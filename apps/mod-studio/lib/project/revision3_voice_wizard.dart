@@ -6,11 +6,247 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/mod_ffi.dart';
-import '../l10n/app_localizations.dart';
 import 'revision3_voice_authoring.dart';
 
 typedef Revision3VoiceOggPicker = Future<String?> Function();
 typedef Revision3VoiceOggPreviewLauncher = Future<void> Function(String path);
+
+@immutable
+final class Revision3VoiceTakeDialogCopy {
+  const Revision3VoiceTakeDialogCopy.english() : _german = false;
+
+  const Revision3VoiceTakeDialogCopy.german() : _german = true;
+
+  final bool _german;
+
+  String _text(String english, String german) => _german ? german : english;
+
+  String get title => _text('Add a Voice take', 'Voice-Take hinzufügen');
+  String get fixedContextUnavailable => _text(
+    'This Voice action no longer matches one intact dialog line and language in the exact current project. Close it and reopen the action from the current workspace. No files were changed.',
+    'Diese Voice-Aktion passt im exakt aktuellen Projekt nicht mehr zu genau einer intakten Dialogzeile und Sprache. Schließe sie und öffne die Aktion erneut aus dem aktuellen Arbeitsbereich. Es wurden keine Dateien geändert.',
+  );
+  String get catalogLoadFailed => _text(
+    'Dialog lines could not be read from the exact current project. No project, game, or save files were changed.',
+    'Die Dialogzeilen konnten nicht aus dem exakt aktuellen Projekt gelesen werden. Projekt-, Spiel- und Speicherdateien wurden nicht geändert.',
+  );
+  String get pickerFailed => _text(
+    'The Ogg picker could not be opened. Choose the recording again.',
+    'Die Ogg-Dateiauswahl konnte nicht geöffnet werden. Wähle die Aufnahme erneut aus.',
+  );
+  String get previewOpened => _text(
+    'Opened the selected local recording for author preview. This does not approve or qualify the audio for the game.',
+    'Die ausgewählte lokale Aufnahme wurde zur Autoren-Vorschau geöffnet. Dadurch wird das Audio weder freigegeben noch für das Spiel qualifiziert.',
+  );
+  String get previewFailed => _text(
+    'The local recording preview could not be opened. Choose the recording again or check the configured audio player.',
+    'Die lokale Aufnahme konnte nicht zur Vorschau geöffnet werden. Wähle sie erneut aus oder prüfe den eingerichteten Audioplayer.',
+  );
+  String get invalidForm => _text(
+    'Review the dialog line, language, recording, take name, and status, then try again.',
+    'Prüfe Dialogzeile, Sprache, Aufnahme, Take-Namen und Status und versuche es erneut.',
+  );
+  String get requiresReopen => _text(
+    'This project can no longer be verified as current. Close this window and reopen the managed project before continuing.',
+    'Dieses Projekt kann nicht mehr als aktuell bestätigt werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut, bevor du fortfährst.',
+  );
+  String get staleCheckpoint => _text(
+    'The managed project changed while this window was open. Close it and add the take again from the current project.',
+    'Das verwaltete Projekt wurde geändert, während dieses Fenster geöffnet war. Schließe es und füge den Take erneut aus dem aktuellen Projekt hinzu.',
+  );
+  String get saveFailed => _text(
+    'The Voice take could not be saved. Nothing was built, deployed, or written into the game or a save. Review the form and try again.',
+    'Der Voice-Take konnte nicht gespeichert werden. Es wurde nichts gebaut, bereitgestellt oder in das Spiel beziehungsweise einen Spielstand geschrieben. Prüfe das Formular und versuche es erneut.',
+  );
+  String get savingStatus => _text(
+    'Saving Voice take to the managed project…',
+    'Voice-Take wird im verwalteten Projekt gespeichert…',
+  );
+  String get loading => _text(
+    'Loading dialog lines from the current project',
+    'Dialogzeilen werden aus dem aktuellen Projekt geladen',
+  );
+  String get refreshDialogLines =>
+      _text('Refresh dialog lines', 'Dialogzeilen aktualisieren');
+  String get refreshVoiceContext =>
+      _text('Refresh Voice context', 'Voice-Kontext aktualisieren');
+  String get close => _text('Close', 'Schließen');
+  String get cancel => _text('Cancel', 'Abbrechen');
+  String get savingAction => _text('Saving take…', 'Take wird gespeichert…');
+  String get submit =>
+      _text('Add take to project', 'Take zum Projekt hinzufügen');
+  String get boundaryProjectOnly =>
+      _text('Saved to project only', 'Nur im Projekt gespeichert');
+  String get boundaryNotInGame =>
+      _text('Not yet usable in game', 'Noch nicht im Spiel nutzbar');
+  String get boundaryDescription => _text(
+    'This imports one real Ogg recording into the managed project. It does not compile, deploy, modify game files, or touch a save.',
+    'Diese Aktion importiert eine echte Ogg-Aufnahme in das verwaltete Projekt. Sie kompiliert oder installiert nichts und ändert weder Spieldateien noch Spielstände.',
+  );
+  String get lineLabel => _text('Dialog line', 'Dialogzeile');
+  String get lineHint => _text(
+    'Search by speaker or line name',
+    'Nach Sprecher oder Zeilenname suchen',
+  );
+  String get lineHelper => _text(
+    'Type to search, then choose one exact existing line.',
+    'Suche und wähle anschließend genau eine vorhandene Zeile aus.',
+  );
+  String get lineRequired => _text(
+    'Search for and choose a dialog line',
+    'Suche und wähle eine Dialogzeile aus',
+  );
+  String get localeLabel => _text('Language code', 'Sprachcode');
+  String get localeHint => 'de';
+  String get localeHelper =>
+      _text('Examples: de, en, en-US', 'Beispiele: de, en, en-US');
+  String get localeRequired =>
+      _text('Enter a language code', 'Gib einen Sprachcode ein');
+  String get localeInvalid => _text(
+    'Use a language code such as de or en-US',
+    'Verwende einen Sprachcode wie de oder en-US',
+  );
+  String get oggLabel => _text('Ogg recording', 'Ogg-Aufnahme');
+  String get oggHelper => _text(
+    'Vorbis and Opus Ogg files are validated before the project changes.',
+    'Vorbis- und Opus-Ogg-Dateien werden geprüft, bevor das Projekt geändert wird.',
+  );
+  String get previewTooltip => _text(
+    'Preview selected local Ogg',
+    'Ausgewählte lokale Ogg-Datei vorhören',
+  );
+  String get browseTooltip => _text('Choose Ogg file', 'Ogg-Datei auswählen');
+  String get takeNameLabel => _text('Take name', 'Take-Name');
+  String get takeNameHint =>
+      _text('Asghan German take 1', 'Asghan Deutsch Take 1');
+  String get takeNameHelper => _text(
+    'Initially suggested from the Ogg file name; you can rename it.',
+    'Wird zunächst aus dem Ogg-Dateinamen vorgeschlagen und kann umbenannt werden.',
+  );
+  String get takeNameRequired =>
+      _text('Enter a take name', 'Gib einen Take-Namen ein');
+  String get takeNameTooLong =>
+      _text('Take name is too long', 'Der Take-Name ist zu lang');
+  String get statusLabel => _text('Review status', 'Prüfstatus');
+  String get statusHelper => _text(
+    'Manually set metadata; audio is not reviewed or approved automatically.',
+    'Dieser Metadatenstatus wird manuell gesetzt; Audio wird nicht automatisch geprüft oder freigegeben.',
+  );
+  String status(AuthoringRevision3VoiceTakeStatus value) => switch (value) {
+    AuthoringRevision3VoiceTakeStatus.draft => _text('Draft', 'Entwurf'),
+    AuthoringRevision3VoiceTakeStatus.recorded => _text(
+      'Recorded',
+      'Aufgenommen',
+    ),
+    AuthoringRevision3VoiceTakeStatus.reviewed => _text('Reviewed', 'Geprüft'),
+    AuthoringRevision3VoiceTakeStatus.approved => _text(
+      'Approved',
+      'Freigegeben',
+    ),
+  };
+  String get selectTakeTitle => _text(
+    'Use this as the selected take',
+    'Diesen Take als ausgewählten Take verwenden',
+  );
+  String get selectTakeSubtitle => _text(
+    'Available only after marking the take Approved.',
+    'Erst verfügbar, nachdem der Take als Freigegeben markiert wurde.',
+  );
+  String voiceLanguage(String locale) =>
+      _text('Voice language: $locale', 'Voice-Sprache: $locale');
+  String get slotBlocked => _text(
+    'This line already has a Voice slot for this language, but its project graph is not safe to extend. Choose another language or repair the project first.',
+    'Diese Zeile besitzt bereits einen Voice-Slot für diese Sprache, aber ihr Projektgraph kann nicht sicher erweitert werden. Wähle eine andere Sprache oder repariere zuerst das Projekt.',
+  );
+  String get slotMissing => _text(
+    'No Voice slot exists for this line and language yet. One will be added with the take.',
+    'Für diese Zeile und Sprache gibt es noch keinen Voice-Slot. Er wird zusammen mit dem Take hinzugefügt.',
+  );
+  String slotExisting(int count, {required bool selected}) => _german
+      ? '$count vorhandene${count == 1 ? 'r Take' : ' Takes'} · ${selected ? 'Ein Take ist derzeit ausgewählt.' : 'Derzeit ist kein Take ausgewählt.'}'
+      : '$count existing take${count == 1 ? '' : 's'} · ${selected ? 'A take is currently selected.' : 'No take is currently selected.'}';
+  String get replacementTitle =>
+      _text('A take is already selected', 'Ein Take ist bereits ausgewählt');
+  String get replacementDescription => _text(
+    'Selecting this approved take will replace the current selection for this dialog line and language.',
+    'Die Auswahl dieses freigegebenen Takes ersetzt die aktuelle Auswahl für diese Dialogzeile und Sprache.',
+  );
+  String get replacementConfirm => _text(
+    'I understand and want to replace it',
+    'Ich verstehe das und möchte die Auswahl ersetzen',
+  );
+  String get localizationPreservedTitle => _text(
+    'Existing dialog text is preserved',
+    'Vorhandener Dialogtext bleibt erhalten',
+  );
+  String get localizationPreservedDescription => _text(
+    'Text editing is unavailable here until the current language text can be displayed and verified safely.',
+    'Textbearbeitung ist hier nicht verfügbar, bis der Text der aktuellen Sprache sicher angezeigt und geprüft werden kann.',
+  );
+  String get sourceRequired =>
+      _text('Choose an Ogg recording', 'Wähle eine Ogg-Aufnahme aus');
+  String get sourceExtension => _text(
+    'Choose a file ending in .ogg',
+    'Wähle eine Datei mit der Endung .ogg aus',
+  );
+  String get pickerTypeLabel => _text('Ogg audio', 'Ogg-Audio');
+  String get previewSourceInvalid => _text(
+    'Choose a valid local Ogg recording first.',
+    'Wähle zuerst eine gültige lokale Ogg-Aufnahme aus.',
+  );
+  String get previewSourceNotFile => _text(
+    'The selected Ogg must be a regular local file.',
+    'Die ausgewählte Ogg-Aufnahme muss eine reguläre lokale Datei sein.',
+  );
+  String get previewLauncherRejected => _text(
+    'No external application accepted the selected Ogg recording.',
+    'Keine externe Anwendung konnte die ausgewählte Ogg-Aufnahme öffnen.',
+  );
+  String importError(String code) => switch (code) {
+    'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE' => _text(
+      'The configured Gothic 1 Remake installation is unavailable. Check it in Settings, then try again.',
+      'Die eingerichtete Gothic-1-Remake-Installation ist nicht verfügbar. Prüfe sie in den Einstellungen und versuche es erneut.',
+    ),
+    'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS' => _text(
+      'This project folder overlaps the configured game installation. Move the project outside the game folder before adding a Voice take.',
+      'Der Projektordner überschneidet sich mit der eingerichteten Spielinstallation. Verschiebe das Projekt aus dem Spielordner, bevor du einen Voice-Take hinzufügst.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INPUT_MISSING' => _text(
+      'The selected Ogg file no longer exists. Choose the recording again.',
+      'Die ausgewählte Ogg-Datei ist nicht mehr vorhanden. Wähle die Aufnahme erneut aus.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INPUT_UNAVAILABLE' => _text(
+      'The selected Ogg file could not be read. Close any app that is holding it, then try again.',
+      'Die ausgewählte Ogg-Datei konnte nicht gelesen werden. Schließe Anwendungen, die darauf zugreifen, und versuche es erneut.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INPUT_UNSAFE' => _text(
+      'The selected source could not be opened safely. Choose a regular local .ogg file.',
+      'Die ausgewählte Aufnahme konnte nicht sicher geöffnet werden. Wähle eine reguläre lokale .ogg-Datei aus.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INPUT_LIMIT' => _text(
+      'The selected Ogg file is larger than the supported import limit.',
+      'Die ausgewählte Ogg-Datei überschreitet die unterstützte Importgröße.',
+    ),
+    'AUTHORING_REVISION3_VOICE_OGG_INVALID' => _text(
+      'The selected file is not a supported, valid Vorbis or Opus Ogg recording.',
+      'Die ausgewählte Datei ist keine unterstützte gültige Vorbis- oder Opus-Ogg-Aufnahme.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INPUT_CHANGED' => _text(
+      'The Ogg file changed while it was being verified. Wait for the recording to finish, then choose it again.',
+      'Die Ogg-Datei wurde während der Prüfung geändert. Warte, bis die Aufnahme abgeschlossen ist, und wähle sie erneut aus.',
+    ),
+    'AUTHORING_REVISION3_VOICE_LIMIT' => _text(
+      'This project cannot accept another Voice take at its current capacity.',
+      'Dieses Projekt kann bei seiner aktuellen Kapazität keinen weiteren Voice-Take aufnehmen.',
+    ),
+    'AUTHORING_REVISION3_VOICE_INTENT_INVALID' ||
+    'AUTHORING_REVISION3_VOICE_STATUS_INVALID' => _text(
+      'The Voice take details are no longer valid for this line. Review the form and try again.',
+      'Die Angaben zum Voice-Take sind für diese Zeile nicht mehr gültig. Prüfe das Formular und versuche es erneut.',
+    ),
+    _ => saveFailed,
+  };
+}
 
 /// Visible normal-mode workflow for attaching a real Ogg take to one existing
 /// managed-R3 dialog line. It exposes no entity IDs, CAS hashes, build,
@@ -18,6 +254,7 @@ typedef Revision3VoiceOggPreviewLauncher = Future<void> Function(String path);
 class Revision3VoiceTakeDialog extends StatefulWidget {
   const Revision3VoiceTakeDialog({
     required this.service,
+    required this.copy,
     this.pickOgg,
     this.previewOgg,
     this.initialLineId,
@@ -29,6 +266,7 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
   final Revision3VoiceAuthoringService service;
   final Revision3VoiceOggPicker? pickOgg;
   final Revision3VoiceOggPreviewLauncher? previewOgg;
+  final Revision3VoiceTakeDialogCopy copy;
 
   /// Optional exact-current selection supplied by a preceding project action,
   /// such as creating a new DialogLine. The freshly loaded catalog still has
@@ -135,8 +373,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             _lineId = null;
             _locale.clear();
             _fixedContextInvalid = true;
-            _error =
-                'This Voice action no longer matches one intact dialog line and language in the exact current project. Close it and reopen the action from the current workspace. No files were changed.';
+            _error = widget.copy.fixedContextUnavailable;
           }
           _selectTake = false;
           _replacementConfirmed = false;
@@ -155,14 +392,13 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       setState(() {
         _loading = false;
         _catalog = null;
-        _error =
-            'Dialog lines could not be read from the exact current project. No project, game, or save files were changed.';
+        _error = widget.copy.catalogLoadFailed;
       });
     }
   }
 
   Future<void> _pickSource() async {
-    final picker = widget.pickOgg ?? _pickRevision3VoiceOgg;
+    final picker = widget.pickOgg ?? () => _pickRevision3VoiceOgg(widget.copy);
     if (_picking || _publishing) return;
     setState(() {
       _picking = true;
@@ -183,8 +419,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error =
-            'The Ogg picker could not be opened. You can enter the file path manually.';
+        _error = widget.copy.pickerFailed;
       });
     } finally {
       if (mounted) setState(() => _picking = false);
@@ -199,20 +434,15 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       _error = null;
     });
     try {
-      await (widget.previewOgg ?? _previewRevision3VoiceOgg)(path);
+      await (widget.previewOgg ??
+          (path) => _previewRevision3VoiceOgg(path, widget.copy))(path);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(AppLocalizations.of(context).managedVoicePreviewOpened),
-        ),
-      );
-    } catch (error) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.copy.previewOpened)));
+    } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _error = AppLocalizations.of(
-          context,
-        ).managedVoicePreviewFailed('$error');
-      });
+      setState(() => _error = widget.copy.previewFailed);
     } finally {
       if (mounted) setState(() => _previewing = false);
     }
@@ -303,8 +533,8 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
         selectTake: _selectTake,
         dialogText: null,
       );
-    } on FormatException catch (error) {
-      setState(() => _error = error.message.toString());
+    } on FormatException {
+      setState(() => _error = widget.copy.invalidForm);
       return;
     }
 
@@ -326,25 +556,20 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       if (!mounted) return;
       setState(() {
         _requiresReopen = true;
-        _error =
-            'This project can no longer be verified as current. Close this window and reopen the managed project before continuing.';
+        _error = widget.copy.requiresReopen;
       });
     } on Revision3VoiceTakeStaleCheckpointException {
       if (!mounted) return;
       setState(() {
         _staleCheckpoint = true;
-        _error =
-            'The managed project changed while this window was open. Close it and add the take again from the current project.';
+        _error = widget.copy.staleCheckpoint;
       });
     } on ModFfiException catch (error) {
       if (!mounted) return;
-      setState(() => _error = _voiceImportErrorMessage(error.code));
+      setState(() => _error = widget.copy.importError(error.code));
     } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _error =
-            'The Voice take could not be saved. Nothing was built, deployed, or written into the game or a save. Review the form and try again.';
-      });
+      setState(() => _error = widget.copy.saveFailed);
     } finally {
       if (mounted && !completed) {
         setState(() {
@@ -363,11 +588,11 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       canPop: !_publicationStarted,
       child: AlertDialog(
         key: const Key('revision3-voice-wizard'),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.record_voice_over_outlined),
-            SizedBox(width: 10),
-            Expanded(child: Text('Add a Voice take')),
+            const Icon(Icons.record_voice_over_outlined),
+            const SizedBox(width: 10),
+            Expanded(child: Text(widget.copy.title)),
           ],
         ),
         content: SizedBox(
@@ -378,12 +603,12 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const _VoiceBoundaryBanner(),
+                  _VoiceBoundaryBanner(copy: widget.copy),
                   const SizedBox(height: 16),
                   if (_publishing) ...[
-                    const _VoiceLiveStatus(
-                      key: Key('revision3-voice-saving-status'),
-                      message: 'Saving Voice take to the managed project…',
+                    _VoiceLiveStatus(
+                      key: const Key('revision3-voice-saving-status'),
+                      message: widget.copy.savingStatus,
                     ),
                     const SizedBox(height: 16),
                   ],
@@ -397,7 +622,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                   if (_loading)
                     Semantics(
                       liveRegion: true,
-                      label: 'Loading dialog lines from the current project',
+                      label: widget.copy.loading,
                       child: const Padding(
                         padding: EdgeInsets.symmetric(vertical: 40),
                         child: Center(
@@ -413,7 +638,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                         key: const Key('revision3-voice-retry'),
                         onPressed: _loadCatalog,
                         icon: const Icon(Icons.refresh),
-                        label: const Text('Refresh dialog lines'),
+                        label: Text(widget.copy.refreshDialogLines),
                       ),
                     )
                   else if (_fixedContextInvalid)
@@ -422,7 +647,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                         key: const Key('revision3-voice-fixed-context-retry'),
                         onPressed: blocked ? null : _loadCatalog,
                         icon: const Icon(Icons.refresh),
-                        label: const Text('Refresh Voice context'),
+                        label: Text(widget.copy.refreshVoiceContext),
                       ),
                     )
                   else
@@ -438,7 +663,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             onPressed: _publicationStarted
                 ? null
                 : () => Navigator.of(context).pop(),
-            child: Text(blocked ? 'Close' : 'Cancel'),
+            child: Text(blocked ? widget.copy.close : widget.copy.cancel),
           ),
           FilledButton.icon(
             key: const Key('revision3-voice-submit'),
@@ -458,7 +683,9 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.library_add_outlined),
-            label: Text(_publishing ? 'Saving take…' : 'Add take to project'),
+            label: Text(
+              _publishing ? widget.copy.savingAction : widget.copy.submit,
+            ),
           ),
         ],
       ),
@@ -476,6 +703,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             _VoiceFixedContextBreadcrumb(
               lineLabel: _selectedLine!.displayLabel,
               locale: _locale.text,
+              copy: widget.copy,
             )
           else
             RawAutocomplete<Revision3VoiceDialogLineChoice>(
@@ -495,29 +723,23 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
               },
               onSelected: _selectLine,
               fieldViewBuilder:
-                  (
-                    context,
-                    controller,
-                    focusNode,
-                    onFieldSubmitted,
-                  ) => TextFormField(
-                    key: const Key('revision3-voice-line-search'),
-                    controller: controller,
-                    focusNode: focusNode,
-                    enabled: enabled,
-                    decoration: const InputDecoration(
-                      labelText: 'Dialog line',
-                      hintText: 'Search by speaker, line name, or Loc ID',
-                      helperText:
-                          'Type to search, then choose one exact existing line.',
-                      border: OutlineInputBorder(),
-                    ),
-                    onChanged: _clearChangedLineSearch,
-                    onFieldSubmitted: (_) => onFieldSubmitted(),
-                    validator: (_) => _lineId == null
-                        ? 'Search for and choose a dialog line'
-                        : null,
-                  ),
+                  (context, controller, focusNode, onFieldSubmitted) =>
+                      TextFormField(
+                        key: const Key('revision3-voice-line-search'),
+                        controller: controller,
+                        focusNode: focusNode,
+                        enabled: enabled,
+                        decoration: InputDecoration(
+                          labelText: widget.copy.lineLabel,
+                          hintText: widget.copy.lineHint,
+                          helperText: widget.copy.lineHelper,
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: _clearChangedLineSearch,
+                        onFieldSubmitted: (_) => onFieldSubmitted(),
+                        validator: (_) =>
+                            _lineId == null ? widget.copy.lineRequired : null,
+                      ),
               optionsViewBuilder: (context, onSelected, options) {
                 final bounded = options.toList(growable: false);
                 return Align(
@@ -556,13 +778,13 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
               controller: _locale,
               enabled: enabled,
               maxLength: 35,
-              decoration: const InputDecoration(
-                labelText: 'Language code',
-                hintText: 'de',
-                helperText: 'Examples: de, en, en-US',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: widget.copy.localeLabel,
+                hintText: widget.copy.localeHint,
+                helperText: widget.copy.localeHelper,
+                border: const OutlineInputBorder(),
               ),
-              validator: _validateLocale,
+              validator: (value) => _validateLocale(value, widget.copy),
               onChanged: (value) {
                 setState(() {
                   _selectTake = false;
@@ -597,6 +819,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             _VoiceSlotSummary(
               summary: _selectedSlotSummary,
               blocked: _selectedLocaleBlocked,
+              copy: widget.copy,
             ),
             const SizedBox(height: 14),
           ],
@@ -605,19 +828,18 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             controller: _source,
             enabled: enabled,
             decoration: InputDecoration(
-              labelText: 'Ogg recording',
-              helperText:
-                  'Vorbis and Opus Ogg files are validated before the project changes.',
+              labelText: widget.copy.oggLabel,
+              helperText: widget.copy.oggHelper,
               border: const OutlineInputBorder(),
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   IconButton(
                     key: const Key('revision3-voice-preview'),
-                    tooltip: AppLocalizations.of(
-                      context,
-                    ).managedVoicePreviewTooltip,
-                    onPressed: enabled && _validateSource(_source.text) == null
+                    tooltip: widget.copy.previewTooltip,
+                    onPressed:
+                        enabled &&
+                            _validateSource(_source.text, widget.copy) == null
                         ? _previewSource
                         : null,
                     icon: _previewing
@@ -629,7 +851,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                   ),
                   IconButton(
                     key: const Key('revision3-voice-browse'),
-                    tooltip: 'Choose Ogg file',
+                    tooltip: widget.copy.browseTooltip,
                     onPressed: enabled ? _pickSource : null,
                     icon: const Icon(Icons.folder_open),
                   ),
@@ -637,7 +859,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
               ),
             ),
             onChanged: (_) => setState(() => _error = null),
-            validator: _validateSource,
+            validator: (value) => _validateSource(value, widget.copy),
           ),
           const SizedBox(height: 14),
           TextFormField(
@@ -645,47 +867,34 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             controller: _takeName,
             enabled: enabled,
             maxLength: 256,
-            decoration: const InputDecoration(
-              labelText: 'Take name',
-              hintText: 'Asghan German take 1',
-              helperText:
-                  'Initially suggested from the Ogg file name; you can rename it.',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: widget.copy.takeNameLabel,
+              hintText: widget.copy.takeNameHint,
+              helperText: widget.copy.takeNameHelper,
+              border: const OutlineInputBorder(),
             ),
             onChanged: (_) => _takeNameWasManuallyEdited = true,
             validator: (value) => (value?.trim().isEmpty ?? true)
-                ? 'Enter a take name'
+                ? widget.copy.takeNameRequired
                 : utf8.encode(value!.trim()).length > 256
-                ? 'Take name is too long'
+                ? widget.copy.takeNameTooLong
                 : null,
           ),
           const SizedBox(height: 14),
           DropdownButtonFormField<AuthoringRevision3VoiceTakeStatus>(
             key: const Key('revision3-voice-status'),
             initialValue: _status,
-            decoration: const InputDecoration(
-              labelText: 'Review status',
-              helperText:
-                  'Manually set metadata; audio is not reviewed or approved automatically.',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: widget.copy.statusLabel,
+              helperText: widget.copy.statusHelper,
+              border: const OutlineInputBorder(),
             ),
-            items: const [
-              DropdownMenuItem(
-                value: AuthoringRevision3VoiceTakeStatus.draft,
-                child: Text('Draft'),
-              ),
-              DropdownMenuItem(
-                value: AuthoringRevision3VoiceTakeStatus.recorded,
-                child: Text('Recorded'),
-              ),
-              DropdownMenuItem(
-                value: AuthoringRevision3VoiceTakeStatus.reviewed,
-                child: Text('Reviewed'),
-              ),
-              DropdownMenuItem(
-                value: AuthoringRevision3VoiceTakeStatus.approved,
-                child: Text('Approved'),
-              ),
+            items: [
+              for (final status in AuthoringRevision3VoiceTakeStatus.values)
+                DropdownMenuItem(
+                  value: status,
+                  child: Text(widget.copy.status(status)),
+                ),
             ],
             onChanged: enabled
                 ? (value) {
@@ -704,10 +913,8 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             key: const Key('revision3-voice-select'),
             contentPadding: EdgeInsets.zero,
             value: _selectTake,
-            title: const Text('Use this as the selected take'),
-            subtitle: const Text(
-              'Available only after marking the take Approved.',
-            ),
+            title: Text(widget.copy.selectTakeTitle),
+            subtitle: Text(widget.copy.selectTakeSubtitle),
             onChanged:
                 enabled && _status == AuthoringRevision3VoiceTakeStatus.approved
                 ? (value) => setState(() {
@@ -721,12 +928,13 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
             _VoiceReplacementWarning(
               confirmed: _replacementConfirmed,
               enabled: enabled,
+              copy: widget.copy,
               onChanged: (value) =>
                   setState(() => _replacementConfirmed = value),
             ),
           ],
           const Divider(height: 24),
-          const _VoiceLocalizationPreservedNotice(),
+          _VoiceLocalizationPreservedNotice(copy: widget.copy),
         ],
       ),
     );
@@ -737,10 +945,12 @@ class _VoiceFixedContextBreadcrumb extends StatelessWidget {
   const _VoiceFixedContextBreadcrumb({
     required this.lineLabel,
     required this.locale,
+    required this.copy,
   });
 
   final String lineLabel;
   final String locale;
+  final Revision3VoiceTakeDialogCopy copy;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -761,7 +971,7 @@ class _VoiceFixedContextBreadcrumb extends StatelessWidget {
             children: [
               Text(lineLabel, style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 3),
-              Text('Voice language: $locale'),
+              Text(copy.voiceLanguage(locale)),
             ],
           ),
         ),
@@ -771,19 +981,27 @@ class _VoiceFixedContextBreadcrumb extends StatelessWidget {
 }
 
 class _VoiceSlotSummary extends StatelessWidget {
-  const _VoiceSlotSummary({required this.summary, required this.blocked});
+  const _VoiceSlotSummary({
+    required this.summary,
+    required this.blocked,
+    required this.copy,
+  });
 
   final Revision3VoiceExistingSlotSummary? summary;
   final bool blocked;
+  final Revision3VoiceTakeDialogCopy copy;
 
   @override
   Widget build(BuildContext context) {
     final value = summary;
     final message = blocked
-        ? 'This line already has a Voice slot for this language, but its project graph is not safe to extend. Choose another language or repair the project first.'
+        ? copy.slotBlocked
         : value == null
-        ? 'No Voice slot exists for this line and language yet. One will be added with the take.'
-        : '${value.candidateCount} existing take${value.candidateCount == 1 ? '' : 's'} · ${value.hasSelectedTake ? 'A take is currently selected.' : 'No take is currently selected.'}';
+        ? copy.slotMissing
+        : copy.slotExisting(
+            value.candidateCount,
+            selected: value.hasSelectedTake,
+          );
     return Container(
       key: const Key('revision3-voice-slot-summary'),
       padding: const EdgeInsets.all(12),
@@ -808,11 +1026,13 @@ class _VoiceReplacementWarning extends StatelessWidget {
     required this.confirmed,
     required this.enabled,
     required this.onChanged,
+    required this.copy,
   });
 
   final bool confirmed;
   final bool enabled;
   final ValueChanged<bool> onChanged;
+  final Revision3VoiceTakeDialogCopy copy;
 
   @override
   Widget build(BuildContext context) {
@@ -828,14 +1048,14 @@ class _VoiceReplacementWarning extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'A take is already selected',
+            copy.replacementTitle,
             style: Theme.of(
               context,
             ).textTheme.titleSmall?.copyWith(color: scheme.onErrorContainer),
           ),
           const SizedBox(height: 4),
           Text(
-            'Selecting this approved take will replace the current selection for this dialog line and language.',
+            copy.replacementDescription,
             style: TextStyle(color: scheme.onErrorContainer),
           ),
           Material(
@@ -844,7 +1064,7 @@ class _VoiceReplacementWarning extends StatelessWidget {
               key: const Key('revision3-voice-confirm-replacement'),
               contentPadding: EdgeInsets.zero,
               value: confirmed,
-              title: const Text('I understand and want to replace it'),
+              title: Text(copy.replacementConfirm),
               controlAffinity: ListTileControlAffinity.leading,
               onChanged: enabled ? (value) => onChanged(value ?? false) : null,
             ),
@@ -856,22 +1076,24 @@ class _VoiceReplacementWarning extends StatelessWidget {
 }
 
 class _VoiceLocalizationPreservedNotice extends StatelessWidget {
-  const _VoiceLocalizationPreservedNotice();
+  const _VoiceLocalizationPreservedNotice({required this.copy});
+
+  final Revision3VoiceTakeDialogCopy copy;
 
   @override
-  Widget build(BuildContext context) => const ListTile(
-    key: Key('revision3-voice-localization-preserved'),
+  Widget build(BuildContext context) => ListTile(
+    key: const Key('revision3-voice-localization-preserved'),
     contentPadding: EdgeInsets.zero,
-    leading: Icon(Icons.lock_outline),
-    title: Text('Existing dialog text is preserved'),
-    subtitle: Text(
-      'Text editing is unavailable here until the current language text can be displayed and verified safely.',
-    ),
+    leading: const Icon(Icons.lock_outline),
+    title: Text(copy.localizationPreservedTitle),
+    subtitle: Text(copy.localizationPreservedDescription),
   );
 }
 
 class _VoiceBoundaryBanner extends StatelessWidget {
-  const _VoiceBoundaryBanner();
+  const _VoiceBoundaryBanner({required this.copy});
+
+  final Revision3VoiceTakeDialogCopy copy;
 
   @override
   Widget build(BuildContext context) {
@@ -886,17 +1108,17 @@ class _VoiceBoundaryBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Wrap(
+          Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              Chip(label: Text('Saved to project only')),
-              Chip(label: Text('Not yet usable in game')),
+              Chip(label: Text(copy.boundaryProjectOnly)),
+              Chip(label: Text(copy.boundaryNotInGame)),
             ],
           ),
           const SizedBox(height: 8),
           Text(
-            'This imports one real Ogg recording into the managed project. It does not compile, deploy, modify game files, or touch a save.',
+            copy.boundaryDescription,
             style: TextStyle(color: scheme.onSecondaryContainer),
           ),
         ],
@@ -948,83 +1170,61 @@ class _VoiceMessage extends StatelessWidget {
   }
 }
 
-String? _validateLocale(String? value) {
+String? _validateLocale(String? value, Revision3VoiceTakeDialogCopy copy) {
   final normalized = value?.trim() ?? '';
-  if (normalized.isEmpty) return 'Enter a language code';
+  if (normalized.isEmpty) return copy.localeRequired;
   if (!revision3VoiceLocaleIsCanonical(normalized)) {
-    return 'Use a language code such as de or en-US';
+    return copy.localeInvalid;
   }
   return null;
 }
 
-String _voiceImportErrorMessage(String code) => switch (code) {
-  'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE' =>
-    'The configured Gothic 1 Remake installation is unavailable. Check it in Settings, then try again.',
-  'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS' =>
-    'This project folder overlaps the configured game installation. Move the project outside the game folder before adding a Voice take.',
-  'AUTHORING_REVISION3_VOICE_INPUT_MISSING' =>
-    'The selected Ogg file no longer exists. Choose the recording again.',
-  'AUTHORING_REVISION3_VOICE_INPUT_UNAVAILABLE' =>
-    'The selected Ogg file could not be read. Close any app that is holding it, then try again.',
-  'AUTHORING_REVISION3_VOICE_INPUT_UNSAFE' =>
-    'The selected source could not be opened safely. Choose a regular local .ogg file.',
-  'AUTHORING_REVISION3_VOICE_INPUT_LIMIT' =>
-    'The selected Ogg file is larger than the supported import limit.',
-  'AUTHORING_REVISION3_VOICE_OGG_INVALID' =>
-    'The selected file is not a supported, valid Vorbis or Opus Ogg recording.',
-  'AUTHORING_REVISION3_VOICE_INPUT_CHANGED' =>
-    'The Ogg file changed while it was being verified. Wait for the recording to finish, then choose it again.',
-  'AUTHORING_REVISION3_VOICE_LIMIT' =>
-    'This project cannot accept another Voice take at its current capacity.',
-  'AUTHORING_REVISION3_VOICE_INTENT_INVALID' ||
-  'AUTHORING_REVISION3_VOICE_STATUS_INVALID' =>
-    'The Voice take details are no longer valid for this line. Review the form and try again.',
-  _ =>
-    'The Voice take could not be saved. Nothing was built, deployed, or written into the game or a save. Review the form and try again.',
-};
-
-Future<String?> _pickRevision3VoiceOgg() async {
+Future<String?> _pickRevision3VoiceOgg(
+  Revision3VoiceTakeDialogCopy copy,
+) async {
   final file = await openFile(
-    acceptedTypeGroups: const [
-      XTypeGroup(label: 'Ogg audio', extensions: ['ogg']),
+    acceptedTypeGroups: [
+      XTypeGroup(label: copy.pickerTypeLabel, extensions: const ['ogg']),
     ],
   );
   return file?.path;
 }
 
-Future<void> _previewRevision3VoiceOgg(String path) async {
-  _validateRevision3VoicePreviewPath(path);
+Future<void> _previewRevision3VoiceOgg(
+  String path,
+  Revision3VoiceTakeDialogCopy copy,
+) async {
+  _validateRevision3VoicePreviewPath(path, copy);
   final opened = await launchUrl(
     Uri.file(path, windows: Platform.isWindows),
     mode: LaunchMode.externalApplication,
   );
   if (!opened) {
-    throw const FileSystemException(
-      'No external application accepted the selected Ogg file.',
-    );
+    throw FileSystemException(copy.previewLauncherRejected);
   }
 }
 
-void _validateRevision3VoicePreviewPath(String path) {
+void _validateRevision3VoicePreviewPath(
+  String path,
+  Revision3VoiceTakeDialogCopy copy,
+) {
   if (path.isEmpty ||
       path.trim() != path ||
       !path.toLowerCase().endsWith('.ogg') ||
       path.runes.any((rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f))) {
-    throw const FormatException('Choose a valid local Ogg recording first.');
+    throw FormatException(copy.previewSourceInvalid);
   }
   if (FileSystemEntity.typeSync(path, followLinks: false) !=
       FileSystemEntityType.file) {
-    throw const FormatException(
-      'The selected Ogg must be a regular local file.',
-    );
+    throw FormatException(copy.previewSourceNotFile);
   }
 }
 
-String? _validateSource(String? value) {
+String? _validateSource(String? value, Revision3VoiceTakeDialogCopy copy) {
   final source = value ?? '';
-  if (source.isEmpty) return 'Choose an Ogg recording';
+  if (source.isEmpty) return copy.sourceRequired;
   if (source.trim() != source || !source.toLowerCase().endsWith('.ogg')) {
-    return 'Choose a file ending in .ogg';
+    return copy.sourceExtension;
   }
   return null;
 }

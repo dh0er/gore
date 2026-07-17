@@ -942,6 +942,61 @@ class AppLocalizationsPt extends AppLocalizations {
       'You changed this project text. Switching now would discard those edits.';
 
   @override
+  String get managedLocalizationVoiceUnsavedTitle =>
+      'Save text before continuing?';
+
+  @override
+  String get managedLocalizationVoiceUnsavedDescription =>
+      'Save these text changes and continue directly to the selected action, keep editing, or deliberately discard the text changes.';
+
+  @override
+  String get managedLocalizationDiscardAndContinue => 'Discard and continue';
+
+  @override
+  String get managedLocalizationSaveAndContinue => 'Save and continue';
+
+  @override
+  String get managedLocalizationGlobalAddVoice => 'Add take for any line';
+
+  @override
+  String get managedLocalizationGlobalManageVoice =>
+      'Manage takes for any line';
+
+  @override
+  String get managedLocalizationGlobalResolveVoice =>
+      'Resolve target for any line';
+
+  @override
+  String managedVoiceTakeSaved(int revision) {
+    return 'Voice take saved in project revision $revision. It is saved to the project only and is not yet usable in game.';
+  }
+
+  @override
+  String managedVoiceSelectionCleared(int revision) {
+    return 'Voice selection cleared in project revision $revision. Voice build remains a separate offline step; runtime remains unqualified.';
+  }
+
+  @override
+  String managedVoiceSelectionSelected(int revision) {
+    return 'Approved Voice take selected in project revision $revision. Voice build remains a separate offline step; runtime remains unqualified.';
+  }
+
+  @override
+  String managedVoiceTargetUnresolvedSaved(int revision) {
+    return 'No installed archive member matched. Voice target evidence saved in project revision $revision.';
+  }
+
+  @override
+  String managedVoiceTargetResolvedSaved(int revision) {
+    return 'One installed archive member was sealed. Voice target evidence saved in project revision $revision.';
+  }
+
+  @override
+  String managedVoiceTargetAmbiguousSaved(int count, int revision) {
+    return '$count installed archive members matched; nothing was chosen implicitly. Voice target evidence saved in project revision $revision.';
+  }
+
+  @override
   String get managedLocalizationDiscard => 'Discard changes';
 
   @override
@@ -965,7 +1020,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get managedLocalizationVoiceActionFailed =>
-      'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
+      'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
 
   @override
   String get managedSectionValidateTestDescription =>

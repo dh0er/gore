@@ -261,6 +261,86 @@ void main() {
     },
   );
 
+  testWidgets(
+    'German fixed context localizes validation, safe failure, and successful publication',
+    (tester) async {
+      await _useLargeSurface(tester);
+      var publishes = 0;
+      Revision3VoiceTakeTechnicalPlan? captured;
+      final service = Revision3VoiceAuthoringService(
+        loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              if (publishes == 1) {
+                throw ModFfiException(
+                  command: 'private_native_command',
+                  code: 'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE',
+                  message:
+                      r'private C:\secret\recording.ogg aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                );
+              }
+              captured = plan;
+              return _publication(
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+                plan: plan,
+              );
+            },
+      );
+
+      await _openWizard(
+        tester,
+        service: service,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        copy: const Revision3VoiceTakeDialogCopy.german(),
+      );
+
+      expect(find.text('Voice-Take hinzufügen'), findsOneWidget);
+      expect(find.text('Nur im Projekt gespeichert'), findsOneWidget);
+      expect(find.text('Noch nicht im Spiel nutzbar'), findsOneWidget);
+      expect(find.text('Voice-Sprache: de'), findsOneWidget);
+      expect(find.text('Ogg-Aufnahme'), findsOneWidget);
+      expect(find.text('Take-Name'), findsOneWidget);
+      expect(find.text('Prüfstatus'), findsOneWidget);
+      expect(find.text('Aufgenommen'), findsOneWidget);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+
+      await _submit(tester);
+      expect(find.text('Wähle eine Ogg-Aufnahme aus'), findsOneWidget);
+      expect(find.text('Gib einen Take-Namen ein'), findsOneWidget);
+      expect(publishes, 0);
+
+      await _fillSourceAndName(tester);
+      await _submit(tester);
+      expect(publishes, 1);
+      expect(
+        find.textContaining(
+          'Die eingerichtete Gothic-1-Remake-Installation ist nicht verfügbar',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('private_native_command'), findsNothing);
+      expect(find.textContaining('recording.ogg'), findsNothing);
+      expect(
+        find.textContaining('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+        findsNothing,
+      );
+
+      await _submit(tester);
+      expect(publishes, 2);
+      expect(find.byKey(const Key('revision3-voice-wizard')), findsNothing);
+      expect(captured?.lineId, revision3VoiceContentLineId);
+      expect(captured?.locale, 'de');
+    },
+  );
+
   testWidgets('invalid fixed context fails closed without publishing', (
     tester,
   ) async {
@@ -687,6 +767,8 @@ Future<void> _openWizard(
   String? initialLineId,
   String? initialLocale,
   bool fixedContext = false,
+  Revision3VoiceTakeDialogCopy copy =
+      const Revision3VoiceTakeDialogCopy.english(),
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -705,6 +787,7 @@ Future<void> _openWizard(
                 initialLineId: initialLineId,
                 initialLocale: initialLocale,
                 fixedContext: fixedContext,
+                copy: copy,
               ),
             ),
             child: const Text('Open'),

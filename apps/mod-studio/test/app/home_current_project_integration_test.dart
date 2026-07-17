@@ -36,8 +36,10 @@ import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
+import 'package:gore_mod/project/revision3_localization_voice_workspace.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
+import 'package:gore_mod/project/revision3_voice_production_card.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -3962,6 +3964,433 @@ void main() {
   });
 
   testWidgets(
+    'dirty contextual Manage saves, rebinds the production host, and continues with exact current context',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const changedText = 'Saved before opening the current Voice setup';
+      const locId = 'GRD_263_ASGHAN_OPEN_INFO_06_02';
+      var localizationRevision = 0;
+      var savedEnglishText = 'Stop right there!';
+      final seedProjectRevisions = <int>[];
+      final seedLocalizationRevisions = <int>[];
+      Revision3DialogLocalizationEditTechnicalPlan? publishedPlan;
+      Revision3DialogLocalizationEditPublication? returnedPublication;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-context-save-and-continue'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+          revision: lease.projectRevision,
+          localizationRevision: localizationRevision,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, requestedRevision, requestedLocId) {
+              seedProjectRevisions.add(lease.projectRevision);
+              seedLocalizationRevisions.add(requestedRevision);
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(requestedRevision, localizationRevision);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: requestedRevision,
+                locId: requestedLocId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance question',
+                speaker: 'Asghan',
+                voiceSlotLocales: const <String>{'de'},
+                englishText: savedEnglishText,
+              );
+            },
+        onDialogLocalizationEditPublish: (lease, plan) {
+          expect(plan.expectedHead.canonicalJson, _head(7).canonicalJson);
+          expect(plan.localizationId, revision3VoiceContentLocalizationId);
+          expect(plan.expectedLocalizationRevision, 0);
+          expect(plan.expectedLocId, locId);
+          expect(plan.texts, const <String, String>{
+            'de': 'Bleib stehen!',
+            'en': changedText,
+          });
+          publishedPlan = plan;
+          savedEnglishText = plan.texts['en']!;
+          localizationRevision = plan.expectedLocalizationRevision + 1;
+          lease.projectRevision++;
+          lease.head = _head(lease.projectRevision);
+          return returnedPublication =
+              Revision3DialogLocalizationEditPublication(
+                projectId: lease.projectId,
+                projectRevision: lease.projectRevision,
+                localizationId: plan.localizationId,
+                localizationRevision: localizationRevision,
+                addedLocales: const <String>[],
+                removedLocales: const <String>[],
+              );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+
+      final textField = find.byKey(const Key('revision3-localization-text-en'));
+      final l10n = AppLocalizations.of(tester.element(textField));
+      await tester.enterText(textField, changedText);
+      await tester.pump();
+      final contextualManage = find.byKey(
+        const Key('revision3-voice-production-manage'),
+      );
+      await _scrollManagedEditorUntilVisible(tester, contextualManage);
+      await tester.tap(contextualManage);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(l10n.managedLocalizationVoiceUnsavedTitle),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedLocalizationSaveAndContinue),
+        findsOneWidget,
+      );
+      await tester.tap(find.text(l10n.managedLocalizationSaveAndContinue));
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogLocalizationEditPublishCalls, 1);
+      expect(publishedPlan, isNotNull);
+      expect(returnedPublication?.projectRevision, 8);
+      expect(returnedPublication?.localizationRevision, 1);
+      expect(savedEnglishText, changedText);
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, 8);
+      expect(current.head.canonicalJson, _head(8).canonicalJson);
+      final reboundWorkspace = tester
+          .widget<Revision3LocalizationVoiceWorkspace>(
+            find.byType(Revision3LocalizationVoiceWorkspace),
+          );
+      expect(reboundWorkspace.projectRevision, 8);
+      expect(
+        reboundWorkspace.projectCheckpointIdentity,
+        _head(8).canonicalJson,
+      );
+      expect(reboundWorkspace.onManageVoiceTakesFor, isNotNull);
+      expect(managed.dialogLocalizationEditSeedCalls, greaterThanOrEqualTo(2));
+      expect(seedProjectRevisions, containsAllInOrder(<int>[7, 8]));
+      expect(seedLocalizationRevisions, containsAllInOrder(<int>[0, 1]));
+      expect(find.textContaining(l10n.managedLocalizationStale), findsNothing);
+      expect(
+        find.text(l10n.managedLocalizationVoiceActionFailed),
+        findsNothing,
+      );
+
+      final dialog = find.byType(Revision3VoiceTakeSelectionDialog);
+      expect(dialog, findsOneWidget);
+      final currentDialog = tester.widget<Revision3VoiceTakeSelectionDialog>(
+        dialog,
+      );
+      expect(currentDialog.fixedContext, isTrue);
+      expect(currentDialog.initialLineId, revision3VoiceContentLineId);
+      expect(currentDialog.initialLocale, 'de');
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Asghan'), findsWidgets);
+      expect(find.textContaining('Mine entrance question'), findsWidgets);
+      expect(find.text('Voice-Sprache: de'), findsOneWidget);
+      expect(
+        find.byKey(const Key('voice-selection-line-search')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+      expect(tester.widget<TextField>(textField).controller!.text, changedText);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-save')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+      expect(find.text(revision3VoiceContentSlotId), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'German Localization and Voice opens all Voice dialogs with distinct global actions',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_dialogs_de_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-dialogs-de'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _voiceLocalizationWorkspaceIndex(revision: lease.projectRevision),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, locId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: locId,
+                  lineId: revision3VoiceContentLineId,
+                  lineDisplayName: 'Mine entrance question',
+                  speaker: 'Asghan',
+                  voiceSlotLocales: const <String>{'de'},
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+
+      final l10n = AppLocalizations.of(
+        tester.element(
+          find.byKey(const Key('revision3-localization-voice-workspace')),
+        ),
+      );
+      const contextualCopy = Revision3VoiceProductionCardCopy.german;
+      final actionLabels =
+          <
+            ({
+              Key globalKey,
+              String globalLabel,
+              Key contextualKey,
+              String contextualLabel,
+            })
+          >[
+            (
+              globalKey: const Key('revision3-localization-add-voice'),
+              globalLabel: l10n.managedLocalizationGlobalAddVoice,
+              contextualKey: const Key('revision3-voice-production-add'),
+              contextualLabel: contextualCopy.addTakeLabel,
+            ),
+            (
+              globalKey: const Key('revision3-localization-manage-voice'),
+              globalLabel: l10n.managedLocalizationGlobalManageVoice,
+              contextualKey: const Key('revision3-voice-production-manage'),
+              contextualLabel: contextualCopy.manageTakesLabel,
+            ),
+            (
+              globalKey: const Key('revision3-localization-resolve-voice'),
+              globalLabel: l10n.managedLocalizationGlobalResolveVoice,
+              contextualKey: const Key('revision3-voice-production-resolve'),
+              contextualLabel: contextualCopy.resolveTargetLabel,
+            ),
+          ];
+      for (final labels in actionLabels) {
+        final globalAction = find.byKey(labels.globalKey);
+        final contextualAction = find.byKey(labels.contextualKey);
+        expect(globalAction, findsOneWidget);
+        expect(contextualAction, findsOneWidget);
+        expect(labels.globalLabel, isNot(labels.contextualLabel));
+        expect(
+          find.descendant(
+            of: globalAction,
+            matching: find.text(labels.globalLabel),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: contextualAction,
+            matching: find.text(labels.contextualLabel),
+          ),
+          findsOneWidget,
+        );
+      }
+
+      Future<void> openGlobalVoiceAction(Key key) async {
+        final action = find.byKey(key);
+        final button = find.descendant(
+          of: action,
+          matching: find.byType(OutlinedButton),
+        );
+        expect(button, findsOneWidget);
+        await tester.ensureVisible(button);
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
+
+      await openGlobalVoiceAction(
+        const Key('revision3-localization-add-voice'),
+      );
+      final addDialog = find.byType(Revision3VoiceTakeDialog);
+      expect(addDialog, findsOneWidget);
+      expect(
+        tester.widget<Revision3VoiceTakeDialog>(addDialog).copy.title,
+        'Voice-Take hinzufügen',
+      );
+      expect(
+        find.descendant(
+          of: addDialog,
+          matching: find.text('Nur im Projekt gespeichert'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-line-search')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-voice-cancel')));
+      await tester.pumpAndSettle();
+
+      await openGlobalVoiceAction(
+        const Key('revision3-localization-manage-voice'),
+      );
+      final manageDialog = find.byType(Revision3VoiceTakeSelectionDialog);
+      expect(manageDialog, findsOneWidget);
+      expect(
+        tester
+            .widget<Revision3VoiceTakeSelectionDialog>(manageDialog)
+            .copy
+            .title,
+        'Voice-Takes verwalten',
+      );
+      expect(
+        find.descendant(
+          of: manageDialog,
+          matching: find.text('Dialogzeile finden'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('voice-selection-line-search')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-cancel')));
+      await tester.pumpAndSettle();
+
+      await openGlobalVoiceAction(
+        const Key('revision3-localization-resolve-voice'),
+      );
+      final targetDialog = find.byType(Revision3VoiceTargetDialog);
+      expect(targetDialog, findsOneWidget);
+      expect(
+        tester.widget<Revision3VoiceTargetDialog>(targetDialog).copy.title,
+        'Installiertes Voice-Ziel auflösen',
+      );
+      expect(
+        find.descendant(
+          of: targetDialog,
+          matching: find.text('Keine Bereitstellung'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-target-line-search')),
+        findsOneWidget,
+      );
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+      expect(find.text(revision3VoiceContentSlotId), findsNothing);
+      await tester.tap(find.byKey(const Key('revision3-voice-target-cancel')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Spanish Localization and Voice keeps translated global Voice actions',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_dialogs_es_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-dialogs-es'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _voiceLocalizationWorkspaceIndex(revision: lease.projectRevision),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, locId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: locId,
+                  lineId: revision3VoiceContentLineId,
+                  lineDisplayName: 'Mine entrance question',
+                  speaker: 'Asghan',
+                  voiceSlotLocales: const <String>{'de'},
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      container.read(localeProvider.notifier).setLocale('es');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+
+      const actions = <(Key, String)>[
+        (Key('revision3-localization-add-voice'), 'Añadir toma de voz'),
+        (Key('revision3-localization-manage-voice'), 'Gestionar tomas de voz'),
+        (
+          Key('revision3-localization-resolve-voice'),
+          'Resolver destino de voz',
+        ),
+      ];
+      for (final (key, label) in actions) {
+        expect(
+          find.descendant(of: find.byKey(key), matching: find.text(label)),
+          findsOneWidget,
+        );
+      }
+      expect(find.text('Add take for any line'), findsNothing);
+      expect(find.text('Manage takes for any line'), findsNothing);
+      expect(find.text('Resolve target for any line'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'unresolved DialogLine localization keeps catalog-dependent Voice actions disabled',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -6871,6 +7300,7 @@ Revision3ContentIndex _contentIndex({
 
 Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
   required int revision,
+  int localizationRevision = 0,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(revision: revision);
   final entities = (json['entities']! as List<Object?>)
@@ -6878,6 +7308,7 @@ Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
   final localization = entities.singleWhere(
     (entity) => entity['id'] == revision3VoiceContentLocalizationId,
   );
+  localization['revision'] = localizationRevision;
   final summary = (localization['summary']! as Map).cast<String, Object?>();
   final data = (summary['data']! as Map).cast<String, Object?>();
   data['locales'] = <Object?>['de', 'en'];
@@ -6935,6 +7366,8 @@ AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
   String lineDisplayName = 'Dialog line',
   String? speaker,
   Set<String> voiceSlotLocales = const <String>{},
+  String germanText = 'Bleib stehen!',
+  String englishText = 'Stop right there!',
 }) {
   final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
     expectedHead: lease.head,
@@ -6955,13 +7388,13 @@ AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
       'locales': <Object?>[
         <String, Object?>{
           'locale': 'de',
-          'text': 'Bleib stehen!',
+          'text': germanText,
           'voice_slot_present': voiceSlotLocales.contains('de'),
           'candidate_count': 0,
         },
         <String, Object?>{
           'locale': 'en',
-          'text': 'Stop right there!',
+          'text': englishText,
           'voice_slot_present': voiceSlotLocales.contains('en'),
           'candidate_count': 0,
         },

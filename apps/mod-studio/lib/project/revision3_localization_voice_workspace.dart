@@ -18,6 +18,34 @@ typedef Revision3LocalizationPublished =
 typedef Revision3LocalizationVoiceCatalogLoader =
     Future<Revision3VoiceCatalog> Function();
 
+enum _UnsavedExternalActionDecision {
+  keepEditing,
+  discardAndContinue,
+  saveAndContinue,
+}
+
+enum _VoiceContextActionKind { addTake, manageTakes, resolveTarget }
+
+enum _PublicationAuthorityStatus { waiting, ready, invalid }
+
+final class _LocalizationSaveCompletion {
+  const _LocalizationSaveCompletion({
+    required this.publication,
+    required this.originProjectId,
+    required this.originProjectRevision,
+    required this.originCheckpointIdentity,
+    required this.choiceStableKey,
+    required this.publicationCheckpointIdentity,
+  });
+
+  final Revision3DialogLocalizationEditPublication publication;
+  final String originProjectId;
+  final int originProjectRevision;
+  final Object originCheckpointIdentity;
+  final String choiceStableKey;
+  final Object? publicationCheckpointIdentity;
+}
+
 /// Author-facing copy for the coherent Localization & Voice workspace.
 ///
 /// The widget deliberately receives all copy from its host. It owns no game,
@@ -69,6 +97,10 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
     required this.unsavedDescription,
     required this.discardLabel,
     required this.keepEditingLabel,
+    required this.voiceUnsavedTitle,
+    required this.voiceUnsavedDescription,
+    required this.discardAndContinueLabel,
+    required this.saveAndContinueLabel,
     required this.staleMessage,
     required this.reopenMessage,
     required this.invalidInputMessage,
@@ -85,9 +117,9 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
         searchLabel: 'Search project texts',
         refreshLabel: 'Refresh',
         newLineLabel: 'New dialog line',
-        addVoiceLabel: 'Add voice take',
-        manageVoiceLabel: 'Manage takes',
-        resolveVoiceLabel: 'Resolve target',
+        addVoiceLabel: 'Add take for any line',
+        manageVoiceLabel: 'Manage takes for any line',
+        resolveVoiceLabel: 'Resolve target for any line',
         loadingLabel: 'Opening project texts',
         emptyTitle: 'No project text yet',
         emptyDescription:
@@ -129,6 +161,11 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
             'You changed this project text. Switching now would discard those edits.',
         discardLabel: 'Discard changes',
         keepEditingLabel: 'Keep editing',
+        voiceUnsavedTitle: 'Save text before continuing?',
+        voiceUnsavedDescription:
+            'Save these text changes and continue directly to the selected action, keep editing, or deliberately discard the text changes.',
+        discardAndContinueLabel: 'Discard and continue',
+        saveAndContinueLabel: 'Save and continue',
         staleMessage:
             'The project changed while this text was open. Refresh and try again.',
         reopenMessage:
@@ -137,7 +174,7 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
             'Check that every language and dialog text is valid and not empty.',
         genericFailureMessage: 'The project text could not be saved.',
         voiceActionFailedMessage:
-            'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.',
+            'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.',
       );
 
   final String title;
@@ -183,6 +220,10 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
   final String unsavedDescription;
   final String discardLabel;
   final String keepEditingLabel;
+  final String voiceUnsavedTitle;
+  final String voiceUnsavedDescription;
+  final String discardAndContinueLabel;
+  final String saveAndContinueLabel;
   final String staleMessage;
   final String reopenMessage;
   final String invalidInputMessage;
@@ -265,14 +306,17 @@ class _Revision3LocalizationVoiceWorkspaceState
   bool _loadingVoiceCatalog = false;
   bool _loadingSeed = false;
   bool _saving = false;
-  bool _runningExternalAction = false;
+  int? _runningExternalActionOwner;
   bool _showEditorOnCompact = false;
   bool _checkpointChangedWhileDirty = false;
-  bool _revisionChangedWhileSaving = false;
   bool _lastReportedDirty = false;
   int _catalogEpoch = 0;
   int _voiceCatalogEpoch = 0;
   int _seedEpoch = 0;
+  int _saveEpoch = 0;
+  int _externalActionEpoch = 0;
+  Future<void>? _catalogReloadFuture;
+  Future<void>? _voiceCatalogReloadFuture;
 
   @override
   void initState() {
@@ -287,12 +331,14 @@ class _Revision3LocalizationVoiceWorkspaceState
   ) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.projectId != widget.projectId) {
+      _saveEpoch++;
+      _saving = false;
+      _invalidateExternalAction();
       _selectedKey = null;
       _voiceLineId = null;
       _voiceLocale = null;
       _showEditorOnCompact = false;
       _checkpointChangedWhileDirty = false;
-      _revisionChangedWhileSaving = false;
       _voiceCatalog = null;
       _voiceCatalogError = null;
       _disposeTextControllers();
@@ -303,7 +349,8 @@ class _Revision3LocalizationVoiceWorkspaceState
             widget.projectCheckpointIdentity) {
       _invalidateVoiceCatalog();
       if (_saving) {
-        _revisionChangedWhileSaving = true;
+        // Keep the submitted draft frozen until the pending publication tells
+        // us whether this is its exact rebind or unrelated checkpoint drift.
       } else if (_dirty) {
         _checkpointChangedWhileDirty = true;
       } else {
@@ -324,6 +371,8 @@ class _Revision3LocalizationVoiceWorkspaceState
     _catalogEpoch++;
     _voiceCatalogEpoch++;
     _seedEpoch++;
+    _saveEpoch++;
+    _invalidateExternalAction();
     _search
       ..removeListener(_searchChanged)
       ..dispose();
@@ -334,6 +383,31 @@ class _Revision3LocalizationVoiceWorkspaceState
   }
 
   void _searchChanged() => setState(() {});
+
+  bool get _runningExternalAction => _runningExternalActionOwner != null;
+
+  bool get _contextMutationBlocked =>
+      _saving || _loadingCatalog || _runningExternalAction;
+
+  int? _beginExternalAction() {
+    if (_runningExternalAction) return null;
+    final owner = ++_externalActionEpoch;
+    setState(() => _runningExternalActionOwner = owner);
+    return owner;
+  }
+
+  bool _externalActionOwnerIsCurrent(int owner) =>
+      mounted && _runningExternalActionOwner == owner;
+
+  void _endExternalAction(int owner) {
+    if (!_externalActionOwnerIsCurrent(owner)) return;
+    setState(() => _runningExternalActionOwner = null);
+  }
+
+  void _invalidateExternalAction() {
+    _externalActionEpoch++;
+    _runningExternalActionOwner = null;
+  }
 
   void _disposeTextControllers() {
     for (final controller in _texts.values) {
@@ -350,7 +424,13 @@ class _Revision3LocalizationVoiceWorkspaceState
     _loadingVoiceCatalog = false;
   }
 
-  Future<void> _reloadCatalog({bool clearCurrent = false}) async {
+  Future<void> _reloadCatalog({bool clearCurrent = false}) {
+    final reload = _reloadCatalogImpl(clearCurrent: clearCurrent);
+    _catalogReloadFuture = reload;
+    return reload;
+  }
+
+  Future<void> _reloadCatalogImpl({bool clearCurrent = false}) async {
     unawaited(_reloadVoiceCatalog(clearCurrent: clearCurrent));
     final epoch = ++_catalogEpoch;
     ++_seedEpoch;
@@ -396,7 +476,13 @@ class _Revision3LocalizationVoiceWorkspaceState
     }
   }
 
-  Future<void> _reloadVoiceCatalog({bool clearCurrent = false}) async {
+  Future<void> _reloadVoiceCatalog({bool clearCurrent = false}) {
+    final reload = _reloadVoiceCatalogImpl(clearCurrent: clearCurrent);
+    _voiceCatalogReloadFuture = reload;
+    return reload;
+  }
+
+  Future<void> _reloadVoiceCatalogImpl({bool clearCurrent = false}) async {
     final loader = widget.loadVoiceCatalog;
     final epoch = ++_voiceCatalogEpoch;
     if (loader == null) {
@@ -546,15 +632,54 @@ class _Revision3LocalizationVoiceWorkspaceState
         false;
   }
 
+  Future<_UnsavedExternalActionDecision> _confirmExternalAction() async {
+    if (!_dirty || _saving) {
+      return _saving
+          ? _UnsavedExternalActionDecision.keepEditing
+          : _UnsavedExternalActionDecision.discardAndContinue;
+    }
+    final canSave = _seed != null && !_checkpointChangedWhileDirty;
+    return await showDialog<_UnsavedExternalActionDecision>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(widget.copy.voiceUnsavedTitle),
+            content: Text(widget.copy.voiceUnsavedDescription),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(_UnsavedExternalActionDecision.keepEditing),
+                child: Text(widget.copy.keepEditingLabel),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(_UnsavedExternalActionDecision.discardAndContinue),
+                child: Text(widget.copy.discardAndContinueLabel),
+              ),
+              FilledButton(
+                onPressed: canSave
+                    ? () => Navigator.of(
+                        context,
+                      ).pop(_UnsavedExternalActionDecision.saveAndContinue)
+                    : null,
+                child: Text(widget.copy.saveAndContinueLabel),
+              ),
+            ],
+          ),
+        ) ??
+        _UnsavedExternalActionDecision.keepEditing;
+  }
+
   Future<void> _selectChoice(String stableKey) async {
-    if (_saving || _loadingCatalog) return;
+    if (_contextMutationBlocked) return;
     if (_selectedKey == stableKey) {
       if (!_showEditorOnCompact) {
         setState(() => _showEditorOnCompact = true);
       }
       return;
     }
-    if (!await _confirmDiscard() || !mounted) return;
+    if (!await _confirmDiscard() || !mounted || _contextMutationBlocked) return;
     if (_checkpointChangedWhileDirty) {
       setState(() {
         _showEditorOnCompact = false;
@@ -573,7 +698,7 @@ class _Revision3LocalizationVoiceWorkspaceState
   }
 
   Future<void> _addLocale() async {
-    if (_saving || _loadingCatalog) return;
+    if (_contextMutationBlocked) return;
     final catalogEpoch = _catalogEpoch;
     final seedEpoch = _seedEpoch;
     final added = await showDialog<_AddedLocale>(
@@ -584,6 +709,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       ),
     );
     if (added == null || !mounted) return;
+    if (_saving || _runningExternalAction) return;
     if (_loadingCatalog ||
         _checkpointChangedWhileDirty ||
         catalogEpoch != _catalogEpoch ||
@@ -599,93 +725,341 @@ class _Revision3LocalizationVoiceWorkspaceState
   }
 
   void _removeLocale(Revision3DialogLocalizationLocaleSeed locale) {
-    if (_saving || _loadingCatalog || !locale.canRemove || _texts.length <= 1) {
+    if (_contextMutationBlocked || !locale.canRemove || _texts.length <= 1) {
       return;
     }
     final controller = _texts.remove(locale.locale);
     controller
       ?..removeListener(_textChanged)
       ..dispose();
+    if (_voiceLocale == locale.locale) {
+      _voiceLocale = _texts.keys.firstOrNull;
+    }
     setState(() {});
     _reportDirty();
   }
 
-  Future<void> _save() async {
+  Future<_LocalizationSaveCompletion?> _save() async {
     final seed = _seed;
     if (seed == null ||
         !_dirty ||
         _saving ||
         _loadingCatalog ||
         _checkpointChangedWhileDirty) {
-      return;
+      return null;
     }
     late final Revision3DialogLocalizationEditInput input;
     try {
       input = Revision3DialogLocalizationEditInput(texts: _currentTexts);
     } on FormatException {
       _showMessage(widget.copy.invalidInputMessage);
-      return;
+      return null;
     }
+    final originProjectId = widget.projectId;
+    final originProjectRevision = widget.projectRevision;
+    final originCheckpointIdentity = widget.projectCheckpointIdentity;
+    final originService = widget.service;
+    final originOnPublished = widget.onPublished;
+    final originCopy = widget.copy;
+    final submittedTexts = Map<String, String>.unmodifiable(input.texts);
+    final saveEpoch = ++_saveEpoch;
+    bool saveIsActive() => mounted && _saveEpoch == saveEpoch;
+    bool originIsCurrent() =>
+        saveIsActive() &&
+        widget.projectId == originProjectId &&
+        widget.projectRevision == originProjectRevision &&
+        widget.projectCheckpointIdentity == originCheckpointIdentity;
+    void reportFailure(String originMessage) {
+      if (!saveIsActive() || widget.projectId != originProjectId) return;
+      if (originIsCurrent()) {
+        _showMessage(originMessage);
+        return;
+      }
+      _checkpointChangedWhileDirty = _dirty;
+      _showMessage(widget.copy.staleMessage);
+    }
+
     setState(() => _saving = true);
-    var published = false;
     try {
-      final publication = await widget.service.publish(
-        seed: seed,
-        input: input,
-      );
-      if (!mounted) return;
-      _baseline = Map<String, String>.unmodifiable(_currentTexts);
+      final publication = await originService.publish(seed: seed, input: input);
+      if (!saveIsActive() || widget.projectId != originProjectId) return null;
+      final completedAtOrigin = originIsCurrent();
+      final completedAtExactPublication =
+          widget.projectRevision == publication.projectRevision &&
+          widget.projectCheckpointIdentity != originCheckpointIdentity;
+      if (!completedAtOrigin && !completedAtExactPublication) {
+        _checkpointChangedWhileDirty = _dirty;
+        _showMessage(widget.copy.staleMessage);
+        return null;
+      }
+      _baseline = submittedTexts;
+      _checkpointChangedWhileDirty = false;
       _reportDirty();
-      published = true;
-      _showMessage(widget.copy.savedLabel);
-      widget.onPublished?.call(publication);
+      _showMessage(
+        completedAtOrigin ? originCopy.savedLabel : widget.copy.savedLabel,
+      );
+      final completion = _LocalizationSaveCompletion(
+        publication: publication,
+        originProjectId: originProjectId,
+        originProjectRevision: originProjectRevision,
+        originCheckpointIdentity: originCheckpointIdentity,
+        choiceStableKey: seed.choice.stableKey,
+        publicationCheckpointIdentity: completedAtExactPublication
+            ? widget.projectCheckpointIdentity
+            : null,
+      );
+      if (completedAtOrigin) {
+        originOnPublished?.call(publication);
+      } else {
+        setState(() => _saving = false);
+        await _reloadCatalog();
+        final voiceReload = _voiceCatalogReloadFuture;
+        if (voiceReload != null) await voiceReload;
+      }
+      return completion;
     } on Revision3DialogLocalizationEditRequiresReopenException {
-      if (mounted) _showMessage(widget.copy.reopenMessage);
+      reportFailure(originCopy.reopenMessage);
     } on Revision3DialogLocalizationEditStaleCheckpointException {
-      if (mounted) _showMessage(widget.copy.staleMessage);
+      reportFailure(originCopy.staleMessage);
     } on Revision3DialogLocalizationEditLockedVoiceTextException {
-      if (mounted) _showMessage(widget.copy.voiceLockedLabel);
+      reportFailure(originCopy.voiceLockedLabel);
     } on FormatException {
-      if (mounted) _showMessage(widget.copy.invalidInputMessage);
+      reportFailure(originCopy.invalidInputMessage);
     } catch (_) {
-      if (mounted) _showMessage(widget.copy.genericFailureMessage);
+      reportFailure(originCopy.genericFailureMessage);
     } finally {
-      if (mounted) {
-        final revisionChangedWhileSaving = _revisionChangedWhileSaving;
-        setState(() {
-          _saving = false;
-          _revisionChangedWhileSaving = false;
-          if (revisionChangedWhileSaving && !published && _dirty) {
-            _checkpointChangedWhileDirty = true;
-          }
-        });
-        if (revisionChangedWhileSaving && published) {
-          unawaited(_reloadCatalog());
-        }
+      if (saveIsActive() && widget.projectId == originProjectId && _saving) {
+        setState(() => _saving = false);
       }
     }
+    return null;
+  }
+
+  Object? _currentPublicationCheckpoint(_LocalizationSaveCompletion saved) {
+    if (!mounted ||
+        widget.projectId != saved.originProjectId ||
+        widget.projectRevision != saved.publication.projectRevision ||
+        widget.projectCheckpointIdentity == saved.originCheckpointIdentity) {
+      return null;
+    }
+    return widget.projectCheckpointIdentity;
+  }
+
+  bool _hasPinnedPublicationCheckpoint(
+    _LocalizationSaveCompletion saved,
+    Object publicationCheckpointIdentity,
+  ) =>
+      mounted &&
+      widget.projectId == saved.originProjectId &&
+      widget.projectRevision == saved.publication.projectRevision &&
+      widget.projectCheckpointIdentity == publicationCheckpointIdentity;
+
+  _PublicationAuthorityStatus _publicationAuthorityStatus(
+    _LocalizationSaveCompletion saved, {
+    required Object publicationCheckpointIdentity,
+    required bool requiresVoiceAuthority,
+    _VoiceContextActionKind? contextKind,
+    String? lineId,
+    String? locale,
+  }) {
+    if (!_hasPinnedPublicationCheckpoint(
+      saved,
+      publicationCheckpointIdentity,
+    )) {
+      return _PublicationAuthorityStatus.invalid;
+    }
+    if (_loadingCatalog || _loadingSeed) {
+      return _PublicationAuthorityStatus.waiting;
+    }
+    final catalog = _catalog;
+    final seed = _seed;
+    if (_catalogError != null ||
+        _seedError != null ||
+        catalog == null ||
+        seed == null ||
+        catalog.projectId != widget.projectId ||
+        catalog.projectRevision != widget.projectRevision ||
+        seed.choice.stableKey != saved.choiceStableKey) {
+      return _PublicationAuthorityStatus.invalid;
+    }
+    if (!requiresVoiceAuthority) return _PublicationAuthorityStatus.ready;
+    if (widget.loadVoiceCatalog == null || _loadingVoiceCatalog) {
+      return _PublicationAuthorityStatus.waiting;
+    }
+    final voiceCatalog = _voiceCatalog;
+    if (_voiceCatalogError != null ||
+        voiceCatalog == null ||
+        voiceCatalog.projectId != widget.projectId ||
+        voiceCatalog.projectRevision != widget.projectRevision) {
+      return _PublicationAuthorityStatus.invalid;
+    }
+    if (contextKind == null) return _PublicationAuthorityStatus.ready;
+    if (lineId == null || locale == null) {
+      return _PublicationAuthorityStatus.invalid;
+    }
+    final seedHasLine = seed.lineBacklinks.any((line) => line.lineId == lineId);
+    final seedHasLocale = seed.locales.any((entry) => entry.locale == locale);
+    final line = voiceCatalog.line(lineId);
+    if (!seedHasLine ||
+        !seedHasLocale ||
+        line == null ||
+        !voiceCatalog.suggestedLocales.contains(locale)) {
+      return _PublicationAuthorityStatus.invalid;
+    }
+    final contextIsCurrent = switch (contextKind) {
+      _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
+      _VoiceContextActionKind.manageTakes =>
+        line.slotSummaryForLocale(locale) != null,
+      _VoiceContextActionKind.resolveTarget => line.isLocaleTargetable(locale),
+    };
+    return contextIsCurrent
+        ? _PublicationAuthorityStatus.ready
+        : _PublicationAuthorityStatus.invalid;
+  }
+
+  Future<Object?> _awaitPublicationAuthority(
+    _LocalizationSaveCompletion saved, {
+    required bool requiresVoiceAuthority,
+    _VoiceContextActionKind? contextKind,
+    String? lineId,
+    String? locale,
+  }) async {
+    await WidgetsBinding.instance.endOfFrame;
+    final publicationCheckpointIdentity =
+        saved.publicationCheckpointIdentity ??
+        _currentPublicationCheckpoint(saved);
+    if (publicationCheckpointIdentity == null ||
+        !_hasPinnedPublicationCheckpoint(
+          saved,
+          publicationCheckpointIdentity,
+        )) {
+      return null;
+    }
+    final catalogReload = _catalogReloadFuture;
+    if (catalogReload == null) return null;
+    await catalogReload;
+    if (!_hasPinnedPublicationCheckpoint(
+      saved,
+      publicationCheckpointIdentity,
+    )) {
+      return null;
+    }
+    if (requiresVoiceAuthority) {
+      final voiceReload = _voiceCatalogReloadFuture;
+      if (voiceReload == null) return null;
+      await voiceReload;
+    }
+    if (!mounted) return null;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!_hasPinnedPublicationCheckpoint(
+      saved,
+      publicationCheckpointIdentity,
+    )) {
+      return null;
+    }
+    final ready =
+        _publicationAuthorityStatus(
+          saved,
+          publicationCheckpointIdentity: publicationCheckpointIdentity,
+          requiresVoiceAuthority: requiresVoiceAuthority,
+          contextKind: contextKind,
+          lineId: lineId,
+          locale: locale,
+        ) ==
+        _PublicationAuthorityStatus.ready;
+    return ready ? publicationCheckpointIdentity : null;
   }
 
   Future<void> _runExternalAction(
-    Revision3LocalizationVoiceAction action, {
+    Revision3LocalizationVoiceAction? Function() resolveAction, {
     bool Function()? authorityIsCurrent,
     VoidCallback? onAuthorityDrift,
+    bool requiresVoiceAuthority = false,
+    _VoiceContextActionKind? contextKind,
+    String? lineId,
+    String? locale,
   }) async {
     if (_saving ||
         _loadingCatalog ||
         _runningExternalAction ||
+        resolveAction() == null ||
         (authorityIsCurrent != null && !authorityIsCurrent())) {
       return;
     }
-    final discardConfirmed = await _confirmDiscard();
+    final originProjectId = widget.projectId;
+    final decision = await _confirmExternalAction();
     if (!mounted) return;
+    if (widget.projectId != originProjectId) {
+      _showMessage(widget.copy.staleMessage);
+      return;
+    }
     if (authorityIsCurrent != null && !authorityIsCurrent()) {
       onAuthorityDrift?.call();
       return;
     }
-    if (!discardConfirmed) return;
+    if (decision == _UnsavedExternalActionDecision.keepEditing) return;
+    if (decision == _UnsavedExternalActionDecision.saveAndContinue) {
+      final externalActionOwner = _beginExternalAction();
+      if (externalActionOwner == null) return;
+      Object? actionCheckpointIdentity;
+      int? actionProjectRevision;
+      bool continuationIsCurrent() {
+        if (!_externalActionOwnerIsCurrent(externalActionOwner) ||
+            widget.projectId != originProjectId) {
+          return false;
+        }
+        final checkpointIdentity = actionCheckpointIdentity;
+        return checkpointIdentity == null ||
+            (widget.projectRevision == actionProjectRevision &&
+                widget.projectCheckpointIdentity == checkpointIdentity);
+      }
+
+      try {
+        final saved = await _save();
+        if (!continuationIsCurrent() || saved == null) return;
+        final publicationCheckpointIdentity = await _awaitPublicationAuthority(
+          saved,
+          requiresVoiceAuthority: requiresVoiceAuthority,
+          contextKind: contextKind,
+          lineId: lineId,
+          locale: locale,
+        );
+        if (!continuationIsCurrent()) return;
+        if (publicationCheckpointIdentity == null ||
+            !_hasPinnedPublicationCheckpoint(
+              saved,
+              publicationCheckpointIdentity,
+            )) {
+          _replaceMessage(
+            '${widget.copy.savedLabel}. ${widget.copy.staleMessage}',
+          );
+          return;
+        }
+        actionCheckpointIdentity = publicationCheckpointIdentity;
+        actionProjectRevision = saved.publication.projectRevision;
+        final action = resolveAction();
+        if (!continuationIsCurrent()) return;
+        if (action == null) {
+          _replaceMessage(
+            '${widget.copy.savedLabel}. ${widget.copy.staleMessage}',
+          );
+          return;
+        }
+        await action();
+        if (!continuationIsCurrent()) return;
+      } catch (_) {
+        if (continuationIsCurrent()) {
+          _showMessage(widget.copy.voiceActionFailedMessage);
+        }
+      } finally {
+        _endExternalAction(externalActionOwner);
+      }
+      return;
+    }
     final reloadAfterAction = _checkpointChangedWhileDirty;
-    final revisionBeforeAction = widget.projectRevision;
+    final actionProjectId = widget.projectId;
+    final actionProjectRevision = widget.projectRevision;
+    final actionCheckpointIdentity = widget.projectCheckpointIdentity;
     if (_dirty) {
       setState(() {
         _replaceSeed(_seed);
@@ -694,22 +1068,40 @@ class _Revision3LocalizationVoiceWorkspaceState
         }
       });
     }
-    setState(() => _runningExternalAction = true);
+    final action = resolveAction();
+    if (action == null) return;
+    final externalActionOwner = _beginExternalAction();
+    if (externalActionOwner == null) return;
+    bool continuationIsCurrent() =>
+        _externalActionOwnerIsCurrent(externalActionOwner) &&
+        widget.projectId == actionProjectId &&
+        widget.projectRevision == actionProjectRevision &&
+        widget.projectCheckpointIdentity == actionCheckpointIdentity;
     try {
       await action();
-      if (!mounted) return;
-      if (reloadAfterAction && widget.projectRevision == revisionBeforeAction) {
+      if (!continuationIsCurrent()) return;
+      if (reloadAfterAction) {
         await _reloadCatalog(clearCurrent: true);
       }
     } catch (_) {
-      if (mounted) _showMessage(widget.copy.voiceActionFailedMessage);
+      if (continuationIsCurrent()) {
+        _showMessage(widget.copy.voiceActionFailedMessage);
+      }
     } finally {
-      if (mounted) setState(() => _runningExternalAction = false);
+      _endExternalAction(externalActionOwner);
     }
   }
 
+  Revision3LocalizationVoiceContextAction? _contextAction(
+    _VoiceContextActionKind kind,
+  ) => switch (kind) {
+    _VoiceContextActionKind.addTake => widget.onAddVoiceTakeFor,
+    _VoiceContextActionKind.manageTakes => widget.onManageVoiceTakesFor,
+    _VoiceContextActionKind.resolveTarget => widget.onResolveVoiceTargetFor,
+  };
+
   Future<void> _runContextAction(
-    Revision3LocalizationVoiceContextAction action,
+    _VoiceContextActionKind kind,
     Revision3VoiceCatalog checkpoint,
   ) async {
     final projectId = widget.projectId;
@@ -736,16 +1128,26 @@ class _Revision3LocalizationVoiceWorkspaceState
     if (!authorityIsCurrent()) {
       return;
     }
+    Revision3LocalizationVoiceAction? resolveAction() {
+      final currentAction = _contextAction(kind);
+      if (currentAction == null) return null;
+      return () => currentAction(initialLineId: lineId, initialLocale: locale);
+    }
+
     await _runExternalAction(
-      () => action(initialLineId: lineId, initialLocale: locale),
+      resolveAction,
       authorityIsCurrent: authorityIsCurrent,
       onAuthorityDrift: () => _showMessage(widget.copy.staleMessage),
+      requiresVoiceAuthority: true,
+      contextKind: kind,
+      lineId: lineId,
+      locale: locale,
     );
   }
 
   void _selectVoiceLine(Revision3DialogLocalizationLineBacklink line) {
     final seed = _seed;
-    if (seed == null || _saving || _loadingCatalog) return;
+    if (seed == null || _contextMutationBlocked) return;
     final locales = seed.locales.map((locale) => locale.locale).toList();
     final retainedLocale = locales.contains(_voiceLocale) ? _voiceLocale : null;
     final slottedLocale = line.voiceSlotLocales
@@ -758,12 +1160,54 @@ class _Revision3LocalizationVoiceWorkspaceState
   }
 
   void _selectVoiceLocale(String locale) {
-    if (_saving || _loadingCatalog) return;
+    if (_contextMutationBlocked) return;
     setState(() => _voiceLocale = locale);
   }
 
+  Future<void> _refreshCatalogFromBrowser() async {
+    if (_contextMutationBlocked) return;
+    if (!await _confirmDiscard() || !mounted || _contextMutationBlocked) return;
+    await _reloadCatalog();
+  }
+
+  Future<void> _retryCatalog({required bool clearCurrent}) async {
+    if (_contextMutationBlocked) return;
+    await _reloadCatalog(clearCurrent: clearCurrent);
+  }
+
+  Future<void> _retrySeed() async {
+    if (_contextMutationBlocked) return;
+    final catalog = _catalog;
+    final key = _selectedKey;
+    if (catalog == null || key == null) return;
+    await _loadSeed(catalog, key);
+  }
+
+  void _leaveFailedCompactEditor() {
+    if (_contextMutationBlocked) return;
+    setState(() => _showEditorOnCompact = false);
+  }
+
+  Future<void> _leaveCompactEditor() async {
+    if (_contextMutationBlocked) return;
+    if (!await _confirmDiscard() || !mounted || _contextMutationBlocked) return;
+    final reload = _checkpointChangedWhileDirty;
+    setState(() {
+      _replaceSeed(reload ? null : _seed);
+      _showEditorOnCompact = false;
+    });
+    if (reload && !_contextMutationBlocked) {
+      await _reloadCatalog(clearCurrent: true);
+    }
+  }
+
   Future<void> _refreshChangedCheckpoint() async {
-    if (_saving || !await _confirmDiscard() || !mounted) return;
+    if (_contextMutationBlocked ||
+        !await _confirmDiscard() ||
+        !mounted ||
+        _contextMutationBlocked) {
+      return;
+    }
     setState(() {
       _showEditorOnCompact = false;
       _replaceSeed(null);
@@ -775,6 +1219,13 @@ class _Revision3LocalizationVoiceWorkspaceState
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _replaceMessage(String message) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..removeCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -791,27 +1242,40 @@ class _Revision3LocalizationVoiceWorkspaceState
             onCreateDialogLine:
                 widget.onCreateDialogLine == null ||
                     _loadingCatalog ||
+                    _saving ||
                     _runningExternalAction
                 ? null
-                : () => _runExternalAction(widget.onCreateDialogLine!),
+                : () => _runExternalAction(() => widget.onCreateDialogLine),
             onAddVoiceTake:
                 widget.onAddVoiceTake == null ||
                     _loadingCatalog ||
+                    _saving ||
                     _runningExternalAction
                 ? null
-                : () => _runExternalAction(widget.onAddVoiceTake!),
+                : () => _runExternalAction(
+                    () => widget.onAddVoiceTake,
+                    requiresVoiceAuthority: true,
+                  ),
             onManageVoiceTakes:
                 widget.onManageVoiceTakes == null ||
                     _loadingCatalog ||
+                    _saving ||
                     _runningExternalAction
                 ? null
-                : () => _runExternalAction(widget.onManageVoiceTakes!),
+                : () => _runExternalAction(
+                    () => widget.onManageVoiceTakes,
+                    requiresVoiceAuthority: true,
+                  ),
             onResolveVoiceTarget:
                 widget.onResolveVoiceTarget == null ||
                     _loadingCatalog ||
+                    _saving ||
                     _runningExternalAction
                 ? null
-                : () => _runExternalAction(widget.onResolveVoiceTarget!),
+                : () => _runExternalAction(
+                    () => widget.onResolveVoiceTarget,
+                    requiresVoiceAuthority: true,
+                  ),
             dense: denseHeader,
             compactActions: !wide || denseHeader,
           ),
@@ -840,16 +1304,19 @@ class _Revision3LocalizationVoiceWorkspaceState
   Widget _buildBrowser({required bool dense}) {
     if (_catalogError != null) {
       final stale = _checkpointChangedWhileDirty;
+      final retryable = _loadErrorRetryable(_catalogError!);
       return _WorkspaceFailure(
         title: stale
             ? widget.copy.staleMessage
             : _loadErrorTitle(_catalogError!),
         retryLabel: stale ? widget.copy.refreshLabel : widget.copy.retryLabel,
-        retry: _loadingCatalog || !_loadErrorRetryable(_catalogError!)
+        retryKey: const Key('revision3-localization-catalog-retry'),
+        showRetry: retryable,
+        retry: _contextMutationBlocked || !retryable
             ? null
             : stale
-            ? () => _reloadCatalog(clearCurrent: true)
-            : _reloadCatalog,
+            ? () => _retryCatalog(clearCurrent: true)
+            : () => _retryCatalog(clearCurrent: false),
       );
     }
     final catalog = _catalog;
@@ -881,14 +1348,11 @@ class _Revision3LocalizationVoiceWorkspaceState
                   ),
                 ),
                 IconButton(
+                  key: const Key('revision3-localization-browser-refresh'),
                   tooltip: widget.copy.refreshLabel,
-                  onPressed: _loadingCatalog || _saving
+                  onPressed: _contextMutationBlocked
                       ? null
-                      : () async {
-                          if (await _confirmDiscard()) {
-                            await _reloadCatalog();
-                          }
-                        },
+                      : _refreshCatalogFromBrowser,
                   icon: const Icon(Icons.refresh),
                 ),
               ],
@@ -906,14 +1370,11 @@ class _Revision3LocalizationVoiceWorkspaceState
               prefixIcon: const Icon(Icons.search),
               suffixIcon: dense
                   ? IconButton(
+                      key: const Key('revision3-localization-browser-refresh'),
                       tooltip: widget.copy.refreshLabel,
-                      onPressed: _loadingCatalog || _saving
+                      onPressed: _contextMutationBlocked
                           ? null
-                          : () async {
-                              if (await _confirmDiscard()) {
-                                await _reloadCatalog();
-                              }
-                            },
+                          : _refreshCatalogFromBrowser,
                       icon: const Icon(Icons.refresh),
                     )
                   : null,
@@ -986,7 +1447,7 @@ class _Revision3LocalizationVoiceWorkspaceState
                           ],
                         ),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: _saving || _loadingCatalog
+                  onTap: _contextMutationBlocked
                       ? null
                       : () => unawaited(_selectChoice(choice.stableKey)),
                 );
@@ -1011,22 +1472,19 @@ class _Revision3LocalizationVoiceWorkspaceState
       final stale =
           _checkpointChangedWhileDirty ||
           _seedError is Revision3DialogLocalizationEditStaleCheckpointException;
+      final retryable = _loadErrorRetryable(_seedError!);
       final failure = _WorkspaceFailure(
         title: _checkpointChangedWhileDirty
             ? widget.copy.staleMessage
             : _loadErrorTitle(_seedError!),
         retryLabel: stale ? widget.copy.refreshLabel : widget.copy.retryLabel,
-        retry: _saving || !_loadErrorRetryable(_seedError!)
+        retryKey: const Key('revision3-localization-seed-retry'),
+        showRetry: retryable,
+        retry: _contextMutationBlocked || !retryable
             ? null
             : stale
-            ? () => _reloadCatalog(clearCurrent: true)
-            : () {
-                final catalog = _catalog;
-                final key = _selectedKey;
-                if (catalog != null && key != null) {
-                  return _loadSeed(catalog, key);
-                }
-              },
+            ? () => _retryCatalog(clearCurrent: true)
+            : _retrySeed,
       );
       if (!compact) return failure;
       return Column(
@@ -1038,9 +1496,9 @@ class _Revision3LocalizationVoiceWorkspaceState
               child: IconButton(
                 key: const Key('revision3-localization-editor-back'),
                 tooltip: widget.copy.projectTextsLabel,
-                onPressed: _saving
+                onPressed: _contextMutationBlocked
                     ? null
-                    : () => setState(() => _showEditorOnCompact = false),
+                    : _leaveFailedCompactEditor,
                 icon: const Icon(Icons.arrow_back),
               ),
             ),
@@ -1088,7 +1546,9 @@ class _Revision3LocalizationVoiceWorkspaceState
                     key: const Key(
                       'revision3-localization-refresh-changed-project',
                     ),
-                    onPressed: _saving ? null : _refreshChangedCheckpoint,
+                    onPressed: _contextMutationBlocked
+                        ? null
+                        : _refreshChangedCheckpoint,
                     icon: const Icon(Icons.refresh),
                     label: Text(widget.copy.refreshLabel),
                   ),
@@ -1325,13 +1785,16 @@ class _Revision3LocalizationVoiceWorkspaceState
           copy: widget.voiceProductionCopy,
           onAddTake: canAdd
               ? () => unawaited(
-                  _runContextAction(widget.onAddVoiceTakeFor!, voiceCatalog!),
+                  _runContextAction(
+                    _VoiceContextActionKind.addTake,
+                    voiceCatalog!,
+                  ),
                 )
               : null,
           onManageTakes: canManage
               ? () => unawaited(
                   _runContextAction(
-                    widget.onManageVoiceTakesFor!,
+                    _VoiceContextActionKind.manageTakes,
                     voiceCatalog!,
                   ),
                 )
@@ -1339,7 +1802,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           onResolveTarget: canResolve
               ? () => unawaited(
                   _runContextAction(
-                    widget.onResolveVoiceTargetFor!,
+                    _VoiceContextActionKind.resolveTarget,
                     voiceCatalog!,
                   ),
                 )
@@ -1359,6 +1822,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           _dirty &&
               !_saving &&
               !_loadingCatalog &&
+              !_runningExternalAction &&
               !_checkpointChangedWhileDirty
           ? _save
           : null,
@@ -1411,20 +1875,9 @@ class _Revision3LocalizationVoiceWorkspaceState
                 IconButton(
                   key: const Key('revision3-localization-editor-back'),
                   tooltip: widget.copy.projectTextsLabel,
-                  onPressed: _saving
+                  onPressed: _contextMutationBlocked
                       ? null
-                      : () async {
-                          if (await _confirmDiscard() && mounted) {
-                            final reload = _checkpointChangedWhileDirty;
-                            setState(() {
-                              _replaceSeed(reload ? null : _seed);
-                              _showEditorOnCompact = false;
-                            });
-                            if (reload) {
-                              await _reloadCatalog(clearCurrent: true);
-                            }
-                          }
-                        },
+                      : _leaveCompactEditor,
                   icon: const Icon(Icons.arrow_back),
                 ),
                 const SizedBox(width: 4),
@@ -1895,11 +2348,15 @@ class _WorkspaceFailure extends StatelessWidget {
     required this.title,
     required this.retryLabel,
     required this.retry,
+    required this.showRetry,
+    this.retryKey,
   });
 
   final String title;
   final String retryLabel;
   final FutureOr<void> Function()? retry;
+  final bool showRetry;
+  final Key? retryKey;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -1911,9 +2368,13 @@ class _WorkspaceFailure extends StatelessWidget {
           const Icon(Icons.error_outline, size: 38),
           const SizedBox(height: 12),
           Text(title, textAlign: TextAlign.center),
-          if (retry != null) ...[
+          if (showRetry) ...[
             const SizedBox(height: 12),
-            FilledButton(onPressed: retry, child: Text(retryLabel)),
+            FilledButton(
+              key: retryKey,
+              onPressed: retry,
+              child: Text(retryLabel),
+            ),
           ],
         ],
       ),

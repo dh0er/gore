@@ -3469,6 +3469,8 @@ class _ManagedRevision3ProjectViewState
     bool fixedContext = false,
   }) async {
     if (gameRoot == null || project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final german = l10n.localeName.startsWith('de');
     final publication = await showDialog<Revision3VoiceTakePublication>(
       context: context,
       builder: (context) => Revision3VoiceTakeDialog(
@@ -3476,6 +3478,9 @@ class _ManagedRevision3ProjectViewState
           loadContentIndex: loadContentIndex,
           publishTechnicalPlan: publishVoiceTake,
         ),
+        copy: german
+            ? const Revision3VoiceTakeDialogCopy.german()
+            : const Revision3VoiceTakeDialogCopy.english(),
         initialLineId: initialLineId,
         initialLocale: initialLocale,
         fixedContext: fixedContext,
@@ -3484,9 +3489,7 @@ class _ManagedRevision3ProjectViewState
     if (!context.mounted || publication == null) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'Voice take saved in project revision ${publication.projectRevision}. It is saved to the project only and is not yet usable in game.',
-        ),
+        content: Text(l10n.managedVoiceTakeSaved(publication.projectRevision)),
       ),
     );
   }
@@ -3498,6 +3501,8 @@ class _ManagedRevision3ProjectViewState
     bool fixedContext = false,
   }) async {
     if (project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final german = l10n.localeName.startsWith('de');
     final publication =
         await showDialog<Revision3VoiceTakeSelectionPublication>(
           context: context,
@@ -3518,19 +3523,21 @@ class _ManagedRevision3ProjectViewState
               loadContentIndex: loadContentIndex,
               publishTechnicalPlan: publishDialogVoiceSlotRemoval,
             ),
+            copy: german
+                ? Revision3VoiceTakeSelectionDialogCopy.german
+                : Revision3VoiceTakeSelectionDialogCopy.english,
             initialLineId: initialLineId,
             initialLocale: initialLocale,
             fixedContext: fixedContext,
           ),
         );
     if (!context.mounted || publication == null) return;
-    final outcome = publication.cleared
-        ? 'Voice selection cleared'
-        : 'Approved Voice take selected';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '$outcome in project revision ${publication.projectRevision}. Voice build remains a separate offline step; runtime remains unqualified.',
+          publication.cleared
+              ? l10n.managedVoiceSelectionCleared(publication.projectRevision)
+              : l10n.managedVoiceSelectionSelected(publication.projectRevision),
         ),
       ),
     );
@@ -3543,6 +3550,8 @@ class _ManagedRevision3ProjectViewState
     bool fixedContext = false,
   }) async {
     if (gameRoot == null || project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final german = l10n.localeName.startsWith('de');
     final publication = await showDialog<Revision3VoiceTargetPublication>(
       context: context,
       builder: (context) => Revision3VoiceTargetDialog(
@@ -3550,27 +3559,29 @@ class _ManagedRevision3ProjectViewState
           loadContentIndex: loadContentIndex,
           publishTechnicalPlan: publishVoiceTarget,
         ),
+        copy: german
+            ? Revision3VoiceTargetDialogCopy.german
+            : Revision3VoiceTargetDialogCopy.english,
         initialLineId: initialLineId,
         initialLocale: initialLocale,
         fixedContext: fixedContext,
       ),
     );
     if (!context.mounted || publication == null) return;
-    final outcome = switch (publication.resolution) {
+    final message = switch (publication.resolution) {
       AuthoringRevision3VoiceTargetResolutionState.unresolved =>
-        'No installed archive member matched',
+        l10n.managedVoiceTargetUnresolvedSaved(publication.projectRevision),
       AuthoringRevision3VoiceTargetResolutionState.resolved =>
-        'One installed archive member was sealed',
+        l10n.managedVoiceTargetResolvedSaved(publication.projectRevision),
       AuthoringRevision3VoiceTargetResolutionState.ambiguous =>
-        '${publication.matchCount} installed archive members matched; nothing was chosen implicitly',
-    };
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '$outcome. Voice target evidence saved in project revision ${publication.projectRevision}.',
+        l10n.managedVoiceTargetAmbiguousSaved(
+          publication.matchCount,
+          publication.projectRevision,
         ),
-      ),
-    );
+    };
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _openVoiceBuild(BuildContext context) async {
@@ -4189,56 +4200,70 @@ Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>
 
 Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
   AppLocalizations l10n,
-) => Revision3LocalizationVoiceWorkspaceCopy(
-  title: l10n.managedWorkspaceLocalizationVoiceLabel,
-  description: l10n.managedSectionLocalizationVoiceDescription,
-  projectTextsLabel: l10n.managedLocalizationProjectTextsLabel,
-  searchLabel: l10n.managedLocalizationSearchLabel,
-  refreshLabel: l10n.managedLocalizationRefresh,
-  newLineLabel: l10n.managedActionNewDialogLineTitle,
-  addVoiceLabel: l10n.managedActionAddVoiceTakeTitle,
-  manageVoiceLabel: l10n.managedActionManageVoiceTakesTitle,
-  resolveVoiceLabel: l10n.managedActionResolveVoiceTargetTitle,
-  loadingLabel: l10n.managedDialogLineLoading,
-  emptyTitle: l10n.managedLocalizationEmptyTitle,
-  emptyDescription: l10n.managedLocalizationEmptyDescription,
-  loadFailedTitle: l10n.managedLocalizationLoadFailed,
-  retryLabel: l10n.managedDialogLineRetry,
-  selectTextLabel: l10n.managedLocalizationSelectText,
-  languagesLabel: l10n.managedLocalizationLanguagesLabel,
-  usedByLinesLabel: l10n.managedLocalizationUsedByLines,
-  voiceContextTitle: l10n.managedLocalizationVoiceContextTitle,
-  voiceSelectLineLabel: l10n.managedLocalizationVoiceSelectLine,
-  voiceSetupExistsLabel: l10n.managedLocalizationVoiceSetupExists,
-  voiceSetupMissingLabel: l10n.managedLocalizationVoiceSetupMissing,
-  noLineLabel: l10n.managedLocalizationNoLine,
-  speakerLabel: l10n.managedLocalizationSpeakerLabel,
-  addLanguageLabel: l10n.managedLocalizationAddLanguage,
-  removeLanguageLabel: l10n.managedLocalizationRemoveLanguage,
-  languageCodeLabel: l10n.managedDialogLineLocaleLabel,
-  languageCodeHint: l10n.managedLocalizationLanguageHint,
-  languageExistsMessage: l10n.managedLocalizationLanguageExists,
-  dialogTextLabel: l10n.managedDialogLineTextLabel,
-  addLabel: l10n.managedLocalizationAdd,
-  cancelLabel: l10n.managedDialogLineCancel,
-  saveLabel: l10n.managedDialogLineSave,
-  savingLabel: l10n.managedDialogLineSaving,
-  savedLabel: l10n.managedLocalizationSaved,
-  voiceLockedLabel: l10n.managedLocalizationVoiceLocked,
-  voiceSlotRemovalLockedLabel: l10n.managedLocalizationVoiceSlotRemovalLocked,
-  minimumLanguageLockedLabel: l10n.managedLocalizationMinimumLanguageLocked,
-  sharedTextNotice: l10n.managedLocalizationSharedNotice,
-  offlineNotice: l10n.managedLocalizationOfflineNotice,
-  unsavedTitle: l10n.managedLocalizationUnsavedTitle,
-  unsavedDescription: l10n.managedLocalizationUnsavedDescription,
-  discardLabel: l10n.managedLocalizationDiscard,
-  keepEditingLabel: l10n.managedLocalizationKeepEditing,
-  staleMessage: l10n.managedLocalizationStale,
-  reopenMessage: l10n.managedLocalizationReopen,
-  invalidInputMessage: l10n.managedLocalizationInvalid,
-  genericFailureMessage: l10n.managedLocalizationSaveFailed,
-  voiceActionFailedMessage: l10n.managedLocalizationVoiceActionFailed,
-);
+) {
+  final usePreciseGlobalVoiceLabels =
+      l10n.localeName.startsWith('en') || l10n.localeName.startsWith('de');
+  return Revision3LocalizationVoiceWorkspaceCopy(
+    title: l10n.managedWorkspaceLocalizationVoiceLabel,
+    description: l10n.managedSectionLocalizationVoiceDescription,
+    projectTextsLabel: l10n.managedLocalizationProjectTextsLabel,
+    searchLabel: l10n.managedLocalizationSearchLabel,
+    refreshLabel: l10n.managedLocalizationRefresh,
+    newLineLabel: l10n.managedActionNewDialogLineTitle,
+    addVoiceLabel: usePreciseGlobalVoiceLabels
+        ? l10n.managedLocalizationGlobalAddVoice
+        : l10n.managedActionAddVoiceTakeTitle,
+    manageVoiceLabel: usePreciseGlobalVoiceLabels
+        ? l10n.managedLocalizationGlobalManageVoice
+        : l10n.managedActionManageVoiceTakesTitle,
+    resolveVoiceLabel: usePreciseGlobalVoiceLabels
+        ? l10n.managedLocalizationGlobalResolveVoice
+        : l10n.managedActionResolveVoiceTargetTitle,
+    loadingLabel: l10n.managedDialogLineLoading,
+    emptyTitle: l10n.managedLocalizationEmptyTitle,
+    emptyDescription: l10n.managedLocalizationEmptyDescription,
+    loadFailedTitle: l10n.managedLocalizationLoadFailed,
+    retryLabel: l10n.managedDialogLineRetry,
+    selectTextLabel: l10n.managedLocalizationSelectText,
+    languagesLabel: l10n.managedLocalizationLanguagesLabel,
+    usedByLinesLabel: l10n.managedLocalizationUsedByLines,
+    voiceContextTitle: l10n.managedLocalizationVoiceContextTitle,
+    voiceSelectLineLabel: l10n.managedLocalizationVoiceSelectLine,
+    voiceSetupExistsLabel: l10n.managedLocalizationVoiceSetupExists,
+    voiceSetupMissingLabel: l10n.managedLocalizationVoiceSetupMissing,
+    noLineLabel: l10n.managedLocalizationNoLine,
+    speakerLabel: l10n.managedLocalizationSpeakerLabel,
+    addLanguageLabel: l10n.managedLocalizationAddLanguage,
+    removeLanguageLabel: l10n.managedLocalizationRemoveLanguage,
+    languageCodeLabel: l10n.managedDialogLineLocaleLabel,
+    languageCodeHint: l10n.managedLocalizationLanguageHint,
+    languageExistsMessage: l10n.managedLocalizationLanguageExists,
+    dialogTextLabel: l10n.managedDialogLineTextLabel,
+    addLabel: l10n.managedLocalizationAdd,
+    cancelLabel: l10n.managedDialogLineCancel,
+    saveLabel: l10n.managedDialogLineSave,
+    savingLabel: l10n.managedDialogLineSaving,
+    savedLabel: l10n.managedLocalizationSaved,
+    voiceLockedLabel: l10n.managedLocalizationVoiceLocked,
+    voiceSlotRemovalLockedLabel: l10n.managedLocalizationVoiceSlotRemovalLocked,
+    minimumLanguageLockedLabel: l10n.managedLocalizationMinimumLanguageLocked,
+    sharedTextNotice: l10n.managedLocalizationSharedNotice,
+    offlineNotice: l10n.managedLocalizationOfflineNotice,
+    unsavedTitle: l10n.managedLocalizationUnsavedTitle,
+    unsavedDescription: l10n.managedLocalizationUnsavedDescription,
+    discardLabel: l10n.managedLocalizationDiscard,
+    keepEditingLabel: l10n.managedLocalizationKeepEditing,
+    voiceUnsavedTitle: l10n.managedLocalizationVoiceUnsavedTitle,
+    voiceUnsavedDescription: l10n.managedLocalizationVoiceUnsavedDescription,
+    discardAndContinueLabel: l10n.managedLocalizationDiscardAndContinue,
+    saveAndContinueLabel: l10n.managedLocalizationSaveAndContinue,
+    staleMessage: l10n.managedLocalizationStale,
+    reopenMessage: l10n.managedLocalizationReopen,
+    invalidInputMessage: l10n.managedLocalizationInvalid,
+    genericFailureMessage: l10n.managedLocalizationSaveFailed,
+    voiceActionFailedMessage: l10n.managedLocalizationVoiceActionFailed,
+  );
+}
 
 Revision3VoiceBuildReadinessCopy _voiceBuildReadinessCopy(
   AppLocalizations l10n,

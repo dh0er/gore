@@ -464,6 +464,9 @@ void main() {
         find.byKey(const Key('revision3-localization-resolve-voice')),
         findsOneWidget,
       );
+      expect(find.text('Add take for any line'), findsOneWidget);
+      expect(find.text('Manage takes for any line'), findsOneWidget);
+      expect(find.text('Resolve target for any line'), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       await tester.tap(
@@ -1370,7 +1373,7 @@ void main() {
       staleManage();
       await tester.pump();
       expect(contextActions, 0);
-      expect(find.text(_copy.unsavedTitle), findsNothing);
+      expect(find.text(_copy.voiceUnsavedTitle), findsNothing);
 
       await tester.tap(
         find.byKey(const Key('revision3-localization-refresh-changed-project')),
@@ -1423,7 +1426,7 @@ void main() {
       await _scrollEditorUntilVisible(tester, manage);
       await tester.tap(manage);
       await tester.pumpAndSettle();
-      expect(find.text(_copy.unsavedTitle), findsOneWidget);
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
 
       final reboundIndex = _contentIndex(
         displayName: 'Head B warning',
@@ -1444,10 +1447,10 @@ void main() {
               contextActions++;
             },
       );
-      expect(find.text(_copy.unsavedTitle), findsOneWidget);
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
       expect(_textField(tester, 'en').controller!.text, draft);
 
-      await tester.tap(find.text(_copy.discardLabel));
+      await tester.tap(find.text(_copy.discardAndContinueLabel));
       await tester.pumpAndSettle();
 
       expect(contextActions, 0);
@@ -1589,7 +1592,7 @@ void main() {
         find.byKey(const Key('revision3-localization-manage-voice')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text(_copy.discardLabel));
+      await tester.tap(find.text(_copy.discardAndContinueLabel));
       await tester.pumpAndSettle();
 
       expect(actionCalls, 1);
@@ -2093,17 +2096,1509 @@ void main() {
     expect(find.text('Verspätetes Alpha'), findsNothing);
   });
 
-  testWidgets('external actions require discard and are no-ops while saving', (
+  testWidgets(
+    'external actions offer discard and are visibly disabled while saving',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      var actionCalls = 0;
+      var technicalCalls = 0;
+      final pending = Completer<Revision3DialogLocalizationEditPublication>();
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final service = _serviceForIndex(
+        index,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              technicalCalls++;
+              return pending.future;
+            },
+      );
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        onCreateDialogLine: () => actionCalls++,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Dirty external guard',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+      await tester.tap(find.text(_copy.keepEditingLabel));
+      await tester.pumpAndSettle();
+      expect(actionCalls, 0);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.discardAndContinueLabel));
+      await tester.pumpAndSettle();
+      expect(actionCalls, 1);
+      expect(_textField(tester, 'en').controller!.text, 'Stop right there!');
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Publishing now',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('revision3-localization-save')));
+      await _pumpUntil(tester, () => technicalCalls == 1);
+      await tester.pump();
+      expect(find.text(_copy.savingLabel), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-new-line')),
+            )
+            .onPressed,
+        isNull,
+      );
+      for (final key in const <Key>[
+        Key('revision3-localization-add-voice'),
+        Key('revision3-localization-manage-voice'),
+        Key('revision3-localization-resolve-voice'),
+      ]) {
+        final action = find.descendant(
+          of: find.byKey(key),
+          matching: find.byType(OutlinedButton),
+        );
+        expect(action, findsOneWidget);
+        expect(tester.widget<OutlinedButton>(action).onPressed, isNull);
+      }
+      expect(actionCalls, 1);
+      expect(find.text(_copy.voiceUnsavedTitle), findsNothing);
+
+      pending.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'compact header keeps every pending-save action visible and disabled',
+    (tester) async {
+      await _setSurface(tester, width: 360, height: 900);
+      final pending = Completer<Revision3DialogLocalizationEditPublication>();
+      var technicalCalls = 0;
+      var actionCalls = 0;
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(
+          index,
+          publish:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required technicalPlan,
+              }) {
+                technicalCalls++;
+                return pending.future;
+              },
+        ),
+        onCreateDialogLine: () => actionCalls++,
+        onAddVoiceTake: () => actionCalls++,
+        onManageVoiceTakes: () => actionCalls++,
+        onResolveVoiceTarget: () => actionCalls++,
+      );
+      await tester.tap(find.text('Mine warning'));
+      await tester.pumpAndSettle();
+      _textField(tester, 'de').controller!.text = 'Compact pending save';
+      await tester.pump();
+      final save = tester.widget<FilledButton>(
+        find.byKey(const Key('revision3-localization-save')),
+      );
+      expect(save.onPressed, isNotNull);
+      save.onPressed!();
+      await _pumpUntil(tester, () => technicalCalls == 1);
+      await tester.pump();
+
+      expect(find.text(_copy.savingLabel), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-new-line')),
+            )
+            .onPressed,
+        isNull,
+      );
+      final moreActions = find.byKey(
+        const Key('revision3-localization-more-actions'),
+      );
+      expect(moreActions, findsOneWidget);
+      await tester.tap(moreActions);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      for (final key in const <Key>[
+        Key('revision3-localization-add-voice'),
+        Key('revision3-localization-manage-voice'),
+        Key('revision3-localization-resolve-voice'),
+      ]) {
+        final item = find.byKey(key);
+        expect(item, findsOneWidget);
+        expect(tester.widget<PopupMenuItem<Object?>>(item).enabled, isFalse);
+      }
+      expect(actionCalls, 0);
+
+      Navigator.of(
+        tester.element(
+          find.byKey(const Key('revision3-localization-add-voice')),
+        ),
+      ).pop();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      pending.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(actionCalls, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'save and continue waits for post-reload frame before resolving callback',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      const changedText = 'Save this transcript before opening Voice';
+      final reboundIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      var publications = 0;
+      var oldActions = 0;
+      var currentActions = 0;
+      String? openedLineId;
+      String? openedLocale;
+      void oldCallback({
+        required String initialLineId,
+        required String initialLocale,
+      }) {
+        oldActions++;
+      }
+
+      void currentCallback({
+        required String initialLineId,
+        required String initialLocale,
+      }) {
+        currentActions++;
+        openedLineId = initialLineId;
+        openedLocale = initialLocale;
+      }
+
+      final initialService = _serviceForIndex(
+        initialIndex,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) async {
+              publications++;
+              return _publication(
+                projectId: expectedProjectId,
+                projectRevision: expectedProjectRevision + 1,
+                localizationId: technicalPlan.localizationId,
+                localizationRevision:
+                    technicalPlan.expectedLocalizationRevision + 1,
+              );
+            },
+      );
+      final reboundService = _serviceForIndex(
+        reboundIndex,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: const <String, String>{
+                'de': 'Bleib stehen!',
+                'en': changedText,
+              },
+            ),
+      );
+      late StateSetter setHostState;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'head-a';
+      var service = initialService;
+      var contentIndex = initialIndex;
+      var rebound = false;
+      var callbackGateLoaded = false;
+      var callbackGateUpdateScheduled = false;
+      var callbackNullBuilds = 0;
+      var callbackGateUpdates = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                if (rebound && !callbackGateLoaded) callbackNullBuilds++;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: _projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  loadVoiceCatalog: () async {
+                    final catalog = Revision3VoiceCatalog.fromContentIndex(
+                      contentIndex,
+                    );
+                    if (rebound &&
+                        !callbackGateLoaded &&
+                        !callbackGateUpdateScheduled) {
+                      callbackGateUpdateScheduled = true;
+                      scheduleMicrotask(() {
+                        if (callbackGateLoaded) return;
+                        setHostState(() {
+                          callbackGateLoaded = true;
+                          callbackGateUpdates++;
+                        });
+                      });
+                    }
+                    return catalog;
+                  },
+                  onPublished: (publication) {
+                    setHostState(() {
+                      projectRevision = publication.projectRevision;
+                      checkpointIdentity = 'head-b';
+                      service = reboundService;
+                      contentIndex = reboundIndex;
+                      rebound = true;
+                    });
+                  },
+                  onManageVoiceTakesFor: !rebound
+                      ? oldCallback
+                      : callbackGateLoaded
+                      ? currentCallback
+                      : null,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        changedText,
+      );
+      await tester.pump();
+      final manage = find.byKey(const Key('revision3-voice-production-manage'));
+      await _scrollEditorUntilVisible(tester, manage);
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+      expect(find.text(_copy.saveAndContinueLabel), findsOneWidget);
+      expect(find.text(_copy.discardAndContinueLabel), findsOneWidget);
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await tester.pumpAndSettle();
+
+      expect(publications, 1);
+      expect(oldActions, 0);
+      expect(currentActions, 1);
+      expect(callbackNullBuilds, greaterThan(0));
+      expect(callbackGateUpdates, 1);
+      expect(openedLineId, _lineId);
+      expect(openedLocale, 'de');
+      expect(_textField(tester, 'en').controller!.text, changedText);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-save')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'save and continue accepts exact publication rebind inside publish await',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      const changedText = 'Save across the coordinator publication rebind';
+      final pending = Completer<Revision3DialogLocalizationEditPublication>();
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final reboundIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      var publishCalls = 0;
+      var reboundSeedLoads = 0;
+      var reboundVoiceLoads = 0;
+      var oldPublished = 0;
+      var currentPublished = 0;
+      var oldActions = 0;
+      var currentActions = 0;
+      final initialService = _serviceForIndex(
+        initialIndex,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              publishCalls++;
+              return pending.future;
+            },
+      );
+      final reboundService = _serviceForIndex(
+        reboundIndex,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) {
+              reboundSeedLoads++;
+              return _exactSeed(
+                projectId: projectId,
+                projectRevision: projectRevision,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: locId,
+                texts: const <String, String>{
+                  'de': 'Bleib stehen!',
+                  'en': changedText,
+                },
+              );
+            },
+      );
+      void oldCallback({
+        required String initialLineId,
+        required String initialLocale,
+      }) {
+        oldActions++;
+      }
+
+      void currentCallback({
+        required String initialLineId,
+        required String initialLocale,
+      }) {
+        currentActions++;
+      }
+
+      late StateSetter setHostState;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'head-a';
+      var service = initialService;
+      var contentIndex = initialIndex;
+      var rebound = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: _projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  loadVoiceCatalog: () async {
+                    if (rebound) reboundVoiceLoads++;
+                    return Revision3VoiceCatalog.fromContentIndex(contentIndex);
+                  },
+                  onPublished: rebound
+                      ? (_) => currentPublished++
+                      : (_) => oldPublished++,
+                  onManageVoiceTakesFor: rebound
+                      ? currentCallback
+                      : oldCallback,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        changedText,
+      );
+      await tester.pump();
+      final manage = find.byKey(const Key('revision3-voice-production-manage'));
+      await _scrollEditorUntilVisible(tester, manage);
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await _pumpUntil(tester, () => publishCalls == 1);
+
+      setHostState(() {
+        projectRevision = 8;
+        checkpointIdentity = 'head-b';
+        service = reboundService;
+        contentIndex = reboundIndex;
+        rebound = true;
+      });
+      await tester.pump();
+      expect(find.text(_copy.savingLabel), findsOneWidget);
+      expect(_textField(tester, 'en').controller!.text, changedText);
+      expect(reboundSeedLoads, 0);
+      expect(reboundVoiceLoads, 0);
+
+      pending.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(oldPublished, 0);
+      expect(currentPublished, 0);
+      expect(oldActions, 0);
+      expect(currentActions, 1);
+      expect(reboundSeedLoads, 1);
+      expect(reboundVoiceLoads, 1);
+      expect(_textField(tester, 'en').controller!.text, changedText);
+      expect(find.text(_copy.staleMessage), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'save and continue rejects same-revision checkpoint drift during reload',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      const changedText = 'Keep the first publication checkpoint pinned';
+      final publication =
+          Completer<Revision3DialogLocalizationEditPublication>();
+      final checkpointBCatalog = Completer<Revision3ContentIndex>();
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final checkpointBIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final checkpointCIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      var publishCalls = 0;
+      var checkpointBCatalogLoads = 0;
+      var checkpointCCatalogLoads = 0;
+      var actions = 0;
+      final initialService = _serviceForIndex(
+        initialIndex,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              publishCalls++;
+              return publication.future;
+            },
+      );
+      final checkpointBService = _serviceForIndex(
+        checkpointBIndex,
+        loadIndex: () {
+          checkpointBCatalogLoads++;
+          return checkpointBCatalog.future;
+        },
+      );
+      final checkpointCService = _serviceForIndex(
+        checkpointCIndex,
+        loadIndex: () async {
+          checkpointCCatalogLoads++;
+          return checkpointCIndex;
+        },
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: const <String, String>{
+                'de': 'Bleib stehen!',
+                'en': changedText,
+              },
+            ),
+      );
+
+      late StateSetter setHostState;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'head-a';
+      var service = initialService;
+      var contentIndex = initialIndex;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: _projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  loadVoiceCatalog: () async =>
+                      Revision3VoiceCatalog.fromContentIndex(contentIndex),
+                  onManageVoiceTakesFor:
+                      ({required initialLineId, required initialLocale}) {
+                        actions++;
+                      },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        changedText,
+      );
+      await tester.pump();
+      final manage = find.byKey(const Key('revision3-voice-production-manage'));
+      await _scrollEditorUntilVisible(tester, manage);
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await _pumpUntil(tester, () => publishCalls == 1);
+
+      setHostState(() {
+        projectRevision = 8;
+        checkpointIdentity = 'head-b';
+        service = checkpointBService;
+        contentIndex = checkpointBIndex;
+      });
+      await tester.pump();
+      publication.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await _pumpUntil(tester, () => checkpointBCatalogLoads == 1);
+
+      setHostState(() {
+        checkpointIdentity = 'head-c';
+        service = checkpointCService;
+        contentIndex = checkpointCIndex;
+      });
+      await tester.pump();
+      await _pumpUntil(tester, () => checkpointCCatalogLoads == 1);
+      checkpointBCatalog.complete(checkpointBIndex);
+      await tester.pumpAndSettle();
+
+      expect(actions, 0);
+      expect(
+        find.text('${_copy.savedLabel}. ${_copy.staleMessage}'),
+        findsOneWidget,
+      );
+      expect(_textField(tester, 'en').controller!.text, changedText);
+    },
+  );
+
+  testWidgets(
+    'save and continue interlocks wide authority while Voice reload is pending',
+    (tester) async {
+      const changedText = 'Do not open another workflow during Voice reload';
+      final fixture = await _pumpPendingVoiceReload(
+        tester,
+        width: 1200,
+        changedText: changedText,
+        secondDisplayName: 'Beta greeting',
+      );
+
+      final newLine = find.byKey(const Key('revision3-localization-new-line'));
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNull);
+      final refresh = find.byKey(
+        const Key('revision3-localization-browser-refresh'),
+      );
+      expect(tester.widget<IconButton>(refresh).onPressed, isNull);
+      final betaChoice = find.widgetWithText(ListTile, 'Beta greeting');
+      expect(tester.widget<ListTile>(betaChoice).onTap, isNull);
+      expect(_textField(tester, 'en').readOnly, isTrue);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-localization-add-language')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(_localeRemoveIcon(tester, 'en').onPressed, isNull);
+      final voiceLine = find.byKey(
+        const ValueKey('revision3-localization-voice-line-$_lineId'),
+      );
+      expect(tester.widget<ListTile>(voiceLine).onTap, isNull);
+      final enVoiceLocale = find.byKey(
+        const ValueKey('revision3-localization-voice-locale-en'),
+      );
+      expect(tester.widget<ChoiceChip>(enVoiceLocale).onSelected, isNull);
+
+      final search = find.byKey(const Key('revision3-localization-search'));
+      expect(tester.widget<TextField>(search).enabled, isNot(false));
+      await tester.enterText(search, 'Beta');
+      await tester.pump();
+      expect(find.text('Beta greeting'), findsOneWidget);
+      await tester.tap(newLine);
+      await tester.tap(refresh);
+      await tester.tap(betaChoice);
+      await tester.pump();
+      expect(fixture.globalActions, 0);
+      expect(fixture.reboundCatalogLoads, 1);
+      expect(fixture.reboundSeedLoads, 1);
+
+      fixture.completeVoiceReload();
+      await tester.pumpAndSettle();
+      expect(fixture.manageActions, 1);
+      expect(fixture.globalActions, 0);
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'compact save and continue locks back and context during Voice reload',
+    (tester) async {
+      const changedText = 'Keep compact authority pinned during Voice reload';
+      final fixture = await _pumpPendingVoiceReload(
+        tester,
+        width: 360,
+        changedText: changedText,
+      );
+
+      final back = find.byKey(const Key('revision3-localization-editor-back'));
+      expect(tester.widget<IconButton>(back).onPressed, isNull);
+      expect(_textField(tester, 'en').readOnly, isTrue);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-localization-add-language')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(_localeRemoveIcon(tester, 'en').onPressed, isNull);
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(
+                const ValueKey('revision3-localization-voice-line-$_lineId'),
+              ),
+            )
+            .onTap,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                const ValueKey('revision3-localization-voice-locale-en'),
+              ),
+            )
+            .onSelected,
+        isNull,
+      );
+      await tester.tap(back);
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-localization-text-editor')),
+        findsOneWidget,
+      );
+
+      fixture.completeVoiceReload();
+      await tester.pumpAndSettle();
+      expect(fixture.manageActions, 1);
+      expect(tester.widget<IconButton>(back).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'retry stays visibly disabled and New dialog failure uses selected-action copy',
+    (tester) async {
+      await _setSurface(tester, width: 360, height: 900);
+      final pendingAction = Completer<void>();
+      var catalogLoads = 0;
+      var actionCalls = 0;
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final service = _serviceForIndex(
+        index,
+        loadIndex: () async {
+          catalogLoads++;
+          throw StateError('fixture catalog failure');
+        },
+      );
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        onCreateDialogLine: () async {
+          actionCalls++;
+          if (actionCalls == 1) {
+            await pendingAction.future;
+            return;
+          }
+          throw StateError('fixture selected-action failure');
+        },
+      );
+
+      final retry = find.byKey(
+        const Key('revision3-localization-catalog-retry'),
+      );
+      expect(retry, findsOneWidget);
+      expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
+      final newLine = find.byKey(const Key('revision3-localization-new-line'));
+      await tester.tap(newLine);
+      await _pumpUntil(tester, () => actionCalls == 1);
+      await tester.pump();
+
+      expect(tester.widget<FilledButton>(retry).onPressed, isNull);
+      await tester.tap(retry);
+      await tester.pump();
+      expect(catalogLoads, 1);
+
+      pendingAction.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
+
+      await tester.tap(newLine);
+      await tester.pumpAndSettle();
+      expect(actionCalls, 2);
+      expect(
+        find.textContaining('The selected action did not finish cleanly.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('The Voice action'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'global discard action aborts when project changes under confirmation',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      var projectAActions = 0;
+      var projectBActions = 0;
+      final projectAIndex = _contentIndex(
+        displayName: 'Project A warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(projectAIndex),
+        projectCheckpointIdentity: 'project-a-head',
+        onCreateDialogLine: () => projectAActions++,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Do not carry this project-A intent into project B',
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+
+      const projectBId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final projectBIndex = _contentIndex(
+        projectId: projectBId,
+        revision: 3,
+        displayName: 'Project B warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        projectId: projectBId,
+        projectRevision: 3,
+        projectCheckpointIdentity: 'project-b-head',
+        service: _serviceForIndex(projectBIndex),
+        onCreateDialogLine: () => projectBActions++,
+      );
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+      await tester.tap(find.text(_copy.discardAndContinueLabel));
+      await tester.pumpAndSettle();
+
+      expect(projectAActions, 0);
+      expect(projectBActions, 0);
+      expect(find.text(_copy.staleMessage), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'project switch replaces a pending external-action owner without a late unlock',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final projectAPublication =
+          Completer<Revision3DialogLocalizationEditPublication>();
+      final projectAReboundCatalog = Completer<Revision3ContentIndex>();
+      final projectBAction = Completer<void>();
+      var projectAPublishCalls = 0;
+      var projectAReboundCatalogLoads = 0;
+      var projectBCatalogLoads = 0;
+      var projectAActions = 0;
+      var projectBActions = 0;
+      final projectAIndex = _contentIndex(
+        displayName: 'Project A warning',
+        locales: const <String>['de', 'en'],
+      );
+      final projectAReboundIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Project A warning',
+        locales: const <String>['de', 'en'],
+      );
+      final projectAService = _serviceForIndex(
+        projectAIndex,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              projectAPublishCalls++;
+              return projectAPublication.future;
+            },
+      );
+      final projectAReboundService = _serviceForIndex(
+        projectAReboundIndex,
+        loadIndex: () {
+          projectAReboundCatalogLoads++;
+          return projectAReboundCatalog.future;
+        },
+      );
+      const projectBId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final projectBIndex = _contentIndex(
+        projectId: projectBId,
+        revision: 3,
+        displayName: 'Project B warning',
+        locales: const <String>['de', 'en'],
+      );
+      final projectBService = _serviceForIndex(
+        projectBIndex,
+        loadIndex: () async {
+          projectBCatalogLoads++;
+          return projectBIndex;
+        },
+      );
+
+      late StateSetter setHostState;
+      var projectId = _projectId;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'project-a-head';
+      var service = projectAService;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                final projectB = projectId == projectBId;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  onCreateDialogLine: projectB
+                      ? () {
+                          projectBActions++;
+                          return projectBAction.future;
+                        }
+                      : () => projectAActions++,
+                  onPublished: projectB
+                      ? null
+                      : (_) {
+                          setHostState(() {
+                            projectRevision = 8;
+                            checkpointIdentity = 'project-a-published-head';
+                            service = projectAReboundService;
+                          });
+                        },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Pending project-A external save',
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await _pumpUntil(tester, () => projectAPublishCalls == 1);
+
+      projectAPublication.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await _pumpUntil(tester, () => projectAReboundCatalogLoads == 1);
+
+      setHostState(() {
+        projectId = projectBId;
+        projectRevision = 3;
+        checkpointIdentity = 'project-b-head';
+        service = projectBService;
+      });
+      await tester.pumpAndSettle();
+      expect(projectBCatalogLoads, 1);
+      final newLine = find.byKey(const Key('revision3-localization-new-line'));
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNotNull);
+
+      await tester.tap(newLine);
+      await _pumpUntil(tester, () => projectBActions == 1);
+      await tester.pump();
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNull);
+
+      projectAReboundCatalog.complete(projectAReboundIndex);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      expect(projectAActions, 0);
+      expect(projectBActions, 1);
+      expect(projectBCatalogLoads, 1);
+      expect(find.textContaining(_copy.staleMessage), findsNothing);
+      expect(find.text(_copy.voiceActionFailedMessage), findsNothing);
+      expect(
+        tester.widget<FilledButton>(newLine).onPressed,
+        isNull,
+        reason: 'project A must not release project B\'s action owner',
+      );
+
+      projectBAction.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'old discarded action cannot reload a same-revision replacement project',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final projectAAction = Completer<void>();
+      var projectAActions = 0;
+      var projectBCatalogLoads = 0;
+      final projectAIndex = _contentIndex(
+        displayName: 'Project A warning',
+        locales: const <String>['de', 'en'],
+      );
+      final projectAService = _serviceForIndex(projectAIndex);
+      const projectBId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final projectBIndex = _contentIndex(
+        projectId: projectBId,
+        displayName: 'Project B warning',
+        locales: const <String>['de', 'en'],
+      );
+      final projectBService = _serviceForIndex(
+        projectBIndex,
+        loadIndex: () async {
+          projectBCatalogLoads++;
+          return projectBIndex;
+        },
+      );
+
+      late StateSetter setHostState;
+      var projectId = _projectId;
+      Object checkpointIdentity = 'project-a-head';
+      var service = projectAService;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: projectId,
+                  projectRevision: 7,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  onCreateDialogLine: projectId == projectBId
+                      ? () {}
+                      : () {
+                          projectAActions++;
+                          return projectAAction.future;
+                        },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Discard this stale project-A draft',
+      );
+      await tester.pump();
+      setHostState(() => checkpointIdentity = 'project-a-drifted-head');
+      await tester.pump();
+
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+      await tester.tap(find.text(_copy.discardAndContinueLabel));
+      await _pumpUntil(tester, () => projectAActions == 1);
+
+      setHostState(() {
+        projectId = projectBId;
+        checkpointIdentity = 'project-b-head';
+        service = projectBService;
+      });
+      await tester.pumpAndSettle();
+      expect(projectBCatalogLoads, 1);
+
+      projectAAction.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      expect(projectBCatalogLoads, 1);
+      expect(find.text(_copy.voiceActionFailedMessage), findsNothing);
+      expect(find.text('Project B warning'), findsWidgets);
+    },
+  );
+
+  testWidgets(
+    'old failed external action cannot message a replacement project',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final projectAAction = Completer<void>();
+      var projectAActions = 0;
+      final projectAIndex = _contentIndex(
+        displayName: 'Project A warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(projectAIndex),
+        projectCheckpointIdentity: 'project-a-head',
+        onCreateDialogLine: () {
+          projectAActions++;
+          return projectAAction.future;
+        },
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-new-line')),
+      );
+      await _pumpUntil(tester, () => projectAActions == 1);
+
+      const projectBId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final projectBIndex = _contentIndex(
+        projectId: projectBId,
+        revision: 3,
+        displayName: 'Project B warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        projectId: projectBId,
+        projectRevision: 3,
+        projectCheckpointIdentity: 'project-b-head',
+        service: _serviceForIndex(projectBIndex),
+        onCreateDialogLine: () {},
+      );
+
+      projectAAction.completeError(StateError('late project-A failure'));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_copy.voiceActionFailedMessage), findsNothing);
+      expect(find.text('Project B warning'), findsWidgets);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-new-line')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'old save completion cannot mutate a replacement project or its callback',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final pending = Completer<Revision3DialogLocalizationEditPublication>();
+      var publishCalls = 0;
+      var oldPublished = 0;
+      var replacementPublished = 0;
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final initialService = _serviceForIndex(
+        initialIndex,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              publishCalls++;
+              return pending.future;
+            },
+      );
+      await _pumpWorkspace(
+        tester,
+        service: initialService,
+        projectCheckpointIdentity: 'project-a-head',
+        onPublished: (_) => oldPublished++,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Pending project-A save',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('revision3-localization-save')));
+      await _pumpUntil(tester, () => publishCalls == 1);
+
+      const replacementProjectId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      final replacementIndex = _contentIndex(
+        projectId: replacementProjectId,
+        revision: 3,
+        displayName: 'Replacement project warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        projectId: replacementProjectId,
+        projectRevision: 3,
+        projectCheckpointIdentity: 'project-b-head',
+        service: _serviceForIndex(replacementIndex),
+        onPublished: (_) => replacementPublished++,
+      );
+      expect(_textField(tester, 'en').controller!.text, 'Stop right there!');
+
+      pending.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(oldPublished, 0);
+      expect(replacementPublished, 0);
+      expect(_textField(tester, 'en').controller!.text, 'Stop right there!');
+      expect(find.text(_copy.savedLabel), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-save')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'old save completion preserves dirty text across same-project head rebind',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final pending = Completer<Revision3DialogLocalizationEditPublication>();
+      var publishCalls = 0;
+      var oldPublished = 0;
+      var reboundPublished = 0;
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final pendingService = _serviceForIndex(
+        index,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required technicalPlan,
+            }) {
+              publishCalls++;
+              return pending.future;
+            },
+      );
+      await _pumpWorkspace(
+        tester,
+        service: pendingService,
+        projectCheckpointIdentity: 'head-a',
+        onPublished: (_) => oldPublished++,
+      );
+      const draft = 'Keep this draft after the head rebind';
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        draft,
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('revision3-localization-save')));
+      await _pumpUntil(tester, () => publishCalls == 1);
+
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        projectCheckpointIdentity: 'head-b',
+        onPublished: (_) => reboundPublished++,
+        settle: false,
+      );
+      expect(_textField(tester, 'en').controller!.text, draft);
+      expect(find.text(_copy.savingLabel), findsOneWidget);
+      expect(find.text(_copy.staleMessage), findsNothing);
+
+      pending.complete(
+        _publication(
+          projectId: _projectId,
+          projectRevision: 8,
+          localizationId: _localizationId,
+          localizationRevision: 5,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(oldPublished, 0);
+      expect(reboundPublished, 0);
+      expect(_textField(tester, 'en').controller!.text, draft);
+      expect(find.text(_copy.savedLabel), findsNothing);
+      expect(find.text(_copy.staleMessage), findsWidgets);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-save')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'save and continue rejects context missing from freshly rebound catalogs',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final reboundIndex = _contentIndex(
+        revision: 8,
+        localizationRevision: 5,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final initialService = _serviceForIndex(initialIndex);
+      final reboundService = _serviceForIndex(
+        reboundIndex,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: const <String, String>{
+                'de': 'Bleib stehen!',
+                'en': 'Saved without the old line context',
+              },
+              backlinks: const <Map<String, Object?>>[],
+            ),
+      );
+      var actions = 0;
+      late StateSetter setHostState;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'head-a';
+      var service = initialService;
+      var contentIndex = initialIndex;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: _projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  loadVoiceCatalog: () async =>
+                      Revision3VoiceCatalog.fromContentIndex(contentIndex),
+                  onPublished: (publication) {
+                    setHostState(() {
+                      projectRevision = publication.projectRevision;
+                      checkpointIdentity = 'head-b';
+                      service = reboundService;
+                      contentIndex = reboundIndex;
+                    });
+                  },
+                  onCreateDialogLine: () {},
+                  onManageVoiceTakesFor:
+                      ({required initialLineId, required initialLocale}) =>
+                          actions++,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Saved without the old line context',
+      );
+      await tester.pump();
+      final manage = find.byKey(const Key('revision3-voice-production-manage'));
+      await _scrollEditorUntilVisible(tester, manage);
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await tester.pumpAndSettle();
+
+      expect(actions, 0);
+      expect(find.textContaining(_copy.savedLabel), findsOneWidget);
+      expect(find.textContaining(_copy.staleMessage), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-new-line')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'save and continue without a publication rebind fails closed after one frame',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      var actions = 0;
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+        onManageVoiceTakesFor:
+            ({required initialLineId, required initialLocale}) => actions++,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-en')),
+        'Save succeeds but this static host never rebinds',
+      );
+      await tester.pump();
+      final manage = find.byKey(const Key('revision3-voice-production-manage'));
+      await _scrollEditorUntilVisible(tester, manage);
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(_copy.saveAndContinueLabel));
+      await tester.pumpAndSettle();
+
+      expect(actions, 0);
+      expect(find.textContaining(_copy.savedLabel), findsOneWidget);
+      expect(find.textContaining(_copy.staleMessage), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-voice-production-manage')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  testWidgets('failed save never continues to the contextual Voice action', (
     tester,
   ) async {
     await _setSurface(tester, width: 1200);
-    var actionCalls = 0;
-    var technicalCalls = 0;
-    final pending = Completer<Revision3DialogLocalizationEditPublication>();
     final index = _contentIndex(
       displayName: 'Mine warning',
       locales: const <String>['de', 'en'],
     );
+    var publications = 0;
+    var actions = 0;
     final service = _serviceForIndex(
       index,
       publish:
@@ -2111,58 +3606,45 @@ void main() {
             required expectedProjectId,
             required expectedProjectRevision,
             required technicalPlan,
-          }) {
-            technicalCalls++;
-            return pending.future;
+          }) async {
+            publications++;
+            throw StateError('fixture save failure');
           },
     );
     await _pumpWorkspace(
       tester,
       service: service,
-      onCreateDialogLine: () => actionCalls++,
+      loadVoiceCatalog: () async =>
+          Revision3VoiceCatalog.fromContentIndex(index),
+      onManageVoiceTakesFor:
+          ({required initialLineId, required initialLocale}) => actions++,
     );
 
+    const draft = 'Keep this draft after the failed save';
     await tester.enterText(
       find.byKey(const Key('revision3-localization-text-en')),
-      'Dirty external guard',
-    );
-    await tester.tap(find.byKey(const Key('revision3-localization-new-line')));
-    await tester.pumpAndSettle();
-    expect(find.text(_copy.unsavedTitle), findsOneWidget);
-    await tester.tap(find.text(_copy.keepEditingLabel));
-    await tester.pumpAndSettle();
-    expect(actionCalls, 0);
-
-    await tester.tap(find.byKey(const Key('revision3-localization-new-line')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text(_copy.discardLabel));
-    await tester.pumpAndSettle();
-    expect(actionCalls, 1);
-    expect(_textField(tester, 'en').controller!.text, 'Stop right there!');
-
-    await tester.enterText(
-      find.byKey(const Key('revision3-localization-text-en')),
-      'Publishing now',
+      draft,
     );
     await tester.pump();
-    await tester.tap(find.byKey(const Key('revision3-localization-save')));
-    await _pumpUntil(tester, () => technicalCalls == 1);
-    await tester.pump();
-    expect(find.text(_copy.savingLabel), findsOneWidget);
-    await tester.tap(find.byKey(const Key('revision3-localization-new-line')));
-    await tester.pump();
-    expect(actionCalls, 1);
-    expect(find.text(_copy.unsavedTitle), findsNothing);
-
-    pending.complete(
-      _publication(
-        projectId: _projectId,
-        projectRevision: 8,
-        localizationId: _localizationId,
-        localizationRevision: 5,
-      ),
-    );
+    final manage = find.byKey(const Key('revision3-voice-production-manage'));
+    await _scrollEditorUntilVisible(tester, manage);
+    await tester.tap(manage);
     await tester.pumpAndSettle();
+    await tester.tap(find.text(_copy.saveAndContinueLabel));
+    await tester.pumpAndSettle();
+
+    expect(publications, 1);
+    expect(actions, 0);
+    expect(_textField(tester, 'en').controller!.text, draft);
+    expect(find.text(_copy.genericFailureMessage), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('revision3-localization-save')),
+          )
+          .onPressed,
+      isNotNull,
+    );
   });
 
   testWidgets('external Voice actions are single-flight and report failures', (
@@ -2222,6 +3704,172 @@ void main() {
   });
 }
 
+final class _PendingVoiceReloadFixture {
+  _PendingVoiceReloadFixture({
+    required this.reboundIndex,
+    required this.voiceReload,
+  });
+
+  final Revision3ContentIndex reboundIndex;
+  final Completer<Revision3VoiceCatalog> voiceReload;
+  int publishCalls = 0;
+  int reboundCatalogLoads = 0;
+  int reboundSeedLoads = 0;
+  int reboundVoiceLoads = 0;
+  int manageActions = 0;
+  int globalActions = 0;
+
+  void completeVoiceReload() => voiceReload.complete(
+    Revision3VoiceCatalog.fromContentIndex(reboundIndex),
+  );
+}
+
+Future<_PendingVoiceReloadFixture> _pumpPendingVoiceReload(
+  WidgetTester tester, {
+  required double width,
+  required String changedText,
+  String? secondDisplayName,
+}) async {
+  await _setSurface(tester, width: width, height: width < 900 ? 900 : 1000);
+  final publication = Completer<Revision3DialogLocalizationEditPublication>();
+  final voiceReload = Completer<Revision3VoiceCatalog>();
+  final primaryLabel = secondDisplayName == null
+      ? 'Mine warning'
+      : 'Alpha warning';
+  final initialIndex = _contentIndex(
+    displayName: primaryLabel,
+    locales: const <String>['de', 'en'],
+    secondDisplayName: secondDisplayName,
+  );
+  final reboundIndex = _contentIndex(
+    revision: 8,
+    localizationRevision: 5,
+    displayName: primaryLabel,
+    locales: const <String>['de', 'en'],
+    secondDisplayName: secondDisplayName,
+  );
+  final fixture = _PendingVoiceReloadFixture(
+    reboundIndex: reboundIndex,
+    voiceReload: voiceReload,
+  );
+  final initialService = _serviceForIndex(
+    initialIndex,
+    publish:
+        ({
+          required expectedProjectId,
+          required expectedProjectRevision,
+          required technicalPlan,
+        }) {
+          fixture.publishCalls++;
+          return publication.future;
+        },
+  );
+  final reboundService = _serviceForIndex(
+    reboundIndex,
+    loadIndex: () async {
+      fixture.reboundCatalogLoads++;
+      return reboundIndex;
+    },
+    seedFor:
+        ({
+          required projectId,
+          required projectRevision,
+          required localizationId,
+          required localizationRevision,
+          required locId,
+        }) {
+          fixture.reboundSeedLoads++;
+          return _exactSeed(
+            projectId: projectId,
+            projectRevision: projectRevision,
+            localizationId: localizationId,
+            localizationRevision: localizationRevision,
+            locId: locId,
+            texts: <String, String>{'de': 'Bleib stehen!', 'en': changedText},
+          );
+        },
+  );
+
+  late StateSetter setHostState;
+  var projectRevision = 7;
+  Object checkpointIdentity = 'head-a';
+  var service = initialService;
+  var contentIndex = initialIndex;
+  var rebound = false;
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: StatefulBuilder(
+          builder: (context, setState) {
+            setHostState = setState;
+            return Revision3LocalizationVoiceWorkspace(
+              projectId: _projectId,
+              projectRevision: projectRevision,
+              projectCheckpointIdentity: checkpointIdentity,
+              service: service,
+              copy: _copy,
+              loadVoiceCatalog: () {
+                if (rebound) {
+                  fixture.reboundVoiceLoads++;
+                  return voiceReload.future;
+                }
+                return Future<Revision3VoiceCatalog>.value(
+                  Revision3VoiceCatalog.fromContentIndex(contentIndex),
+                );
+              },
+              onCreateDialogLine: () => fixture.globalActions++,
+              onManageVoiceTakesFor:
+                  ({required initialLineId, required initialLocale}) {
+                    fixture.manageActions++;
+                  },
+            );
+          },
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  if (width < 900) {
+    await tester.tap(find.text(primaryLabel));
+    await tester.pumpAndSettle();
+  }
+  await tester.enterText(
+    find.byKey(const Key('revision3-localization-text-en')),
+    changedText,
+  );
+  await tester.pump();
+  final manage = find.byKey(const Key('revision3-voice-production-manage'));
+  await _scrollEditorUntilVisible(tester, manage);
+  await tester.tap(manage);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(_copy.saveAndContinueLabel));
+  await _pumpUntil(tester, () => fixture.publishCalls == 1);
+
+  setHostState(() {
+    projectRevision = 8;
+    checkpointIdentity = 'head-b';
+    service = reboundService;
+    contentIndex = reboundIndex;
+    rebound = true;
+  });
+  await tester.pump();
+  publication.complete(
+    _publication(
+      projectId: _projectId,
+      projectRevision: 8,
+      localizationId: _localizationId,
+      localizationRevision: 5,
+    ),
+  );
+  await _pumpUntil(tester, () {
+    final field = find.byKey(const Key('revision3-localization-text-en'));
+    return fixture.reboundVoiceLoads == 1 &&
+        field.evaluate().isNotEmpty &&
+        tester.widget<TextField>(field).controller!.text == changedText;
+  });
+  return fixture;
+}
+
 typedef _SeedFactory =
     AuthoringRevision3DialogLocalizationEditSeed Function({
       required String projectId,
@@ -2250,8 +3898,9 @@ Revision3DialogLocalizationEditAuthoringService _serviceForIndex(
   Revision3ContentIndex index, {
   _SeedFactory? seedFor,
   _Publisher? publish,
+  Future<Revision3ContentIndex> Function()? loadIndex,
 }) => Revision3DialogLocalizationEditAuthoringService(
-  loadContentIndex: () async => index,
+  loadContentIndex: loadIndex ?? () async => index,
   loadExactSeed:
       ({
         required expectedProjectId,
@@ -2462,7 +4111,11 @@ Future<void> _scrollEditorUntilVisible(
       tester.view.physicalSize.height / tester.view.devicePixelRatio;
   for (var attempt = 0; attempt < 20; attempt++) {
     final center = tester.getCenter(target, warnIfMissed: false);
-    if (center.dy >= 0 && center.dy <= viewportHeight) return;
+    if (center.dy >= 0 &&
+        center.dy <= viewportHeight &&
+        target.hitTestable().evaluate().isNotEmpty) {
+      return;
+    }
     await tester.drag(scrollable, Offset(0, reverse ? 220 : -220));
     await tester.pump();
   }
@@ -2578,7 +4231,9 @@ Revision3DialogLocalizationEditPublication _publication({
 );
 
 Revision3ContentIndex _contentIndex({
+  String projectId = _projectId,
   int revision = 7,
+  int localizationRevision = 4,
   required String displayName,
   required List<String> locales,
   bool existingDeSlot = true,
@@ -2588,11 +4243,14 @@ Revision3ContentIndex _contentIndex({
   String? duplicateLineDisplayName,
   String? duplicateLineSpeaker,
 }) {
-  final json = revision3VoiceContentIndexJsonFixture(
+  var json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
     existingDeSlot: existingDeSlot,
     duplicateLine: duplicateLine,
   );
+  if (projectId != _projectId) {
+    json = (_replaceProjectId(json, projectId)! as Map).cast<String, Object?>();
+  }
   final entities = (json['entities']! as List<Object?>)
       .map(
         (value) =>
@@ -2620,7 +4278,7 @@ Revision3ContentIndex _contentIndex({
   );
   final primaryLocId = rejectPrimaryVoiceLine ? 'CON' : _locId;
   localization['display_name'] = displayName;
-  localization['revision'] = 4;
+  localization['revision'] = localizationRevision;
   final summary = (localization['summary']! as Map).cast<String, Object?>();
   final data = (summary['data']! as Map).cast<String, Object?>();
   data['loc_id'] = primaryLocId;
@@ -2680,3 +4338,15 @@ Revision3ContentIndex _contentIndex({
   json['entity_counts'] = counts;
   return Revision3ContentIndex.fromJsonObject(json);
 }
+
+Object? _replaceProjectId(Object? value, String projectId) => switch (value) {
+  String() when value == _projectId => projectId,
+  List<Object?>() => <Object?>[
+    for (final entry in value) _replaceProjectId(entry, projectId),
+  ],
+  Map() => <String, Object?>{
+    for (final entry in value.entries)
+      entry.key as String: _replaceProjectId(entry.value, projectId),
+  },
+  _ => value,
+};

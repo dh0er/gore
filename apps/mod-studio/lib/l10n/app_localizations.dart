@@ -1688,6 +1688,84 @@ abstract class AppLocalizations {
   /// **'You changed this project text. Switching now would discard those edits.'**
   String get managedLocalizationUnsavedDescription;
 
+  /// No description provided for @managedLocalizationVoiceUnsavedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save text before continuing?'**
+  String get managedLocalizationVoiceUnsavedTitle;
+
+  /// No description provided for @managedLocalizationVoiceUnsavedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Save these text changes and continue directly to the selected action, keep editing, or deliberately discard the text changes.'**
+  String get managedLocalizationVoiceUnsavedDescription;
+
+  /// No description provided for @managedLocalizationDiscardAndContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard and continue'**
+  String get managedLocalizationDiscardAndContinue;
+
+  /// No description provided for @managedLocalizationSaveAndContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Save and continue'**
+  String get managedLocalizationSaveAndContinue;
+
+  /// No description provided for @managedLocalizationGlobalAddVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Add take for any line'**
+  String get managedLocalizationGlobalAddVoice;
+
+  /// No description provided for @managedLocalizationGlobalManageVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage takes for any line'**
+  String get managedLocalizationGlobalManageVoice;
+
+  /// No description provided for @managedLocalizationGlobalResolveVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve target for any line'**
+  String get managedLocalizationGlobalResolveVoice;
+
+  /// No description provided for @managedVoiceTakeSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice take saved in project revision {revision}. It is saved to the project only and is not yet usable in game.'**
+  String managedVoiceTakeSaved(int revision);
+
+  /// No description provided for @managedVoiceSelectionCleared.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice selection cleared in project revision {revision}. Voice build remains a separate offline step; runtime remains unqualified.'**
+  String managedVoiceSelectionCleared(int revision);
+
+  /// No description provided for @managedVoiceSelectionSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'Approved Voice take selected in project revision {revision}. Voice build remains a separate offline step; runtime remains unqualified.'**
+  String managedVoiceSelectionSelected(int revision);
+
+  /// No description provided for @managedVoiceTargetUnresolvedSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'No installed archive member matched. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetUnresolvedSaved(int revision);
+
+  /// No description provided for @managedVoiceTargetResolvedSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'One installed archive member was sealed. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetResolvedSaved(int revision);
+
+  /// No description provided for @managedVoiceTargetAmbiguousSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed archive members matched; nothing was chosen implicitly. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetAmbiguousSaved(int count, int revision);
+
   /// No description provided for @managedLocalizationDiscard.
   ///
   /// In en, this message translates to:
@@ -1727,7 +1805,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedLocalizationVoiceActionFailed.
   ///
   /// In en, this message translates to:
-  /// **'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.'**
+  /// **'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.'**
   String get managedLocalizationVoiceActionFailed;
 
   /// No description provided for @managedSectionValidateTestDescription.

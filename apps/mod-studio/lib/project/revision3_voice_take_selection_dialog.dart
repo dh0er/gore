@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
-import '../l10n/app_localizations.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
@@ -9,8 +8,245 @@ import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
 const _clearSelectionValue = '__no_voice_take_selected__';
-const _fixedContextUnavailableMessage =
-    'This Voice action no longer matches one intact existing Voice setup in the exact current project. Close it and reopen Manage takes from the current workspace. No project, game, or save files were changed.';
+
+/// Complete author-facing copy for [Revision3VoiceTakeSelectionDialog].
+@immutable
+final class Revision3VoiceTakeSelectionDialogCopy {
+  const Revision3VoiceTakeSelectionDialogCopy._(this._german);
+
+  static const english = Revision3VoiceTakeSelectionDialogCopy._(false);
+  static const german = Revision3VoiceTakeSelectionDialogCopy._(true);
+
+  final bool _german;
+
+  String get title => _german ? 'Voice-Takes verwalten' : 'Manage Voice takes';
+  String get introduction => _german
+      ? 'Wähle, welche vorhandene freigegebene Aufnahme diese Dialogzeile verwenden soll. Der Status ist nur eine Kennzeichnung im Autoren-Workflow und belegt weder Audioqualität noch Einsatzbereitschaft im Spiel. Änderungen bleiben im Offline-Projekt, bis Build und Bereitstellung separat ausgeführt werden.'
+      : 'Choose which existing Approved recording this dialog line should use. Status is an author workflow label only; it does not prove audio quality or in-game readiness. Changes stay in the offline project until separate build and deployment steps.';
+  String get fixedContextUnavailable => _german
+      ? 'Diese Voice-Aktion passt im exakt aktuellen Projekt nicht mehr zu einem intakten vorhandenen Voice-Setup. Schließe das Fenster und öffne „Aufnahmen verwalten“ im aktuellen Arbeitsbereich erneut. Es wurden keine Projekt-, Spiel- oder Spielstanddateien verändert.'
+      : 'This Voice action no longer matches one intact existing Voice setup in the exact current project. Close it and reopen Manage takes from the current workspace. No project, game, or save files were changed.';
+  String get requiresReopen => _german
+      ? 'Öffne das verwaltete Projekt erneut, bevor du Voice-Takes änderst.'
+      : 'Reopen the managed project before changing Voice takes.';
+  String get loadFailed => _german
+      ? 'Voice-Takes konnten nicht sicher geladen werden. Versuche es erneut oder öffne das verwaltete Projekt neu.'
+      : 'Voice takes could not be loaded safely. Try again or reopen the managed project.';
+  String get staleSelection => _german
+      ? 'Das Projekt wurde geändert, während dieses Fenster geöffnet war. Schließe es und versuche es im aktualisierten Projekt erneut.'
+      : 'The project changed while this window was open. Close it and try again from the refreshed project.';
+  String get selectionSaveFailed => _german
+      ? 'Die Voice-Auswahl konnte nicht sicher gespeichert werden. Es wurden keine Spiel- oder Spielstanddateien geändert.'
+      : 'The Voice selection could not be saved safely. No game or save files were changed.';
+
+  String get statusChangedApproved => _german
+      ? 'Status wurde auf Freigegeben geändert. Dieser Take kann jetzt ausgewählt werden.'
+      : 'Status changed to Approved. This take can now be selected.';
+  String statusChanged(String status) => _german
+      ? 'Status wurde auf $status geändert.'
+      : 'Status changed to $status.';
+  String get selectedTakeStatusBlocked => _german
+      ? 'Dieser Take ist aktuell ausgewählt. Leere die Auswahl, bevor du seinen Status von Freigegeben änderst.'
+      : 'This take is currently selected. Clear the selection before changing it from Approved.';
+  String get statusStale => _german
+      ? 'Das Projekt wurde geändert, bevor dieser Status gespeichert werden konnte. Lade die aktuellen Voice-Takes neu, bevor du fortfährst.'
+      : 'The project changed before this status could be saved. Reload the latest Voice takes before continuing.';
+  String get statusSavedUnconfirmed => _german
+      ? 'Der Status wurde gespeichert, aber die aktuellen Voice-Takes konnten nicht bestätigt werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut.'
+      : 'The status was saved, but the latest Voice takes could not be confirmed. Close this window and reopen the managed project.';
+  String get statusUnconfirmed => _german
+      ? 'Das Statusergebnis konnte nicht bestätigt werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut, bevor du es erneut versuchst.'
+      : 'The status result could not be confirmed. Close this window and reopen the managed project before trying again.';
+  String get statusSavedReloadFailed => _german
+      ? 'Der Status wurde gespeichert, aber die aktuellen Voice-Takes konnten nicht bestätigt werden. Lade die Takes neu, bevor du fortfährst; die Statusänderung wird nicht wiederholt.'
+      : 'The status was saved, but the latest Voice takes could not be confirmed. Reload the takes before continuing; the status change will not be repeated.';
+  String get statusSaveFailed => _german
+      ? 'Der Voice-Take-Status konnte nicht sicher gespeichert werden. Prüfe den aktuellen Projektstand und versuche es erneut.'
+      : 'The Voice take status could not be saved safely. Review the current project and try again.';
+
+  String get takeRemoveAction =>
+      _german ? 'Aus dieser Zeile entfernen…' : 'Remove from this line…';
+  String get takeRemoveTooltip => _german
+      ? 'Diese Aufnahme aus der aktuellen Dialogzeile und Sprache entfernen'
+      : 'Remove this recording from the current dialog line and language';
+  String get takeRemoveDialogTitle =>
+      _german ? 'Voice-Take entfernen?' : 'Remove Voice take?';
+  String takeRemoveDialogSummary(String take, String line, String locale) =>
+      _german
+      ? '„$take“ aus $line ($locale) entfernen?'
+      : 'Remove “$take” from $line ($locale)?';
+  String get takeRemoveScope => _german
+      ? 'Nur die Verknüpfung für diese Dialogzeile und Sprache wird gelöst. Andere Verwendungen im Projekt bleiben unverändert.'
+      : 'Only the link for this dialog line and language is removed. Other project uses remain unchanged.';
+  String get takeRemoveInternalRetention => _german
+      ? 'Die Audiodatei bleibt intern gespeichert. Diese Aktion gibt keinen Projektspeicher frei und kann noch nicht rückgängig gemacht werden.'
+      : 'The audio file remains stored internally. This action does not free project storage and has no undo yet.';
+  String get takeRemoveGameBoundary => _german
+      ? 'Spielinstallation und Spielstände werden nicht verändert.'
+      : 'The game installation and save games are not changed.';
+  String get takeRemoveSelectedWarning => _german
+      ? 'Dies ist der aktive Take. Beim Entfernen wird die Auswahl atomar geleert. Es wird kein Ersatz automatisch gewählt; der Voice-Build bleibt blockiert, bis ein freigegebener Take ausgewählt wurde.'
+      : 'This is the active take. Removing it also clears the selection atomically. No replacement is chosen automatically, so Voice build remains blocked until an Approved take is selected.';
+  String get takeRemoveCancel => _german ? 'Abbrechen' : 'Cancel';
+  String get takeRemoveConfirm =>
+      _german ? 'Aus Zeile entfernen' : 'Remove from line';
+  String get takeRemoveUniqueSuccess => _german
+      ? 'Der Take wurde aus dieser Zeile und dem aktuellen Projektgraphen entfernt. Seine internen Audiodaten bleiben erhalten.'
+      : 'The take was removed from this line and from the current project graph. Its internal audio data remains retained.';
+  String get takeRemoveSharedSuccess => _german
+      ? 'Die Verknüpfung wurde aus dieser Zeile und Sprache gelöst. Der Take bleibt für andere Verwendungen im Projekt verfügbar; seine internen Audiodaten bleiben erhalten.'
+      : 'The link was removed from this line and language. The take remains available to its other project uses, and its internal audio data remains retained.';
+  String get takeRemoveSelectionClearedSuccess => _german
+      ? 'Die aktive Auswahl wurde atomar geleert. Es wurde kein Ersatz gewählt; der Voice-Build bleibt blockiert, bis ein freigegebener Take ausgewählt wurde.'
+      : 'The active selection was cleared atomically. No replacement was selected; Voice build is blocked until an Approved take is selected.';
+  String get takeRemoveStale => _german
+      ? 'Das Projekt wurde geändert, bevor der Take entfernt werden konnte. Lade die aktuellen Voice-Takes neu und prüfe die Aktion erneut.'
+      : 'The project changed before the take could be removed. Reload the latest Voice takes and review the action again.';
+  String get takeRemoveRequiresReopen => _german
+      ? 'Das Ergebnis der Entfernung konnte nicht bestätigt werden. Nicht erneut versuchen. Schließe dieses Fenster und öffne das verwaltete Projekt erneut oder stelle es wieder her.'
+      : 'The removal result could not be confirmed. Do not retry. Close this window and reopen or recover the managed project.';
+  String get takeRemoveSavedUnconfirmed => _german
+      ? 'Die Entfernung wurde gespeichert, aber der aktuelle Projektstand konnte nicht bestätigt werden. Wiederhole die Entfernung nicht. Schließe dieses Fenster und öffne das verwaltete Projekt erneut oder stelle es wieder her.'
+      : 'The removal was saved, but the latest project could not be confirmed. Do not repeat the removal. Close this window and reopen or recover the managed project.';
+  String get takeRemoveSavedReloadFailed => _german
+      ? 'Die Entfernung wurde gespeichert, aber die aktuellen Voice-Takes konnten nicht geladen werden. Lade die Takes neu; die Entfernung wird nicht wiederholt.'
+      : 'The removal was saved, but the latest Voice takes could not be loaded. Reload the takes; the removal will not be repeated.';
+  String get takeRemoveFailed => _german
+      ? 'Der Take konnte nicht sicher entfernt werden. Es wurde keine Entfernung bestätigt.'
+      : 'The take could not be removed safely. No removal was confirmed.';
+  String get takeRemoveReloadConfirmed => _german
+      ? 'Die gespeicherte Entfernung wurde im aktuellen Projektstand bestätigt.'
+      : 'The saved removal was confirmed from the latest project.';
+
+  String get slotRemoveAction =>
+      _german ? 'Leeres Voice-Setup entfernen…' : 'Remove empty Voice setup…';
+  String get slotRemoveDialogTitle =>
+      _german ? 'Leeres Voice-Setup entfernen?' : 'Remove empty Voice setup?';
+  String slotRemoveDialogSummary(String line, String locale) => _german
+      ? 'Das leere Voice-Setup für $locale aus $line entfernen?'
+      : 'Remove the empty $locale Voice setup from $line?';
+  String get slotRemoveRetention => _german
+      ? 'Der Dialogtext bleibt im Projekt. Keine Aufnahme, kein Audio-Blob, keine Spieldatei und kein Spielstand werden gelöscht.'
+      : 'The dialog text stays in the project. No recording, audio blob, game file, or save is deleted.';
+  String get slotRemoveTargetWarning => _german
+      ? 'Dabei wird auch der gespeicherte Nachweis zum installierten Ziel für diese Zeile und Sprache entfernt. Das installierte Archiv selbst bleibt unberührt.'
+      : 'This also removes the stored installed-target evidence for this line and language. The installed archive itself remains untouched.';
+  String get slotRemoveRecreate => _german
+      ? 'Du kannst später einen neuen Take hinzufügen; das benötigte Voice-Setup wird dann automatisch neu erstellt.'
+      : 'You can add a new take later; the required Voice setup will then be created again automatically.';
+  String get slotRemoveCancel => _german ? 'Setup behalten' : 'Keep setup';
+  String get slotRemoveConfirm => _german ? 'Setup entfernen' : 'Remove setup';
+  String get slotRemoveSuccess => _german
+      ? 'Das leere Voice-Setup wurde entfernt. Dialogtext, Audiospeicher, Spieldateien und Spielstände wurden nicht verändert.'
+      : 'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.';
+  String get slotRemoveStale => _german
+      ? 'Das Projekt wurde geändert, bevor das leere Voice-Setup entfernt werden konnte. Lade die aktuellen Voice-Takes neu und versuche es erneut.'
+      : 'The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.';
+  String get slotRemoveSavedUnconfirmed => _german
+      ? 'Das Ergebnis konnte nicht bestätigt werden; das leere Voice-Setup wurde möglicherweise gespeichert. Wiederhole die Entfernung nicht. Schließe dieses Fenster, öffne das verwaltete Projekt erneut und prüfe die Zeile.'
+      : 'The result could not be confirmed and the empty Voice setup may have been saved. Do not repeat the removal. Close this window, reopen the managed project, and inspect the line.';
+  String get slotRemoveSavedReloadFailed => _german
+      ? 'Das leere Voice-Setup wurde gespeichert, aber das Neuladen ist fehlgeschlagen. Lade neu, um die Änderung zu bestätigen; die Entfernung wird nicht wiederholt.'
+      : 'The empty Voice setup was saved, but reloading failed. Reload to confirm it; the removal will not be repeated.';
+  String get slotRemoveFailed => _german
+      ? 'Das leere Voice-Setup konnte nicht sicher entfernt werden. Es wurde keine Entfernung bestätigt.'
+      : 'The empty Voice setup could not be removed safely. No removal was confirmed.';
+  String get slotRemoveReloadConfirmed => _german
+      ? 'Die gespeicherte Entfernung des leeren Voice-Setups wurde im aktuellen Projektstand bestätigt.'
+      : 'Saved empty Voice setup removal confirmed from the latest project.';
+
+  String get latestTakesReloaded => _german
+      ? 'Aktuelle Voice-Takes neu geladen.'
+      : 'Latest Voice takes reloaded.';
+  String get savedStatusConfirmed => _german
+      ? 'Gespeicherter Status im aktuellen Projekt bestätigt.'
+      : 'Saved status confirmed from the latest project.';
+  String get latestTakesUnconfirmed => _german
+      ? 'Die aktuellen Voice-Takes konnten nicht bestätigt werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut.'
+      : 'The latest Voice takes could not be confirmed. Close this window and reopen the managed project.';
+  String get reloadFailed => _german
+      ? 'Voice-Takes konnten nicht sicher neu geladen werden. Keine gespeicherte Änderung wurde wiederholt.'
+      : 'Voice takes could not be reloaded safely. No saved change was repeated.';
+
+  String get findLineLabel =>
+      _german ? 'Dialogzeile finden' : 'Find a dialog line';
+  String get findLineHint => _german
+      ? 'Nach Sprecher oder Zeilenname suchen'
+      : 'Search by speaker or line name';
+  String get noMatchingLine => _german
+      ? 'Keine passende Dialogzeile besitzt ein intaktes vorhandenes Voice-Setup.'
+      : 'No matching dialog line has an intact existing Voice slot.';
+  String voiceLanguageCount(int count) => _german
+      ? '$count Voice-Sprache${count == 1 ? '' : 'n'}'
+      : '$count Voice language${count == 1 ? '' : 's'}';
+  String get voiceLanguageLabel => _german ? 'Voice-Sprache' : 'Voice language';
+  String get selectedTakeTitle =>
+      _german ? 'Ausgewählter Take' : 'Selected take';
+  String get noTakeSelected =>
+      _german ? 'Kein Take ausgewählt' : 'No take selected';
+  String get currentSelection =>
+      _german ? 'Aktuelle Auswahl' : 'Current selection';
+  String get clearActiveChoice => _german
+      ? 'Aufnahmen behalten, aber aktive Auswahl leeren'
+      : 'Keep the recordings, but clear the active choice';
+  String get clearSelectionWarning => _german
+      ? 'Die Takes bleiben in diesem Projekt, aber der Voice-Build ist blockiert, bis wieder ein freigegebener Take ausgewählt wurde.'
+      : 'The takes stay in this project, but Voice build is blocked until an Approved take is selected again.';
+  String get pendingSelectionStatus => _german
+      ? 'Speichere die ausstehende Auswahl oder mache sie rückgängig, bevor du einen Take-Status änderst.'
+      : 'Save or undo the pending selection before changing a take status.';
+  String get noTakes => _german
+      ? 'Dieses Voice-Setup hat keine Takes.'
+      : 'This Voice setup has no takes.';
+  String get retry => _german ? 'Erneut versuchen' : 'Retry';
+  String get reloadTakes => _german ? 'Takes neu laden' : 'Reload takes';
+  String get close => _german ? 'Schließen' : 'Close';
+  String get cancel => _german ? 'Abbrechen' : 'Cancel';
+  String get saveSelection => _german ? 'Auswahl speichern' : 'Save selection';
+  String fixedContextLanguage(String locale) =>
+      _german ? 'Voice-Sprache: $locale' : 'Voice language: $locale';
+
+  String statusLabel(String statusName) => switch (statusName) {
+    'draft' => _german ? 'Entwurf' : 'Draft',
+    'recorded' => _german ? 'Aufgenommen' : 'Recorded',
+    'reviewed' => _german ? 'Geprüft' : 'Reviewed',
+    'approved' => _german ? 'Freigegeben' : 'Approved',
+    _ => throw ArgumentError.value(statusName, 'statusName'),
+  };
+  String takeSubtitle({
+    required String statusName,
+    required bool isCurrent,
+    required bool isApproved,
+  }) {
+    final status = statusLabel(statusName);
+    if (isCurrent && !isApproved) {
+      return _german
+          ? '$status • Aktuelle Auswahl muss freigegeben sein; ändere den Status zu Freigegeben oder leere die Auswahl'
+          : '$status • Current selection must be Approved; change to Approved or clear it';
+    }
+    final parts = <String>[status];
+    if (isCurrent) parts.add(currentSelection);
+    if (!isApproved) {
+      parts.add(
+        _german
+            ? 'Freigabe vor der Auswahl erforderlich'
+            : 'Approval required before selection',
+      );
+    }
+    return parts.join(' • ');
+  }
+
+  String get selectedStatusTooltip => _german
+      ? 'Leere die Auswahl, bevor du diesen Status änderst'
+      : 'Clear the selection before changing this status';
+  String get changeStatusTooltip =>
+      _german ? 'Take-Status ändern' : 'Change take status';
+  String get changeStatusLabel =>
+      _german ? 'Status ändern…' : 'Change status...';
+  String get selectedApprovedStatusGuard => _german
+      ? 'Leere die Auswahl, bevor du den Status dieses Takes von Freigegeben änderst.'
+      : 'Clear the selection before changing this take from Approved.';
+}
 
 /// Friendly project-only editor for selecting or clearing an existing Voice
 /// take. Entity IDs, CAS heads, paths, and archive internals are never shown.
@@ -21,6 +257,7 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     required this.statusService,
     required this.removalService,
     required this.slotRemovalService,
+    required this.copy,
     this.initialLineId,
     this.initialLocale,
     this.fixedContext = false,
@@ -32,6 +269,7 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
   final Revision3DialogVoiceSlotRemovalAuthoringService slotRemovalService;
   final String? initialLineId;
   final String? initialLocale;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
 
   /// Keeps an in-workspace line/locale handoff fixed. The freshly loaded
   /// catalog must still prove that exact existing Voice setup intact.
@@ -173,7 +411,7 @@ class _Revision3VoiceTakeSelectionDialogState
         _fixedContextInvalid = fixedContextInvalid;
         _catalogLoadFailed = false;
         if (fixedContextInvalid) {
-          _error = _fixedContextUnavailableMessage;
+          _error = widget.copy.fixedContextUnavailable;
         }
         _loading = false;
       });
@@ -183,14 +421,14 @@ class _Revision3VoiceTakeSelectionDialogState
         _loading = false;
         _catalogLoadFailed = true;
         _requiresClose = true;
-        _error = 'Reopen the managed project before changing Voice takes.';
+        _error = widget.copy.requiresReopen;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _loading = false;
         _catalogLoadFailed = true;
-        _error = 'Voice takes could not be loaded: ${_friendlyError(error)}';
+        _error = widget.copy.loadFailed;
       });
     }
   }
@@ -303,27 +541,27 @@ class _Revision3VoiceTakeSelectionDialogState
         selectedTakeId: value == _clearSelectionValue ? null : value,
       );
       if (!mounted) return;
+      setState(() => _busy = false);
       Navigator.of(context).pop(publication);
     } on Revision3VoiceTakeSelectionStaleCheckpointException {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _requiresClose = true;
-        _error =
-            'The project changed while this window was open. Close it and try again from the refreshed project.';
+        _error = widget.copy.staleSelection;
       });
     } on Revision3VoiceTakeSelectionRequiresReopenException {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _requiresClose = true;
-        _error = 'Reopen the managed project before changing Voice takes.';
+        _error = widget.copy.requiresReopen;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = 'Voice selection was not saved: ${_friendlyError(error)}';
+        _error = widget.copy.selectionSaveFailed;
       });
     }
   }
@@ -385,16 +623,17 @@ class _Revision3VoiceTakeSelectionDialogState
         _pendingStatusPublication = null;
         _notice =
             publication.status == AuthoringRevision3VoiceTakeStatus.approved
-            ? 'Status changed to Approved. This take can now be selected.'
-            : 'Status changed to ${_voiceTakeStatusLabel(publication.status)}.';
+            ? widget.copy.statusChangedApproved
+            : widget.copy.statusChanged(
+                widget.copy.statusLabel(publication.status.name),
+              );
       });
     } on Revision3VoiceTakeStatusSelectedTakeException {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _statusBusyTakeId = null;
-        _error =
-            'This take is currently selected. Clear the selection before changing it from Approved.';
+        _error = widget.copy.selectedTakeStatusBlocked;
       });
     } on Revision3VoiceTakeStatusStaleCheckpointException {
       if (!mounted) return;
@@ -402,8 +641,7 @@ class _Revision3VoiceTakeSelectionDialogState
         _busy = false;
         _statusBusyTakeId = null;
         _reloadRequired = true;
-        _error =
-            'The project changed before this status could be saved. Reload the latest Voice takes before continuing.';
+        _error = widget.copy.statusStale;
       });
     } on Revision3VoiceTakeStatusRequiresReopenException {
       if (!mounted) return;
@@ -413,18 +651,18 @@ class _Revision3VoiceTakeSelectionDialogState
         _requiresClose = true;
         _reloadRequired = false;
         _error = publishedThisAttempt
-            ? 'The status was saved, but the latest Voice takes could not be confirmed. Close this window and reopen the managed project.'
-            : 'The status result could not be confirmed. Close this window and reopen the managed project before trying again.';
+            ? widget.copy.statusSavedUnconfirmed
+            : widget.copy.statusUnconfirmed;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         _busy = false;
         _statusBusyTakeId = null;
         _reloadRequired = publishedThisAttempt;
         _error = publishedThisAttempt
-            ? 'The status was saved, but the latest Voice takes could not be confirmed. Reload the takes before continuing; the status change will not be repeated.'
-            : 'Voice take status was not saved: ${_friendlyError(error)}';
+            ? widget.copy.statusSavedReloadFailed
+            : widget.copy.statusSaveFailed;
       });
     }
   }
@@ -445,10 +683,9 @@ class _Revision3VoiceTakeSelectionDialogState
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
-        final copy = AppLocalizations.of(dialogContext);
         return AlertDialog(
           key: const Key('voice-take-remove-confirm-dialog'),
-          title: Text(copy.managedVoiceTakeRemoveDialogTitle),
+          title: Text(widget.copy.takeRemoveDialogTitle),
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: SingleChildScrollView(
@@ -457,18 +694,18 @@ class _Revision3VoiceTakeSelectionDialogState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    copy.managedVoiceTakeRemoveDialogSummary(
+                    widget.copy.takeRemoveDialogSummary(
                       take.displayLabel,
                       line.displayLabel,
                       locale,
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Text(copy.managedVoiceTakeRemoveScope),
+                  Text(widget.copy.takeRemoveScope),
                   const SizedBox(height: 8),
-                  Text(copy.managedVoiceTakeRemoveInternalRetention),
+                  Text(widget.copy.takeRemoveInternalRetention),
                   const SizedBox(height: 8),
-                  Text(copy.managedVoiceTakeRemoveGameBoundary),
+                  Text(widget.copy.takeRemoveGameBoundary),
                   if (selected) ...[
                     const SizedBox(height: 12),
                     Container(
@@ -492,7 +729,7 @@ class _Revision3VoiceTakeSelectionDialogState
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              copy.managedVoiceTakeRemoveSelectedWarning,
+                              widget.copy.takeRemoveSelectedWarning,
                               style: TextStyle(
                                 color: Theme.of(
                                   dialogContext,
@@ -512,12 +749,12 @@ class _Revision3VoiceTakeSelectionDialogState
             TextButton(
               key: const Key('voice-take-remove-cancel'),
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(copy.managedVoiceTakeRemoveCancel),
+              child: Text(widget.copy.takeRemoveCancel),
             ),
             FilledButton(
               key: const Key('voice-take-remove-confirm'),
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: Text(copy.managedVoiceTakeRemoveConfirm),
+              child: Text(widget.copy.takeRemoveConfirm),
             ),
           ],
         );
@@ -563,7 +800,6 @@ class _Revision3VoiceTakeSelectionDialogState
       final refreshedLine = refreshed.line(lineId)!;
       final refreshedSummary = refreshedLine.slotSummaryForLocale(locale)!;
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _catalog = refreshed;
         _lineId = refreshedLine.lineId;
@@ -573,43 +809,40 @@ class _Revision3VoiceTakeSelectionDialogState
         _removalBusyTakeId = null;
         _pendingRemovalPublication = null;
         final outcome = publication!.takeEntityRemoved
-            ? copy.managedVoiceTakeRemoveUniqueSuccess
-            : copy.managedVoiceTakeRemoveSharedSuccess;
+            ? widget.copy.takeRemoveUniqueSuccess
+            : widget.copy.takeRemoveSharedSuccess;
         _notice = publication.selectionCleared
-            ? '$outcome\n${copy.managedVoiceTakeRemoveSelectionClearedSuccess}'
+            ? '$outcome\n${widget.copy.takeRemoveSelectionClearedSuccess}'
             : outcome;
       });
     } on Revision3VoiceTakeRemovalStaleCheckpointException {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _removalBusyTakeId = null;
         _reloadRequired = true;
-        _error = copy.managedVoiceTakeRemoveStale;
+        _error = widget.copy.takeRemoveStale;
       });
     } on Revision3VoiceTakeRemovalRequiresReopenException {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _removalBusyTakeId = null;
         _reloadRequired = false;
         _requiresClose = true;
         _error = publishedThisAttempt
-            ? copy.managedVoiceTakeRemoveSavedUnconfirmed
-            : copy.managedVoiceTakeRemoveRequiresReopen;
+            ? widget.copy.takeRemoveSavedUnconfirmed
+            : widget.copy.takeRemoveRequiresReopen;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _removalBusyTakeId = null;
         _reloadRequired = publishedThisAttempt;
         _error = publishedThisAttempt
-            ? copy.managedVoiceTakeRemoveSavedReloadFailed
-            : copy.managedVoiceTakeRemoveFailed(_friendlyError(error));
+            ? widget.copy.takeRemoveSavedReloadFailed
+            : widget.copy.takeRemoveFailed;
       });
     }
   }
@@ -629,12 +862,11 @@ class _Revision3VoiceTakeSelectionDialogState
       return;
     }
     final retainsTargetEvidence = summary.targetResolution.name != 'unresolved';
-    final copy = AppLocalizations.of(context);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         key: const Key('voice-slot-remove-confirm-dialog'),
-        title: Text(copy.managedVoiceSlotRemoveDialogTitle),
+        title: Text(widget.copy.slotRemoveDialogTitle),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 560),
           child: SingleChildScrollView(
@@ -643,13 +875,13 @@ class _Revision3VoiceTakeSelectionDialogState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  copy.managedVoiceSlotRemoveDialogSummary(
+                  widget.copy.slotRemoveDialogSummary(
                     line.displayLabel,
                     locale,
                   ),
                 ),
                 const SizedBox(height: 12),
-                Text(copy.managedVoiceSlotRemoveRetention),
+                Text(widget.copy.slotRemoveRetention),
                 if (retainsTargetEvidence) ...[
                   const SizedBox(height: 12),
                   Container(
@@ -659,11 +891,11 @@ class _Revision3VoiceTakeSelectionDialogState
                       color: Theme.of(dialogContext).colorScheme.errorContainer,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text(copy.managedVoiceSlotRemoveTargetWarning),
+                    child: Text(widget.copy.slotRemoveTargetWarning),
                   ),
                 ],
                 const SizedBox(height: 12),
-                Text(copy.managedVoiceSlotRemoveRecreate),
+                Text(widget.copy.slotRemoveRecreate),
               ],
             ),
           ),
@@ -672,12 +904,12 @@ class _Revision3VoiceTakeSelectionDialogState
           TextButton(
             key: const Key('voice-slot-remove-cancel'),
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(copy.managedVoiceSlotRemoveCancel),
+            child: Text(widget.copy.slotRemoveCancel),
           ),
           FilledButton(
             key: const Key('voice-slot-remove-confirm'),
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(copy.managedVoiceSlotRemoveConfirm),
+            child: Text(widget.copy.slotRemoveConfirm),
           ),
         ],
       ),
@@ -722,7 +954,6 @@ class _Revision3VoiceTakeSelectionDialogState
           ? const <String>[]
           : _intactLocales(refreshedLine);
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _catalog = refreshed;
         if (widget.fixedContext) {
@@ -741,34 +972,31 @@ class _Revision3VoiceTakeSelectionDialogState
         }
         _busy = false;
         _pendingSlotRemovalPublication = null;
-        _notice = copy.managedVoiceSlotRemoveSuccess;
+        _notice = widget.copy.slotRemoveSuccess;
       });
     } on Revision3DialogVoiceSlotRemovalStaleCheckpointException {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _reloadRequired = true;
-        _error = copy.managedVoiceSlotRemoveStale;
+        _error = widget.copy.slotRemoveStale;
       });
     } on Revision3DialogVoiceSlotRemovalRequiresReopenException {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _reloadRequired = false;
         _requiresClose = true;
-        _error = copy.managedVoiceSlotRemoveSavedUnconfirmed;
+        _error = widget.copy.slotRemoveSavedUnconfirmed;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
-      final copy = AppLocalizations.of(context);
       setState(() {
         _busy = false;
         _reloadRequired = publishedThisAttempt;
         _error = publishedThisAttempt
-            ? copy.managedVoiceSlotRemoveSavedReloadFailed
-            : copy.managedVoiceSlotRemoveFailed(_friendlyError(error));
+            ? widget.copy.slotRemoveSavedReloadFailed
+            : widget.copy.slotRemoveFailed;
       });
     }
   }
@@ -850,7 +1078,7 @@ class _Revision3VoiceTakeSelectionDialogState
             _busy = false;
             _fixedContextInvalid = true;
             _requiresClose = true;
-            _error = _fixedContextUnavailableMessage;
+            _error = widget.copy.fixedContextUnavailable;
             _notice = null;
           });
           return;
@@ -878,12 +1106,12 @@ class _Revision3VoiceTakeSelectionDialogState
           _requiresClose = true;
         }
         _notice = pendingSlotRemoval != null
-            ? AppLocalizations.of(context).managedVoiceSlotRemoveReloadConfirmed
+            ? widget.copy.slotRemoveReloadConfirmed
             : pendingRemoval != null
-            ? AppLocalizations.of(context).managedVoiceTakeRemoveReloadConfirmed
+            ? widget.copy.takeRemoveReloadConfirmed
             : pending == null
-            ? 'Latest Voice takes reloaded.'
-            : 'Saved status confirmed from the latest project.';
+            ? widget.copy.latestTakesReloaded
+            : widget.copy.savedStatusConfirmed;
       });
     } on Revision3VoiceTakeRemovalRequiresReopenException {
       if (!recoveryIsCurrent()) return;
@@ -891,9 +1119,7 @@ class _Revision3VoiceTakeSelectionDialogState
         _busy = false;
         _reloadRequired = false;
         _requiresClose = true;
-        _error = AppLocalizations.of(
-          context,
-        ).managedVoiceTakeRemoveSavedUnconfirmed;
+        _error = widget.copy.takeRemoveSavedUnconfirmed;
       });
     } on Revision3DialogVoiceSlotRemovalRequiresReopenException {
       if (!recoveryIsCurrent()) return;
@@ -901,9 +1127,7 @@ class _Revision3VoiceTakeSelectionDialogState
         _busy = false;
         _reloadRequired = false;
         _requiresClose = true;
-        _error = AppLocalizations.of(
-          context,
-        ).managedVoiceSlotRemoveSavedUnconfirmed;
+        _error = widget.copy.slotRemoveSavedUnconfirmed;
       });
     } on Revision3VoiceTakeStatusRequiresReopenException {
       if (!recoveryIsCurrent()) return;
@@ -911,15 +1135,13 @@ class _Revision3VoiceTakeSelectionDialogState
         _busy = false;
         _reloadRequired = false;
         _requiresClose = true;
-        _error =
-            'The latest Voice takes could not be confirmed. Close this window and reopen the managed project.';
+        _error = widget.copy.latestTakesUnconfirmed;
       });
-    } catch (error) {
+    } catch (_) {
       if (!recoveryIsCurrent()) return;
       setState(() {
         _busy = false;
-        _error =
-            'Voice takes could not be reloaded: ${_friendlyError(error)} No saved change was repeated.';
+        _error = widget.copy.reloadFailed;
       });
     }
   }
@@ -927,273 +1149,282 @@ class _Revision3VoiceTakeSelectionDialogState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final copy = AppLocalizations.of(context);
+    final copy = widget.copy;
     final lines = _visibleLines;
     final line = _selectedLine;
     final summary = _selectedSummary;
-    return AlertDialog(
-      key: const Key('revision3-voice-take-selection-dialog'),
-      title: const Text('Manage Voice takes'),
-      content: SizedBox(
-        width: 760,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Choose which existing Approved recording this dialog line should use. Status is an author workflow label only; it does not prove audio quality or in-game readiness. Changes stay in the offline project until separate build and deployment steps.',
-              ),
-              const SizedBox(height: 16),
-              if (widget.fixedContext && line != null && _locale != null) ...[
-                _SelectionFixedContextBreadcrumb(
-                  lineLabel: line.displayLabel,
-                  locale: _locale!,
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (!widget.fixedContext) ...[
-                TextField(
-                  key: const Key('voice-selection-line-search'),
-                  controller: _searchController,
-                  enabled: !_loading && !_interactionLocked,
-                  decoration: const InputDecoration(
-                    labelText: 'Find a dialog line',
-                    hintText: 'Search by speaker or line name',
-                    prefixIcon: Icon(Icons.search),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-              if (_loading)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: CircularProgressIndicator(),
-                  ),
-                )
-              else if (!widget.fixedContext &&
-                  _catalog != null &&
-                  lines.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Text(
-                    'No matching dialog line has an intact existing Voice slot.',
-                    key: Key('voice-selection-no-lines'),
-                  ),
-                )
-              else if (!widget.fixedContext && _catalog != null)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 190),
-                  child: ListView.builder(
-                    key: const Key('voice-selection-lines'),
-                    shrinkWrap: true,
-                    itemCount: lines.length,
-                    itemBuilder: (context, index) {
-                      final choice = lines[index];
-                      final selected = choice.lineId == _lineId;
-                      return Card(
-                        color: selected
-                            ? theme.colorScheme.secondaryContainer
-                            : null,
-                        child: ListTile(
-                          key: ValueKey('voice-selection-line-$index'),
-                          selected: selected,
-                          enabled: !_interactionLocked,
-                          leading: const Icon(Icons.chat_bubble_outline),
-                          title: Text(choice.displayLabel),
-                          subtitle: Text(
-                            '${_intactLocales(choice).length} Voice language${_intactLocales(choice).length == 1 ? '' : 's'}',
-                          ),
-                          onTap: _interactionLocked
-                              ? null
-                              : () => _chooseLine(choice),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              if (!widget.fixedContext && line != null) ...[
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        key: const Key('revision3-voice-take-selection-dialog'),
+        title: Text(copy.title),
+        content: SizedBox(
+          width: 760,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(copy.introduction),
                 const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  key: const Key('voice-selection-locale'),
-                  initialValue: _locale,
-                  decoration: const InputDecoration(
-                    labelText: 'Voice language',
-                    border: OutlineInputBorder(),
+                if (widget.fixedContext && line != null && _locale != null) ...[
+                  _SelectionFixedContextBreadcrumb(
+                    lineLabel: line.displayLabel,
+                    locale: _locale!,
+                    copy: copy,
                   ),
-                  items: [
-                    for (final locale in _intactLocales(line))
-                      DropdownMenuItem(value: locale, child: Text(locale)),
-                  ],
-                  onChanged: _interactionLocked ? null : _chooseLocale,
-                ),
-              ],
-              if (summary != null) ...[
-                const SizedBox(height: 18),
-                Text('Selected take', style: theme.textTheme.titleMedium),
-                const SizedBox(height: 6),
-                RadioGroup<String>(
-                  groupValue: _selectionValue,
-                  onChanged: _interactionLocked
-                      ? (_) {}
-                      : (value) => setState(() {
-                          _selectionValue = value;
-                          _error = null;
-                        }),
-                  child: Column(
-                    children: [
-                      RadioListTile<String>(
-                        key: const Key('voice-selection-clear'),
-                        value: _clearSelectionValue,
-                        enabled: !_interactionLocked,
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('No take selected'),
-                        subtitle: Text(
-                          summary.selectedTakeId == null
-                              ? 'Current selection'
-                              : 'Keep the recordings, but clear the active choice',
-                        ),
-                      ),
-                      for (
-                        var index = 0;
-                        index < summary.candidates.length;
-                        index++
-                      )
-                        _TakeChoiceTile(
-                          index: index,
-                          take: summary.candidates[index],
-                          isCurrent:
-                              summary.selectedTakeId ==
-                              summary.candidates[index].id,
-                          busy: _interactionLocked,
-                          statusDisabled: _hasChange,
-                          statusBusy:
-                              _statusBusyTakeId == summary.candidates[index].id,
-                          onStatusChanged: (status) =>
-                              _changeStatus(summary.candidates[index], status),
-                          removeLabel: copy.managedVoiceTakeRemoveAction,
-                          removeTooltip: copy.managedVoiceTakeRemoveTooltip,
-                          removeBusy:
-                              _removalBusyTakeId ==
-                              summary.candidates[index].id,
-                          onRemove: () =>
-                              _confirmRemove(summary.candidates[index]),
-                        ),
-                    ],
-                  ),
-                ),
-                if (_selectionValue == _clearSelectionValue &&
-                    summary.selectedTakeId != null)
-                  Container(
-                    key: const Key('voice-selection-clear-warning'),
-                    margin: const EdgeInsets.only(top: 8),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      'The takes stay in this project, but Voice build is blocked until an Approved take is selected again.',
-                      style: TextStyle(
-                        color: theme.colorScheme.onErrorContainer,
-                      ),
+                  const SizedBox(height: 8),
+                ],
+                if (!widget.fixedContext) ...[
+                  TextField(
+                    key: const Key('voice-selection-line-search'),
+                    controller: _searchController,
+                    enabled: !_loading && !_interactionLocked,
+                    decoration: InputDecoration(
+                      labelText: copy.findLineLabel,
+                      hintText: copy.findLineHint,
+                      prefixIcon: const Icon(Icons.search),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
-                if (_hasChange)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      'Save or undo the pending selection before changing a take status.',
-                      key: Key('voice-status-selection-pending'),
+                  const SizedBox(height: 8),
+                ],
+                if (_loading)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: CircularProgressIndicator(),
                     ),
-                  ),
-                if (summary.candidates.isEmpty)
+                  )
+                else if (!widget.fixedContext &&
+                    _catalog != null &&
+                    lines.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'This Voice setup has no takes.',
-                          key: Key('voice-selection-no-candidates'),
-                        ),
-                        if (summary.isRemovableGeneratedSlot) ...[
-                          const SizedBox(height: 8),
-                          OutlinedButton.icon(
-                            key: const Key('voice-slot-remove-empty'),
-                            onPressed: _interactionLocked || _hasChange
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      copy.noMatchingLine,
+                      key: const Key('voice-selection-no-lines'),
+                    ),
+                  )
+                else if (!widget.fixedContext && _catalog != null)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 190),
+                    child: ListView.builder(
+                      key: const Key('voice-selection-lines'),
+                      shrinkWrap: true,
+                      itemCount: lines.length,
+                      itemBuilder: (context, index) {
+                        final choice = lines[index];
+                        final selected = choice.lineId == _lineId;
+                        return Card(
+                          color: selected
+                              ? theme.colorScheme.secondaryContainer
+                              : null,
+                          child: ListTile(
+                            key: ValueKey('voice-selection-line-$index'),
+                            selected: selected,
+                            enabled: !_interactionLocked,
+                            leading: const Icon(Icons.chat_bubble_outline),
+                            title: Text(choice.displayLabel),
+                            subtitle: Text(
+                              copy.voiceLanguageCount(
+                                _intactLocales(choice).length,
+                              ),
+                            ),
+                            onTap: _interactionLocked
                                 ? null
-                                : _confirmRemoveEmptySlot,
-                            icon: const Icon(Icons.link_off),
-                            label: Text(copy.managedVoiceSlotRemoveAction),
+                                : () => _chooseLine(choice),
                           ),
-                        ],
+                        );
+                      },
+                    ),
+                  ),
+                if (!widget.fixedContext && line != null) ...[
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    key: const Key('voice-selection-locale'),
+                    initialValue: _locale,
+                    decoration: InputDecoration(
+                      labelText: copy.voiceLanguageLabel,
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (final locale in _intactLocales(line))
+                        DropdownMenuItem(value: locale, child: Text(locale)),
+                    ],
+                    onChanged: _interactionLocked ? null : _chooseLocale,
+                  ),
+                ],
+                if (summary != null) ...[
+                  const SizedBox(height: 18),
+                  Text(
+                    copy.selectedTakeTitle,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 6),
+                  RadioGroup<String>(
+                    groupValue: _selectionValue,
+                    onChanged: _interactionLocked
+                        ? (_) {}
+                        : (value) => setState(() {
+                            _selectionValue = value;
+                            _error = null;
+                          }),
+                    child: Column(
+                      children: [
+                        RadioListTile<String>(
+                          key: const Key('voice-selection-clear'),
+                          value: _clearSelectionValue,
+                          enabled: !_interactionLocked,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(copy.noTakeSelected),
+                          subtitle: Text(
+                            summary.selectedTakeId == null
+                                ? copy.currentSelection
+                                : copy.clearActiveChoice,
+                          ),
+                        ),
+                        for (
+                          var index = 0;
+                          index < summary.candidates.length;
+                          index++
+                        )
+                          _TakeChoiceTile(
+                            index: index,
+                            take: summary.candidates[index],
+                            isCurrent:
+                                summary.selectedTakeId ==
+                                summary.candidates[index].id,
+                            busy: _interactionLocked,
+                            statusDisabled: _hasChange,
+                            statusBusy:
+                                _statusBusyTakeId ==
+                                summary.candidates[index].id,
+                            onStatusChanged: (status) => _changeStatus(
+                              summary.candidates[index],
+                              status,
+                            ),
+                            copy: copy,
+                            removeBusy:
+                                _removalBusyTakeId ==
+                                summary.candidates[index].id,
+                            onRemove: () =>
+                                _confirmRemove(summary.candidates[index]),
+                          ),
                       ],
                     ),
                   ),
+                  if (_selectionValue == _clearSelectionValue &&
+                      summary.selectedTakeId != null)
+                    Container(
+                      key: const Key('voice-selection-clear-warning'),
+                      margin: const EdgeInsets.only(top: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        copy.clearSelectionWarning,
+                        style: TextStyle(
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
+                      ),
+                    ),
+                  if (_hasChange)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        copy.pendingSelectionStatus,
+                        key: const Key('voice-status-selection-pending'),
+                      ),
+                    ),
+                  if (summary.candidates.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            copy.noTakes,
+                            key: const Key('voice-selection-no-candidates'),
+                          ),
+                          if (summary.isRemovableGeneratedSlot) ...[
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              key: const Key('voice-slot-remove-empty'),
+                              onPressed: _interactionLocked || _hasChange
+                                  ? null
+                                  : _confirmRemoveEmptySlot,
+                              icon: const Icon(Icons.link_off),
+                              label: Text(copy.slotRemoveAction),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    key: const Key('voice-selection-error'),
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                ],
+                if (_notice != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _notice!,
+                    key: const Key('voice-status-notice'),
+                    style: TextStyle(color: theme.colorScheme.primary),
+                  ),
+                ],
               ],
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  key: const Key('voice-selection-error'),
-                  style: TextStyle(color: theme.colorScheme.error),
-                ),
-              ],
-              if (_notice != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _notice!,
-                  key: const Key('voice-status-notice'),
-                  style: TextStyle(color: theme.colorScheme.primary),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
+        actions: [
+          if (_error != null &&
+              (_catalog == null || _fixedContextInvalid) &&
+              !_loading &&
+              !_requiresClose)
+            TextButton(
+              key: const Key('voice-selection-retry'),
+              onPressed: _busy ? null : _load,
+              child: Text(copy.retry),
+            ),
+          if (_reloadRequired)
+            TextButton(
+              key: const Key('voice-status-reload'),
+              onPressed: _busy ? null : _reloadTakes,
+              child: Text(copy.reloadTakes),
+            ),
+          TextButton(
+            key: const Key('voice-selection-cancel'),
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            child: Text(
+              _statusWasSaved ||
+                      _removalWasSaved ||
+                      _slotRemovalWasSaved ||
+                      _requiresClose ||
+                      _reloadRequired
+                  ? copy.close
+                  : copy.cancel,
+            ),
+          ),
+          FilledButton(
+            key: const Key('voice-selection-save'),
+            onPressed: _interactionLocked || !_hasChange ? null : _save,
+            child: _busy
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(copy.saveSelection),
+          ),
+        ],
       ),
-      actions: [
-        if (_error != null &&
-            (_catalog == null || _fixedContextInvalid) &&
-            !_loading &&
-            !_requiresClose)
-          TextButton(
-            key: const Key('voice-selection-retry'),
-            onPressed: _busy ? null : _load,
-            child: const Text('Retry'),
-          ),
-        if (_reloadRequired)
-          TextButton(
-            key: const Key('voice-status-reload'),
-            onPressed: _busy ? null : _reloadTakes,
-            child: const Text('Reload takes'),
-          ),
-        TextButton(
-          key: const Key('voice-selection-cancel'),
-          onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: Text(
-            _statusWasSaved ||
-                    _removalWasSaved ||
-                    _slotRemovalWasSaved ||
-                    _requiresClose ||
-                    _reloadRequired
-                ? 'Close'
-                : 'Cancel',
-          ),
-        ),
-        FilledButton(
-          key: const Key('voice-selection-save'),
-          onPressed: _interactionLocked || !_hasChange ? null : _save,
-          child: _busy
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Save selection'),
-        ),
-      ],
     );
   }
 }
@@ -1202,10 +1433,12 @@ class _SelectionFixedContextBreadcrumb extends StatelessWidget {
   const _SelectionFixedContextBreadcrumb({
     required this.lineLabel,
     required this.locale,
+    required this.copy,
   });
 
   final String lineLabel;
   final String locale;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1226,7 +1459,7 @@ class _SelectionFixedContextBreadcrumb extends StatelessWidget {
             children: [
               Text(lineLabel, style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 3),
-              Text('Voice language: $locale'),
+              Text(copy.fixedContextLanguage(locale)),
             ],
           ),
         ),
@@ -1244,8 +1477,7 @@ class _TakeChoiceTile extends StatelessWidget {
     required this.statusDisabled,
     required this.statusBusy,
     required this.onStatusChanged,
-    required this.removeLabel,
-    required this.removeTooltip,
+    required this.copy,
     required this.removeBusy,
     required this.onRemove,
   });
@@ -1257,8 +1489,7 @@ class _TakeChoiceTile extends StatelessWidget {
   final bool statusDisabled;
   final bool statusBusy;
   final ValueChanged<AuthoringRevision3VoiceTakeStatus> onStatusChanged;
-  final String removeLabel;
-  final String removeTooltip;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
   final bool removeBusy;
   final VoidCallback onRemove;
 
@@ -1273,9 +1504,11 @@ class _TakeChoiceTile extends StatelessWidget {
         contentPadding: EdgeInsets.zero,
         title: Text(take.displayLabel),
         subtitle: Text(
-          isCurrent && !take.isApproved
-              ? '${take.statusLabel} • Current selection must be Approved; change to Approved or clear it'
-              : '${take.statusLabel}${isCurrent ? ' • Current selection' : ''}${take.isApproved ? '' : ' • Approval required before selection'}',
+          copy.takeSubtitle(
+            statusName: take.status.name,
+            isCurrent: isCurrent,
+            isApproved: take.isApproved,
+          ),
         ),
       ),
       _TakeStatusControl(
@@ -1286,8 +1519,7 @@ class _TakeChoiceTile extends StatelessWidget {
         statusDisabled: statusDisabled,
         statusBusy: statusBusy,
         onStatusChanged: onStatusChanged,
-        removeLabel: removeLabel,
-        removeTooltip: removeTooltip,
+        copy: copy,
         removeBusy: removeBusy,
         onRemove: onRemove,
       ),
@@ -1304,8 +1536,7 @@ class _TakeStatusControl extends StatelessWidget {
     required this.statusDisabled,
     required this.statusBusy,
     required this.onStatusChanged,
-    required this.removeLabel,
-    required this.removeTooltip,
+    required this.copy,
     required this.removeBusy,
     required this.onRemove,
   });
@@ -1317,8 +1548,7 @@ class _TakeStatusControl extends StatelessWidget {
   final bool statusDisabled;
   final bool statusBusy;
   final ValueChanged<AuthoringRevision3VoiceTakeStatus> onStatusChanged;
-  final String removeLabel;
-  final String removeTooltip;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
   final bool removeBusy;
   final VoidCallback onRemove;
 
@@ -1349,8 +1579,8 @@ class _TakeStatusControl extends StatelessWidget {
                     isCurrent &&
                         currentStatus ==
                             AuthoringRevision3VoiceTakeStatus.approved
-                    ? 'Clear the selection before changing this status'
-                    : 'Change take status',
+                    ? copy.selectedStatusTooltip
+                    : copy.changeStatusTooltip,
                 onSelected: onStatusChanged,
                 itemBuilder: (context) => [
                   for (final status in AuthoringRevision3VoiceTakeStatus.values)
@@ -1364,7 +1594,7 @@ class _TakeStatusControl extends StatelessWidget {
                           (!isCurrent ||
                               status ==
                                   AuthoringRevision3VoiceTakeStatus.approved),
-                      child: Text(_voiceTakeStatusLabel(status)),
+                      child: Text(copy.statusLabel(status.name)),
                     ),
                 ],
                 child: Padding(
@@ -1383,7 +1613,7 @@ class _TakeStatusControl extends StatelessWidget {
                         const SizedBox(width: 8),
                       ],
                       Text(
-                        'Change status...',
+                        copy.changeStatusLabel,
                         style: TextStyle(
                           color: !busy && !statusDisabled && canChangeStatus
                               ? Theme.of(context).colorScheme.primary
@@ -1395,7 +1625,7 @@ class _TakeStatusControl extends StatelessWidget {
                 ),
               ),
               Tooltip(
-                message: removeTooltip,
+                message: copy.takeRemoveTooltip,
                 child: TextButton.icon(
                   key: ValueKey('voice-take-remove-$index'),
                   onPressed: busy || statusDisabled ? null : onRemove,
@@ -1405,7 +1635,7 @@ class _TakeStatusControl extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.link_off_outlined, size: 18),
-                  label: Text(removeLabel),
+                  label: Text(copy.takeRemoveAction),
                 ),
               ),
             ],
@@ -1413,24 +1643,14 @@ class _TakeStatusControl extends StatelessWidget {
         ),
         if (isCurrent &&
             currentStatus == AuthoringRevision3VoiceTakeStatus.approved)
-          const Padding(
-            padding: EdgeInsets.only(left: 12, bottom: 8),
-            child: Text(
-              'Clear the selection before changing this take from Approved.',
-            ),
+          Padding(
+            padding: const EdgeInsets.only(left: 12, bottom: 8),
+            child: Text(copy.selectedApprovedStatusGuard),
           ),
       ],
     );
   }
 }
-
-String _voiceTakeStatusLabel(AuthoringRevision3VoiceTakeStatus status) =>
-    switch (status) {
-      AuthoringRevision3VoiceTakeStatus.draft => 'Draft',
-      AuthoringRevision3VoiceTakeStatus.recorded => 'Recorded',
-      AuthoringRevision3VoiceTakeStatus.reviewed => 'Reviewed',
-      AuthoringRevision3VoiceTakeStatus.approved => 'Approved',
-    };
 
 bool _catalogConfirmsStatusPublication(
   Revision3VoiceCatalog catalog,
@@ -1498,10 +1718,4 @@ bool _catalogConfirmsSlotRemoval(
       line.localizationIdentity == publication.locId &&
       line.slotIdForLocale(publication.locale) == null &&
       line.slotSummaryForLocale(publication.locale) == null;
-}
-
-String _friendlyError(Object error) {
-  if (error is ModFfiException) return error.message;
-  if (error is FormatException) return error.message;
-  return error.toString();
 }

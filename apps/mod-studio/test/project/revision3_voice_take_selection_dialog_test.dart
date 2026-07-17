@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
@@ -194,6 +195,7 @@ void main() {
           supportedLocales: AppLocalizations.supportedLocales,
           home: Revision3VoiceTakeSelectionDialog(
             key: const Key('selection-dialog-under-test'),
+            copy: Revision3VoiceTakeSelectionDialogCopy.english,
             service: Revision3VoiceTakeSelectionAuthoringService(
               loadContentIndex: load,
               publishTechnicalPlan: _unexpectedPublish,
@@ -296,6 +298,7 @@ void main() {
         supportedLocales: AppLocalizations.supportedLocales,
         home: Revision3VoiceTakeSelectionDialog(
           key: const Key('selection-dialog-under-test'),
+          copy: Revision3VoiceTakeSelectionDialogCopy.english,
           service: Revision3VoiceTakeSelectionAuthoringService(
             loadContentIndex: load,
             publishTechnicalPlan: publishSelection,
@@ -362,6 +365,78 @@ void main() {
   );
 
   testWidgets(
+    'unknown native load failure hides raw path, identity, code, and command',
+    (tester) async {
+      const privateId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const privatePath = r'C:\private-load-path\voice-take.ogg';
+
+      await _openDialog(
+        tester,
+        index: _index(),
+        load: () async => throw const ModFfiException(
+          command: 'private_load_command',
+          code: 'PRIVATE_UNKNOWN_CODE',
+          message: '$privatePath $privateId',
+        ),
+      );
+
+      expect(
+        find.text(
+          'Voice takes could not be loaded safely. Try again or reopen the managed project.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('private-load-path'), findsNothing);
+      expect(find.textContaining(privateId), findsNothing);
+      expect(find.textContaining('PRIVATE_UNKNOWN_CODE'), findsNothing);
+      expect(find.textContaining('private_load_command'), findsNothing);
+      expect(_button(tester, 'voice-selection-retry').onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'German unknown format publication failure hides raw path and identity',
+    (tester) async {
+      const privateId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      const privatePath = r'C:\private-format-path\selection.json';
+      var publishes = 0;
+
+      await _openDialog(
+        tester,
+        index: _index(),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        copy: Revision3VoiceTakeSelectionDialogCopy.german,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              throw const FormatException('$privatePath $privateId');
+            },
+      );
+
+      await tester.tap(find.byKey(const Key('voice-selection-clear')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      await tester.pumpAndSettle();
+
+      expect(publishes, 1);
+      expect(
+        find.text(
+          'Die Voice-Auswahl konnte nicht sicher gespeichert werden. Es wurden keine Spiel- oder Spielstanddateien geändert.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('private-format-path'), findsNothing);
+      expect(find.textContaining(privateId), findsNothing);
+    },
+  );
+
+  testWidgets(
     'pending recovery cannot replace a successfully rebound fixed context',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1200, 1000));
@@ -399,6 +474,7 @@ void main() {
         supportedLocales: AppLocalizations.supportedLocales,
         home: Revision3VoiceTakeSelectionDialog(
           key: const Key('selection-dialog-under-test'),
+          copy: Revision3VoiceTakeSelectionDialogCopy.english,
           service: Revision3VoiceTakeSelectionAuthoringService(
             loadContentIndex: load,
             publishTechnicalPlan: _unexpectedPublish,
@@ -570,55 +646,74 @@ void main() {
     expect(received?.selectedTakeId, isNot(received?.expectedSelectedTakeId));
   });
 
-  testWidgets('busy state locks controls and exposes no premature result', (
-    tester,
-  ) async {
-    final completer = Completer<Revision3VoiceTakeSelectionPublication>();
-    Revision3VoiceTakeSelectionTechnicalPlan? received;
-    await _openDialog(
-      tester,
-      index: _index(),
-      publish:
-          ({
-            required expectedProjectId,
-            required expectedProjectRevision,
-            required plan,
-          }) {
-            received = plan;
-            return completer.future;
-          },
-    );
-    await tester.tap(find.byKey(const Key('voice-selection-line-0')));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('voice-selection-clear')));
-    await tester.pump();
-    await tester.tap(find.byKey(const Key('voice-selection-save')));
-    await tester.pump();
+  testWidgets(
+    'busy publication blocks dismissal and returns only its exact result',
+    (tester) async {
+      final completer = Completer<Revision3VoiceTakeSelectionPublication>();
+      Revision3VoiceTakeSelectionTechnicalPlan? received;
+      Revision3VoiceTakeSelectionPublication? dialogResult;
+      await _openDialog(
+        tester,
+        index: _index(),
+        onResult: (result) => dialogResult = result,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) {
+              received = plan;
+              return completer.future;
+            },
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('voice-selection-clear')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      await tester.pump();
 
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(_button(tester, 'voice-selection-cancel').onPressed, isNull);
-    expect(
-      tester
-          .widget<TextField>(
-            find.byKey(const Key('voice-selection-line-search')),
-          )
-          .enabled,
-      isFalse,
-    );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(_button(tester, 'voice-selection-cancel').onPressed, isNull);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('voice-selection-line-search')),
+            )
+            .enabled,
+        isFalse,
+      );
 
-    completer.complete(
-      _publication(
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+      expect(dialogResult, isNull);
+
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+      expect(dialogResult, isNull);
+
+      final publication = _publication(
         projectId: revision3VoiceContentProjectId,
         revision: 8,
         plan: received!,
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('revision3-voice-take-selection-dialog')),
-      findsNothing,
-    );
-  });
+      );
+      completer.complete(publication);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsNothing,
+      );
+      expect(dialogResult, same(publication));
+    },
+  );
 
   testWidgets('fresh-index drift is shown as stale and keeps dialog open', (
     tester,
@@ -1001,26 +1096,46 @@ void main() {
   });
 
   testWidgets(
-    'remove is localized, names its exact scope, and cancel never publishes',
+    'German copy covers fixed context, selection, removal, and terminal status',
     (tester) async {
-      var publishCalls = 0;
+      var removalPublishes = 0;
+      var statusPublishes = 0;
       await _openDialog(
         tester,
         index: _index(),
-        locale: const Locale('de'),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        copy: Revision3VoiceTakeSelectionDialogCopy.german,
+        publishStatus:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              statusPublishes++;
+              throw const Revision3VoiceTakeStatusRequiresReopenException();
+            },
         publishRemoval:
             ({
               required expectedProjectId,
               required expectedProjectRevision,
               required plan,
             }) async {
-              publishCalls++;
+              removalPublishes++;
               throw StateError('must not publish after cancel');
             },
       );
-      await tester.tap(find.byKey(const Key('voice-selection-line-0')));
-      await tester.pump();
 
+      expect(find.text('Voice-Takes verwalten'), findsOneWidget);
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.text('Voice-Sprache: de'), findsOneWidget);
+      expect(find.text('Ausgewählter Take'), findsOneWidget);
+      expect(find.textContaining('Freigegeben'), findsWidgets);
+      expect(find.textContaining('Aufgenommen'), findsWidgets);
       expect(find.text('Aus dieser Zeile entfernen…'), findsNWidgets(2));
       await tester.tap(find.byKey(const Key('voice-take-remove-1')));
       await tester.pumpAndSettle();
@@ -1039,16 +1154,32 @@ void main() {
         find.textContaining('Spielinstallation und Spielstände'),
         findsOneWidget,
       );
+      expect(find.text('Aus Zeile entfernen'), findsOneWidget);
       expect(find.textContaining(revision3VoiceContentLineId), findsNothing);
       expect(find.textContaining(revision3VoiceContentSlotId), findsNothing);
 
       await tester.tap(find.byKey(const Key('voice-take-remove-cancel')));
       await tester.pumpAndSettle();
-      expect(publishCalls, 0);
+      expect(removalPublishes, 0);
       expect(
         find.byKey(const Key('voice-take-remove-confirm-dialog')),
         findsNothing,
       );
+
+      await tester.tap(find.byKey(const Key('voice-status-change-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Freigegeben'), findsWidgets);
+      await tester.tap(find.byKey(const Key('voice-status-option-1-approved')));
+      await tester.pumpAndSettle();
+
+      expect(statusPublishes, 1);
+      expect(
+        find.textContaining('Statusergebnis konnte nicht bestätigt werden'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(TextButton, 'Schließen'), findsOneWidget);
+      expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+      expect(_button(tester, 'voice-selection-save').onPressed, isNull);
     },
   );
 
@@ -1738,6 +1869,9 @@ Future<void> _openDialog(
   String? initialLineId,
   String? initialLocale,
   bool fixedContext = false,
+  ValueChanged<Revision3VoiceTakeSelectionPublication?>? onResult,
+  Revision3VoiceTakeSelectionDialogCopy copy =
+      Revision3VoiceTakeSelectionDialogCopy.english,
 }) async {
   await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1765,18 +1899,23 @@ Future<void> _openDialog(
       home: Builder(
         builder: (context) => FilledButton(
           key: const Key('open-dialog'),
-          onPressed: () => showDialog<Revision3VoiceTakeSelectionPublication>(
-            context: context,
-            builder: (_) => Revision3VoiceTakeSelectionDialog(
-              service: service,
-              statusService: statusService,
-              removalService: removalService,
-              slotRemovalService: slotRemovalService,
-              initialLineId: initialLineId,
-              initialLocale: initialLocale,
-              fixedContext: fixedContext,
-            ),
-          ),
+          onPressed: () async {
+            final result =
+                await showDialog<Revision3VoiceTakeSelectionPublication>(
+                  context: context,
+                  builder: (_) => Revision3VoiceTakeSelectionDialog(
+                    service: service,
+                    statusService: statusService,
+                    removalService: removalService,
+                    slotRemovalService: slotRemovalService,
+                    initialLineId: initialLineId,
+                    initialLocale: initialLocale,
+                    fixedContext: fixedContext,
+                    copy: copy,
+                  ),
+                );
+            onResult?.call(result);
+          },
           child: const Text('Open'),
         ),
       ),

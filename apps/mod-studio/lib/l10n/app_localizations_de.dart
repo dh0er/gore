@@ -958,6 +958,63 @@ class AppLocalizationsDe extends AppLocalizations {
       'Du hast diesen Projekttext geändert. Beim Wechseln gehen diese Änderungen verloren.';
 
   @override
+  String get managedLocalizationVoiceUnsavedTitle =>
+      'Textänderungen vor dem Fortfahren speichern?';
+
+  @override
+  String get managedLocalizationVoiceUnsavedDescription =>
+      'Speichere die Textänderungen und öffne direkt die gewählte Aktion, bearbeite den Text weiter oder verwirf die Änderungen bewusst.';
+
+  @override
+  String get managedLocalizationDiscardAndContinue =>
+      'Verwerfen und fortfahren';
+
+  @override
+  String get managedLocalizationSaveAndContinue => 'Speichern und fortfahren';
+
+  @override
+  String get managedLocalizationGlobalAddVoice =>
+      'Aufnahme für beliebige Zeile';
+
+  @override
+  String get managedLocalizationGlobalManageVoice =>
+      'Aufnahmen beliebiger Zeile';
+
+  @override
+  String get managedLocalizationGlobalResolveVoice =>
+      'Ziel für beliebige Zeile';
+
+  @override
+  String managedVoiceTakeSaved(int revision) {
+    return 'Voice-Take in Projektrevision $revision gespeichert. Er ist nur im Projekt gespeichert und noch nicht im Spiel nutzbar.';
+  }
+
+  @override
+  String managedVoiceSelectionCleared(int revision) {
+    return 'Voice-Auswahl in Projektrevision $revision geleert. Der Voice-Build bleibt ein separater Offline-Schritt; für die Laufzeit ist noch nichts qualifiziert.';
+  }
+
+  @override
+  String managedVoiceSelectionSelected(int revision) {
+    return 'Freigegebenen Voice-Take in Projektrevision $revision ausgewählt. Der Voice-Build bleibt ein separater Offline-Schritt; für die Laufzeit ist noch nichts qualifiziert.';
+  }
+
+  @override
+  String managedVoiceTargetUnresolvedSaved(int revision) {
+    return 'Kein Eintrag im installierten Archiv passte. Der Nachweis zum Voice-Ziel wurde in Projektrevision $revision gespeichert.';
+  }
+
+  @override
+  String managedVoiceTargetResolvedSaved(int revision) {
+    return 'Ein Eintrag im installierten Archiv wurde eindeutig versiegelt. Der Nachweis zum Voice-Ziel wurde in Projektrevision $revision gespeichert.';
+  }
+
+  @override
+  String managedVoiceTargetAmbiguousSaved(int count, int revision) {
+    return '$count Einträge im installierten Archiv passten; es wurde nichts stillschweigend ausgewählt. Der Nachweis zum Voice-Ziel wurde in Projektrevision $revision gespeichert.';
+  }
+
+  @override
   String get managedLocalizationDiscard => 'Änderungen verwerfen';
 
   @override
@@ -981,7 +1038,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedLocalizationVoiceActionFailed =>
-      'Die Voice-Aktion wurde nicht sauber abgeschlossen. Aktualisiere das Projekt vor einem erneuten Versuch; das exakt aktuelle Projekt zeigt, ob eine Änderung veröffentlicht wurde. Dieser Arbeitsbereich hat keine Spiel- oder Speicherdateien geändert.';
+      'Die gewählte Aktion wurde nicht sauber abgeschlossen. Aktualisiere das Projekt vor einem erneuten Versuch; das exakt aktuelle Projekt zeigt, ob eine Änderung veröffentlicht wurde. Dieser Arbeitsbereich hat keine Spiel- oder Speicherdateien geändert.';
 
   @override
   String get managedSectionValidateTestDescription =>

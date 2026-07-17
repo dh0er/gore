@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
@@ -446,6 +448,181 @@ void main() {
       await tester.pumpAndSettle();
     }
   });
+
+  testWidgets('German fixed context resolves with localized safety copy', (
+    tester,
+  ) async {
+    final pending = Completer<Revision3VoiceTargetPublication>();
+    Revision3VoiceTargetTechnicalPlan? received;
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) {
+            received = plan;
+            return pending.future;
+          },
+    );
+
+    await _openDialog(
+      tester,
+      service,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      copy: Revision3VoiceTargetDialogCopy.german,
+    );
+
+    expect(find.text('Installiertes Voice-Ziel auflösen'), findsOneWidget);
+    expect(find.text('Voice-Sprache: de'), findsOneWidget);
+    expect(find.text('Aktuelles Ziel: nicht aufgelöst'), findsOneWidget);
+    expect(find.text('Speichert Nachweis im Projekt'), findsOneWidget);
+    expect(find.text('Keine Bereitstellung'), findsOneWidget);
+    expect(find.text('Kein Treffer wird erfunden'), findsOneWidget);
+    expect(find.text('Installiertes Ziel auflösen'), findsOneWidget);
+    expect(find.text('Abbrechen'), findsOneWidget);
+    expect(find.text(revision3VoiceContentLineId), findsNothing);
+    expect(find.text(revision3VoiceContentSlotId), findsNothing);
+
+    await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Ziel wird aufgelöst …'), findsOneWidget);
+
+    pending.complete(
+      _publication(
+        received!,
+        projectId: revision3VoiceContentProjectId,
+        revision: 8,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(received?.lineId, revision3VoiceContentLineId);
+    expect(received?.locale, 'de');
+    expect(
+      find.byKey(const Key('revision3-voice-target-dialog')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('German search copy preserves fail-closed selection clearing', (
+    tester,
+  ) async {
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan: _unexpectedPublish,
+    );
+
+    await _openDialog(
+      tester,
+      service,
+      copy: Revision3VoiceTargetDialogCopy.german,
+    );
+
+    expect(find.text('Dialogzeile mit vorhandenem Voice-Slot'), findsOneWidget);
+    expect(find.text('Nach Sprecher oder Zeilenname suchen'), findsOneWidget);
+    expect(find.text('Sprache des vorhandenen Voice-Slots'), findsOneWidget);
+
+    await _chooseAsghanLine(tester);
+    expect(_submitButton(tester).onPressed, isNotNull);
+    expect(find.text('Aktuelles Ziel: nicht aufgelöst'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-voice-target-line-search')),
+      'Andere Zeile',
+    );
+    await tester.pumpAndSettle();
+
+    expect(_submitButton(tester).onPressed, isNull);
+    expect(find.text('Installiertes Ziel auflösen'), findsOneWidget);
+    expect(find.text(revision3VoiceContentLineId), findsNothing);
+  });
+
+  testWidgets('German native errors stay safe and retryable', (tester) async {
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async => throw const ModFfiException(
+            command: 'authoring_revision3_voice_target',
+            code: 'AUTHORING_REVISION3_VOICE_TARGET_ARCHIVE_UNAVAILABLE',
+            message:
+                r'C:\private\install\Voice.pak konnte nicht geöffnet werden',
+          ),
+    );
+
+    await _openDialog(
+      tester,
+      service,
+      copy: Revision3VoiceTargetDialogCopy.german,
+    );
+    await _chooseAsghanLine(tester);
+    await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining(
+        'Das installierte Voice-Archiv für diese Sprache ist nicht verfügbar',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining(r'C:\private'), findsNothing);
+    expect(_submitButton(tester).onPressed, isNotNull);
+    expect(find.text('Abbrechen'), findsOneWidget);
+  });
+
+  testWidgets('German stale checkpoint is terminal and requires closing', (
+    tester,
+  ) async {
+    var loads = 0;
+    var publishes = 0;
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async {
+        loads++;
+        return revision3VoiceContentIndexFixture(revision: loads == 1 ? 7 : 8);
+      },
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            publishes++;
+            return _publication(
+              plan,
+              projectId: expectedProjectId,
+              revision: expectedProjectRevision + 1,
+            );
+          },
+    );
+
+    await _openDialog(
+      tester,
+      service,
+      copy: Revision3VoiceTargetDialogCopy.german,
+    );
+    await _chooseAsghanLine(tester);
+    await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+    await tester.pumpAndSettle();
+
+    expect(publishes, 0);
+    expect(
+      find.textContaining(
+        'Das verwaltete Projekt wurde geändert, während dieses Fenster geöffnet war',
+      ),
+      findsOneWidget,
+    );
+    expect(_submitButton(tester).onPressed, isNull);
+    expect(find.text('Schließen'), findsOneWidget);
+    expect(find.text('Abbrechen'), findsNothing);
+  });
 }
 
 Future<void> _openDialog(
@@ -455,6 +632,7 @@ Future<void> _openDialog(
   String? initialLineId,
   String? initialLocale,
   bool fixedContext = false,
+  Revision3VoiceTargetDialogCopy copy = Revision3VoiceTargetDialogCopy.english,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1;
@@ -474,6 +652,7 @@ Future<void> _openDialog(
                   initialLineId: initialLineId,
                   initialLocale: initialLocale,
                   fixedContext: fixedContext,
+                  copy: copy,
                 ),
               );
               onResult?.call(result);
