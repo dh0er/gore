@@ -8554,21 +8554,17 @@ final class _FakeVoiceTakeMediaQaManagedLease extends _FakeManagedLease
     required super.projectIdValue,
     required super.projectRevision,
     required super.head,
-    this.supportsMediaQa = true,
     this.receiptMismatch = false,
-    this.poisonOnError = false,
     this.nextError,
   });
 
-  final bool supportsMediaQa;
   final bool receiptMismatch;
-  final bool poisonOnError;
   Object? nextError;
   int inspectCalls = 0;
   int relatchCalls = 0;
 
   @override
-  bool get supportsVoiceTakeMediaQa => supportsMediaQa;
+  bool get supportsVoiceTakeMediaQa => true;
 
   @override
   void markRequiresReopenAfterVoiceTakeMediaQaUncertainty() {
@@ -8584,7 +8580,6 @@ final class _FakeVoiceTakeMediaQaManagedLease extends _FakeManagedLease
     final injected = nextError;
     nextError = null;
     if (injected != null) {
-      if (poisonOnError) requiresReopenValue = true;
       throw injected;
     }
     final request = revision3VoicePreviewRequest(head: head);

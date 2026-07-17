@@ -682,6 +682,50 @@ project requires reopening. This slice still does not create a runtime dialog
 topic, selection effect, Quest transition, journal entry, reward, package,
 deployment, or gameplay proof.
 
+### Managed revision-3 Quest Journey V1
+
+The selected Quest's default **Overview** now presents one coherent, read-only
+**Quest journey** instead of making authors reconstruct the Quest from separate
+technical summaries. It combines the exact current content index, native-
+validated transition seed, and ordered transcript into one checkpoint-bound
+projection. The header keeps the friendly title, giver, and parent story
+visible; the main Quest and every objective show Available, Start, Success,
+and Failure behavior; objective-linked dialog stays beside its objective and
+ungrouped dialog has a separate **General dialog** area. Contextual buttons
+reuse the existing exact **Name & objectives**, **Description & connections**,
+and **States & transitions** editors. Selecting a dialog row switches the same
+Story workbench to **Dialog & Voice** and preserves that exact row, so create,
+attach, reorder, detach, localization preview, and Voice work remain in the
+already-qualified transcript surface rather than being duplicated.
+
+The Content Library stays available for discovery and inspection, but it is no
+longer presented as an equal Quest-authoring destination. Its selected
+exact-current Quest/NPC Draft offers **Open in Story**, which closes compact
+details if necessary and selects the same entity on Story Overview/Journey only
+after the project, revision, head, index, selection, entity identity, and kind
+still agree. A stale, repeated, disposed, or failed handoff performs no write
+and reveals no technical error detail.
+
+The composition fails closed unless the project/revision/head, Quest and
+owned ScriptModule, generator/target/plan seal, objective order and stable
+slots, complete transcript order, and every DialogLine backlink agree. The
+transition and transcript reads may run in parallel, but their results do not
+form a journey until that common binding succeeds. Generator-version-2/3
+Quests retain their effective frozen behavior while all dialog remains general;
+the Studio never guesses objective groupings that those projects do not store.
+The complete transcript stays capped at 256 lines, shared-line use is visible,
+and technical IDs, paths, hashes, LocIDs, and raw runtime names do not become
+normal authoring UI.
+
+Loading is read-only and starts no writer, localization-detail read, game-root
+operation, build, deployment, runtime call, or save access. Stale inputs offer
+an exact reload; lost Store/publication authority requires reopening and cannot
+be retried optimistically. Ordinary parent rebuilds do not fan out repeated
+reads, late results cannot replace a newer checkpoint, and editor publication
+still relies on the existing managed session followed by a fresh project
+reload. The visible **Draft / Project logic / runtime not proven** boundary is
+therefore part of the normal Journey, not hidden in Expert details.
+
 ### V4 source lowering and compiler/cache evidence
 
 The V4 renderer emits only reviewed Quest lifecycle constructs. External flags

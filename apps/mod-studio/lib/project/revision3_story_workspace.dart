@@ -26,6 +26,12 @@ typedef Revision3StoryQuestTranscriptBuilder =
       required String? selectedLineId,
       required ValueChanged<String?> onSelectedLineChanged,
     });
+typedef Revision3StoryQuestJourneyBuilder =
+    Widget Function({
+      required Revision3ContentIndex index,
+      required Revision3ContentEntity quest,
+      required ValueChanged<String> onOpenDialogLine,
+    });
 
 @immutable
 final class Revision3StoryDraftRemovalBlocker {
@@ -283,6 +289,7 @@ final class Revision3StoryWorkspaceController {
     int projectRevision,
     String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
   )?
   _selectEntityAtRevision;
   VoidCallback? _cancelPendingSelection;
@@ -293,15 +300,25 @@ final class Revision3StoryWorkspaceController {
     required int projectRevision,
     String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
   }) {
     final select = _selectEntityAtRevision;
     if (_disposed ||
         select == null ||
         entityId.isEmpty ||
-        projectRevision < 1) {
+        projectRevision < 1 ||
+        (selectedLineId != null &&
+            (selectedLineId.isEmpty ||
+                section != Revision3StoryWorkbenchSection.dialogVoice))) {
       return Future<bool>.value(false);
     }
-    return select(entityId, projectRevision, projectHeadCanonicalJson, section);
+    return select(
+      entityId,
+      projectRevision,
+      projectHeadCanonicalJson,
+      section,
+      selectedLineId,
+    );
   }
 
   void dispose() {
@@ -320,6 +337,7 @@ final class Revision3StoryWorkspaceController {
       int projectRevision,
       String? projectHeadCanonicalJson,
       Revision3StoryWorkbenchSection? section,
+      String? selectedLineId,
     )
     selectEntityAtRevision,
     VoidCallback cancelPendingSelection,
@@ -381,12 +399,14 @@ final class _PendingStorySelection {
     required this.projectRevision,
     required this.projectHeadCanonicalJson,
     required this.section,
+    required this.selectedLineId,
   });
 
   final String entityId;
   final int projectRevision;
   final String? projectHeadCanonicalJson;
   final Revision3StoryWorkbenchSection? section;
+  final String? selectedLineId;
   final Completer<bool> result = Completer<bool>();
 }
 
@@ -424,6 +444,7 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     this.inspectNpcSourceDisabledReason,
     this.removeDraft,
     this.removeDraftDisabledReason,
+    this.questJourneyBuilder,
     this.questTranscriptBuilder,
     super.key,
   }) : assert(projectRoot != ''),
@@ -468,6 +489,10 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   final String? inspectNpcSourceDisabledReason;
   final Revision3StoryWorkspaceRemoveDraftAction? removeDraft;
   final String? removeDraftDisabledReason;
+
+  /// Builds one exact-current, read-only Quest journey. Its dialog-line handoff
+  /// stays inside this workspace so the matching transcript row is selected.
+  final Revision3StoryQuestJourneyBuilder? questJourneyBuilder;
 
   /// Builds the exact-current Quest transcript UI without granting this
   /// workspace native publication or navigation authority.
@@ -634,6 +659,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     int projectRevision,
     String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
   ) {
     if (!mounted ||
         entityId.isEmpty ||
@@ -646,7 +672,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     final index = _index;
     if (index != null && index.projectRevision == projectRevision) {
       return Future<bool>.value(
-        _resolveExactSelection(index, entityId, section),
+        _resolveExactSelection(index, entityId, section, selectedLineId),
       );
     }
     if (projectRevision < widget.projectRevision) {
@@ -658,6 +684,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       projectRevision: projectRevision,
       projectHeadCanonicalJson: projectHeadCanonicalJson,
       section: section,
+      selectedLineId: selectedLineId,
     );
     _pendingSelection = pending;
     return pending.result.future;
@@ -680,6 +707,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       index,
       pending.entityId,
       pending.section,
+      pending.selectedLineId,
     );
     _completePendingSelection(resolved);
   }
@@ -688,6 +716,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     Revision3ContentIndex index,
     String entityId,
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
   ) {
     final entity = index.entityById(entityId);
     if (entity == null || !_isStoryEntity(entity)) return false;
@@ -695,7 +724,19 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         !Revision3StoryEntityWorkbench.supportsSection(entity, section)) {
       return false;
     }
-    _selectEntity(index, entity, section: section, reveal: true);
+    if (selectedLineId != null &&
+        (entity.kind != Revision3ContentEntityKind.questDraft ||
+            section != Revision3StoryWorkbenchSection.dialogVoice ||
+            !_hasExactTranscriptLine(index, entity, selectedLineId))) {
+      return false;
+    }
+    _selectEntity(
+      index,
+      entity,
+      section: section,
+      selectedLineId: selectedLineId,
+      reveal: true,
+    );
     _scheduleDetailsPresentation(index, entity.id);
     return true;
   }
@@ -714,6 +755,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     Revision3ContentIndex index,
     Revision3ContentEntity entity, {
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
     bool reveal = false,
   }) {
     if (!identical(index, _index) || !_isStoryEntity(entity)) return;
@@ -722,6 +764,9 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       if (reveal) _filter = _StoryFilter.all;
       _selectedEntityId = entity.id;
       if (section != null) _sections[entity.id] = section;
+      if (selectedLineId != null) {
+        _selectedTranscriptLines[entity.id] = selectedLineId;
+      }
     });
   }
 
@@ -1185,6 +1230,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     Revision3ContentIndex index,
     Revision3ContentEntity entity, {
     bool sheet = false,
+    StateSetter? sheetSetState,
   }) {
     final removal = Revision3StoryDraftRemovalPreflight.fromIndex(
       index: index,
@@ -1214,6 +1260,15 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       await action(index, entity);
     }
 
+    void updatePresentation(VoidCallback update) {
+      final updateSheet = sheetSetState;
+      if (updateSheet != null) {
+        updateSheet(update);
+      } else {
+        setState(update);
+      }
+    }
+
     return Revision3StoryEntityWorkbench(
       key: ValueKey(
         'revision3-story-workspace-workbench-${widget.projectId}-${entity.id}',
@@ -1226,7 +1281,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
           Revision3StoryEntityWorkbench.defaultSectionFor(entity),
       onSectionChanged: (section) {
         if (_isExactCurrentIndex(index)) {
-          setState(() => _sections[entity.id] = section);
+          updatePresentation(() => _sections[entity.id] = section);
         }
       },
       actions: Revision3StoryEntityWorkbenchActions(
@@ -1284,6 +1339,23 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         removeDraftDisabledReason: removeDisabledReason,
         removingDraft: _removingDraft,
       ),
+      questJourney:
+          entity.kind == Revision3ContentEntityKind.questDraft &&
+              widget.questJourneyBuilder != null
+          ? widget.questJourneyBuilder!(
+              index: index,
+              quest: entity,
+              onOpenDialogLine: (lineId) {
+                if (!_isExactCurrentIndex(index) || lineId.isEmpty) return;
+                if (!_hasExactTranscriptLine(index, entity, lineId)) return;
+                updatePresentation(() {
+                  _sections[entity.id] =
+                      Revision3StoryWorkbenchSection.dialogVoice;
+                  _selectedTranscriptLines[entity.id] = lineId;
+                });
+              },
+            )
+          : null,
       questTranscript:
           entity.kind == Revision3ContentEntityKind.questDraft &&
               widget.questTranscriptBuilder != null
@@ -1293,7 +1365,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
               selectedLineId: _selectedTranscriptLines[entity.id],
               onSelectedLineChanged: (lineId) {
                 if (!_isExactCurrentIndex(index)) return;
-                setState(() {
+                updatePresentation(() {
                   if (lineId == null || lineId.isEmpty) {
                     _selectedTranscriptLines.remove(entity.id);
                   } else {
@@ -1361,7 +1433,14 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
               child: SizedBox(
                 key: const Key('revision3-story-workspace-details-sheet'),
                 height: MediaQuery.sizeOf(sheetContext).height * 0.9,
-                child: _buildWorkbench(index, entity, sheet: true),
+                child: StatefulBuilder(
+                  builder: (context, setSheetState) => _buildWorkbench(
+                    index,
+                    entity,
+                    sheet: true,
+                    sheetSetState: setSheetState,
+                  ),
+                ),
               ),
             ),
           );
@@ -1848,6 +1927,27 @@ List<Revision3ContentEntity> _storyEntities(Revision3ContentIndex index) =>
 bool _isStoryEntity(Revision3ContentEntity entity) =>
     entity.kind == Revision3ContentEntityKind.npcDraft ||
     entity.kind == Revision3ContentEntityKind.questDraft;
+
+bool _hasExactTranscriptLine(
+  Revision3ContentIndex index,
+  Revision3ContentEntity quest,
+  String lineId,
+) {
+  final line = index.entityById(lineId);
+  return quest.kind == Revision3ContentEntityKind.questDraft &&
+      lineId.isNotEmpty &&
+      line?.kind == Revision3ContentEntityKind.dialogLine &&
+      quest.references.any(
+        (reference) =>
+            reference.role == 'quest_transcript_line' &&
+            reference.resolution ==
+                Revision3ContentReferenceResolution.resolved &&
+            reference.target.projectId == index.projectId &&
+            reference.target.entityId == lineId &&
+            reference.target.expectedKind ==
+                Revision3ContentEntityKind.dialogLine,
+      );
+}
 
 String _entityName(Revision3ContentEntity entity) => entity.displayName.isEmpty
     ? entity.summary.primaryIdentity

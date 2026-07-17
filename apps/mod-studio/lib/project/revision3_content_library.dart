@@ -36,6 +36,11 @@ typedef Revision3NpcProfileEditor =
       Revision3ContentIndex index,
       Revision3ContentEntity npc,
     );
+typedef Revision3StoryDraftOpener =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity entity,
+    );
 
 /// Exact identity of a managed project that may host a content library.
 @immutable
@@ -252,6 +257,7 @@ class _PendingContentNavigation {
 }
 
 enum _EntityToolAction {
+  openStoryDraft,
   questOutline,
   questContext,
   questTransitions,
@@ -287,6 +293,10 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editNpcProfileDisabledReason,
     this.inspectQuestSourceDisabledReason,
     this.inspectNpcSourceDisabledReason,
+    this.openStoryDraftInStory,
+    this.openStoryDraftLabel = 'Open in Story',
+    this.openStoryDraftDescription =
+        'Continue editing this draft in the canonical Story workspace.',
     this.storyWorkbenchCopy = const Revision3StoryEntityWorkbenchCopy.english(),
     this.controller,
     super.key,
@@ -309,6 +319,9 @@ class Revision3ContentLibrary extends StatefulWidget {
   final String? editNpcProfileDisabledReason;
   final String? inspectQuestSourceDisabledReason;
   final String? inspectNpcSourceDisabledReason;
+  final Revision3StoryDraftOpener? openStoryDraftInStory;
+  final String openStoryDraftLabel;
+  final String openStoryDraftDescription;
   final Revision3StoryEntityWorkbenchCopy storyWorkbenchCopy;
   final Revision3ContentLibraryController? controller;
 
@@ -332,6 +345,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   bool? _entitiesUseDetailsSheet;
   bool? _assetsUseDetailsSheet;
   int _exactPresentationEpoch = 0;
+  int _storyHandoffGeneration = 0;
+  bool _storyHandoffBusy = false;
+  String? _storyHandoffError;
 
   @override
   void initState() {
@@ -384,6 +400,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   @override
   void dispose() {
     _exactPresentationEpoch++;
+    _storyHandoffGeneration++;
     _cancelPendingNavigations();
     widget.controller?._detach(this);
     _search
@@ -392,7 +409,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     super.dispose();
   }
 
-  void _searchChanged() => setState(() {});
+  void _searchChanged() => setState(() => _storyHandoffError = null);
 
   Revision3ContentProjectIdentity get _projectIdentity =>
       Revision3ContentProjectIdentity(
@@ -499,10 +516,13 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
 
   Future<void> _reload({bool clearCurrent = false}) async {
     _exactPresentationEpoch++;
+    _storyHandoffGeneration++;
     final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
       _error = null;
+      _storyHandoffBusy = false;
+      _storyHandoffError = null;
       if (clearCurrent) _index = null;
     });
     try {
@@ -564,6 +584,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       _mode = _ContentMode.entities;
       _kind = null;
       _selectedEntityId = entityId;
+      _storyHandoffError = null;
       if (storySection != null) _storySections[entityId] = storySection;
     });
   }
@@ -574,6 +595,73 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     setState(() {
       _mode = _ContentMode.assets;
       _selectedAssetSha256 = sha256;
+      _storyHandoffError = null;
+    });
+  }
+
+  bool _storyHandoffIsExact(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity,
+  ) =>
+      mounted &&
+      identical(_index, index) &&
+      index.projectId == widget.projectId &&
+      index.projectRevision == widget.projectRevision &&
+      _mode == _ContentMode.entities &&
+      identical(_effectiveSelectedEntity(index), entity) &&
+      identical(index.entityById(entity.id), entity) &&
+      _isStoryDraft(entity);
+
+  Revision3ContentEntity? _effectiveSelectedEntity(
+    Revision3ContentIndex index,
+  ) {
+    final query = _search.text.trim().toLowerCase();
+    Revision3ContentEntity? first;
+    for (final candidate in index.entities) {
+      if ((_kind != null && candidate.kind != _kind) ||
+          !candidate.matches(query)) {
+        continue;
+      }
+      first ??= candidate;
+      if (candidate.id == _selectedEntityId) return candidate;
+    }
+    return first;
+  }
+
+  Future<void> _openStoryDraft(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity,
+  ) async {
+    final open = widget.openStoryDraftInStory;
+    if (_storyHandoffBusy ||
+        open == null ||
+        !_storyHandoffIsExact(index, entity)) {
+      return;
+    }
+    final operation = ++_storyHandoffGeneration;
+    setState(() {
+      _storyHandoffBusy = true;
+      _storyHandoffError = null;
+    });
+    if (!_storyHandoffIsExact(index, entity)) {
+      if (mounted && operation == _storyHandoffGeneration) {
+        setState(() => _storyHandoffBusy = false);
+      }
+      return;
+    }
+    var failed = false;
+    try {
+      await open(index, entity);
+    } catch (_) {
+      failed = true;
+    }
+    if (!mounted || operation != _storyHandoffGeneration) return;
+    setState(() {
+      _storyHandoffBusy = false;
+      if (failed && _storyHandoffIsExact(index, entity)) {
+        _storyHandoffError =
+            'Story could not be opened. The project was not changed.';
+      }
     });
   }
 
@@ -622,7 +710,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           index: index,
           loading: _loading,
           mode: _mode,
-          onModeChanged: (mode) => setState(() => _mode = mode),
+          onModeChanged: (mode) => setState(() {
+            _mode = mode;
+            _storyHandoffError = null;
+          }),
           onRefresh: _loading ? null : _reload,
         ),
         if (_error != null)
@@ -646,7 +737,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
             controller: _search,
             mode: _mode,
             selectedKind: _kind,
-            onKindChanged: (kind) => setState(() => _kind = kind),
+            onKindChanged: (kind) => setState(() {
+              _kind = kind;
+              _storyHandoffError = null;
+            }),
           ),
           Expanded(
             child: switch (_mode) {
@@ -700,6 +794,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       onOpenEntity: (entityId) =>
                           _selectEntity(index, entityId),
                       onOpenAsset: (sha256) => _selectAsset(index, sha256),
+                      onOpenStory: widget.openStoryDraftInStory == null
+                          ? null
+                          : () => _openStoryDraft(index, selected),
                       onEditQuestOutline: widget.editQuestOutline == null
                           ? null
                           : () => widget.editQuestOutline!(index, selected),
@@ -746,6 +843,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           Navigator.of(context).pop();
           _selectAsset(index, sha256);
         },
+        onOpenStory: widget.openStoryDraftInStory == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.openStoryDraft),
         onEditQuestOutline: widget.editQuestOutline == null
             ? null
             : () async =>
@@ -776,6 +877,8 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     );
     if (!mounted || !identical(_index, index) || editAction == null) return;
     switch (editAction) {
+      case _EntityToolAction.openStoryDraft:
+        await _openStoryDraft(index, entity);
       case _EntityToolAction.questOutline:
         await widget.editQuestOutline?.call(index, entity);
       case _EntityToolAction.questContext:
@@ -796,6 +899,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     required Revision3ContentEntity entity,
     required ValueChanged<String> onOpenEntity,
     required ValueChanged<String> onOpenAsset,
+    required Future<void> Function()? onOpenStory,
     required Future<void> Function()? onEditQuestOutline,
     required Future<void> Function()? onEditQuestContext,
     required Future<void> Function()? onEditQuestTransitions,
@@ -807,7 +911,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       final selectedSection =
           _storySections[entity.id] ??
           Revision3StoryEntityWorkbench.defaultSectionFor(entity);
-      return Revision3StoryEntityWorkbench(
+      final workbench = Revision3StoryEntityWorkbench(
         key: ValueKey(
           'revision3-story-workbench-${widget.projectId}-${entity.id}',
         ),
@@ -848,6 +952,22 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
         ),
         copy: widget.storyWorkbenchCopy,
+      );
+      if (onOpenStory == null) return workbench;
+      return Column(
+        key: ValueKey('revision3-content-story-draft-details-${entity.id}'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _StoryDraftContinuation(
+            entity: entity,
+            label: widget.openStoryDraftLabel,
+            description: widget.openStoryDraftDescription,
+            busy: _storyHandoffBusy,
+            error: _storyHandoffError,
+            onPressed: onOpenStory,
+          ),
+          Expanded(child: workbench),
+        ],
       );
     }
     return _EntityDetails(
@@ -962,6 +1082,109 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     await sheetRoute?.completed;
     return result;
   }
+}
+
+class _StoryDraftContinuation extends StatelessWidget {
+  const _StoryDraftContinuation({
+    required this.entity,
+    required this.label,
+    required this.description,
+    required this.busy,
+    required this.error,
+    required this.onPressed,
+  });
+
+  final Revision3ContentEntity entity;
+  final String label;
+  final String description;
+  final bool busy;
+  final String? error;
+  final Future<void> Function() onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final friendlyLabel = _friendlyStoryHandoffCopy(
+      label,
+      fallback: 'Open in Story',
+      maxLength: 80,
+    );
+    final friendlyDescription = _friendlyStoryHandoffCopy(
+      description,
+      fallback: 'Continue editing this draft in the canonical Story workspace.',
+      maxLength: 240,
+    );
+    final button = FilledButton.tonalIcon(
+      key: Key('revision3-content-open-story-${entity.id}'),
+      onPressed: busy ? null : onPressed,
+      icon: busy
+          ? const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.arrow_forward_outlined),
+      label: Text(friendlyLabel),
+    );
+    return Card(
+      key: const Key('revision3-content-open-story-continuation'),
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final compact = constraints.maxWidth < 520;
+            final explanation = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  friendlyDescription,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (error != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    error!,
+                    key: const Key('revision3-content-open-story-error'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            );
+            if (compact) {
+              return Column(
+                key: const Key('revision3-content-open-story-compact'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [explanation, const SizedBox(height: 10), button],
+              );
+            }
+            return Row(
+              key: const Key('revision3-content-open-story-wide'),
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: explanation),
+                const SizedBox(width: 16),
+                button,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+String _friendlyStoryHandoffCopy(
+  String value, {
+  required String fallback,
+  required int maxLength,
+}) {
+  final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  return normalized.isEmpty || normalized.length > maxLength
+      ? fallback
+      : normalized;
 }
 
 class _LibraryHeader extends StatelessWidget {
@@ -1321,6 +1544,8 @@ class _EntityDetails extends StatelessWidget {
                 tooltip: 'Quest tools',
                 onSelected: (action) async {
                   switch (action) {
+                    case _EntityToolAction.openStoryDraft:
+                      break;
                     case _EntityToolAction.questOutline:
                       await editQuestOutline?.call();
                     case _EntityToolAction.questContext:

@@ -56,6 +56,9 @@ import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_context_authoring.dart';
 import 'project/revision3_quest_context_dialog.dart';
+import 'project/revision3_quest_journey_panel.dart';
+import 'project/revision3_quest_journey_service.dart';
+import 'project/revision3_quest_journey_view.dart';
 import 'project/revision3_quest_opening_recipe.dart';
 import 'project/revision3_quest_outline_authoring.dart';
 import 'project/revision3_quest_outline_dialog.dart';
@@ -2964,6 +2967,18 @@ class _ManagedRevision3ProjectViewState
                         _openQuestSourceInspection(context, index, quest),
               inspectNpcSource: (index, npc) =>
                   _openNpcProfile(context, index, npc),
+              openStoryDraftInStory: project.requiresReopen
+                  ? null
+                  : (index, entity) =>
+                        _openLibraryDraftInStory(context, index, entity),
+              openStoryDraftLabel: l10n.localeName.startsWith('de')
+                  ? 'In Story öffnen'
+                  : 'Open in Story',
+              openStoryDraftDescription: l10n.localeName.startsWith('de')
+                  ? 'Quest- und NPC-Entwürfe werden in Story vollständig und '
+                        'zusammenhängend bearbeitet.'
+                  : 'Continue this Quest or NPC in the complete Story '
+                        'workspace.',
               editNpcProfileDisabledReason: gameRoot == null
                   ? l10n.managedDashboardMissingGameDescription
                   : null,
@@ -3240,6 +3255,15 @@ class _ManagedRevision3ProjectViewState
           ? null
           : gameRequiredReason,
       inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
+      questJourneyBuilder:
+          ({required index, required quest, required onOpenDialogLine}) =>
+              _buildQuestJourneyView(
+                context,
+                l10n,
+                index: index,
+                quest: quest,
+                onOpenDialogLine: onOpenDialogLine,
+              ),
       questTranscriptBuilder:
           ({
             required index,
@@ -3261,6 +3285,53 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
+  Widget _buildQuestJourneyView(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required Revision3ContentIndex index,
+    required Revision3ContentEntity quest,
+    required ValueChanged<String> onOpenDialogLine,
+  }) {
+    final basisProjectId = project.projectId;
+    final basisProjectRevision = project.projectRevision;
+    final basisHead = project.head;
+    final transcript = _createQuestTranscriptService(
+      basisProjectId: basisProjectId,
+      basisProjectRevision: basisProjectRevision,
+      basisHead: basisHead,
+    );
+    final service = Revision3QuestJourneyService(
+      transitions: Revision3QuestTransitionsAuthoringService(
+        loadSeed: loadQuestTransitionsSeed,
+        publishTechnicalPlan: editQuestTransitions,
+      ),
+      transcript: transcript,
+    );
+    final copy = l10n.localeName.startsWith('de')
+        ? const Revision3QuestJourneyPanelCopy.german()
+        : const Revision3QuestJourneyPanelCopy.english();
+    final canEdit = !project.requiresReopen;
+    return Revision3QuestJourneyView(
+      projectId: basisProjectId,
+      projectRevision: basisProjectRevision,
+      checkpointIdentity: basisHead.canonicalJson,
+      index: index,
+      quest: quest,
+      service: service,
+      onEditNameObjectives: canEdit
+          ? () => _openQuestOutlineEditor(context, index, quest)
+          : null,
+      onEditDescriptionConnections: !canEdit || gameRoot == null
+          ? null
+          : () => _openQuestContextEditor(context, index, quest),
+      onEditStatesTransitions: canEdit
+          ? () => _openQuestTransitionsEditor(context, index, quest)
+          : null,
+      onOpenDialogLine: (row) => onOpenDialogLine(row.lineId),
+      copy: copy,
+    );
+  }
+
   Widget _buildQuestTranscriptPanel(
     BuildContext context,
     AppLocalizations l10n, {
@@ -3272,8 +3343,6 @@ class _ManagedRevision3ProjectViewState
     final basisProjectId = project.projectId;
     final basisProjectRevision = project.projectRevision;
     final basisHead = project.head;
-    final loadContentForBasis = loadContentIndex;
-    final readLocalizationForBasis = readDialogLocalization;
     final german = l10n.localeName.startsWith('de');
     final copy = german
         ? Revision3QuestTranscriptPanelCopy.german
@@ -3293,7 +3362,54 @@ class _ManagedRevision3ProjectViewState
               ? 'Warte, bis die laufende Projektaktion abgeschlossen ist.'
               : 'Wait for the current project action to finish.')
         : null;
-    final service = Revision3QuestTranscriptAuthoringService(
+    final service = _createQuestTranscriptService(
+      basisProjectId: basisProjectId,
+      basisProjectRevision: basisProjectRevision,
+      basisHead: basisHead,
+    );
+    return Revision3QuestTranscriptPanel(
+      projectId: index.projectId,
+      projectRevision: index.projectRevision,
+      projectCheckpointIdentity: basisHead.canonicalJson,
+      questId: quest.id,
+      questRevision: quest.revision,
+      service: service,
+      selectedLineId: selectedLineId,
+      onSelectedLineChanged: onSelectedLineChanged,
+      onCreateLine:
+          ({
+            required projection,
+            required insertionIndex,
+            required objectiveSlot,
+            required publishTechnicalPlan,
+          }) => _openQuestTranscriptLineEntry(
+            context,
+            projection: projection,
+            publishTechnicalPlan: publishTechnicalPlan,
+          ),
+      onOpenTextVoice: ({required projection, required row, required locale}) =>
+          _openQuestTranscriptTextVoice(
+            context,
+            projection: projection,
+            row: row,
+            locale: locale,
+          ),
+      onPublished: (publication) =>
+          _onQuestTranscriptPublished(context, publication),
+      mutationsEnabled: mutationsEnabled,
+      mutationDisabledReason: mutationDisabledReason,
+      copy: copy,
+    );
+  }
+
+  Revision3QuestTranscriptAuthoringService _createQuestTranscriptService({
+    required String basisProjectId,
+    required int basisProjectRevision,
+    required AuthoringWorkingHead basisHead,
+  }) {
+    final loadContentForBasis = loadContentIndex;
+    final readLocalizationForBasis = readDialogLocalization;
+    return Revision3QuestTranscriptAuthoringService(
       expectedHead: basisHead,
       loadContentIndex: () async {
         final loaded = await loadContentForBasis();
@@ -3344,39 +3460,6 @@ class _ManagedRevision3ProjectViewState
           },
       publishReplace: publishQuestTranscriptReplace,
       publishCreate: publishQuestTranscriptCreate,
-    );
-    return Revision3QuestTranscriptPanel(
-      projectId: index.projectId,
-      projectRevision: index.projectRevision,
-      projectCheckpointIdentity: basisHead.canonicalJson,
-      questId: quest.id,
-      questRevision: quest.revision,
-      service: service,
-      selectedLineId: selectedLineId,
-      onSelectedLineChanged: onSelectedLineChanged,
-      onCreateLine:
-          ({
-            required projection,
-            required insertionIndex,
-            required objectiveSlot,
-            required publishTechnicalPlan,
-          }) => _openQuestTranscriptLineEntry(
-            context,
-            projection: projection,
-            publishTechnicalPlan: publishTechnicalPlan,
-          ),
-      onOpenTextVoice: ({required projection, required row, required locale}) =>
-          _openQuestTranscriptTextVoice(
-            context,
-            projection: projection,
-            row: row,
-            locale: locale,
-          ),
-      onPublished: (publication) =>
-          _onQuestTranscriptPublished(context, publication),
-      mutationsEnabled: mutationsEnabled,
-      mutationDisabledReason: mutationDisabledReason,
-      copy: copy,
     );
   }
 
@@ -4558,6 +4641,7 @@ class _ManagedRevision3ProjectViewState
           selectionOrigin,
           questId: questStep.publication.questId,
           checkpoint: lineStep.checkpoint,
+          selectedLineId: lineStep.publication.createdLineId,
         );
       case Revision3QuestOpeningRecipeLockedOutcome():
         messenger.showSnackBar(
@@ -4576,6 +4660,7 @@ class _ManagedRevision3ProjectViewState
     _ManagedStorySelectionOrigin origin, {
     required String questId,
     required ManagedRevision3CurrentProjectState checkpoint,
+    String? selectedLineId,
   }) async {
     if (!_isCurrentStorySelectionOrigin(origin) ||
         !_isCurrentQuestOpeningCheckpoint(checkpoint)) {
@@ -4600,6 +4685,7 @@ class _ManagedRevision3ProjectViewState
       projectRevision: checkpoint.projectRevision,
       projectHeadCanonicalJson: checkpoint.head.canonicalJson,
       section: Revision3StoryWorkbenchSection.dialogVoice,
+      selectedLineId: selectedLineId,
     );
   }
 
@@ -4922,6 +5008,7 @@ class _ManagedRevision3ProjectViewState
     required int projectRevision,
     String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
+    String? selectedLineId,
   }) {
     final messenger = ScaffoldMessenger.of(context);
     final staleMessage = AppLocalizations.of(
@@ -4934,12 +5021,60 @@ class _ManagedRevision3ProjectViewState
             projectRevision: projectRevision,
             projectHeadCanonicalJson: projectHeadCanonicalJson,
             section: section,
+            selectedLineId: selectedLineId,
           )
           .then((selected) {
             if (selected || !_isCurrentStorySelectionOrigin(origin)) return;
             messenger.removeCurrentSnackBar();
             messenger.showSnackBar(SnackBar(content: Text(staleMessage)));
           }),
+    );
+  }
+
+  Future<void> _openLibraryDraftInStory(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity,
+  ) async {
+    final origin = _storySelectionOrigin;
+    final expected = currentManagedProject;
+    if (expected == null) return;
+
+    bool isExactCurrentDraft() =>
+        context.mounted &&
+        _isCurrentStorySelectionOrigin(origin) &&
+        _isCurrentQuestOpeningCheckpoint(expected) &&
+        index.projectId == expected.projectId &&
+        index.projectRevision == expected.projectRevision &&
+        identical(index.entityById(entity.id), entity) &&
+        (entity.kind == Revision3ContentEntityKind.questDraft ||
+            entity.kind == Revision3ContentEntityKind.npcDraft);
+
+    if (!isExactCurrentDraft()) return;
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.story,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!isExactCurrentDraft()) return;
+    final selected = await origin.controller.selectEntityAtRevision(
+      entityId: entity.id,
+      projectRevision: expected.projectRevision,
+      projectHeadCanonicalJson: expected.head.canonicalJson,
+      section: Revision3StoryWorkbenchSection.overview,
+    );
+    if (!context.mounted || selected || !isExactCurrentDraft()) return;
+    final messenger = ScaffoldMessenger.of(context)..removeCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          AppLocalizations.of(
+            context,
+          ).managedStoryWorkspacePublishedSelectionStale,
+        ),
+      ),
     );
   }
 

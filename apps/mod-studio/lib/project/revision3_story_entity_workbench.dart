@@ -262,6 +262,7 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
     required this.selectedSection,
     required this.onSectionChanged,
     required this.actions,
+    this.questJourney,
     this.questTranscript,
     this.copy = const Revision3StoryEntityWorkbenchCopy.english(),
     super.key,
@@ -278,6 +279,14 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
   final Revision3StoryWorkbenchSection selectedSection;
   final ValueChanged<Revision3StoryWorkbenchSection> onSectionChanged;
   final Revision3StoryEntityWorkbenchActions actions;
+
+  /// Friendly Quest-only journey supplied by the owning workspace.
+  ///
+  /// When present, this replaces the fragmented technical overview with one
+  /// coherent read-only projection and contextual hand-offs to the existing
+  /// exact editors. Content surfaces that have not adopted the journey retain
+  /// the bounded overview below.
+  final Widget? questJourney;
 
   /// Friendly Quest-only transcript editor supplied by the owning workspace.
   ///
@@ -524,10 +533,17 @@ class _Revision3StoryEntityWorkbenchState
 
   Widget _buildSection(BuildContext context) {
     final entity = widget.entity;
+    final sectionKey = Key(
+      'revision3-story-workbench-section-${_section.name}-${entity.id}',
+    );
+    final journey = widget.questJourney;
+    if (_section == Revision3StoryWorkbenchSection.overview &&
+        entity.kind == Revision3ContentEntityKind.questDraft &&
+        journey != null) {
+      return KeyedSubtree(key: sectionKey, child: journey);
+    }
     return ListView(
-      key: Key(
-        'revision3-story-workbench-section-${_section.name}-${entity.id}',
-      ),
+      key: sectionKey,
       padding: const EdgeInsets.all(20),
       children: switch (_section) {
         Revision3StoryWorkbenchSection.overview => _questOverview(context),

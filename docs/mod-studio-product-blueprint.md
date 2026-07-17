@@ -168,6 +168,43 @@ survivor or its empty state without automatic retry. This is a first safe
 semantic deletion primitive, not general undo/history, project deletion, blob
 garbage collection, build/deploy, or runtime behavior.
 
+Quest continuation addendum (2026-07-17): Home now offers a recommended
+**Quest + opening line** Draft recipe. It publishes Quest and ScriptModule as
+N+1, rebinds to that exact managed checkpoint, and may then use the existing
+transcript insertion transaction to publish the first line as N+2. Cancelling
+the line form honestly retains and opens the Quest-only N+1 checkpoint. This is
+two verified publications, not one atomic multi-domain transaction, and the
+line is not a playable conversation, topic, NPC binding, or Quest-start link.
+
+Quest Journey addendum (2026-07-17): a selected Quest's default Story
+**Overview** is now one responsive, objective-centered Journey instead of a
+technical fact sheet. It composes the exact current content index, validated
+transition seed, and complete ordered transcript only when their project/head,
+Quest/module, target/plan seal, objective order/slots, and dialog references
+agree. Authors see the main Quest and objectives across Available/Start/
+Success/Failure, linked dialog beside stable V4 objectives, a separate General
+dialog area, and direct handoffs to the existing name/objective, context,
+behavior, and full transcript/Voice editors. Clicking a Journey dialog row
+selects that exact row in **Dialog & Voice**; the guided opening-line recipe
+also preserves its newly created row through the Story deep link. Older
+generator-v2/v3 Quests keep their effective fixed behavior but never receive
+invented objective-to-dialog grouping. Loading is read-only, bounded to 256
+lines, discards late/stale results, treats lost authority as reopen-required,
+and exposes neither technical IDs nor any build, deployment, runtime, game, or
+save authority. Existing Story/Logic/Dialog tabs remain until Journey covers
+their complete editing capability; this slice consolidates the normal starting
+view without retiring working tools.
+
+Content-to-Story addendum (2026-07-17): Content remains the cross-source
+discovery surface. A selected exact-current Quest/NPC Draft now shows one
+responsive **Open in Story** continuation above its retained inspection
+Workbench. The handoff revalidates project, revision, head, index, selection,
+entity identity, and supported kind, closes compact details first, and selects
+that same Draft on canonical Story Overview/Journey. It is single-flight and
+fails with safe author-facing copy; stale/reloaded/disposed callbacks cannot
+navigate or mutate. Existing Content inspection actions remain while duplicate
+authoring affordances are retired only after Story reaches capability parity.
+
 NPC profile addendum (2026-07-16): a selected managed NPC's **Profile** now
 offers one compact **Edit name & archetype** form in both the wide Story
 workspace and compact details sheet. It edits the friendly display name and a
@@ -595,11 +632,14 @@ The north-star flow for substantial mods is **Create playable slice**:
    path. The named slice remains useful for writing and review when it cannot
    yet run.
 
-Today the separate bounded NPC and Quest Draft wizards exist, but this combined
-new-NPC/new-quest slice remains a **planned Draft workflow and not a supported
-production promise**. The important product decision is that authors can
-eventually scaffold and organize the whole intent without hand-authoring
-disconnected backend rows. NPC spawning/identity and quest
+Today the separate bounded NPC and Quest Draft wizards exist. Home also composes
+the Quest wizard and existing transcript insertion as an honest two-checkpoint
+**Quest + opening line** Draft recipe, including a Quest-only continuation when
+the second form is cancelled. The broader combined new-NPC/new-quest playable
+slice remains a **planned Draft workflow and not a supported production
+promise**. The important product decision is that authors can eventually
+scaffold and organize the whole intent without hand-authoring disconnected
+backend rows. NPC spawning/identity and quest
 transitions/effects/persistence are different qualification tracks; success in
 one never upgrades the other. A scoped iteration build names every excluded or
 blocked mechanism rather than silently omitting it.
@@ -831,9 +871,12 @@ specification:
 **Immediate checkpoint order (updated 2026-07-17): usability and completion take
 precedence over new breadth.** Problems & Readiness V1, honest action gates,
 compact project chrome, Project Close, and the guided project-local dialog-line
-create/exact-managed-reuse V1 form the landed baseline. Direct project-text
-editing and the direct NPC/Quest Story workspace now replace two former
-card/modal detours without changing their authority boundaries. The first
+create/exact-managed-reuse V1 form the landed baseline. The recommended
+two-checkpoint **Quest + opening line** recipe now removes the creation-to-writing
+dead end while preserving an honest Quest-only result on cancellation; it does
+not create a playable conversation. Direct project-text editing and the direct
+NPC/Quest Story workspace now replace two former card/modal detours without
+changing their authority boundaries. The first
 reviewed non-World offline build is now integrated for one selected reviewed
 managed DataAsset stage: it derives from the exact-current project, creates only
 a new receipt-owned output, then reopens and re-inspects that output. The first

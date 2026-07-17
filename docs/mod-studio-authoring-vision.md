@@ -593,23 +593,50 @@ in Workbench V1 without detouring through Content. Content retains the same
 global discovery projection, while non-Story reference targets return there.
 Selecting a `QuestDraft` opens Workbench V1 with **Overview**, **Story**,
 **Logic**, **Dialog & Voice**, **References**, and **Problems & Checks**.
-Overview, Story, and Logic invoke the existing atomic **Name & objectives**,
-**Description & connections**, and **States & transitions** operations; they do
-not duplicate project state. Problems reuses the existing exact-current source/
-compiler inspection. Dialog & Voice hosts the bounded exact-current ordered
-Quest transcript: friendly project lines can be attached, reordered, grouped
+Overview is now a responsive, objective-centered **Quest Journey** rather than
+the earlier technical fact sheet. One read-only fan-in composes the exact
+current content index, validated lifecycle seed, and ordered transcript only
+when project/head, Quest/module, target/plan seal, objective order/slots, and
+every line reference agree. It presents main-Quest and objective behavior across
+Available/Start/Success/Failure, keeps stable-V4 dialog beside its objective,
+keeps ungrouped dialog in a separate General area, and labels older generator-
+v2/v3 behavior without inventing objective grouping. Journey, Story, and Logic
+hand off to the existing atomic **Name & objectives**, **Description &
+connections**, and **States & transitions** operations; they do not duplicate
+project state. Selecting a Journey dialog row switches this same exact Quest to
+**Dialog & Voice** and selects that row. Problems reuses the existing exact-
+current source/compiler inspection. Dialog & Voice hosts the bounded exact-
+current ordered Quest transcript: friendly project lines can be attached,
+reordered, grouped
 by stable V4 objective slot, detached without deletion, previewed lazily, or
 created and inserted atomically; one exact row/language can open in
 Localization & Voice. Transcript mutations remain gated while localization
-text is dirty or the managed checkpoint is busy/stale. The reference projection
-is not build or runtime readiness. The lifecycle action itself is one friendly
-behavior table over the fixed root/objective edges, with a sequential template
-and bounded typed condition/action dialogs. Both slices share the exact
-project/session publication lane, but the transcript grants no runtime topic or
+text is dirty or the managed checkpoint is busy/stale. Home also exposes a
+recommended two-checkpoint **Quest + opening line** recipe: the existing Quest
+transaction publishes N+1, Studio rebinds to that exact checkpoint, and the
+existing transcript transaction may publish the first line at N+2. Cancelling
+the line form retains the usable Quest and opens its **Dialog & Voice** tab;
+completion now preserves and selects the exact created row. No combined atomic
+or playable-conversation claim is made. Journey loading is bounded to 256 lines,
+does not repeat on harmless parent rebuilds, discards late/stale results, and
+turns lost authority into a reopen requirement. The reference
+projection is not build or runtime readiness. The lifecycle action itself is
+one friendly behavior table over the fixed root/objective edges, with a
+sequential template and bounded typed condition/action dialogs. Both slices
+share the exact project/session publication lane, but the transcript grants no runtime topic or
 selection effect and the workspace still has no synchronized general graph,
 journal, reward, item, raw-source, complete simulation, build, deploy, or
 runtime-test surface. The Studio labels the saved checkpoint Draft-only,
 build-blocked, and runtime-unqualified.
+
+Content remains the discovery surface, not a second authoring destination.
+Selected current-project Quest/NPC Drafts now offer one explicit **Open in
+Story** continuation above the retained Workbench projection. It validates the
+exact index, entity, revision, project, and head again, then opens and selects
+that same Draft in canonical Story Overview/Journey. Compact details close
+before handoff; stale, repeated, or failed handoffs stay inert and never expose
+technical error details. Existing Content inspection actions remain available
+while this consolidation is incremental.
 
 ### 4.6 Voice at the line
 
@@ -1480,9 +1507,13 @@ generation/rebase diagnostics, the full three-way rebase workflow, offline
 semantic diff/build-plan inspection, and batch edits for compatible semantic
 fields.
 
-The landed bounded Quest subset already provides ordered Draft creation,
-separate existing-Quest outline and catalog-bound context edits, and the first
-fixed-lifecycle V4 **States & transitions** table. The V4 slice persists a
+The landed bounded Quest subset already provides ordered Draft creation, a
+guided two-checkpoint Quest-plus-opening-line continuation, separate
+existing-Quest outline and catalog-bound context edits, and the first
+fixed-lifecycle V4 **States & transitions** table. The guided continuation
+composes existing exact transactions and retains a Quest-only N+1 checkpoint if
+line authoring is cancelled; it is neither a synchronized general graph nor a
+playable dialog. The V4 slice persists a
 closed stable-slot plan, validates bounded typed conditions/actions, and lowers
 deterministic source. Reading or deriving a V2/V3 plan is a byte-preserving
 no-op; only an explicit behavior edit upgrades it, while separate outline or

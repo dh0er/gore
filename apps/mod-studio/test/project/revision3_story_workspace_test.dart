@@ -580,6 +580,136 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Quest journey is the default overview and opens an exact transcript row',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(includeTranscriptLine: true),
+        questJourneyBuilder:
+            ({required index, required quest, required onOpenDialogLine}) =>
+                FilledButton(
+                  key: const Key('test-journey-open-line'),
+                  onPressed: () => onOpenDialogLine(_transcriptLineId),
+                  child: const Text('Open journey dialog'),
+                ),
+        questTranscriptBuilder:
+            ({
+              required index,
+              required quest,
+              required selectedLineId,
+              required onSelectedLineChanged,
+            }) => Text('Transcript selection: ${selectedLineId ?? 'none'}'),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('test-journey-open-line')), findsOneWidget);
+      expect(find.text('Technical ID'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('test-journey-open-line')));
+      await tester.pump();
+
+      final dialogTab = find.byKey(
+        Key('revision3-story-workbench-tab-dialogVoice-$_questId'),
+      );
+      expect(tester.widget<ChoiceChip>(dialogTab).selected, isTrue);
+      expect(
+        find.text('Transcript selection: $_transcriptLineId'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'compact Quest journey owns scrolling and opens the exact transcript row',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(560, 760));
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(includeTranscriptLine: true),
+        questJourneyBuilder:
+            ({required index, required quest, required onOpenDialogLine}) =>
+                SingleChildScrollView(
+                  key: const Key('test-compact-journey-scroll'),
+                  child: Column(
+                    children: [
+                      FilledButton(
+                        key: const Key('test-compact-journey-open-line'),
+                        onPressed: () => onOpenDialogLine(_transcriptLineId),
+                        child: const Text('Open compact journey dialog'),
+                      ),
+                      const SizedBox(height: 900),
+                      const Text(
+                        'General dialog reached',
+                        key: Key('test-compact-journey-general-dialog'),
+                      ),
+                    ],
+                  ),
+                ),
+        questTranscriptBuilder:
+            ({
+              required index,
+              required quest,
+              required selectedLineId,
+              required onSelectedLineChanged,
+            }) => Text('Transcript selection: ${selectedLineId ?? 'none'}'),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      final sheet = find.byKey(
+        const Key('revision3-story-workspace-details-sheet'),
+      );
+      expect(sheet, findsOneWidget);
+
+      final verticalScrollables = find
+          .descendant(of: sheet, matching: find.byType(Scrollable))
+          .evaluate()
+          .where((element) {
+            final scrollable = element.widget as Scrollable;
+            return axisDirectionToAxis(scrollable.axisDirection) ==
+                Axis.vertical;
+          });
+      expect(verticalScrollables.length, 1);
+
+      final journeyScroll = find
+          .descendant(
+            of: find.byKey(const Key('test-compact-journey-scroll')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final general = find.byKey(
+        const Key('test-compact-journey-general-dialog'),
+      );
+      await tester.scrollUntilVisible(general, 240, scrollable: journeyScroll);
+      expect(general.hitTestable(), findsOneWidget);
+
+      final openLine = find.byKey(const Key('test-compact-journey-open-line'));
+      await tester.ensureVisible(openLine);
+      await tester.pump();
+      await tester.tap(openLine);
+      await tester.pump();
+
+      final dialogTab = find.byKey(
+        Key('revision3-story-workbench-tab-dialogVoice-$_questId'),
+      );
+      expect(tester.widget<ChoiceChip>(dialogTab).selected, isTrue);
+      expect(
+        find.text('Transcript selection: $_transcriptLineId'),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('NPC Dialog & Voice remains unavailable with a Quest builder', (
     tester,
   ) async {
@@ -1191,6 +1321,71 @@ void main() {
     expect(await unresolved, isFalse);
   });
 
+  testWidgets('controller deep-links only an exact Quest transcript row', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3StoryWorkspaceController();
+    addTearDown(controller.dispose);
+    await _pumpWorkspace(
+      tester,
+      controller: controller,
+      load: () async => _fixture(includeTranscriptLine: true),
+      questTranscriptBuilder:
+          ({
+            required index,
+            required quest,
+            required selectedLineId,
+            required onSelectedLineChanged,
+          }) => Text('Deep-linked line: ${selectedLineId ?? 'none'}'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _questId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _transcriptLineId,
+      ),
+      isTrue,
+    );
+    await tester.pump();
+
+    expect(find.text('Deep-linked line: $_transcriptLineId'), findsOneWidget);
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              Key('revision3-story-workbench-tab-dialogVoice-$_questId'),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _questId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: 'missing-line',
+      ),
+      isFalse,
+    );
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _questId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.overview,
+        selectedLineId: _transcriptLineId,
+      ),
+      isFalse,
+    );
+  });
+
   test('removal preflight proves the pair and filters incoming ownership', () {
     final exactIndex = _fixture();
     final exact = Revision3StoryDraftRemovalPreflight.fromIndex(
@@ -1650,6 +1845,7 @@ Future<void> _pumpWorkspace(
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
+  Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
 }) => tester.pumpWidget(
   MaterialApp(
@@ -1675,6 +1871,7 @@ Future<void> _pumpWorkspace(
         copy: copy,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
+        questJourneyBuilder: questJourneyBuilder,
         questTranscriptBuilder: questTranscriptBuilder,
       ),
     ),
@@ -1704,6 +1901,7 @@ Revision3StoryWorkspace _workspace({
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
+  Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
 }) => Revision3StoryWorkspace(
   projectRoot: root,
@@ -1732,6 +1930,7 @@ Revision3StoryWorkspace _workspace({
   removeDraft: removeDraft,
   removeDraftDisabledReason: removeDraftDisabledReason,
   editNpcProfileDisabledReason: editNpcProfileDisabledReason,
+  questJourneyBuilder: questJourneyBuilder,
   questTranscriptBuilder: questTranscriptBuilder,
 );
 

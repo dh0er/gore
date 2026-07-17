@@ -2172,16 +2172,22 @@ void main() {
     'real compact German Home keeps Story copy list and actions usable',
     (tester) async {
       await _setNarrowShortTestSurface(tester);
-      const projectId = '63636363636363636363636363636363';
+      final fixture = Revision3QuestOutlineFixture();
       final managed = _FakeManagedLease(
         root: Directory(r'C:\mods\story-compact-german'),
-        projectId: projectId,
-        projectRevision: 7,
-        head: _head(7),
-        contentIndexBuilder: (lease) => _storyWorkbenchGameGateIndex(
-          projectId: lease.projectId,
-          revision: lease.projectRevision,
-        ),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: fixture.projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
       );
       final coordinator = CurrentProjectCoordinator(
         openManagedRevision3: (_) async => managed,
@@ -2248,16 +2254,17 @@ void main() {
       );
       expect(tester.takeException(), isNull);
 
-      final edit = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-overview-'
-          '$revision3QuestOutlineQuestId',
-        ),
+      final edit = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
       );
-      await _revealWorkbenchAction(tester, edit);
-      expect(_workbenchActionTileWidget(tester, edit).enabled, isTrue);
-      await _tapWorkbenchAction(tester, edit);
-      await tester.pumpAndSettle();
+      expect(edit, findsOneWidget);
+      expect(find.text('Name & Ziele bearbeiten'), findsOneWidget);
+      await tester.ensureVisible(edit);
+      await tester.pump();
+      expect(tester.widget<OutlinedButton>(edit).onPressed, isNotNull);
+      await tester.tap(edit);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(
         find.byKey(const Key('revision3-quest-outline-dialog')),
         findsOneWidget,
@@ -3720,6 +3727,193 @@ void main() {
         find.byKey(const Key('revision3-quest-context-dialog')),
         findsNothing,
       );
+    },
+  );
+
+  testWidgets(
+    'Content Quest continuation opens the exact canonical Story journey',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\content-to-story-journey'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: fixture.projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedStory(tester);
+      final logic = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-logic-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(logic, findsOneWidget);
+      await tester.ensureVisible(logic);
+      await tester.tap(logic);
+      await tester.pump();
+      expect(tester.widget<ChoiceChip>(logic).selected, isTrue);
+
+      await _navigateManagedContent(tester);
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final openStory = find.byKey(
+        const Key('revision3-content-open-story-$revision3QuestOutlineQuestId'),
+      );
+      expect(openStory, findsOneWidget);
+      expect(find.text('Open in Story'), findsOneWidget);
+      await tester.ensureVisible(openStory);
+      await tester.pump();
+      await tester.tap(openStory);
+      await tester.pumpAndSettle();
+
+      final selectedQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(selectedQuest, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedQuest).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-panel')),
+        findsOneWidget,
+      );
+      final overview = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-overview-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(overview, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(overview).selected, isTrue);
+      expect(find.text(revision3QuestOutlineQuestId), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Story Quest journey unifies exact behavior and editor handoffs',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\quest-journey-authoring'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: fixture.projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedStory(tester);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-quest-journey-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('Find Homer'), findsWidgets);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-main-behavior')),
+        findsOneWidget,
+      );
+      for (var index = 0; index < fixture.objectiveTitles.length; index++) {
+        expect(
+          find.byKey(Key('revision3-quest-journey-objective-$index')),
+          findsOneWidget,
+        );
+      }
+      expect(
+        find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-quest-journey-edit-description-connections'),
+        ),
+        findsNothing,
+        reason: 'only the catalog-bound context editor needs a game root',
+      );
+      final states = find.byKey(
+        const Key('revision3-quest-journey-edit-states-transitions'),
+      );
+      expect(states, findsOneWidget);
+      expect(find.text(revision3QuestOutlineQuestId), findsNothing);
+      expect(find.text(revision3QuestOutlineModuleId), findsNothing);
+
+      final overview = find.byKey(
+        const Key(
+          'revision3-story-workbench-section-overview-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      );
+      await tester.scrollUntilVisible(
+        states,
+        240,
+        scrollable: find
+            .descendant(of: overview, matching: find.byType(Scrollable))
+            .first,
+      );
+      await tester.pump();
+      await tester.tap(states);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(
+        find.byKey(const Key('revision3-quest-transitions-dialog')),
+        findsOneWidget,
+      );
+      expect(managed.questTransitionsSeedCalls, 2);
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-transitions-cancel')),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -6928,6 +7122,12 @@ Future<void> _navigateManagedHome(WidgetTester tester) =>
     _navigateManagedWorkspace(
       tester,
       const Key('revision3-project-workspace-nav-home'),
+    );
+
+Future<void> _navigateManagedStory(WidgetTester tester) =>
+    _navigateManagedWorkspace(
+      tester,
+      const Key('revision3-project-workspace-nav-story'),
     );
 
 Future<void> _navigateManagedContent(WidgetTester tester) async {

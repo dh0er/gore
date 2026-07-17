@@ -84,6 +84,211 @@ void main() {
     },
   );
 
+  testWidgets(
+    'wide Story continuation forwards the exact Quest once above Workbench',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1600, 900));
+      final pending = Completer<void>();
+      var calls = 0;
+      Revision3ContentIndex? openedIndex;
+      Revision3ContentEntity? openedEntity;
+      await _pumpLoadedLibrary(
+        tester,
+        openStoryDraftLabel: 'Continue Quest in Story',
+        openStoryDraftDescription:
+            'Use the canonical Story workspace for the complete Quest.',
+        openStoryDraftInStory: (index, entity) {
+          calls++;
+          openedIndex = index;
+          openedEntity = entity;
+          return pending.future;
+        },
+      );
+
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pump();
+
+      final continuation = find.byKey(
+        const Key('revision3-content-open-story-continuation'),
+      );
+      final workbench = find.byKey(
+        Key('revision3-story-workbench-$_projectId-$_questId'),
+      );
+      final button = find.byKey(Key('revision3-content-open-story-$_questId'));
+      expect(continuation, findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-content-open-story-wide')),
+        findsOneWidget,
+      );
+      expect(find.text('Continue Quest in Story'), findsOneWidget);
+      expect(
+        find.text('Use the canonical Story workspace for the complete Quest.'),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(continuation).dy,
+        lessThan(tester.getTopLeft(workbench).dy),
+      );
+      expect(
+        find.byKey(
+          Key('revision3-story-workbench-action-edit-overview-$_questId'),
+        ),
+        findsOneWidget,
+      );
+
+      final firstPress = tester.widget<FilledButton>(button).onPressed;
+      expect(firstPress, isNotNull);
+      await tester.tap(button);
+      await tester.pump();
+
+      expect(calls, 1);
+      expect(
+        identical(openedIndex?.entityById(_questId), openedEntity),
+        isTrue,
+      );
+      expect(openedEntity?.id, _questId);
+      expect(tester.widget<FilledButton>(button).onPressed, isNull);
+      firstPress!();
+      await tester.pump();
+      expect(calls, 1, reason: 'one exact handoff remains single-flight');
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(button).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'compact NPC continuation closes its details sheet before handoff',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(560, 760));
+      var calls = 0;
+      var sheetWasVisible = true;
+      String? openedId;
+      await _pumpLoadedLibrary(
+        tester,
+        openStoryDraftInStory: (index, entity) async {
+          calls++;
+          openedId = entity.id;
+          expect(identical(index.entityById(entity.id), entity), isTrue);
+          sheetWasVisible = find.byType(BottomSheet).evaluate().isNotEmpty;
+        },
+      );
+
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_npcId')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-content-open-story-compact')),
+        findsOneWidget,
+      );
+      final button = find.byKey(Key('revision3-content-open-story-$_npcId'));
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(openedId, _npcId);
+      expect(sheetWasVisible, isFalse);
+      expect(find.byType(BottomSheet), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'stale compact continuation is inert after exact project reload',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(560, 760));
+      var revision = 7;
+      var calls = 0;
+      late StateSetter rebuild;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Scaffold(
+                body: Revision3ContentLibrary(
+                  projectRoot: 'managed-root',
+                  projectId: _projectId,
+                  projectRevision: revision,
+                  projectHeadCanonicalJson: 'canonical-head-$revision',
+                  load: () async => _fixture(revision: revision),
+                  openStoryDraftInStory: (index, entity) async => calls++,
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pumpAndSettle();
+      final stalePress = tester
+          .widget<FilledButton>(
+            find.byKey(Key('revision3-content-open-story-$_questId')),
+          )
+          .onPressed;
+      expect(stalePress, isNotNull);
+
+      rebuild(() => revision = 8);
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsOneWidget);
+
+      stalePress!();
+      await tester.pumpAndSettle();
+
+      expect(calls, 0);
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(find.text('3 entities / 2 assets / revision 8'), findsOneWidget);
+    },
+  );
+
+  testWidgets('failed Story handoff is friendly and hides raw details', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1600, 900));
+    await _pumpLoadedLibrary(
+      tester,
+      openStoryDraftInStory: (index, entity) async {
+        throw StateError(r'C:\private\story.json $_questId');
+      },
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await tester.tap(find.byKey(Key('revision3-content-open-story-$_questId')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Story could not be opened. The project was not changed.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining(r'C:\'), findsNothing);
+  });
+
+  testWidgets('no Story callback renders no misleading continuation', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1600, 900));
+    await _pumpLoadedLibrary(tester);
+
+    expect(
+      find.byKey(const Key('revision3-content-open-story-continuation')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    expect(
+      find.byKey(const Key('revision3-content-open-story-continuation')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(Key('revision3-content-open-story-$_questId')),
+      findsNothing,
+    );
+  });
+
   testWidgets('Edit Quest keeps outline usable when context has no game root', (
     tester,
   ) async {
@@ -1852,6 +2057,10 @@ Future<void> _pumpLoadedLibrary(
   Revision3NpcProfileEditor? editNpcProfile,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  Revision3StoryDraftOpener? openStoryDraftInStory,
+  String openStoryDraftLabel = 'Open in Story',
+  String openStoryDraftDescription =
+      'Continue editing this draft in the canonical Story workspace.',
   String? editQuestContextDisabledReason,
   String? inspectQuestSourceDisabledReason,
   Revision3ContentLibraryController? controller,
@@ -1868,6 +2077,9 @@ Future<void> _pumpLoadedLibrary(
     editNpcProfile: editNpcProfile,
     inspectQuestSource: inspectQuestSource,
     inspectNpcSource: inspectNpcSource,
+    openStoryDraftInStory: openStoryDraftInStory,
+    openStoryDraftLabel: openStoryDraftLabel,
+    openStoryDraftDescription: openStoryDraftDescription,
     editQuestContextDisabledReason: editQuestContextDisabledReason,
     inspectQuestSourceDisabledReason: inspectQuestSourceDisabledReason,
     controller: controller,
@@ -1885,6 +2097,10 @@ Future<void> _pumpLibrary(
   Revision3NpcProfileEditor? editNpcProfile,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  Revision3StoryDraftOpener? openStoryDraftInStory,
+  String openStoryDraftLabel = 'Open in Story',
+  String openStoryDraftDescription =
+      'Continue editing this draft in the canonical Story workspace.',
   String? editQuestContextDisabledReason,
   String? inspectQuestSourceDisabledReason,
   Revision3ContentLibraryController? controller,
@@ -1903,6 +2119,9 @@ Future<void> _pumpLibrary(
         editNpcProfile: editNpcProfile,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
+        openStoryDraftInStory: openStoryDraftInStory,
+        openStoryDraftLabel: openStoryDraftLabel,
+        openStoryDraftDescription: openStoryDraftDescription,
         editQuestContextDisabledReason: editQuestContextDisabledReason,
         inspectQuestSourceDisabledReason: inspectQuestSourceDisabledReason,
         controller: controller,
