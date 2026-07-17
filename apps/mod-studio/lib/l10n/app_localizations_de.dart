@@ -985,6 +985,26 @@ class AppLocalizationsDe extends AppLocalizations {
       'Ziel für beliebige Zeile';
 
   @override
+  String get managedVoiceFolderImportTitle => 'Aufnahmen-Ordner importieren';
+
+  @override
+  String get managedVoiceFolderImportDescription =>
+      'Prüfe einen Ordner benannter Ogg-Aufnahmen und füge danach alle bereiten Takes in genau einer atomaren Projektänderung hinzu.';
+
+  @override
+  String get managedVoiceFolderImportChooseFolder =>
+      'Aufnahmen-Ordner auswählen';
+
+  @override
+  String get managedVoiceFolderImportDirtyBlocked =>
+      'Speichere oder verwirf die offenen Lokalisierungsänderungen, bevor du Aufnahmen importierst.';
+
+  @override
+  String managedVoiceFolderImportSaved(int count, int revision) {
+    return '$count Aufnahmen in Projektrevision $revision importiert. Sie sind nur als Recorded-Takes im Projekt gespeichert; Auswahl, Spieldateien und Spielstände wurden nicht geändert.';
+  }
+
+  @override
   String managedVoiceTakeSaved(int revision) {
     return 'Voice-Take in Projektrevision $revision gespeichert. Er ist nur im Projekt gespeichert und noch nicht im Spiel nutzbar.';
   }

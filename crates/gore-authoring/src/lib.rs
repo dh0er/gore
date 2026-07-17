@@ -34,6 +34,7 @@ mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transitions;
 mod story_transaction_revision3_removal;
 mod story_transaction_revision3_voice;
+mod story_transaction_revision3_voice_batch;
 mod story_transaction_revision3_voice_selection;
 mod story_transaction_revision3_voice_take_removal;
 mod story_transaction_revision3_voice_take_status;
@@ -317,6 +318,13 @@ pub use story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_REQUEST_JSON_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
     MAX_REVISION3_VOICE_TEXT_BYTES_V1, REVISION3_VOICE_SLOT_GENERATOR_ID_V1,
     REVISION3_VOICE_SLOT_GENERATOR_VERSION_V1, REVISION3_VOICE_TAKE_IMPORTER_ID_V1,
+};
+pub use story_transaction_revision3_voice_batch::{
+    apply_revision3_voice_take_batch_transaction_v1, Revision3VoiceTakeBatchConflictV1,
+    Revision3VoiceTakeBatchErrorV1, Revision3VoiceTakeBatchEvaluationV1,
+    Revision3VoiceTakeBatchItemOutcomeV1, Revision3VoiceTakeBatchOutcomeV1,
+    Revision3VoiceTakeBatchRejectionV1, MAX_REVISION3_VOICE_BATCH_ITEMS_V1,
+    MAX_REVISION3_VOICE_BATCH_PROJECT_WORK_BYTES_V1,
 };
 pub use story_transaction_revision3_voice_selection::{
     apply_revision3_voice_take_selection_transaction_v1, Revision3VoiceTakeSelectionBuildStatusV1,

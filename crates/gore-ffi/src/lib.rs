@@ -241,6 +241,7 @@ mod authoring_story_quest_outline_revision3;
 mod authoring_story_quest_outline_v2_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_story_quest_transitions_revision3;
+mod authoring_voice_batch_revision3;
 mod authoring_voice_build_revision3;
 mod authoring_voice_plan_revision3;
 mod authoring_voice_revision3;
@@ -300,6 +301,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_open_head_bytes_document",
     "authoring_store_open_revision3",
     "authoring_store_open_revision3_head_bytes",
+    authoring_voice_batch_revision3::PLAN_COMMAND,
     authoring_voice_plan_revision3::COMMAND,
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
@@ -321,6 +323,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_quest_outline_edit_v2",
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
+    authoring_voice_batch_revision3::PREPARE_COMMAND,
     authoring_voice_take_remove_revision3::COMMAND,
     "authoring_store_prepare_revision3_voice_take_selection_v1",
     "authoring_store_prepare_revision3_voice_take_status_v1",
@@ -594,6 +597,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         authoring_voice_plan_revision3::COMMAND => {
             Some(authoring_voice_plan_revision3::plan_revision3_voice_v1_raw)
         }
+        authoring_voice_batch_revision3::PLAN_COMMAND => {
+            Some(authoring_voice_batch_revision3::plan_revision3_voice_batch_v1_raw)
+        }
         "authoring_store_check_revision3_npc_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_npc_compiler_v1_raw,
         ),
@@ -675,6 +681,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         authoring_voice_take_remove_revision3::COMMAND => Some(
             authoring_voice_take_remove_revision3::prepare_revision3_voice_take_removal_v1_raw,
+        ),
+        authoring_voice_batch_revision3::PREPARE_COMMAND => Some(
+            authoring_voice_batch_revision3::prepare_revision3_voice_batch_v1_raw,
         ),
         "authoring_store_prepare_revision3_voice_take_selection_v1" => {
             Some(authoring_voice_selection_revision3::prepare_revision3_voice_take_selection_v1_raw)
@@ -1763,6 +1772,7 @@ mod tests {
                     "authoring_store_open_head_bytes_document",
                     "authoring_store_open_revision3",
                     "authoring_store_open_revision3_head_bytes",
+                    "authoring_store_plan_revision3_voice_batch_v1",
                     "authoring_store_plan_revision3_voice_v1",
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
@@ -1784,6 +1794,7 @@ mod tests {
                     "authoring_store_prepare_revision3_quest_outline_edit_v2",
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
                     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
+                    "authoring_store_prepare_revision3_voice_batch_v1",
                     "authoring_store_prepare_revision3_voice_take_removal_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
                     "authoring_store_prepare_revision3_voice_take_status_v1",

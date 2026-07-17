@@ -92,6 +92,219 @@ pub(super) enum SecureSourceReadError {
     Changed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SecureDirectEntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SecureDirectEntry {
+    pub name: String,
+    pub kind: SecureDirectEntryKind,
+}
+
+/// One direct-directory capability retained for the complete lifetime of a
+/// bounded scan/read/recheck operation. Enumeration is handle-relative. Every
+/// absolute ancestor is opened without following links/reparse points before
+/// the capability becomes visible.
+pub(super) struct SecureDirectDirectory {
+    path: PathBuf,
+    directory: cap_std::fs::Dir,
+    identity: OggFileIdentity,
+    _directory_handle: FsFile,
+    _ancestor_handles: Vec<FsFile>,
+}
+
+impl SecureDirectDirectory {
+    pub fn open(path: &Path) -> Result<Self, SecureSourceReadError> {
+        open_secure_direct_directory(path).map_err(Into::into)
+    }
+
+    pub fn scan(
+        &self,
+        max_entries: usize,
+        max_name_bytes: usize,
+    ) -> Result<Vec<SecureDirectEntry>, SecureSourceReadError> {
+        let mut output = Vec::new();
+        let entries = self
+            .directory
+            .entries()
+            .map_err(|_| SecureSourceReadError::Unavailable)?;
+        for entry in entries {
+            if output.len() >= max_entries {
+                return Err(SecureSourceReadError::Limit);
+            }
+            let entry = entry.map_err(|_| SecureSourceReadError::Unavailable)?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| SecureSourceReadError::Unsafe)?;
+            if name.is_empty() || name.contains('\0') {
+                return Err(SecureSourceReadError::Unsafe);
+            }
+            if name.len() > max_name_bytes {
+                return Err(SecureSourceReadError::Limit);
+            }
+            let file_type = entry
+                .file_type()
+                .map_err(|_| SecureSourceReadError::Unavailable)?;
+            let kind = if file_type.is_symlink() {
+                SecureDirectEntryKind::Symlink
+            } else if file_type.is_file() {
+                SecureDirectEntryKind::File
+            } else if file_type.is_dir() {
+                SecureDirectEntryKind::Directory
+            } else {
+                SecureDirectEntryKind::Other
+            };
+            output.push(SecureDirectEntry { name, kind });
+        }
+        output.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        Ok(output)
+    }
+
+    pub fn read_single_link_member(
+        &self,
+        name: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, SecureSourceReadError> {
+        self.read_single_link_member_with_hook(name, max_bytes, || {})
+    }
+
+    fn read_single_link_member_with_hook(
+        &self,
+        name: &str,
+        max_bytes: u64,
+        after_read: impl FnOnce(),
+    ) -> Result<Vec<u8>, SecureSourceReadError> {
+        if !is_one_safe_direct_name(name) {
+            return Err(SecureSourceReadError::Unsafe);
+        }
+        let (mut source, initial) = open_direct_member(&self.directory, name)?;
+        if initial.byte_len > max_bytes {
+            return Err(SecureSourceReadError::Limit);
+        }
+        let capacity =
+            usize::try_from(initial.byte_len).map_err(|_| SecureSourceReadError::Limit)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|_| SecureSourceReadError::Limit)?;
+        let read_limit = max_bytes
+            .checked_add(1)
+            .ok_or(SecureSourceReadError::Limit)?;
+        source
+            .by_ref()
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|_| SecureSourceReadError::Unavailable)?;
+        if bytes.len() as u64 != initial.byte_len {
+            return Err(SecureSourceReadError::Changed);
+        }
+        if bytes.len() as u64 > max_bytes {
+            return Err(SecureSourceReadError::Limit);
+        }
+
+        after_read();
+
+        let final_snapshot = snapshot_open_ogg_handle(&source).and_then(|snapshot| {
+            validate_ogg_snapshot(snapshot)?;
+            Ok(snapshot)
+        });
+        let reopened = open_direct_member(&self.directory, name).map(|(_, snapshot)| snapshot);
+        ensure_ogg_source_unchanged(initial, final_snapshot, reopened)
+            .map_err(SecureSourceReadError::from)?;
+        Ok(bytes)
+    }
+
+    pub fn revalidate(&self) -> Result<(), SecureSourceReadError> {
+        // Once this capability has been accepted, inability to reopen the same ambient name is
+        // source drift rather than a new classification of that replacement path. The retained
+        // capability remains safe and usable, but callers must rebuild their folder plan.
+        let reopened =
+            open_secure_direct_directory(&self.path).map_err(|_| SecureSourceReadError::Changed)?;
+        if reopened.identity != self.identity {
+            return Err(SecureSourceReadError::Changed);
+        }
+        Ok(())
+    }
+
+    /// Return whether either retained directory path is an ancestor of the other.
+    ///
+    /// This comparison never resolves an ambient path. It compares the exact root-to-directory
+    /// identity sequences of the pinned no-follow handle chains, so a rename after both
+    /// capabilities were opened cannot alter their original ancestry classification.
+    pub fn overlaps_retained_path(&self, other: &Self) -> Result<bool, SecureSourceReadError> {
+        let shared_len = self.retained_path_len().min(other.retained_path_len());
+        for index in 0..shared_len {
+            if self.retained_path_identity(index)? != other.retained_path_identity(index)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn retained_path_len(&self) -> usize {
+        self._ancestor_handles.len() + 1
+    }
+
+    fn retained_path_identity(
+        &self,
+        index: usize,
+    ) -> Result<OggFileIdentity, SecureSourceReadError> {
+        if let Some(handle) = self._ancestor_handles.get(index) {
+            return snapshot_directory_identity(handle).map_err(Into::into);
+        }
+        if index == self._ancestor_handles.len() {
+            let identity = snapshot_directory_identity(&self._directory_handle)
+                .map_err(SecureSourceReadError::from)?;
+            if identity != self.identity {
+                return Err(SecureSourceReadError::Changed);
+            }
+            return Ok(identity);
+        }
+        Err(SecureSourceReadError::Changed)
+    }
+
+    /// Resolve the ambient directory name for lexical root comparisons, but return that
+    /// canonical path only after a fresh no-follow capability resolves to this exact retained
+    /// directory identity.
+    ///
+    /// The returned path is not a filesystem authority. Reads must continue through `self`.
+    pub fn canonical_path_bound_to_identity(&self) -> Result<PathBuf, SecureSourceReadError> {
+        self.canonical_path_bound_to_identity_with_hook(|_| {})
+    }
+
+    fn canonical_path_bound_to_identity_with_hook(
+        &self,
+        after_canonicalize: impl FnOnce(&Path),
+    ) -> Result<PathBuf, SecureSourceReadError> {
+        // `canonicalize` necessarily follows the ambient name. Treat every failure after the
+        // original capability was retained as source drift, then bind its result back to the
+        // retained identity through the same no-follow ancestor chain used by `open`.
+        let canonical = fs::canonicalize(&self.path).map_err(|_| SecureSourceReadError::Changed)?;
+        after_canonicalize(&canonical);
+        let rebound =
+            open_secure_direct_directory(&canonical).map_err(|_| SecureSourceReadError::Changed)?;
+        if rebound.identity != self.identity {
+            return Err(SecureSourceReadError::Changed);
+        }
+        // Recheck the original ambient name as the final gate. A canonical target that still
+        // names the retained object is insufficient when the caller-provided name was swapped
+        // to a symlink or replacement during resolution.
+        self.revalidate()?;
+        Ok(canonical)
+    }
+}
+
 impl From<OggSourceReadError> for SecureSourceReadError {
     fn from(error: OggSourceReadError) -> Self {
         match error {
@@ -302,6 +515,153 @@ fn normalized_absolute_ogg_source_path(path: &Path) -> Result<PathBuf, OggSource
         return Err(OggSourceReadError::Unsafe);
     }
     Ok(normalized)
+}
+
+fn is_one_safe_direct_name(name: &str) -> bool {
+    if name.is_empty() || name.contains('\0') {
+        return false;
+    }
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+}
+
+fn open_direct_member(
+    directory: &cap_std::fs::Dir,
+    name: &str,
+) -> Result<(FsFile, OggHandleSnapshot), OggSourceReadError> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = directory
+        .open_with(name, &options)
+        .map_err(classify_ogg_open_error)?
+        .into_std();
+    let snapshot = snapshot_open_ogg_handle(&file)?;
+    validate_ogg_snapshot(snapshot)?;
+    Ok((file, snapshot))
+}
+
+#[cfg(unix)]
+fn open_secure_direct_directory(path: &Path) -> Result<SecureDirectDirectory, OggSourceReadError> {
+    use std::path::Component;
+
+    let path = normalized_absolute_ogg_source_path(path)?;
+    let names = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_os_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut directory_handle = open_unix_root_directory()?;
+    let mut ancestor_handles = Vec::new();
+    ancestor_handles
+        .try_reserve_exact(names.len())
+        .map_err(|_| OggSourceReadError::Limit)?;
+    for name in names {
+        let next = open_unix_directory_at(&directory_handle, &name)?;
+        ancestor_handles.push(directory_handle);
+        directory_handle = next;
+    }
+    let identity = snapshot_directory_identity(&directory_handle)?;
+    let capability = directory_handle
+        .try_clone()
+        .map(cap_std::fs::Dir::from_std_file)
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    Ok(SecureDirectDirectory {
+        path,
+        directory: capability,
+        identity,
+        _directory_handle: directory_handle,
+        _ancestor_handles: ancestor_handles,
+    })
+}
+
+#[cfg(windows)]
+fn open_secure_direct_directory(path: &Path) -> Result<SecureDirectDirectory, OggSourceReadError> {
+    let path = normalized_absolute_ogg_source_path(path)?;
+    let mut prefixes = path.ancestors().collect::<Vec<_>>();
+    prefixes.reverse();
+    let mut handles = Vec::new();
+    handles
+        .try_reserve_exact(prefixes.len())
+        .map_err(|_| OggSourceReadError::Limit)?;
+    for prefix in prefixes {
+        if prefix.as_os_str().is_empty() {
+            continue;
+        }
+        handles.push(open_windows_directory_no_follow(prefix)?);
+    }
+    let directory_handle = handles.pop().ok_or(OggSourceReadError::Unsafe)?;
+    let identity = snapshot_directory_identity(&directory_handle)?;
+    let capability = directory_handle
+        .try_clone()
+        .map(cap_std::fs::Dir::from_std_file)
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    Ok(SecureDirectDirectory {
+        path,
+        directory: capability,
+        identity,
+        _directory_handle: directory_handle,
+        _ancestor_handles: handles,
+    })
+}
+
+#[cfg(unix)]
+fn snapshot_directory_identity(file: &FsFile) -> Result<OggFileIdentity, OggSourceReadError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    if !metadata.is_dir() {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(OggFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn snapshot_directory_identity(file: &FsFile) -> Result<OggFileIdentity, OggSourceReadError> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    // SAFETY: `file` owns a valid directory handle and `info` is writable.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(OggSourceReadError::Unavailable);
+    }
+    if !metadata.is_dir() || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(OggFileIdentity {
+        volume: u64::from(info.dwVolumeSerialNumber),
+        file: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+    })
 }
 
 #[cfg(windows)]
@@ -1555,6 +1915,284 @@ mod tests {
             map_ogg_source_read_error(OggSourceReadError::Changed).response()["error"]["code"],
             "VOICE_OGG_CHANGED"
         );
+    }
+
+    #[test]
+    fn secure_direct_directory_enumerates_deterministically_and_enforces_scan_limits() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("notes.txt"), b"ignored").unwrap();
+        fs::write(folder.join("Alpha.ogg"), b"voice").unwrap();
+        fs::create_dir(folder.join("nested")).unwrap();
+
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+        let entries = guarded.scan(3, 64).unwrap();
+        assert_eq!(
+            entries,
+            vec![
+                SecureDirectEntry {
+                    name: "Alpha.ogg".to_owned(),
+                    kind: SecureDirectEntryKind::File,
+                },
+                SecureDirectEntry {
+                    name: "nested".to_owned(),
+                    kind: SecureDirectEntryKind::Directory,
+                },
+                SecureDirectEntry {
+                    name: "notes.txt".to_owned(),
+                    kind: SecureDirectEntryKind::File,
+                },
+            ]
+        );
+        assert_eq!(guarded.scan(2, 64), Err(SecureSourceReadError::Limit));
+        assert_eq!(guarded.scan(3, 4), Err(SecureSourceReadError::Limit));
+        assert_eq!(guarded.revalidate(), Ok(()));
+
+        fs::write(folder.join("Beta.ogg"), b"second").unwrap();
+        let changed_entries = guarded.scan(4, 64).unwrap();
+        assert_ne!(entries, changed_entries);
+        // Adding a member changes the source-set seal, not the identity of the pinned directory.
+        assert_eq!(guarded.revalidate(), Ok(()));
+    }
+
+    #[test]
+    fn secure_direct_directory_reads_only_bounded_single_link_direct_members() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        fs::create_dir(&folder).unwrap();
+        let bytes = b"stable voice bytes";
+        let source = folder.join("voice.ogg");
+        fs::write(&source, bytes).unwrap();
+        fs::create_dir(folder.join("nested.ogg")).unwrap();
+        let hard_source = folder.join("hard-source.ogg");
+        let hard_link = folder.join("hard-link.ogg");
+        fs::write(&hard_source, b"linked").unwrap();
+        fs::hard_link(&hard_source, &hard_link).unwrap();
+
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+        assert_eq!(
+            guarded.read_single_link_member("voice.ogg", bytes.len() as u64),
+            Ok(bytes.to_vec())
+        );
+        assert_eq!(
+            guarded.read_single_link_member("voice.ogg", 3),
+            Err(SecureSourceReadError::Limit)
+        );
+        for unsafe_name in ["", ".", "..", "../voice.ogg", "nested/voice.ogg"] {
+            assert_eq!(
+                guarded.read_single_link_member(unsafe_name, 1024),
+                Err(SecureSourceReadError::Unsafe),
+                "name {unsafe_name:?}"
+            );
+        }
+        assert_eq!(
+            guarded.read_single_link_member("nested.ogg", 1024),
+            Err(SecureSourceReadError::Unsafe)
+        );
+
+        assert_eq!(
+            guarded.read_single_link_member("hard-source.ogg", 1024),
+            Err(SecureSourceReadError::Unsafe)
+        );
+        assert_eq!(
+            guarded.read_single_link_member("hard-link.ogg", 1024),
+            Err(SecureSourceReadError::Unsafe)
+        );
+    }
+
+    #[test]
+    fn secure_direct_member_detects_drift_after_its_complete_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        fs::create_dir(&folder).unwrap();
+        let source = folder.join("voice.ogg");
+        let original = b"original bytes";
+        fs::write(&source, original).unwrap();
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+
+        #[cfg(unix)]
+        assert_eq!(
+            guarded.read_single_link_member_with_hook("voice.ogg", 1024, || {
+                fs::write(&source, b"different bytes with another length").unwrap();
+            }),
+            Err(SecureSourceReadError::Changed)
+        );
+
+        #[cfg(windows)]
+        assert_eq!(
+            guarded.read_single_link_member_with_hook("voice.ogg", 1024, || {
+                // The live source handle deliberately excludes write/delete sharing.
+                assert!(fs::write(&source, b"different bytes").is_err());
+            }),
+            Ok(original.to_vec())
+        );
+    }
+
+    #[test]
+    fn secure_direct_directory_stays_bound_to_the_opened_folder_and_revalidates_ambient_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        let moved = temp.path().join("moved-folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("voice.ogg"), b"original").unwrap();
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+
+        #[cfg(unix)]
+        {
+            fs::rename(&folder, &moved).unwrap();
+            fs::create_dir(&folder).unwrap();
+            fs::write(folder.join("voice.ogg"), b"replacement").unwrap();
+            assert_eq!(
+                guarded.read_single_link_member("voice.ogg", 1024),
+                Ok(b"original".to_vec())
+            );
+            assert_eq!(guarded.revalidate(), Err(SecureSourceReadError::Changed));
+        }
+
+        #[cfg(windows)]
+        {
+            // The root-to-folder handle chain excludes delete sharing while the capability lives.
+            assert!(fs::rename(&folder, &moved).is_err());
+            assert_eq!(
+                guarded.read_single_link_member("voice.ogg", 1024),
+                Ok(b"original".to_vec())
+            );
+            assert_eq!(guarded.revalidate(), Ok(()));
+            drop(guarded);
+            fs::rename(&folder, &moved).unwrap();
+        }
+    }
+
+    #[test]
+    fn secure_direct_directory_returns_only_a_canonical_path_with_the_exact_retained_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        fs::create_dir(&folder).unwrap();
+        let mut guarded = SecureDirectDirectory::open(&folder).unwrap();
+        let canonical = fs::canonicalize(&folder).unwrap();
+
+        assert_eq!(guarded.canonical_path_bound_to_identity(), Ok(canonical));
+
+        // Exercise the exact identity gate on every platform without relying on the host's
+        // rename-sharing behavior.
+        guarded.identity.file ^= 1;
+        assert_eq!(
+            guarded.canonical_path_bound_to_identity(),
+            Err(SecureSourceReadError::Changed)
+        );
+    }
+
+    #[test]
+    fn secure_direct_directory_compares_complete_retained_path_identity_chains() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let nested = parent.join("nested");
+        let sibling = temp.path().join("sibling");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir(&sibling).unwrap();
+
+        let parent_capability = SecureDirectDirectory::open(&parent).unwrap();
+        let parent_again = SecureDirectDirectory::open(&parent).unwrap();
+        let nested_capability = SecureDirectDirectory::open(&nested).unwrap();
+        let sibling_capability = SecureDirectDirectory::open(&sibling).unwrap();
+
+        assert_eq!(
+            parent_capability.overlaps_retained_path(&parent_again),
+            Ok(true)
+        );
+        assert_eq!(
+            parent_capability.overlaps_retained_path(&nested_capability),
+            Ok(true)
+        );
+        assert_eq!(
+            nested_capability.overlaps_retained_path(&parent_capability),
+            Ok(true)
+        );
+        assert_eq!(
+            parent_capability.overlaps_retained_path(&sibling_capability),
+            Ok(false)
+        );
+        assert_eq!(
+            sibling_capability.overlaps_retained_path(&nested_capability),
+            Ok(false)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_direct_directory_retains_original_overlap_classification_after_rename() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent");
+        let nested = parent.join("nested");
+        let moved = temp.path().join("moved");
+        fs::create_dir_all(&nested).unwrap();
+        let parent_capability = SecureDirectDirectory::open(&parent).unwrap();
+        let nested_capability = SecureDirectDirectory::open(&nested).unwrap();
+        assert_eq!(
+            parent_capability.overlaps_retained_path(&nested_capability),
+            Ok(true)
+        );
+
+        fs::rename(&nested, &moved).unwrap();
+
+        assert_eq!(
+            parent_capability.overlaps_retained_path(&nested_capability),
+            Ok(true)
+        );
+        assert_eq!(
+            nested_capability.overlaps_retained_path(&parent_capability),
+            Ok(true)
+        );
+        assert_eq!(
+            nested_capability.revalidate(),
+            Err(SecureSourceReadError::Changed)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secure_direct_directory_rejects_symlink_swap_between_canonicalize_and_rebind() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        let moved = temp.path().join("moved-folder");
+        let replacement = temp.path().join("replacement-folder");
+        fs::create_dir(&folder).unwrap();
+        fs::create_dir(&replacement).unwrap();
+        fs::write(folder.join("voice.ogg"), b"retained").unwrap();
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+        let canonical_before = fs::canonicalize(&folder).unwrap();
+
+        let result = guarded.canonical_path_bound_to_identity_with_hook(|canonical| {
+            assert_eq!(canonical, canonical_before.as_path());
+            fs::rename(&folder, &moved).unwrap();
+            std::os::unix::fs::symlink(&replacement, &folder).unwrap();
+        });
+
+        assert_eq!(result, Err(SecureSourceReadError::Changed));
+        assert_eq!(
+            guarded.read_single_link_member("voice.ogg", 1024),
+            Ok(b"retained".to_vec())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn secure_direct_directory_blocks_windows_rename_during_canonical_rebind() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("voice-folder");
+        let moved = temp.path().join("moved-folder");
+        fs::create_dir(&folder).unwrap();
+        let guarded = SecureDirectDirectory::open(&folder).unwrap();
+        let canonical = fs::canonicalize(&folder).unwrap();
+
+        let result = guarded.canonical_path_bound_to_identity_with_hook(|_| {
+            // The retained Windows handle chain excludes delete sharing, so the swap cannot
+            // enter the canonicalize/rebind window in the first place.
+            assert!(fs::rename(&folder, &moved).is_err());
+        });
+
+        assert_eq!(result, Ok(canonical));
     }
 
     #[test]

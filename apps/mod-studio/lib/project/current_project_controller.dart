@@ -669,6 +669,28 @@ abstract interface class ManagedRevision3VoiceTakeStatusLease {
   });
 }
 
+/// Optional authority for one read-only Voice-folder plan and one atomic
+/// project-only publication of its complete ready set. Keeping this capability
+/// separate prevents legacy leases and narrow test doubles from accidentally
+/// gaining folder-read or batch-mutation authority.
+abstract interface class ManagedRevision3VoiceBatchLease {
+  bool get supportsVoiceBatch;
+
+  void markRequiresReopenAfterVoiceBatchUncertainty();
+
+  Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+  });
+
+  Future<ManagedRevision3VoiceBatchCheckpoint> prepareAndPublishVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  });
+}
+
 /// Optional exact-current capability for atomically detaching one VoiceTake
 /// candidate. Capability discovery stays explicit because this operation can
 /// remove an otherwise-unreferenced project entity.
@@ -880,6 +902,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3NpcProfileEditLease,
         ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3VoiceBatchLease,
         ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3DialogVoiceSlotRemovalLease,
         ManagedRevision3RecoveryLease,
@@ -954,6 +977,9 @@ final class _ManagedRevision3SessionLease
   bool get supportsVoiceTakeRemoval => _session.supportsVoiceTakeRemoval;
 
   @override
+  bool get supportsVoiceBatch => _session.supportsVoiceBatch;
+
+  @override
   bool get supportsDialogVoiceSlotRemoval =>
       _session.supportsDialogVoiceSlotRemoval;
 
@@ -966,6 +992,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterVoiceTakeRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterVoiceBatchUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1356,6 +1386,28 @@ final class _ManagedRevision3SessionLease
       selected: checkpoint.selected,
     );
   }
+
+  @override
+  Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+  }) => _session.planVoiceBatchV1(
+    gameRoot: gameRoot,
+    sourceFolder: sourceFolder,
+    locale: locale,
+  );
+
+  @override
+  Future<ManagedRevision3VoiceBatchCheckpoint> prepareAndPublishVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  }) => _session.prepareAndPublishVoiceBatchV1(
+    gameRoot: gameRoot,
+    sourceFolder: sourceFolder,
+    plan: plan,
+  );
 
   @override
   Future<Revision3VoiceTakeSelectionPublication>
@@ -3787,6 +3839,179 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTakeRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Scan and seal one direct Voice source folder against the exact visible
+  /// managed checkpoint. This is read-only: it does not install CAS objects,
+  /// publish a project revision, or touch the game installation or saves.
+  Future<AuthoringRevision3VoiceBatchPlanResult>
+  planCurrentRevision3VoiceBatchV1({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice folder import is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceBatchRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceBatchStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty || sourceFolder.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice folder import needs a configured game installation and one source folder',
+      );
+    }
+    if (lease is! ManagedRevision3VoiceBatchLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project has no atomic Voice folder capability',
+      );
+    }
+    final batch = lease as ManagedRevision3VoiceBatchLease;
+    if (!batch.supportsVoiceBatch) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project has no atomic Voice folder capability',
+      );
+    }
+
+    try {
+      final plan = await batch.planVoiceBatchV1(
+        gameRoot: gameRoot,
+        sourceFolder: sourceFolder,
+        locale: locale,
+      );
+      if (plan.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          plan.projectId != expectedProjectId ||
+          plan.revision != expectedProjectRevision ||
+          plan.locale != locale ||
+          lease.head.canonicalJson != expectedHead.canonicalJson ||
+          lease.projectId != expectedProjectId ||
+          lease.projectRevision != expectedProjectRevision) {
+        batch.markRequiresReopenAfterVoiceBatchUncertainty();
+        throw const Revision3VoiceBatchRequiresReopenException();
+      }
+      return plan;
+    } catch (error, stackTrace) {
+      if (error is Revision3VoiceBatchRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          batch.markRequiresReopenAfterVoiceBatchUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceBatchRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Revalidate and publish one previously reviewed Voice folder as exactly
+  /// one next project revision. Every direct Ogg row must be ready or an exact
+  /// existing no-op; the operation offers no partial-import override.
+  Future<ManagedRevision3VoiceBatchCheckpoint>
+  importCurrentRevision3VoiceBatchV1({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required String sourceFolder,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice folder import is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceBatchRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        plan.basisHead.canonicalJson != expectedHead.canonicalJson ||
+        plan.projectId != expectedProjectId ||
+        plan.revision != expectedProjectRevision ||
+        !plan.canPrepare) {
+      throw const Revision3VoiceBatchStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty || sourceFolder.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice folder import needs a configured game installation and one source folder',
+      );
+    }
+    if (lease is! ManagedRevision3VoiceBatchLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project has no atomic Voice folder capability',
+      );
+    }
+    final batch = lease as ManagedRevision3VoiceBatchLease;
+    if (!batch.supportsVoiceBatch) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project has no atomic Voice folder capability',
+      );
+    }
+
+    try {
+      final checkpoint = await batch.prepareAndPublishVoiceBatchV1(
+        gameRoot: gameRoot,
+        sourceFolder: sourceFolder,
+        plan: plan,
+      );
+      if (checkpoint.projectId != expectedProjectId ||
+          checkpoint.projectId != lease.projectId ||
+          checkpoint.projectRevision != expectedProjectRevision + 1 ||
+          checkpoint.projectRevision != lease.projectRevision ||
+          checkpoint.head.canonicalJson != lease.head.canonicalJson ||
+          checkpoint.locale != plan.locale ||
+          checkpoint.sourceManifestSha256 != plan.sourceManifestSha256 ||
+          checkpoint.planSha256 != plan.planSha256 ||
+          checkpoint.importedCount != plan.readyCount ||
+          checkpoint.alreadyPresentCount != plan.alreadyPresentCount) {
+        batch.markRequiresReopenAfterVoiceBatchUncertainty();
+        throw const Revision3VoiceBatchRequiresReopenException();
+      }
+      return checkpoint;
+    } catch (error, stackTrace) {
+      if (error is Revision3VoiceBatchRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          batch.markRequiresReopenAfterVoiceBatchUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceBatchRequiresReopenException(),
           stackTrace,
         );
       }

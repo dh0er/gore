@@ -37,6 +37,7 @@ part '../project/revision3_project_export.dart';
 part '../project/revision3_project_history_wire.dart';
 part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
+part '../project/revision3_voice_batch.dart';
 part '../project/revision3_voice_take.dart';
 part '../project/revision3_voice_take_removal.dart';
 part '../project/revision3_voice_take_selection.dart';
@@ -1524,6 +1525,104 @@ class ModFfi {
         response,
         currentProjectJson: currentProjectJson,
         request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Scan one bounded folder of direct Ogg children and derive an exact,
+  /// read-only, all-or-nothing Voice batch plan for one canonical locale.
+  Future<AuthoringRevision3VoiceBatchPlanResult>
+  authoringStorePlanRevision3VoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_plan_revision3_voice_batch_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3Path(sourceFolder, 'sourceFolder');
+    final canonicalLocale = _authoringRevision3VoiceLocale(locale);
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3RequestString(
+      expectedHead.canonicalJson,
+      'expectedHeadJson',
+      _maxAuthoringHeadJsonBytes,
+    );
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': expectedHead.canonicalJson,
+      'game_root': gameRoot,
+      'locale': canonicalLocale,
+      'root': root,
+      'source_folder': sourceFolder,
+    });
+    try {
+      return AuthoringRevision3VoiceBatchPlanResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        currentProjectJson: currentProjectJson,
+        expectedLocale: canonicalLocale,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Re-scan and re-plan one exact ready Voice folder plan, then prepare one
+  /// unpublished project revision containing every ready recording or none.
+  Future<AuthoringRevision3VoiceBatchPreparation>
+  authoringStorePrepareRevision3VoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_batch_v1';
+    if (!plan.canPrepare) {
+      throw ArgumentError.value(plan.status, 'plan', 'must be ready');
+    }
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3Path(sourceFolder, 'sourceFolder');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    if (current.projectId != plan.projectId ||
+        current.revision != plan.revision) {
+      throw const FormatException(
+        'revision-3 Voice batch plan is not bound to the current project',
+      );
+    }
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': plan.basisHead.canonicalJson,
+      'game_root': gameRoot,
+      'locale': plan.locale,
+      'root': root,
+      'source_folder': sourceFolder,
+      'expected_source_manifest_sha256': plan.sourceManifestSha256,
+      'expected_plan_sha256': plan.planSha256,
+    });
+    try {
+      return AuthoringRevision3VoiceBatchPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        plan: plan,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

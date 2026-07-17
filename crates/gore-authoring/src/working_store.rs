@@ -2046,6 +2046,41 @@ impl WorkingProjectStore {
         })
     }
 
+    /// Validate already-owned source bytes without reopening an ambient path.
+    ///
+    /// This is the capability-oriented peer of [`Self::prepare_ogg_import_classified`]. Native
+    /// folder workflows first obtain bytes through a retained no-follow directory/file handle and
+    /// then hand ownership to this method. No Store staging or CAS object is created.
+    pub fn prepare_ogg_bytes_classified(
+        &self,
+        bytes: Vec<u8>,
+        logical_name: impl Into<String>,
+    ) -> Result<PreparedOggImport, OggImportError> {
+        self.ensure_root_safe()?;
+        let logical_name = logical_name.into();
+        self.validate_logical_name(&logical_name)?;
+        enforce_limit("Ogg bytes", bytes.len(), self.limits.max_ogg_bytes)
+            .map_err(|error| OggImportError::source(OggImportFailureContext::SourceLimit, error))?;
+        let ogg = self
+            .derive_ogg_metadata(&bytes)
+            .map_err(|error| match error {
+                WorkingStoreError::InvalidOgg(_) => {
+                    OggImportError::source(OggImportFailureContext::SourceInvalid, error)
+                }
+                _ => error.into(),
+            })?;
+        let seal = seal_bytes(&bytes);
+        Ok(PreparedOggImport {
+            bytes,
+            asset: AssetRef {
+                sha256: seal.sha256,
+                byte_len: seal.byte_len,
+                logical_name,
+            },
+            ogg,
+        })
+    }
+
     /// Consume one verified source preparation and install its exact bytes under fixed-head CAS.
     ///
     /// No external source is reopened. Installation and cleanup failures are Store failures. A

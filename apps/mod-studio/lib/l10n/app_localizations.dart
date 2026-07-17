@@ -1730,6 +1730,36 @@ abstract class AppLocalizations {
   /// **'Resolve target for any line'**
   String get managedLocalizationGlobalResolveVoice;
 
+  /// No description provided for @managedVoiceFolderImportTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Import recordings folder'**
+  String get managedVoiceFolderImportTitle;
+
+  /// No description provided for @managedVoiceFolderImportDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review a folder of named Ogg recordings, then add every ready take in one all-or-nothing project update.'**
+  String get managedVoiceFolderImportDescription;
+
+  /// No description provided for @managedVoiceFolderImportChooseFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose recordings folder'**
+  String get managedVoiceFolderImportChooseFolder;
+
+  /// No description provided for @managedVoiceFolderImportDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before importing recordings.'**
+  String get managedVoiceFolderImportDirtyBlocked;
+
+  /// No description provided for @managedVoiceFolderImportSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported {count} recordings in project revision {revision}. They are project-only Recorded takes; selection, game files, and saves were not changed.'**
+  String managedVoiceFolderImportSaved(int count, int revision);
+
   /// No description provided for @managedVoiceTakeSaved.
   ///
   /// In en, this message translates to:

@@ -102,6 +102,24 @@ final class ManagedRevision3DialogLocalizationEditStaleException
     : super('the selected dialog localization is stale for the exact project');
 }
 
+/// The reviewed Voice-folder plan no longer names the exact source/project
+/// generation owned by this session. The published project remains untouched;
+/// callers may request a fresh plan while the session itself is still exact.
+final class Revision3VoiceBatchStaleCheckpointException
+    extends ManagedProjectSessionException {
+  const Revision3VoiceBatchStaleCheckpointException()
+    : super('the reviewed Voice folder plan is stale for the exact project');
+}
+
+/// A higher layer observed an uncertain Voice-folder publication receipt and
+/// deliberately revoked this session's authoring authority. Only verified
+/// recovery or closing and reopening the project can restore it.
+final class Revision3VoiceBatchRequiresReopenException
+    extends ManagedProjectSessionException {
+  const Revision3VoiceBatchRequiresReopenException()
+    : super('the Voice folder import requires the project to be reopened');
+}
+
 /// Evidence from one compiler-only check plus the app-side post-call Store
 /// audit. No compiled artifact is retained and this receipt grants no build,
 /// runtime, deployment, or publication authority.
@@ -485,6 +503,36 @@ final class ManagedRevision3VoiceTakeCheckpoint {
   final AuthoringRevision3VoiceAsset asset;
   final AuthoringRevision3VoiceOggMetadata ogg;
   final bool assetDeduplicated;
+}
+
+/// One all-or-nothing folder import returned only after every sealed source
+/// produced one exact candidate, the single candidate project fully reopened,
+/// fixed-head CAS publication succeeded, and the published head reopened.
+/// It grants no build, deployment, runtime, game, or save authority.
+final class ManagedRevision3VoiceBatchCheckpoint {
+  ManagedRevision3VoiceBatchCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.locale,
+    required this.sourceManifestSha256,
+    required this.planSha256,
+    required this.importedCount,
+    required this.alreadyPresentCount,
+    required List<AuthoringRevision3VoiceBatchPreparationItem> items,
+  }) : items = List.unmodifiable(items);
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String locale;
+  final String sourceManifestSha256;
+  final String planSha256;
+  final int importedCount;
+  final int alreadyPresentCount;
+  final List<AuthoringRevision3VoiceBatchPreparationItem> items;
 }
 
 /// One changed or cleared VoiceSlot selection returned only after native
@@ -1071,6 +1119,29 @@ abstract interface class ManagedRevision3ProjectHistoryStore {
   });
 }
 
+/// Optional native authority for one read-only Voice folder plan and one
+/// all-or-nothing unpublished batch candidate. Older stores and unrelated
+/// fakes must opt in explicitly before they can inspect folders or mutate a
+/// project through this path.
+abstract interface class ManagedRevision3VoiceBatchStore {
+  Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  });
+
+  Future<AuthoringRevision3VoiceBatchPreparation> prepareVoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  });
+}
+
 /// Narrow capability for preparing the exact removal of one Story Draft and
 /// its uniquely-owned generated ScriptModule. Keeping it separate avoids
 /// granting deletion authority to checkpoint-only alternate stores and fakes.
@@ -1123,6 +1194,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3ReviewedDataAssetBuildStore,
         ManagedRevision3ExactSnapshotExportStore,
         ManagedRevision3ProjectHistoryStore,
+        ManagedRevision3VoiceBatchStore,
         ManagedRevision3StoryDraftRemovalStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
@@ -1422,6 +1494,38 @@ final class ModFfiManagedRevision3AuthoringStore
     source: source,
     currentProjectJson: currentProjectJson,
     request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStorePlanRevision3VoiceBatchV1(
+    root: root,
+    gameRoot: gameRoot,
+    sourceFolder: sourceFolder,
+    locale: locale,
+    currentProjectJson: currentProjectJson,
+    expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceBatchPreparation> prepareVoiceBatchV1({
+    required String root,
+    required String gameRoot,
+    required String sourceFolder,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  }) => ffi.authoringStorePrepareRevision3VoiceBatchV1(
+    root: root,
+    gameRoot: gameRoot,
+    sourceFolder: sourceFolder,
+    currentProjectJson: currentProjectJson,
+    plan: plan,
   );
 
   @override
@@ -1951,6 +2055,7 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3StoryDraftRemovalStore;
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
+  bool get supportsVoiceBatch => _store is ManagedRevision3VoiceBatchStore;
   bool get supportsDialogVoiceSlotRemoval =>
       _store is ManagedRevision3DialogVoiceSlotRemovalStore;
   bool get supportsNpcProfileEdit =>
@@ -3184,6 +3289,128 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Read and seal one exact-current, filesystem-safe Voice folder plan.
+  /// The operation is serialized with project mutation and rechecks the fixed
+  /// head after the native scan. It writes no project, game, or save data.
+  Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required String locale,
+  }) {
+    if (_store is! ManagedRevision3VoiceBatchStore) {
+      return Future<AuthoringRevision3VoiceBatchPlanResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Voice batch capability',
+        ),
+      );
+    }
+    final batchStore = _store as ManagedRevision3VoiceBatchStore;
+    return _core.readExact<AuthoringRevision3VoiceBatchPlanResult>(
+      (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice batch plan has no exact project identity',
+          );
+        }
+        final result = await batchStore.planVoiceBatchV1(
+          root: root.path,
+          gameRoot: gameRoot,
+          sourceFolder: sourceFolder,
+          locale: locale,
+          currentProjectJson: basis.projectJson,
+          expectedHead: basis.head,
+        );
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.revision != projectRevision ||
+            result.locale != locale) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice batch plan disagrees with its exact session basis',
+          );
+        }
+        return result;
+      },
+      operation: 'planVoiceBatchV1',
+      handleReadError: _core._throwRevision3VoiceBatchPlanError,
+    );
+  }
+
+  /// Revalidate and publish every ready row from one exact folder plan as one
+  /// project revision. Native preparation may retain verified immutable CAS
+  /// orphans on failure, but the visible project graph is never partial.
+  Future<ManagedRevision3VoiceBatchCheckpoint> prepareAndPublishVoiceBatchV1({
+    required String gameRoot,
+    required String sourceFolder,
+    required AuthoringRevision3VoiceBatchPlanResult plan,
+  }) {
+    if (_store is! ManagedRevision3VoiceBatchStore) {
+      return Future<ManagedRevision3VoiceBatchCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Voice batch capability',
+        ),
+      );
+    }
+    final batchStore = _store as ManagedRevision3VoiceBatchStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3VoiceBatchCheckpoint
+    >(
+      operation: 'prepareAndPublishVoiceBatchV1',
+      handlePrepareError: _core._throwRevision3VoiceBatchPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice batch transaction has no exact project identity',
+          );
+        }
+        if (plan.basisHead.canonicalJson != basis.head.canonicalJson ||
+            plan.projectId != projectId ||
+            plan.revision != projectRevision ||
+            !plan.canPrepare) {
+          throw const Revision3VoiceBatchStaleCheckpointException();
+        }
+        final prepared = await batchStore.prepareVoiceBatchV1(
+          root: root.path,
+          gameRoot: gameRoot,
+          sourceFolder: sourceFolder,
+          currentProjectJson: basis.projectJson,
+          plan: plan,
+        );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.locale != plan.locale ||
+            prepared.sourceManifestSha256 != plan.sourceManifestSha256 ||
+            prepared.planSha256 != plan.planSha256 ||
+            prepared.importedCount != plan.readyCount ||
+            prepared.alreadyPresentCount != plan.alreadyPresentCount) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice batch preparation disagrees with its exact session plan',
+          );
+        }
+        return _ManagedPreparedCheckpoint<ManagedRevision3VoiceBatchCheckpoint>(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3VoiceBatchCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            locale: prepared.locale,
+            sourceManifestSha256: prepared.sourceManifestSha256,
+            planSha256: prepared.planSha256,
+            importedCount: prepared.importedCount,
+            alreadyPresentCount: prepared.alreadyPresentCount,
+            items: prepared.items,
+          ),
+        );
+      },
+    );
+  }
 
   /// Select one existing Approved Voice take, or clear the current selection,
   /// through the project-only managed publication lane. No game root or media
@@ -5915,6 +6142,87 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceBatchPlanError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_BATCH_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceBatchPlanErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is UnsupportedError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice folder plan could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3VoiceBatchPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_BATCH_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (error.code == 'AUTHORING_REVISION3_VOICE_BATCH_PLAN_CHANGED' ||
+          error.code == 'AUTHORING_REVISION3_VOICE_BATCH_NOT_READY') {
+        Error.throwWithStackTrace(
+          const Revision3VoiceBatchStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceBatchPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is UnsupportedError ||
+        error is Revision3VoiceBatchStaleCheckpointException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice folder import could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceTargetPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -7081,6 +7389,25 @@ bool _revision3VoicePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_STATUS_INVALID',
   'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS',
 }.contains(code);
+
+bool _revision3VoiceBatchPlanErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_BATCH_REQUEST_INVALID',
+  'AUTHORING_REVISION3_VOICE_BATCH_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_BATCH_HEAD_INVALID',
+  'AUTHORING_REVISION3_VOICE_BATCH_ROOT_OVERLAP',
+  'AUTHORING_REVISION3_VOICE_BATCH_SOURCE_UNAVAILABLE',
+  'AUTHORING_REVISION3_VOICE_BATCH_SOURCE_UNSAFE',
+  'AUTHORING_REVISION3_VOICE_BATCH_SOURCE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_BATCH_SOURCE_CHANGED',
+  'AUTHORING_REVISION3_VOICE_BATCH_STORE_MISSING',
+  'AUTHORING_REVISION3_VOICE_BATCH_STORE_UNSAFE',
+  'AUTHORING_REVISION3_VOICE_BATCH_STORE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_BATCH_STORE_IO',
+  'AUTHORING_REVISION3_VOICE_BATCH_RESPONSE_LIMIT',
+}.contains(code);
+
+bool _revision3VoiceBatchPrepareErrorIsRetryable(String code) =>
+    _revision3VoiceBatchPlanErrorIsRetryable(code);
 
 bool _revision3VoiceTargetPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_TARGET_ARCHIVE_CHANGED',

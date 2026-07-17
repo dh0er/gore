@@ -15,7 +15,7 @@ treated as deployed compatibility state.
 With a managed revision-3 project open, **Localization & Voice** is a direct
 search/list/editor workspace rather than a capability-card landing page. It
 keeps project text, language editing, the guided line action, and the bounded
-Voice authoring actions in steps 1–5 together. Text/line and take-selection
+Voice authoring actions in steps 1–7 together. Text/line and take-selection
 flows are project-only. Import and installed-target resolution additionally
 need a Gothic 1 Remake installation configured in Settings. Bundle construction
 remains a separate **Build & Release** action and needs that installation too.
@@ -30,7 +30,10 @@ remains a separate **Build & Release** action and needs that installation too.
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-4. **Manage Voice takes** searches existing dialog lines, lets the author move
+4. **Import recording folder** reviews and atomically imports up to 256 direct
+   `<LocID>.ogg` children for one canonical locale. It is the bounded production
+   path described below, not a recursive or partial file importer.
+5. **Manage Voice takes** searches existing dialog lines, lets the author move
    a retained take through Draft/Recorded/Reviewed/Approved, and selects one
    Approved candidate for an existing locale slot or explicitly clears the
    current selection. The same dialog can remove one take from that exact
@@ -38,11 +41,11 @@ remains a separate **Build & Release** action and needs that installation too.
    a take shared by another slot remains there. Status and selection are
    separate saved changes. No operation rewrites or physically deletes media,
    and the workflow needs no game path.
-5. **Resolve Voice target** inspects the exact installed locale archive for one
+6. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-6. Under **Build & Release**, **Build Voice bundle** evaluates every current
+7. Under **Build & Release**, **Build Voice bundle** evaluates every current
    Voice slot and either shows all structured blockers without creating output,
    or writes one sealed voice-only bundle into a brand-new folder selected by
    the author. This is an offline build; the dialog has no deployment action.
@@ -158,6 +161,44 @@ Vorbis and Opus metadata can be retained as authored source evidence. The
 current sealed bundle lowerer is qualified only for Vorbis, so selecting an
 Opus take produces an explicit `selected_take_codec_unqualified` build blocker
 instead of guessing compatibility.
+
+## Atomic Voice folder import V1
+
+**Import recording folder** accepts one author-selected folder and one
+canonical locale. V1 scans direct children only, ignores non-Ogg children, and
+includes every case-insensitive `.ogg` name in the review. At most 256 Ogg
+entries are accepted. Each filename must have the exact `<LocID>.ogg` shape and
+resolve unambiguously to one intact project-owned dialog line/localization and
+that canonical locale; subfolders are never traversed.
+
+The plan is strictly all-or-nothing. Every included Ogg must be `ready` or
+`already_present`, and at least one must be `ready`, before import can start.
+There is no partial-success or override mode. An Ogg whose digest already exists
+in that exact line/locale slot is a read-only no-op. Every new take is created as
+`Recorded` and is never selected automatically, so approval and selection stay
+separate author decisions.
+
+Native code binds the source folder to retained no-follow directory identities,
+reads only direct regular members, detects unsafe aliases and source changes,
+and revalidates the complete scan, source bytes, root identities, exact head,
+and reviewed source/plan seals before preparing a result. Item count, individual
+and aggregate Ogg bytes, directory entries, transport, response, and
+project-size-by-item work are bounded. Store, semantic game root, and source
+folder must remain pairwise disjoint.
+
+Planning is read-only. Preparation repeats every accepted source read, may add
+verified immutable Ogg objects to CAS, applies the complete batch as one pure
+transaction, and returns one fully reopened but unpublished checkpoint. The
+serialized managed session alone may publish that checkpoint with one guarded
+fixed-head compare-and-swap and full published reopen. Source, head, or reviewed
+plan drift therefore produces no visible project-graph change and never exposes
+a partial batch; a late race may leave only verified unreferenced CAS objects.
+
+The workflow writes no game installation, save, deployment, or build output and
+grants no target, build, runtime, or media-quality authority. Normal UI copy
+shows friendly line, speaker, locale, and review state only. It does not expose
+the selected absolute path or folder name, LocIDs, entity IDs, hashes, native
+commands/codes, CAS paths, or raw native failures.
 
 ## Existing take review status
 
@@ -381,7 +422,8 @@ The managed-R3 workflow still does not provide:
 - managed-CAS take preview, recording, trimming, normalization, transcoding,
   loudness comparison, actor notes, or lineage (only the selected local
   pre-import Ogg has an author preview);
-- folder/batch import, translation/Voice coverage, CSV/XLIFF, or review queues;
+- recursive, partial, or multi-locale folder import, translation/Voice coverage,
+  CSV/XLIFF, or review queues;
 - qualified Opus output; or
 - new-member namespace/lookup proof or a sealed generation-bound path for
   adopting vanilla dialog/localization identities;

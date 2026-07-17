@@ -39,6 +39,7 @@ import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_localization_voice_workspace.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
+import 'package:gore_mod/project/revision3_voice_folder_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_production_card.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -56,6 +57,62 @@ import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
+  test(
+    'Voice folder success receipt is silent after a project switch',
+    () async {
+      final oldRoot = Directory(r'C:\mods\voice-folder-toast-old');
+      final newRoot = Directory(r'C:\mods\voice-folder-toast-new');
+      const oldProjectId = '81818181818181818181818181818181';
+      final oldProject = _FakeManagedLease(
+        root: oldRoot,
+        projectId: oldProjectId,
+        projectRevision: 8,
+        head: _head(8),
+      );
+      final newProject = _FakeManagedLease(
+        root: newRoot,
+        projectId: '82828282828282828282828282828282',
+        projectRevision: 3,
+        head: _head(3),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async =>
+            root.path == oldRoot.path ? oldProject : newProject,
+      );
+      await coordinator.openManagedRevision3(oldRoot);
+      final publication = Revision3VoiceFolderImportPublication(
+        projectId: oldProjectId,
+        projectRevision: 8,
+        projectHead: _head(8).canonicalJson,
+        checkpointToken: 'checkpoint-8',
+        planToken: 'plan-8',
+        importedCount: 1,
+      );
+
+      expect(
+        revision3VoiceFolderPublicationMatchesCurrent(
+          coordinator.state,
+          originRoot: oldRoot.path,
+          originProjectId: oldProjectId,
+          publication: publication,
+        ),
+        isTrue,
+      );
+
+      await coordinator.closeCurrent();
+      await coordinator.openManagedRevision3(newRoot);
+      expect(
+        revision3VoiceFolderPublicationMatchesCurrent(
+          coordinator.state,
+          originRoot: oldRoot.path,
+          originProjectId: oldProjectId,
+          publication: publication,
+        ),
+        isFalse,
+      );
+    },
+  );
+
   testWidgets('visible Legacy entry creates and adopts a managed R3 project', (
     tester,
   ) async {
@@ -878,6 +935,7 @@ void main() {
       await coordinator.openManagedRevision3(managed.root);
       final container = _container(
         coordinator: coordinator,
+        gamePath: r'C:\Games\G1R\Gothic1Remake.exe',
         pickManaged: (_) async {
           pickerCalls++;
           return r'C:\mods\replacement-managed-project';
@@ -887,6 +945,14 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<InkWell>(
+              find.byKey(const Key('managed-import-voice-folder')),
+            )
+            .onTap,
+        isNotNull,
+      );
       await _navigateManagedLocalizationVoice(tester);
       expect(managed.dialogLocalizationEditSeedCalls, 1);
 
@@ -920,6 +986,24 @@ void main() {
       expect(
         find.text(l10n.projectExportActionDirtyBlocked, skipOffstage: false),
         findsOneWidget,
+      );
+      expect(
+        find.text(
+          l10n.managedVoiceFolderImportDirtyBlocked,
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<InkWell>(
+              find.byKey(
+                const Key('managed-import-voice-folder'),
+                skipOffstage: false,
+              ),
+            )
+            .onTap,
+        isNull,
       );
 
       tester

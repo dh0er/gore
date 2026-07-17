@@ -79,6 +79,9 @@ import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_production_card.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_build_readiness_panel.dart';
+import 'project/revision3_voice_folder_authoring.dart';
+import 'project/revision3_voice_folder_import_dialog.dart';
+import 'project/revision3_voice_folder_managed_adapter.dart';
 import 'project/revision3_voice_take_removal_authoring.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
 import 'project/revision3_voice_take_selection_dialog.dart';
@@ -264,6 +267,22 @@ void handleMainTabEntered(WidgetRef ref, int index) {
       }
   }
 }
+
+/// A completed folder publication may notify only the exact project that
+/// opened its dialog and only after that exact receipt became current.
+bool revision3VoiceFolderPublicationMatchesCurrent(
+  CurrentProjectState current, {
+  required String originRoot,
+  required String originProjectId,
+  required Revision3VoiceFolderImportPublication publication,
+}) =>
+    current is ManagedRevision3CurrentProjectState &&
+    !current.requiresReopen &&
+    current.root.path == originRoot &&
+    current.projectId == originProjectId &&
+    current.projectId == publication.projectId &&
+    current.projectRevision == publication.projectRevision &&
+    current.head.canonicalJson == publication.projectHead;
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -1080,6 +1099,7 @@ class _HomePageState extends ConsumerState<HomePage>
           project: currentProject,
           gameRoot: gameRoot,
           recoveryBusy: _projectActionBusy,
+          managedWorkspaceDirty: _managedWorkspaceDirty,
           exportProjectCopy:
               !_projectActionBusy &&
                   !currentProject.requiresReopen &&
@@ -1273,6 +1293,66 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          planVoiceFolder: ({required sourceFolder, required locale}) {
+            final configuredGameRoot = gameRoot;
+            final latest = ref.read(currentProjectCoordinatorProvider);
+            if (configuredGameRoot == null ||
+                latest is! ManagedRevision3CurrentProjectState ||
+                latest.root.path != currentProject.root.path ||
+                latest.projectId != currentProject.projectId ||
+                latest.projectRevision != currentProject.projectRevision ||
+                latest.head.canonicalJson !=
+                    currentProject.head.canonicalJson) {
+              throw const Revision3VoiceBatchStaleCheckpointException();
+            }
+            return ref
+                .read(currentProjectCoordinatorProvider.notifier)
+                .planCurrentRevision3VoiceBatchV1(
+                  expectedRoot: currentProject.root.path,
+                  expectedProjectId: currentProject.projectId,
+                  expectedProjectRevision: currentProject.projectRevision,
+                  expectedHead: currentProject.head,
+                  gameRoot: configuredGameRoot,
+                  sourceFolder: sourceFolder,
+                  locale: locale,
+                );
+          },
+          publishVoiceFolder: ({required sourceFolder, required plan}) {
+            final configuredGameRoot = gameRoot;
+            final latest = ref.read(currentProjectCoordinatorProvider);
+            if (configuredGameRoot == null ||
+                latest is! ManagedRevision3CurrentProjectState ||
+                latest.root.path != currentProject.root.path ||
+                latest.projectId != currentProject.projectId ||
+                latest.projectRevision != currentProject.projectRevision ||
+                latest.head.canonicalJson !=
+                    currentProject.head.canonicalJson) {
+              throw const Revision3VoiceBatchStaleCheckpointException();
+            }
+            return ref
+                .read(currentProjectCoordinatorProvider.notifier)
+                .importCurrentRevision3VoiceBatchV1(
+                  expectedRoot: currentProject.root.path,
+                  expectedProjectId: currentProject.projectId,
+                  expectedProjectRevision: currentProject.projectRevision,
+                  expectedHead: currentProject.head,
+                  gameRoot: configuredGameRoot,
+                  sourceFolder: sourceFolder,
+                  plan: plan,
+                );
+          },
+          pickVoiceFolder: () => ref.read(
+            managedRevision3DirectoryPickerProvider,
+          )(l10n.managedVoiceFolderImportChooseFolder),
+          isVoiceFolderPublicationCurrent: (publication) {
+            final latest = ref.read(currentProjectCoordinatorProvider);
+            return revision3VoiceFolderPublicationMatchesCurrent(
+              latest,
+              originRoot: currentProject.root.path,
+              originProjectId: currentProject.projectId,
+              publication: publication,
+            );
+          },
           publishVoiceTakeSelection:
               ({
                 required expectedProjectId,
@@ -1929,6 +2009,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.project,
     required this.gameRoot,
     required this.recoveryBusy,
+    required this.managedWorkspaceDirty,
     required this.exportProjectCopy,
     required this.exportProjectCopyDisabledReason,
     required this.recoverProject,
@@ -1947,6 +2028,10 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishDialogLocalizationEdit,
     required this.publishDialogLine,
     required this.publishVoiceTake,
+    required this.planVoiceFolder,
+    required this.publishVoiceFolder,
+    required this.pickVoiceFolder,
+    required this.isVoiceFolderPublicationCurrent,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTakeStatus,
     required this.publishVoiceTakeRemoval,
@@ -1991,6 +2076,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
   final bool recoveryBusy;
+  final bool managedWorkspaceDirty;
   final VoidCallback? exportProjectCopy;
   final String? exportProjectCopyDisabledReason;
   final ManagedRevision3RecoveryAction recoverProject;
@@ -2011,6 +2097,11 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   publishDialogLocalizationEdit;
   final Revision3DialogLineEntryTechnicalPublisher publishDialogLine;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
+  final Revision3VoiceFolderNativePlanner planVoiceFolder;
+  final Revision3VoiceFolderNativePublisher publishVoiceFolder;
+  final Revision3VoiceFolderDirectoryPicker pickVoiceFolder;
+  final bool Function(Revision3VoiceFolderImportPublication publication)
+  isVoiceFolderPublicationCurrent;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
   final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
@@ -2087,6 +2178,12 @@ class _ManagedRevision3ProjectViewState
       widget.publishDialogLine;
   Revision3VoiceTechnicalPublisher get publishVoiceTake =>
       widget.publishVoiceTake;
+  Revision3VoiceFolderNativePlanner get planVoiceFolder =>
+      widget.planVoiceFolder;
+  Revision3VoiceFolderNativePublisher get publishVoiceFolder =>
+      widget.publishVoiceFolder;
+  Revision3VoiceFolderDirectoryPicker get pickVoiceFolder =>
+      widget.pickVoiceFolder;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
       widget.publishVoiceTakeSelection;
   Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
@@ -3079,6 +3176,9 @@ class _ManagedRevision3ProjectViewState
           onAddVoiceTake: gameConfigured && intactVoiceLine
               ? () => _openVoiceWizard(context)
               : null,
+          onImportVoiceFolder: gameConfigured && !project.requiresReopen
+              ? () => _openVoiceFolderImport(context)
+              : null,
           onManageVoiceTakes: intactVoiceLine
               ? () => _openVoiceTakeSelection(context)
               : null,
@@ -3333,6 +3433,26 @@ class _ManagedRevision3ProjectViewState
           enabledFor: voiceAvailable,
           onPressed: requiresGame(_openVoiceWizard),
         ),
+        Revision3ProjectDashboardAction(
+          id: 'import-voice-folder',
+          controlKey: const Key('managed-import-voice-folder'),
+          icon: Icons.drive_folder_upload_outlined,
+          title: l10n.managedVoiceFolderImportTitle,
+          description: l10n.managedVoiceFolderImportDescription,
+          disabledReason: !gameConfigured
+              ? l10n.managedDashboardMissingGameDescription
+              : widget.managedWorkspaceDirty
+              ? l10n.managedVoiceFolderImportDirtyBlocked
+              : project.requiresReopen
+              ? l10n.managedLocalizationReopen
+              : null,
+          onPressed:
+              gameConfigured &&
+                  !widget.managedWorkspaceDirty &&
+                  !project.requiresReopen
+              ? () => unawaited(_openVoiceFolderImport(context))
+              : null,
+        ),
       ],
       toolActions: [
         Revision3ProjectDashboardAction(
@@ -3490,6 +3610,51 @@ class _ManagedRevision3ProjectViewState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(l10n.managedVoiceTakeSaved(publication.projectRevision)),
+      ),
+    );
+  }
+
+  Future<void> _openVoiceFolderImport(BuildContext context) async {
+    if (gameRoot == null || project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final adapter = Revision3VoiceFolderManagedAdapter(
+      expectedProjectId: project.projectId,
+      expectedProjectRevision: project.projectRevision,
+      expectedProjectHead: project.head.canonicalJson,
+      loadContentIndex: loadContentIndex,
+      planNative: planVoiceFolder,
+      publishNative: publishVoiceFolder,
+    );
+    final localeName = l10n.localeName;
+    final initialLocale = revision3VoiceLocaleIsCanonical(localeName)
+        ? localeName
+        : '';
+    final publication = await showRevision3VoiceFolderImportDialog(
+      context: context,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectHead: project.head.canonicalJson,
+      checkpointToken: adapter.expectedCheckpointToken,
+      service: adapter.service,
+      copy: localeName.startsWith('de')
+          ? const Revision3VoiceFolderImportDialogCopy.german()
+          : const Revision3VoiceFolderImportDialogCopy.english(),
+      pickFolder: pickVoiceFolder,
+      initialLocale: initialLocale,
+    );
+    if (publication == null ||
+        !context.mounted ||
+        !widget.isVoiceFolderPublicationCurrent(publication)) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          l10n.managedVoiceFolderImportSaved(
+            publication.importedCount,
+            publication.projectRevision,
+          ),
+        ),
       ),
     );
   }
@@ -4213,6 +4378,7 @@ Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
     addVoiceLabel: usePreciseGlobalVoiceLabels
         ? l10n.managedLocalizationGlobalAddVoice
         : l10n.managedActionAddVoiceTakeTitle,
+    importVoiceFolderLabel: l10n.managedVoiceFolderImportTitle,
     manageVoiceLabel: usePreciseGlobalVoiceLabels
         ? l10n.managedLocalizationGlobalManageVoice
         : l10n.managedActionManageVoiceTakesTitle,

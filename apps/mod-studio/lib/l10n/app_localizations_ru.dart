@@ -969,6 +969,25 @@ class AppLocalizationsRu extends AppLocalizations {
       'Resolve target for any line';
 
   @override
+  String get managedVoiceFolderImportTitle => 'Import recordings folder';
+
+  @override
+  String get managedVoiceFolderImportDescription =>
+      'Review a folder of named Ogg recordings, then add every ready take in one all-or-nothing project update.';
+
+  @override
+  String get managedVoiceFolderImportChooseFolder => 'Choose recordings folder';
+
+  @override
+  String get managedVoiceFolderImportDirtyBlocked =>
+      'Save or discard the open localization edits before importing recordings.';
+
+  @override
+  String managedVoiceFolderImportSaved(int count, int revision) {
+    return 'Imported $count recordings in project revision $revision. They are project-only Recorded takes; selection, game files, and saves were not changed.';
+  }
+
+  @override
   String managedVoiceTakeSaved(int revision) {
     return 'Voice take saved in project revision $revision. It is saved to the project only and is not yet usable in game.';
   }

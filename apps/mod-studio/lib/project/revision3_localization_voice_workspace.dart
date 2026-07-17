@@ -106,6 +106,7 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
     required this.invalidInputMessage,
     required this.genericFailureMessage,
     required this.voiceActionFailedMessage,
+    this.importVoiceFolderLabel = 'Import recordings folder',
   });
 
   const Revision3LocalizationVoiceWorkspaceCopy.english()
@@ -229,6 +230,7 @@ final class Revision3LocalizationVoiceWorkspaceCopy {
   final String invalidInputMessage;
   final String genericFailureMessage;
   final String voiceActionFailedMessage;
+  final String importVoiceFolderLabel;
 }
 
 /// Direct, responsive project-text workspace.
@@ -248,6 +250,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     this.voiceProductionCopy = Revision3VoiceProductionCardCopy.english,
     this.onCreateDialogLine,
     this.onAddVoiceTake,
+    this.onImportVoiceFolder,
     this.onManageVoiceTakes,
     this.onResolveVoiceTarget,
     this.onAddVoiceTakeFor,
@@ -274,6 +277,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Revision3VoiceProductionCardCopy voiceProductionCopy;
   final Revision3LocalizationVoiceAction? onCreateDialogLine;
   final Revision3LocalizationVoiceAction? onAddVoiceTake;
+  final Revision3LocalizationVoiceAction? onImportVoiceFolder;
   final Revision3LocalizationVoiceAction? onManageVoiceTakes;
   final Revision3LocalizationVoiceAction? onResolveVoiceTarget;
   final Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor;
@@ -1256,6 +1260,16 @@ class _Revision3LocalizationVoiceWorkspaceState
                     () => widget.onAddVoiceTake,
                     requiresVoiceAuthority: true,
                   ),
+            onImportVoiceFolder:
+                widget.onImportVoiceFolder == null ||
+                    _loadingCatalog ||
+                    _saving ||
+                    _runningExternalAction
+                ? null
+                : () => _runExternalAction(
+                    () => widget.onImportVoiceFolder,
+                    requiresVoiceAuthority: true,
+                  ),
             onManageVoiceTakes:
                 widget.onManageVoiceTakes == null ||
                     _loadingCatalog ||
@@ -1920,7 +1934,12 @@ class _Revision3LocalizationVoiceWorkspaceState
       error is! Revision3DialogLocalizationEditRequiresReopenException;
 }
 
-enum _WorkspaceHeaderAction { addVoice, manageVoice, resolveVoice }
+enum _WorkspaceHeaderAction {
+  addVoice,
+  importVoiceFolder,
+  manageVoice,
+  resolveVoice,
+}
 
 class _WorkspaceHeader extends StatelessWidget {
   const _WorkspaceHeader({
@@ -1928,6 +1947,7 @@ class _WorkspaceHeader extends StatelessWidget {
     required this.notice,
     required this.onCreateDialogLine,
     required this.onAddVoiceTake,
+    required this.onImportVoiceFolder,
     required this.onManageVoiceTakes,
     required this.onResolveVoiceTarget,
     required this.dense,
@@ -1938,6 +1958,7 @@ class _WorkspaceHeader extends StatelessWidget {
   final String? notice;
   final Revision3LocalizationVoiceAction? onCreateDialogLine;
   final Revision3LocalizationVoiceAction? onAddVoiceTake;
+  final Revision3LocalizationVoiceAction? onImportVoiceFolder;
   final Revision3LocalizationVoiceAction? onManageVoiceTakes;
   final Revision3LocalizationVoiceAction? onResolveVoiceTarget;
   final bool dense;
@@ -1959,6 +1980,12 @@ class _WorkspaceHeader extends StatelessWidget {
         icon: Icons.mic_none_outlined,
         label: copy.addVoiceLabel,
         action: onAddVoiceTake,
+      ),
+      _HeaderAction(
+        key: const Key('revision3-localization-import-voice-folder'),
+        icon: Icons.drive_folder_upload_outlined,
+        label: copy.importVoiceFolderLabel,
+        action: onImportVoiceFolder,
       ),
       _HeaderAction(
         key: const Key('revision3-localization-manage-voice'),
@@ -1994,6 +2021,8 @@ class _WorkspaceHeader extends StatelessWidget {
                     onSelected: (selection) {
                       final action = switch (selection) {
                         _WorkspaceHeaderAction.addVoice => onAddVoiceTake,
+                        _WorkspaceHeaderAction.importVoiceFolder =>
+                          onImportVoiceFolder,
                         _WorkspaceHeaderAction.manageVoice =>
                           onManageVoiceTakes,
                         _WorkspaceHeaderAction.resolveVoice =>
@@ -2010,6 +2039,15 @@ class _WorkspaceHeader extends StatelessWidget {
                           label: copy.addVoiceLabel,
                           action: onAddVoiceTake,
                         ),
+                      _overflowAction(
+                        key: const Key(
+                          'revision3-localization-import-voice-folder',
+                        ),
+                        value: _WorkspaceHeaderAction.importVoiceFolder,
+                        icon: Icons.drive_folder_upload_outlined,
+                        label: copy.importVoiceFolderLabel,
+                        action: onImportVoiceFolder,
+                      ),
                       _overflowAction(
                         key: const Key('revision3-localization-manage-voice'),
                         value: _WorkspaceHeaderAction.manageVoice,
