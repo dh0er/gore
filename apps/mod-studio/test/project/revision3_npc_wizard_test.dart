@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 
@@ -12,6 +13,8 @@ const _npcId = '22222222222222222222222222222222';
 const _moduleId = '33333333333333333333333333333333';
 const _asghanCatalogId = 'g1r:npc:om_grd_asghan_263';
 const _viperCatalogId = 'g1r:npc:oc_grd_viper_253';
+
+const _germanCopy = Revision3NpcWizardCopy.german;
 
 void main() {
   testWidgets('valid initial archetype can publish without opening picker', (
@@ -456,6 +459,132 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
   });
+
+  testWidgets(
+    'injected German copy owns the normal path and discard boundary',
+    (tester) async {
+      await _setSurface(tester);
+      await _openWizard(
+        tester,
+        copy: _germanCopy,
+        initialCatalogId: _asghanCatalogId,
+        loadCatalog: (_) async => _catalog(),
+        chooseArchetype: (_, _) async => _viperCatalogId,
+        publish: ({required gameRoot, required input}) async => _publication(),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(_germanCopy.title), findsOneWidget);
+      expect(find.text(_germanCopy.basicsTitle), findsOneWidget);
+      expect(find.text(_germanCopy.displayNameLabel), findsOneWidget);
+      expect(find.text(_germanCopy.offlineDraftLabel), findsOneWidget);
+      expect(find.text(_germanCopy.buildBlockedLabel), findsOneWidget);
+      expect(find.text(_germanCopy.runtimeUnqualifiedLabel), findsOneWidget);
+      expect(find.text(_germanCopy.notSpawnedLabel), findsOneWidget);
+      expect(find.text(_germanCopy.capabilityDescription), findsOneWidget);
+      final boundarySemantics = tester.widget<Semantics>(
+        find
+            .ancestor(
+              of: find.byKey(const Key('revision3-npc-boundary')),
+              matching: find.byType(Semantics),
+            )
+            .first,
+      );
+      expect(
+        boundarySemantics.properties.label,
+        _germanCopy.capabilitySemanticsLabel,
+      );
+      expect(find.text(Revision3NpcWizardCopy.english.title), findsNothing);
+      expect(
+        find.text(Revision3NpcWizardCopy.english.cancelLabel),
+        findsNothing,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Torwache',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+      await tester.pumpAndSettle();
+
+      expect(find.text(_germanCopy.discardTitle), findsOneWidget);
+      expect(find.text(_germanCopy.discardDescription), findsOneWidget);
+      expect(find.text(_germanCopy.keepEditingLabel), findsOneWidget);
+      expect(find.text(_germanCopy.discardLabel), findsOneWidget);
+    },
+  );
+
+  testWidgets('compact 360 logical pixels at 200 percent remains scrollable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await _openWizard(
+      tester,
+      copy: _germanCopy,
+      textScaler: const TextScaler.linear(2),
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) async => _catalog(),
+      chooseArchetype: (_, _) async => _viperCatalogId,
+      publish: ({required gameRoot, required input}) async => _publication(),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+    expect(find.byType(SingleChildScrollView), findsWidgets);
+    final choose = find.byKey(const Key('revision3-npc-choose-archetype'));
+    await tester.ensureVisible(choose);
+    await tester.pump();
+    final chooseRect = tester.getRect(choose);
+    expect(chooseRect.left, greaterThanOrEqualTo(0));
+    expect(chooseRect.right, lessThanOrEqualTo(360));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('repeated submit activation stays single-flight', (tester) async {
+    await _setSurface(tester);
+    final freshCatalog = Completer<Revision3NpcCatalog>();
+    final publication = Completer<Revision3NpcDraftPublication>();
+    var loadCalls = 0;
+    var publishCalls = 0;
+    await _openWizard(
+      tester,
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) {
+        loadCalls += 1;
+        return loadCalls == 1 ? Future.value(_catalog()) : freshCatalog.future;
+      },
+      chooseArchetype: (_, _) async => _viperCatalogId,
+      publish: ({required gameRoot, required input}) {
+        publishCalls += 1;
+        return publication.future;
+      },
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('revision3-npc-display-name')),
+      'North Gate Guard',
+    );
+
+    final submit = find.byKey(const Key('revision3-npc-submit'));
+    await tester.tap(submit);
+    await tester.tap(submit);
+    await tester.pump();
+    expect(loadCalls, 2);
+    expect(publishCalls, 0);
+    expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+
+    freshCatalog.complete(_catalog());
+    await tester.pump();
+    expect(publishCalls, 1);
+    await tester.tap(submit);
+    await tester.pump();
+    expect(publishCalls, 1);
+
+    publication.complete(_publication());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+  });
 }
 
 Future<void> _setSurface(WidgetTester tester) =>
@@ -467,10 +596,16 @@ Future<void> _openWizard(
   required Revision3NpcDraftPublisher publish,
   required Revision3NpcArchetypeChooser chooseArchetype,
   String? initialCatalogId,
+  Revision3NpcWizardCopy copy = Revision3NpcWizardCopy.english,
+  TextScaler textScaler = TextScaler.noScaling,
   ValueChanged<Revision3NpcDraftPublication?>? onResult,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+        child: child!,
+      ),
       home: Builder(
         builder: (context) => Scaffold(
           body: Center(
@@ -484,6 +619,7 @@ Future<void> _openWizard(
                     publish: publish,
                     chooseArchetype: chooseArchetype,
                     initialCatalogId: initialCatalogId,
+                    copy: copy,
                   ),
                 );
                 onResult?.call(result);
@@ -522,6 +658,9 @@ Revision3NpcCatalog _catalog({bool onlyViper = false}) => Revision3NpcCatalog(
 Revision3NpcDraftPublication _publication() => Revision3NpcDraftPublication(
   projectId: _projectId,
   projectRevision: 8,
+  head: AuthoringWorkingHead.fromCanonicalJson(
+    '{"store_format":1,"snapshot":{"byte_len":9,"sha256":"0000000000000000000000000000000000000000000000000000000000000008"}}',
+  ),
   npcId: _npcId,
   scriptModuleId: _moduleId,
 );

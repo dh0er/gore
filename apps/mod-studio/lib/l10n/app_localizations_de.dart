@@ -1328,6 +1328,11 @@ class AppLocalizationsDe extends AppLocalizations {
       'Erstelle anhand verifizierter Nachweise aus dem installierten Spiel einen begrenzten Offline-NPC-Entwurf.';
 
   @override
+  String managedNpcDraftSaved(int projectRevision) {
+    return 'Charakterentwurf in Projektrevision $projectRevision gespeichert. Er bleibt für Builds gesperrt, ist für die Laufzeit ungeprüft und wird nicht gespawnt.';
+  }
+
+  @override
   String get managedActionNewQuestTitle => 'Neue Quest';
 
   @override
@@ -2564,6 +2569,18 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedStoryWorkbenchEditNpcProfile =>
       'Name & Archetyp bearbeiten';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle =>
+      'Nächster Schritt: Dialog & Sprachausgabe';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription =>
+      'Nur Entwurf: Fahre mit Begrüßungszeilen, Text und Sprachausgabe fort. Dabei werden nur Projektinhalte verknüpft; es entsteht kein spielbarer Dialog und kein Laufzeitnachweis.';
+
+  @override
+  String get managedStoryWorkbenchContinueToNpcDialogVoice =>
+      'Weiter zu Dialog & Sprachausgabe';
 
   @override
   String get managedStoryWorkbenchNpcDisplayNameLabel => 'NPC-Name';

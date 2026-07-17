@@ -1317,6 +1317,11 @@ class AppLocalizationsIt extends AppLocalizations {
       'Crea una bozza di PNG offline e circoscritta da dati verificati del gioco installato.';
 
   @override
+  String managedNpcDraftSaved(int projectRevision) {
+    return 'Character draft saved in project revision $projectRevision. It remains build-blocked, runtime-unqualified, and is not spawned.';
+  }
+
+  @override
   String get managedActionNewQuestTitle => 'Nuova missione';
 
   @override
@@ -2553,6 +2558,18 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchEditNpcProfile => 'Edit name & archetype';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle =>
+      'Next step: Dialog & Voice';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription =>
+      'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.';
+
+  @override
+  String get managedStoryWorkbenchContinueToNpcDialogVoice =>
+      'Continue to Dialog & Voice';
 
   @override
   String get managedStoryWorkbenchNpcDisplayNameLabel => 'Character name';

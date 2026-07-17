@@ -173,6 +173,21 @@ playability authority is granted. Nonempty R3 snapshots require a Studio/Core
 version that understands this additive field; older closed-schema builds may
 reject them rather than silently discard it.
 
+Character Draft continuation addendum (2026-07-17): normal managed-R3 NPC
+creation no longer ends on the launching Home, Story, Base-game, or cross-source
+search surface. After publication Studio verifies the fully reopened root,
+project ID, revision, and canonical head, mounts **Story**, selects the exact
+new NPC, and opens its existing **Dialog & Voice** greeting editor. Cancellation
+publishes nothing; project switches, head drift, reopen-required state, or a
+disposed owner stop the handoff rather than guessing. The wizard's complete
+visible copy is injectable, has English and German production variants, hides
+technical identities, remains usable at 360 logical pixels and 200% text
+scaling, and keeps publication single-flight. The NPC Profile offers a direct
+next-step card into the same owned dialog editor. This connects proven
+authoring surfaces only; it adds no automatic greeting mutation, second editor,
+compiler, build, deployment, spawn, game/save write, runtime, or playable-NPC
+claim.
+
 Story status addendum (2026-07-16): the managed-R3 **Story** destination is now
 a direct workspace rather than a card page that sends authors to Content. It
 loads the exact-current project index, projects only NPC and Quest Drafts, and

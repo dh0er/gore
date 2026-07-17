@@ -139,6 +139,24 @@ NPC/`ScriptModule` pair through guarded fixed-head byte CAS, fully reopens the
 published checkpoint, and refreshes the visible project revision and content
 library.
 
+The normal managed-R3 create routes now continue from that publication instead
+of leaving the author on the page that launched the wizard. Studio first
+rebinds the fully reopened root, project ID, revision, and canonical head, then
+mounts **Story**, selects the exact new NPC, and opens its existing **Dialog &
+Voice** greeting surface. Cancel publishes nothing and stays on the original
+page; project switches, head drift, or reopen-required state stop the handoff
+without selecting a same-ID entity from another checkpoint. The same
+continuation is used by the project Create command, Story creation, and the
+Base-game/search starters.
+
+All visible wizard, validation, picker, safety, and discard copy is injected;
+English and German production copy are complete. Its archetype row and dialog
+remain scrollable at 360 logical pixels and 200% text scaling. The selected
+NPC's Profile also offers one direct next step into the same owned **Dialog &
+Voice** panel. This is navigation and authoring UX only: it adds no second
+editor, mutation, compiler, spawn, build, deployment, game-write, or runtime
+authority.
+
 This is deliberately a logical-clone **Draft** only. The wizard does not compile,
 build, deploy, spawn, write game files, change a save, or claim gameplay
 behavior. Visuals, faction, stats, inventory, routine, dialog, quests, and world

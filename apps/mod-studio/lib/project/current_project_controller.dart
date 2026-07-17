@@ -1499,6 +1499,7 @@ final class _ManagedRevision3SessionLease
     return Revision3NpcDraftPublication(
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
+      head: checkpoint.head,
       npcId: checkpoint.npcId,
       scriptModuleId: checkpoint.scriptModuleId,
     );
@@ -4042,7 +4043,9 @@ final class CurrentProjectCoordinator
       if (publication.projectId != expectedProjectId ||
           publication.projectId != lease.projectId ||
           publication.projectRevision != expectedProjectRevision + 1 ||
-          publication.projectRevision != lease.projectRevision) {
+          publication.projectRevision != lease.projectRevision ||
+          publication.head.canonicalJson == expectedHead.canonicalJson ||
+          publication.head.canonicalJson != lease.head.canonicalJson) {
         throw const CurrentProjectCoordinatorException(
           'published NPC Draft disagrees with the current managed checkpoint',
         );

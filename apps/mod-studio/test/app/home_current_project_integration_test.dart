@@ -69,6 +69,10 @@ const _homeNpcGreetingModuleId = '89898989898989898989898989898989';
 const _homeQuestOpeningRecipeQuestId = '67676767676767676767676767676767';
 const _homeQuestOpeningRecipeModuleId = '68686868686868686868686868686868';
 const _homeQuestOpeningRecipeTechnicalId = 'GORE_QUEST_OPENING_RECIPE';
+const _homeCreatedNpcId = '29292929292929292929292929292929';
+const _homeCreatedNpcModuleId = '39393939393939393939393939393939';
+const _homeCreatedNpcUniqueName = 'GORE_NORTH_GATE_GUARD';
+const _homeCreatedNpcModuleNamespace = 'GoreMods.Npcs.NorthGateGuard';
 
 void main() {
   test(
@@ -264,6 +268,7 @@ void main() {
           return Revision3NpcDraftPublication(
             projectId: lease.projectId,
             projectRevision: 1,
+            head: lease.head,
             npcId: '10101010101010101010101010101010',
             scriptModuleId: '20202020202020202020202020202020',
           );
@@ -1579,6 +1584,288 @@ void main() {
     expect(find.text('DA_Asghan'), findsWidgets);
     expect(find.text('DA_Viper'), findsNothing);
   });
+
+  testWidgets(
+    'Base game NPC starting point publishes and opens exact Story Dialog Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_base_game_npc_handoff',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = 'a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7';
+      var baseCatalogLoads = 0;
+      var npcCatalogLoads = 0;
+      var chooserCalls = 0;
+      Revision3NpcDraftPublication? published;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\base-game-npc-handoff'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => lease.projectRevision == 7
+            ? _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              )
+            : _createdNpcContentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+                npcId: _homeCreatedNpcId,
+                moduleId: _homeCreatedNpcModuleId,
+                displayName: 'North Gate Guard',
+              ),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+          expect(input.displayName, 'North Gate Guard');
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return published = Revision3NpcDraftPublication(
+            projectId: projectId,
+            projectRevision: 8,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadBaseGameCatalog: (_) async {
+          baseCatalogLoads++;
+          return _baseGameCatalog();
+        },
+        loadNpcCatalog: (_) async {
+          npcCatalogLoads++;
+          return _npcCatalog();
+        },
+        chooseNpcArchetype: (_, _) async {
+          chooserCalls++;
+          return 'g1r:npc:om_grd_viper_000';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedBaseGameContent(tester);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+        reason: 'Story stays lazy until the exact Base game action publishes',
+      );
+
+      final npcStart = find.byKey(
+        const ValueKey((
+          'revision3-base-game-create-npc',
+          'g1r:npc:om_grd_asghan_263',
+        )),
+      );
+      await tester.ensureVisible(npcStart);
+      await tester.tap(npcStart);
+      await tester.pumpAndSettle();
+
+      final wizard = find.byKey(const Key('revision3-npc-wizard'));
+      expect(wizard, findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-npc-selected-archetype-label')),
+        findsOneWidget,
+      );
+      expect(find.text('Asghan guard'), findsWidgets);
+      expect(
+        find.descendant(
+          of: wizard,
+          matching: find.text('g1r:npc:om_grd_asghan_263'),
+        ),
+        findsNothing,
+      );
+      expect(chooserCalls, 0, reason: 'the exact Base game row is preselected');
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'North Gate Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+
+      expect(baseCatalogLoads, 1);
+      expect(npcCatalogLoads, 2);
+      expect(chooserCalls, 0);
+      expect(managed.npcPublishCalls, 1);
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(3));
+      expect(published?.projectId, projectId);
+      expect(published?.projectRevision, 8);
+      expect(published?.head.canonicalJson, _head(8).canonicalJson);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      _expectExactCreatedNpcStoryDialogVoice(tester);
+    },
+  );
+
+  testWidgets(
+    'Global Search Base NPC publishes and opens exact Story Dialog Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_global_search_npc_handoff',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = 'b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8';
+      var baseCatalogLoads = 0;
+      var npcCatalogLoads = 0;
+      var chooserCalls = 0;
+      Revision3NpcDraftPublication? published;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\global-search-npc-handoff'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => lease.projectRevision == 7
+            ? _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              )
+            : _createdNpcContentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+                npcId: _homeCreatedNpcId,
+                moduleId: _homeCreatedNpcModuleId,
+                displayName: 'North Gate Guard',
+              ),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+          expect(input.displayName, 'North Gate Guard');
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return published = Revision3NpcDraftPublication(
+            projectId: projectId,
+            projectRevision: 8,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+        onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          return _homeDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadBaseGameCatalog: (_) async {
+          baseCatalogLoads++;
+          return _baseGameCatalog();
+        },
+        loadNpcCatalog: (_) async {
+          npcCatalogLoads++;
+          return _npcCatalog();
+        },
+        chooseNpcArchetype: (_, _) async {
+          chooserCalls++;
+          return 'g1r:npc:om_grd_viper_000';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-scoped-content-browser-nav-all-sources'),
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-global-content-search-field')),
+        'asghan',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-global-content-search-submit')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+        reason: 'Story stays lazy until the exact Search all action publishes',
+      );
+      expect(baseCatalogLoads, 1);
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+
+      final createNpc = find.byKey(
+        const ValueKey<Object>((
+          'global-search-action',
+          Revision3GlobalContentActionKind.createBaseNpcDraft,
+          'g1r:npc:om_grd_asghan_263',
+        )),
+      );
+      await tester.ensureVisible(createNpc);
+      await tester.tap(createNpc);
+      await tester.pumpAndSettle();
+
+      final wizard = find.byKey(const Key('revision3-npc-wizard'));
+      expect(wizard, findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-npc-selected-archetype-label')),
+        findsOneWidget,
+      );
+      expect(find.text('Asghan guard'), findsWidgets);
+      expect(
+        find.descendant(
+          of: wizard,
+          matching: find.text('g1r:npc:om_grd_asghan_263'),
+        ),
+        findsNothing,
+      );
+      expect(
+        chooserCalls,
+        0,
+        reason: 'the exact Search all result is preselected',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'North Gate Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+
+      expect(baseCatalogLoads, 1);
+      expect(npcCatalogLoads, 2);
+      expect(chooserCalls, 0);
+      expect(managed.npcPublishCalls, 1);
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(4));
+      expect(published?.projectId, projectId);
+      expect(published?.projectRevision, 8);
+      expect(published?.head.canonicalJson, _head(8).canonicalJson);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      _expectExactCreatedNpcStoryDialogVoice(tester);
+    },
+  );
 
   testWidgets(
     'canonical managed workspace hosts real tools with honest availability',
@@ -4647,7 +4934,7 @@ void main() {
   );
 
   testWidgets(
-    'visible managed NPC wizard publishes and reloads the new revision',
+    'project Create mounts Story and opens the exact new NPC Dialog Voice',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final gameRoot = Directory.systemTemp.createTempSync('gore_r3_npc_game');
@@ -4662,10 +4949,18 @@ void main() {
         projectId: projectId,
         projectRevision: 7,
         head: _head(7),
-        contentIndexBuilder: (lease) => _contentIndex(
-          projectId: lease.projectId,
-          revision: lease.projectRevision,
-        ),
+        contentIndexBuilder: (lease) => lease.projectRevision == 7
+            ? _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              )
+            : _createdNpcContentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+                npcId: _homeCreatedNpcId,
+                moduleId: _homeCreatedNpcModuleId,
+                displayName: 'North Gate Guard',
+              ),
         onNpcPublish: (lease, requestedGameRoot, input) {
           expect(requestedGameRoot, gameRoot.path);
           expect(input.displayName, 'North Gate Guard');
@@ -4675,8 +4970,9 @@ void main() {
           return Revision3NpcDraftPublication(
             projectId: projectId,
             projectRevision: 8,
-            npcId: '29292929292929292929292929292929',
-            scriptModuleId: '39393939393939393939393939393939',
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
           );
         },
       );
@@ -4699,15 +4995,14 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
-      final createButton = find.byKey(
-        const Key('revision3-story-workspace-create-npc'),
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+        reason: 'Story must still be lazy before the global Create command',
       );
-      expect(createButton, findsOneWidget);
-      expect(tester.widget<FilledButton>(createButton).onPressed, isNotNull);
-      expect(managed.contentReadCalls, 2);
-
-      await tester.tap(createButton);
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-project-create-npc')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
@@ -4724,20 +5019,328 @@ void main() {
 
       expect(catalogLoads, 2);
       expect(managed.npcPublishCalls, 1);
-      expect(managed.contentReadCalls, 4);
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(3));
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
-      await _expandManagedTechnicalDetails(tester);
-      expect(find.text('8'), findsWidgets);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsOneWidget,
+      );
+      final selectedNpc = find.byKey(
+        const Key('revision3-story-workspace-entity-$_homeCreatedNpcId'),
+      );
+      expect(selectedNpc, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedNpc).selected, isTrue);
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-$_homeCreatedNpcId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-npc-dialog-voice-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-npc-greeting-new-line')),
+        findsOneWidget,
+      );
       expect(
         find.textContaining(
           'could not be selected at its exact project revision',
         ),
-        findsOneWidget,
+        findsNothing,
       );
+      expect(find.textContaining('Character draft saved'), findsOneWidget);
       expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
       expect(find.text('Build / Deploy'), findsNothing);
+      for (final technicalIdentity in const <String>[
+        _homeCreatedNpcId,
+        _homeCreatedNpcModuleId,
+        _homeCreatedNpcUniqueName,
+        _homeCreatedNpcModuleNamespace,
+      ]) {
+        expect(find.text(technicalIdentity), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'cancelling project Create NPC stays on Home and publishes none',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_cancel_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\npc-authoring-cancel'),
+        projectId: '20202020202020202020202020202020',
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-project-create-npc')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+      await tester.pumpAndSettle();
+
+      expect(managed.npcPublishCalls, 0);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        7,
+      );
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-home')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'project switch after NPC publication never follows the old Story link',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_project_switch_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final oldRoot = Directory(r'C:\mods\npc-project-switch-old');
+      final newRoot = Directory(r'C:\mods\npc-project-switch-new');
+      final switchCompleted = Completer<void>();
+      late CurrentProjectCoordinator coordinator;
+      final oldManaged = _FakeManagedLease(
+        root: oldRoot,
+        projectId: '21212121212121212121212121212121',
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onNpcPublish: (lease, _, _) {
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          unawaited(
+            (() async {
+              try {
+                await coordinator.closeCurrent();
+                await coordinator.openManagedRevision3(newRoot);
+                switchCompleted.complete();
+              } catch (error, stackTrace) {
+                switchCompleted.completeError(error, stackTrace);
+              }
+            })(),
+          );
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+      );
+      final newManaged = _FakeManagedLease(
+        root: newRoot,
+        projectId: '22222222222222222222222222222222',
+        projectRevision: 8,
+        head: _head(8),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          projectName: 'Replacement project',
+        ),
+      );
+      coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async =>
+            root.path == oldRoot.path ? oldManaged : newManaged,
+      );
+      await coordinator.openManagedRevision3(oldRoot);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-project-create-npc')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Old project guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+      await switchCompleted.future;
+      await tester.pumpAndSettle();
+
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.root.path, newRoot.path);
+      expect(current.projectId, newManaged.projectId);
+      expect(current.projectRevision, 8);
+      expect(oldManaged.npcPublishCalls, 1);
+      expect(oldManaged.closeCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-home')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+      );
+      expect(find.textContaining('Character draft saved'), findsNothing);
+      expect(find.text('Old project guard'), findsNothing);
+      for (final technicalIdentity in const <String>[
+        _homeCreatedNpcId,
+        _homeCreatedNpcModuleId,
+      ]) {
+        expect(find.text(technicalIdentity), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'published NPC head drift before dialog closes never opens Story',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_head_drift_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '23232323232323232323232323232323';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\npc-head-drift'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onNpcPublish: (lease, _, _) {
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-project-create-npc')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Drifted guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pump();
+
+      expect(managed.npcPublishCalls, 1);
+      var current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.root.path, managed.root.path);
+      expect(current.projectId, projectId);
+      expect(current.projectRevision, 8);
+      expect(current.head.canonicalJson, _head(8).canonicalJson);
+
+      managed.head = _head(108);
+      await coordinator.verifyCurrent();
+      await tester.pumpAndSettle();
+
+      current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.root.path, managed.root.path);
+      expect(current.projectId, projectId);
+      expect(current.projectRevision, 8);
+      expect(current.head.canonicalJson, _head(108).canonicalJson);
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-home')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+      );
+      expect(find.text('Drifted guard'), findsNothing);
+      expect(find.textContaining('Character draft saved'), findsNothing);
+      expect(
+        find.byKey(
+          const Key('revision3-story-workspace-entity-$_homeCreatedNpcId'),
+        ),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -8367,6 +8970,49 @@ const _managedPrimaryNavigationKeys = <Key>[
   Key('revision3-project-workspace-nav-settings-expert'),
 ];
 
+void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
+  expect(
+    find.byKey(const Key('revision3-project-workspace-page-story')),
+    findsOneWidget,
+  );
+  final selectedNpc = find.byKey(
+    const Key('revision3-story-workspace-entity-$_homeCreatedNpcId'),
+  );
+  expect(selectedNpc, findsOneWidget);
+  expect(tester.widget<ListTile>(selectedNpc).selected, isTrue);
+  final dialogVoice = find.byKey(
+    const Key('revision3-story-workbench-tab-dialogVoice-$_homeCreatedNpcId'),
+  );
+  expect(dialogVoice, findsOneWidget);
+  expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+  expect(
+    find.byKey(const Key('revision3-npc-dialog-voice-panel')),
+    findsOneWidget,
+  );
+  expect(
+    find.byKey(const Key('revision3-npc-greeting-new-line')),
+    findsOneWidget,
+  );
+  expect(find.text('North Gate Guard'), findsWidgets);
+  expect(
+    find.textContaining('could not be selected at its exact project revision'),
+    findsNothing,
+  );
+  expect(find.textContaining('Character draft saved'), findsOneWidget);
+  expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+  expect(find.text('Build / Deploy'), findsNothing);
+  for (final technicalIdentity in const <String>[
+    'g1r:npc:om_grd_asghan_263',
+    _homeCreatedNpcId,
+    _homeCreatedNpcModuleId,
+    _homeCreatedNpcUniqueName,
+    _homeCreatedNpcModuleNamespace,
+  ]) {
+    expect(find.text(technicalIdentity), findsNothing);
+  }
+  expect(tester.takeException(), isNull);
+}
+
 Future<void> _navigateManagedHome(WidgetTester tester) =>
     _navigateManagedWorkspace(
       tester,
@@ -9969,6 +10615,108 @@ Revision3ContentIndex _contentIndex({
   'authoring_locales': <Object?>[],
   'entity_counts': <String, Object?>{},
   'entities': <Object?>[],
+  'assets': <Object?>[],
+});
+
+Revision3ContentIndex _createdNpcContentIndex({
+  required String projectId,
+  required int revision,
+  required String npcId,
+  required String moduleId,
+  required String displayName,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': revision,
+  'project_name': 'Home NPC project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 1,
+      'sha256': List<String>.filled(64, '5').join(),
+    },
+  },
+  'authoring_locales': <Object?>['de'],
+  'entity_counts': <String, Object?>{'npc_draft': 1, 'script_module': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': npcId,
+      'kind': 'npc_draft',
+      'display_name': displayName,
+      'revision': 0,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': _homeCreatedNpcUniqueName,
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': _homeCreatedNpcUniqueName,
+          'module_namespace': _homeCreatedNpcModuleNamespace,
+          'parent_character_definition':
+              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+          'parent_spawn_definition':
+              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+          'greeting_count': 0,
+        },
+      },
+      'references': <Object?>[
+        _dialogLineEntityReference(
+          projectId: projectId,
+          role: 'draft_script_module',
+          entityId: moduleId,
+          expectedKind: 'script_module',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': moduleId,
+      'kind': 'script_module',
+      'display_name': 'North Gate Guard Script',
+      'revision': 0,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': revision3NpcFixtureGeneratorId,
+        'generator_version': revision3NpcFixtureGeneratorVersion,
+        'owner': <String, Object?>{
+          'project_id': projectId,
+          'entity_id': npcId,
+          'expected_kind': 'npc_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': revision3NpcFixtureGeneratorId,
+          'generator_version': revision3NpcFixtureGeneratorVersion,
+          'module_namespace': _homeCreatedNpcModuleNamespace,
+          'module_relative_path': 'GoreMods/Npcs/NorthGateGuard.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        _dialogLineEntityReference(
+          projectId: projectId,
+          role: 'origin_owner',
+          entityId: npcId,
+          expectedKind: 'npc_draft',
+        ),
+        _dialogLineEntityReference(
+          projectId: projectId,
+          role: 'script_owner',
+          entityId: npcId,
+          expectedKind: 'npc_draft',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+  ],
   'assets': <Object?>[],
 });
 

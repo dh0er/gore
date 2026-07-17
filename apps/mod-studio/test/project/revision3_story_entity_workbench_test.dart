@@ -421,6 +421,128 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'compact scaled NPC profile continues to Dialog & Voice for the same draft',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(360, 640));
+      final index = _fixture();
+      final sectionChanges = <Revision3StoryWorkbenchSection>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Revision3StoryEntityWorkbench(
+              projectId: index.projectId,
+              index: index,
+              entity: index.entityById(_npcId)!,
+              selectedSection: Revision3StoryWorkbenchSection.profile,
+              onSectionChanged: sectionChanges.add,
+              actions: _actions,
+              npcDialogVoice: const Text('Exact NPC greeting editor'),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final details = find.byKey(
+        Key('revision3-content-entity-details-$_npcId'),
+      );
+      final profile = find.byKey(
+        Key('revision3-story-workbench-section-profile-$_npcId'),
+      );
+      final nextStep = find.byKey(
+        Key('revision3-story-workbench-npc-dialog-next-step-$_npcId'),
+      );
+      final continueButton = find.descendant(
+        of: nextStep,
+        matching: find.widgetWithText(
+          FilledButton,
+          'Continue to Dialog & Voice',
+        ),
+      );
+
+      expect(details, findsOneWidget);
+      expect(profile, findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.scrollUntilVisible(
+        nextStep,
+        120,
+        scrollable: find.descendant(
+          of: profile,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(nextStep, findsOneWidget);
+      expect(find.text('Next step: Dialog & Voice'), findsOneWidget);
+      expect(
+        find.textContaining('does not create playable dialog'),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: nextStep, matching: find.textContaining(_npcId)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: nextStep,
+          matching: find.textContaining('GORE_GATE_GUARD'),
+        ),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+
+      final profileScroll = find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
+      );
+      for (
+        var attempt = 0;
+        attempt < 20 && continueButton.hitTestable().evaluate().isEmpty;
+        attempt++
+      ) {
+        await tester.drag(profileScroll, const Offset(0, -120));
+        await tester.pump();
+      }
+      expect(continueButton.hitTestable(), findsOneWidget);
+      await tester.tap(continueButton.hitTestable());
+      await tester.pumpAndSettle();
+
+      expect(sectionChanges, const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.dialogVoice,
+      ]);
+      expect(details, findsOneWidget);
+      expect(profile, findsNothing);
+      expect(
+        find.byKey(
+          Key('revision3-story-workbench-section-dialogVoice-$_npcId'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Exact NPC greeting editor'), findsOneWidget);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final legacySection in const <Revision3StoryWorkbenchSection>[
     Revision3StoryWorkbenchSection.story,
     Revision3StoryWorkbenchSection.logic,

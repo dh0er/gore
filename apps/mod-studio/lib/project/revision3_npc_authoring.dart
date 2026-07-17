@@ -357,6 +357,7 @@ final class Revision3NpcDraftPublication {
   Revision3NpcDraftPublication({
     required String projectId,
     required int projectRevision,
+    required this.head,
     required String npcId,
     required String scriptModuleId,
   }) : projectId = _requiredProjectId(projectId),
@@ -366,6 +367,7 @@ final class Revision3NpcDraftPublication {
 
   final String projectId;
   final int projectRevision;
+  final AuthoringWorkingHead head;
   final String npcId;
   final String scriptModuleId;
 }

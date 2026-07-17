@@ -9,6 +9,236 @@ import 'revision3_npc_authoring.dart';
 typedef Revision3NpcArchetypeChooser =
     Future<String?> Function(BuildContext context, Revision3NpcCatalog catalog);
 
+/// Author-facing copy for the bounded managed-R3 NPC Draft wizard.
+///
+/// The surrounding workspace may inject localized copy without giving this
+/// isolated editor access to generated localization classes. English remains
+/// the default so existing callers keep their current presentation.
+@immutable
+final class Revision3NpcWizardCopy {
+  const Revision3NpcWizardCopy({
+    required this.title,
+    required this.catalogLoadFailed,
+    required this.archetypeNotQualified,
+    required this.archetypePickerFailed,
+    required this.archetypeRequired,
+    required this.catalogChanged,
+    required this.requiresReopen,
+    required this.staleCheckpoint,
+    required this.saveFailed,
+    required this.catalogLoadingSemanticsLabel,
+    required this.retryCatalogLabel,
+    required this.closeLabel,
+    required this.cancelLabel,
+    required this.saveLabel,
+    required this.discardTitle,
+    required this.discardDescription,
+    required this.keepEditingLabel,
+    required this.discardLabel,
+    required this.basicsTitle,
+    required this.displayNameLabel,
+    required this.displayNameHint,
+    required this.displayNameHelp,
+    required this.displayNameRequired,
+    required this.displayNameTooLong,
+    required this.displayNameInvalid,
+    required this.startingPointTitle,
+    required this.noArchetypeSelected,
+    required this.chooseArchetypeDescription,
+    required this.selectedArchetypeDescription,
+    required this.chooseArchetypeLabel,
+    required this.changeArchetypeLabel,
+    required this.inheritanceBoundaryDescription,
+    required this.capabilitySemanticsLabel,
+    required this.offlineDraftLabel,
+    required this.buildBlockedLabel,
+    required this.runtimeUnqualifiedLabel,
+    required this.notSpawnedLabel,
+    required this.capabilityDescription,
+    required this.archetypePicker,
+  });
+
+  static const english = Revision3NpcWizardCopy(
+    title: 'Make a character draft',
+    catalogLoadFailed:
+        'NPC archetypes could not be refreshed from the configured game. No project or game files were changed.',
+    archetypeNotQualified:
+        'That archetype is not qualified for offline NPC Draft creation.',
+    archetypePickerFailed:
+        'The NPC archetype picker could not be opened safely.',
+    archetypeRequired: 'Choose a character archetype.',
+    catalogChanged:
+        'The game archetype catalog changed while this wizard was open. Choose the archetype again.',
+    requiresReopen:
+        'This project can no longer be verified as current. Close this wizard and reopen the managed project before continuing.',
+    staleCheckpoint:
+        'The managed project changed while this wizard was open. Close this wizard and create the NPC draft again from the current project.',
+    saveFailed:
+        'The NPC draft could not be saved. Nothing was compiled, deployed, spawned, or written into the game. You can review the form and try again.',
+    catalogLoadingSemanticsLabel: 'Refreshing NPC archetypes from the game',
+    retryCatalogLabel: 'Refresh game choices',
+    closeLabel: 'Close',
+    cancelLabel: 'Cancel',
+    saveLabel: 'Save draft to project',
+    discardTitle: 'Discard character draft changes?',
+    discardDescription:
+        'Your unsaved character name and archetype choice will be lost.',
+    keepEditingLabel: 'Keep editing',
+    discardLabel: 'Discard',
+    basicsTitle: 'Character basics',
+    displayNameLabel: 'Character name',
+    displayNameHint: 'North Gate Guard',
+    displayNameHelp: 'Technical names and IDs are generated automatically.',
+    displayNameRequired: 'Enter a character name',
+    displayNameTooLong: 'Character name is too long',
+    displayNameInvalid:
+        'Character name cannot contain line breaks or control characters',
+    startingPointTitle: 'Starting point',
+    noArchetypeSelected: 'No archetype selected',
+    chooseArchetypeDescription:
+        'Choose an offline-qualified existing character as the structural starting point.',
+    selectedArchetypeDescription:
+        'Offline-qualified logical clone starting point.',
+    chooseArchetypeLabel: 'Choose\u2026',
+    changeArchetypeLabel: 'Change\u2026',
+    inheritanceBoundaryDescription:
+        'This draft inherits only the proven three-class structural chain. Visuals, faction, stats, inventory, routine, dialog, quests, and a world spawn are not authored by this step.',
+    capabilitySemanticsLabel: 'NPC Draft capability limits',
+    offlineDraftLabel: 'Offline draft',
+    buildBlockedLabel: 'Build blocked',
+    runtimeUnqualifiedLabel: 'Runtime unqualified',
+    notSpawnedLabel: 'Not spawned',
+    capabilityDescription:
+        'This saves a logical character shell in the managed project. It does not compile, deploy, spawn a character, write game files, change a save, or prove gameplay behavior.',
+    archetypePicker: StoryNpcArchetypePickerLabels(
+      title: 'Choose a character archetype',
+      search: 'Search characters and classes',
+      showExperimental: 'Show static-linkage evidence (not selectable)',
+      offlineQualified: 'Offline Draft supported',
+      experimentalStaticLinkage: 'Inspect only',
+      empty: 'No matching NPC archetypes.',
+      spawnClass: 'Spawn definition',
+      aiConfigClass: 'AI configuration',
+      characterDefinitionClass: 'Character definition',
+      actorBlueprint: 'Actor Blueprint',
+      bodyBlueprintFamily: 'Body family',
+      humanBaseFamily: 'Human base',
+      humanWomanFamily: 'Human woman',
+      otherFamily: 'Other',
+    ),
+  );
+
+  static const german = Revision3NpcWizardCopy(
+    title: 'Charakterentwurf erstellen',
+    catalogLoadFailed:
+        'Die Charaktervorlagen konnten nicht aktualisiert werden. Es wurden keine Dateien geändert.',
+    archetypeNotQualified:
+        'Diese Vorlage ist nicht für einen Offline-Entwurf freigegeben.',
+    archetypePickerFailed:
+        'Die Auswahl der Charaktervorlage konnte nicht sicher geöffnet werden.',
+    archetypeRequired: 'Wähle eine Charaktervorlage.',
+    catalogChanged:
+        'Die Charaktervorlagen haben sich geändert. Wähle die Vorlage erneut.',
+    requiresReopen:
+        'Das Projekt ist nicht mehr sicher aktuell. Schließe diesen Dialog und öffne das Projekt erneut.',
+    staleCheckpoint:
+        'Das Projekt hat sich geändert. Schließe diesen Dialog und beginne erneut.',
+    saveFailed:
+        'Der Charakterentwurf konnte nicht gespeichert werden. Spiel und Spielstände blieben unverändert.',
+    catalogLoadingSemanticsLabel: 'Charaktervorlagen werden aktualisiert',
+    retryCatalogLabel: 'Spielvorlagen neu laden',
+    closeLabel: 'Schließen',
+    cancelLabel: 'Abbrechen',
+    saveLabel: 'Entwurf im Projekt speichern',
+    discardTitle: 'Änderungen am Charakterentwurf verwerfen?',
+    discardDescription:
+        'Der ungespeicherte Charaktername und die Vorlagenauswahl gehen verloren.',
+    keepEditingLabel: 'Weiter bearbeiten',
+    discardLabel: 'Verwerfen',
+    basicsTitle: 'Grunddaten',
+    displayNameLabel: 'Charaktername',
+    displayNameHint: 'Wache am Nordtor',
+    displayNameHelp: 'Technische Namen und Kennungen entstehen automatisch.',
+    displayNameRequired: 'Gib einen Charakternamen ein',
+    displayNameTooLong: 'Der Charaktername ist zu lang',
+    displayNameInvalid:
+        'Der Charaktername darf keine Zeilenumbrüche oder Steuerzeichen enthalten',
+    startingPointTitle: 'Ausgangsfigur',
+    noArchetypeSelected: 'Keine Vorlage ausgewählt',
+    chooseArchetypeDescription:
+        'Wähle eine offline geprüfte Figur als strukturellen Ausgangspunkt.',
+    selectedArchetypeDescription:
+        'Offline geprüfter Ausgangspunkt für den logischen Klon.',
+    chooseArchetypeLabel: 'Auswählen\u2026',
+    changeArchetypeLabel: 'Ändern\u2026',
+    inheritanceBoundaryDescription:
+        'Dieser Schritt übernimmt nur die geprüfte Klassenstruktur. Aussehen, Fraktion, Werte, Inventar, Tagesablauf, Dialoge, Quests und Spawn werden noch nicht erstellt.',
+    capabilitySemanticsLabel: 'Grenzen des Charakterentwurfs',
+    offlineDraftLabel: 'Offline-Entwurf',
+    buildBlockedLabel: 'Build blockiert',
+    runtimeUnqualifiedLabel: 'Runtime ungeprüft',
+    notSpawnedLabel: 'Nicht gespawnt',
+    capabilityDescription:
+        'Dies speichert eine logische Charakterhülle im Projekt. Es kompiliert, installiert oder spawnt nichts und ändert weder Spiel noch Spielstand.',
+    archetypePicker: StoryNpcArchetypePickerLabels(
+      title: 'Charaktervorlage auswählen',
+      search: 'Figuren und Klassen durchsuchen',
+      showExperimental: 'Statische Hinweise anzeigen',
+      offlineQualified: 'Offline-Entwurf unterstützt',
+      experimentalStaticLinkage: 'Nur ansehen',
+      empty: 'Keine passenden Charaktervorlagen.',
+      spawnClass: 'Spawn-Definition',
+      aiConfigClass: 'KI-Konfiguration',
+      characterDefinitionClass: 'Charakterdefinition',
+      actorBlueprint: 'Actor Blueprint',
+      bodyBlueprintFamily: 'Körperfamilie',
+      humanBaseFamily: 'Menschliche Basis',
+      humanWomanFamily: 'Menschliche Frau',
+      otherFamily: 'Andere',
+    ),
+  );
+
+  final String title;
+  final String catalogLoadFailed;
+  final String archetypeNotQualified;
+  final String archetypePickerFailed;
+  final String archetypeRequired;
+  final String catalogChanged;
+  final String requiresReopen;
+  final String staleCheckpoint;
+  final String saveFailed;
+  final String catalogLoadingSemanticsLabel;
+  final String retryCatalogLabel;
+  final String closeLabel;
+  final String cancelLabel;
+  final String saveLabel;
+  final String discardTitle;
+  final String discardDescription;
+  final String keepEditingLabel;
+  final String discardLabel;
+  final String basicsTitle;
+  final String displayNameLabel;
+  final String displayNameHint;
+  final String displayNameHelp;
+  final String displayNameRequired;
+  final String displayNameTooLong;
+  final String displayNameInvalid;
+  final String startingPointTitle;
+  final String noArchetypeSelected;
+  final String chooseArchetypeDescription;
+  final String selectedArchetypeDescription;
+  final String chooseArchetypeLabel;
+  final String changeArchetypeLabel;
+  final String inheritanceBoundaryDescription;
+  final String capabilitySemanticsLabel;
+  final String offlineDraftLabel;
+  final String buildBlockedLabel;
+  final String runtimeUnqualifiedLabel;
+  final String notSpawnedLabel;
+  final String capabilityDescription;
+  final StoryNpcArchetypePickerLabels archetypePicker;
+}
+
 /// Guided normal-mode surface over the exact managed-R3 NPC Draft transaction.
 ///
 /// It creates only a logical clone shell. Generated identities, source, class
@@ -21,6 +251,7 @@ class Revision3NpcWizardDialog extends StatefulWidget {
     required this.publish,
     this.chooseArchetype,
     this.initialCatalogId,
+    this.copy = Revision3NpcWizardCopy.english,
     super.key,
   });
 
@@ -29,6 +260,7 @@ class Revision3NpcWizardDialog extends StatefulWidget {
   final Revision3NpcDraftPublisher publish;
   final Revision3NpcArchetypeChooser? chooseArchetype;
   final String? initialCatalogId;
+  final Revision3NpcWizardCopy copy;
 
   @override
   State<Revision3NpcWizardDialog> createState() =>
@@ -110,8 +342,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _catalogLoading = false;
-        _error =
-            'NPC archetypes could not be refreshed from the configured game. No project or game files were changed.';
+        _error = widget.copy.catalogLoadFailed;
       });
     }
   }
@@ -147,8 +378,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       if (!mounted || selected == null) return;
       if (!catalog.contains(selected)) {
         setState(() {
-          _error =
-              'That archetype is not qualified for offline NPC Draft creation.';
+          _error = widget.copy.archetypeNotQualified;
         });
         return;
       }
@@ -156,7 +386,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = 'The NPC archetype picker could not be opened safely.';
+        _error = widget.copy.archetypePickerFailed;
       });
     } finally {
       if (mounted) setState(() => _choosing = false);
@@ -174,22 +404,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     return showStoryNpcArchetypePicker(
       context: context,
       index: index,
-      labels: const StoryNpcArchetypePickerLabels(
-        title: 'Choose a character archetype',
-        search: 'Search characters and classes',
-        showExperimental: 'Show static-linkage evidence (not selectable)',
-        offlineQualified: 'Offline Draft supported',
-        experimentalStaticLinkage: 'Inspect only',
-        empty: 'No matching NPC archetypes.',
-        spawnClass: 'Spawn definition',
-        aiConfigClass: 'AI configuration',
-        characterDefinitionClass: 'Character definition',
-        actorBlueprint: 'Actor Blueprint',
-        bodyBlueprintFamily: 'Body family',
-        humanBaseFamily: 'Human base',
-        humanWomanFamily: 'Human woman',
-        otherFamily: 'Other',
-      ),
+      labels: widget.copy.archetypePicker,
     );
   }
 
@@ -198,7 +413,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     final catalogId = _catalogId;
     if (catalogId == null) {
-      setState(() => _error = 'Choose a character archetype.');
+      setState(() => _error = widget.copy.archetypeRequired);
       return;
     }
     final input = Revision3NpcDraftAuthoringInput(
@@ -222,8 +437,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
           _adoptCatalog(fresh);
           _publishing = false;
           _publicationStarted = false;
-          _error =
-              'The game archetype catalog changed while this wizard was open. Choose the archetype again.';
+          _error = widget.copy.catalogChanged;
         });
         return;
       }
@@ -241,8 +455,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
         _requiresReopen = true;
         _publishing = false;
         _publicationStarted = false;
-        _error =
-            'This project can no longer be verified as current. Close this wizard and reopen the managed project before continuing.';
+        _error = widget.copy.requiresReopen;
       });
     } on Revision3NpcDraftStaleCheckpointException {
       if (!mounted) return;
@@ -250,16 +463,14 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
         _staleCheckpoint = true;
         _publishing = false;
         _publicationStarted = false;
-        _error =
-            'The managed project changed while this wizard was open. Close this wizard and create the NPC draft again from the current project.';
+        _error = widget.copy.staleCheckpoint;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _publishing = false;
         _publicationStarted = false;
-        _error =
-            'The NPC draft could not be saved. Nothing was compiled, deployed, spawned, or written into the game. You can review the form and try again.';
+        _error = widget.copy.saveFailed;
       });
     } finally {
       if (mounted && !completed && _publishing) {
@@ -288,11 +499,12 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     },
     child: AlertDialog(
       key: const Key('revision3-npc-wizard'),
-      title: const Row(
+      scrollable: true,
+      title: Row(
         children: [
-          Icon(Icons.person_add_alt_1_outlined),
-          SizedBox(width: 10),
-          Expanded(child: Text('Make a character draft')),
+          const Icon(Icons.person_add_alt_1_outlined),
+          const SizedBox(width: 10),
+          Expanded(child: Text(widget.copy.title)),
         ],
       ),
       content: SizedBox(
@@ -303,7 +515,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const _NpcDraftBoundaryBanner(),
+                _NpcDraftBoundaryBanner(copy: widget.copy),
                 const SizedBox(height: 16),
                 if (_error != null) ...[
                   _NpcWizardMessage(
@@ -318,7 +530,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
                     child: Center(
                       child: Semantics(
                         liveRegion: true,
-                        label: 'Refreshing NPC archetypes from the game',
+                        label: widget.copy.catalogLoadingSemanticsLabel,
                         child: const CircularProgressIndicator(
                           key: Key('revision3-npc-catalog-loading'),
                         ),
@@ -331,7 +543,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
                       key: const Key('revision3-npc-catalog-retry'),
                       onPressed: _loadCatalog,
                       icon: const Icon(Icons.refresh),
-                      label: const Text('Refresh game choices'),
+                      label: Text(widget.copy.retryCatalogLabel),
                     ),
                   )
                 else
@@ -345,7 +557,9 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
         TextButton(
           key: const Key('revision3-npc-cancel'),
           onPressed: _busy || _confirmingDiscard ? null : _requestDismiss,
-          child: Text(_locked ? 'Close' : 'Cancel'),
+          child: Text(
+            _locked ? widget.copy.closeLabel : widget.copy.cancelLabel,
+          ),
         ),
         FilledButton.icon(
           key: const Key('revision3-npc-submit'),
@@ -356,7 +570,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.save_outlined),
-          label: const Text('Save draft to project'),
+          label: Text(widget.copy.saveLabel),
         ),
       ],
     ),
@@ -377,20 +591,18 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       context: context,
       builder: (context) => AlertDialog(
         key: const Key('revision3-npc-discard-dialog'),
-        title: const Text('Discard character draft changes?'),
-        content: const Text(
-          'Your unsaved character name and archetype choice will be lost.',
-        ),
+        title: Text(widget.copy.discardTitle),
+        content: Text(widget.copy.discardDescription),
         actions: [
           TextButton(
             key: const Key('revision3-npc-keep-editing'),
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Keep editing'),
+            child: Text(widget.copy.keepEditingLabel),
           ),
           FilledButton(
             key: const Key('revision3-npc-discard'),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Discard'),
+            child: Text(widget.copy.discardLabel),
           ),
         ],
       ),
@@ -410,13 +622,50 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
   Widget _buildForm(BuildContext context) {
     final selected = _catalog?.choice(_catalogId ?? '');
     final enabled = !_busy && !_locked;
+    final compactArchetype =
+        MediaQuery.sizeOf(context).width < 760 ||
+        MediaQuery.textScalerOf(context).scale(1) >= 1.5;
+    Widget archetypeDetails() => Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.person_search_outlined),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                selected?.displayName ?? widget.copy.noArchetypeSelected,
+                key: const Key('revision3-npc-selected-archetype-label'),
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                selected == null
+                    ? widget.copy.chooseArchetypeDescription
+                    : widget.copy.selectedArchetypeDescription,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    Widget archetypeButton() => OutlinedButton(
+      key: const Key('revision3-npc-choose-archetype'),
+      onPressed: enabled ? _chooseArchetype : null,
+      child: Text(
+        selected == null
+            ? widget.copy.chooseArchetypeLabel
+            : widget.copy.changeArchetypeLabel,
+      ),
+    );
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Character basics',
+            widget.copy.basicsTitle,
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 10),
@@ -426,18 +675,17 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
             enabled: enabled,
             maxLength: 256,
             textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(
-              labelText: 'Character name',
-              hintText: 'North Gate Guard',
-              helperText:
-                  'Technical names and IDs are generated automatically.',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: widget.copy.displayNameLabel,
+              hintText: widget.copy.displayNameHint,
+              helperText: widget.copy.displayNameHelp,
+              border: const OutlineInputBorder(),
             ),
             validator: _validateNpcName,
           ),
           const SizedBox(height: 16),
           Text(
-            'Starting point',
+            widget.copy.startingPointTitle,
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
@@ -448,58 +696,59 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
               border: Border.all(color: Theme.of(context).colorScheme.outline),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Row(
-              children: [
-                const Icon(Icons.person_search_outlined),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            child: compactArchetype
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        selected?.displayName ?? 'No archetype selected',
-                        key: const Key(
-                          'revision3-npc-selected-archetype-label',
-                        ),
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        selected == null
-                            ? 'Choose an offline-qualified existing character as the structural starting point.'
-                            : 'Offline-qualified logical clone starting point.',
+                      archetypeDetails(),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: archetypeButton(),
                       ),
                     ],
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: archetypeDetails()),
+                      const SizedBox(width: 8),
+                      archetypeButton(),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  key: const Key('revision3-npc-choose-archetype'),
-                  onPressed: enabled ? _chooseArchetype : null,
-                  child: Text(selected == null ? 'Choose…' : 'Change…'),
-                ),
-              ],
-            ),
           ),
           const SizedBox(height: 14),
-          const Text(
-            'This draft inherits only the proven three-class structural chain. Visuals, faction, stats, inventory, routine, dialog, quests, and a world spawn are not authored by this step.',
-          ),
+          Text(widget.copy.inheritanceBoundaryDescription),
         ],
       ),
     );
   }
+
+  String? _validateNpcName(String? value) {
+    final normalized = value?.trim() ?? '';
+    if (normalized.isEmpty) return widget.copy.displayNameRequired;
+    if (utf8.encode(normalized).length > 256) {
+      return widget.copy.displayNameTooLong;
+    }
+    if (normalized.runes.any(
+      (rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f),
+    )) {
+      return widget.copy.displayNameInvalid;
+    }
+    return null;
+  }
 }
 
 class _NpcDraftBoundaryBanner extends StatelessWidget {
-  const _NpcDraftBoundaryBanner();
+  const _NpcDraftBoundaryBanner({required this.copy});
+
+  final Revision3NpcWizardCopy copy;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Semantics(
       container: true,
-      label: 'NPC Draft capability limits',
+      label: copy.capabilitySemanticsLabel,
       child: Container(
         key: const Key('revision3-npc-boundary'),
         padding: const EdgeInsets.all(12),
@@ -510,19 +759,19 @@ class _NpcDraftBoundaryBanner extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Wrap(
+            Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                Chip(label: Text('Offline draft')),
-                Chip(label: Text('Build blocked')),
-                Chip(label: Text('Runtime unqualified')),
-                Chip(label: Text('Not spawned')),
+                Chip(label: Text(copy.offlineDraftLabel)),
+                Chip(label: Text(copy.buildBlockedLabel)),
+                Chip(label: Text(copy.runtimeUnqualifiedLabel)),
+                Chip(label: Text(copy.notSpawnedLabel)),
               ],
             ),
             const SizedBox(height: 8),
             Text(
-              'This saves a logical character shell in the managed project. It does not compile, deploy, spawn a character, write game files, change a save, or prove gameplay behavior.',
+              copy.capabilityDescription,
               style: TextStyle(color: scheme.onSecondaryContainer),
             ),
           ],
@@ -552,18 +801,4 @@ class _NpcWizardMessage extends StatelessWidget {
       ),
     );
   }
-}
-
-String? _validateNpcName(String? value) {
-  final normalized = value?.trim() ?? '';
-  if (normalized.isEmpty) return 'Enter a character name';
-  if (utf8.encode(normalized).length > 256) {
-    return 'Character name is too long';
-  }
-  if (normalized.runes.any(
-    (rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f),
-  )) {
-    return 'Character name cannot contain line breaks or control characters';
-  }
-  return null;
 }

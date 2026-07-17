@@ -3446,7 +3446,11 @@ class _ManagedRevision3ProjectViewState
                 ),
               ),
               createNpcDraft: (catalogId) => unawaited(
-                _openNpcWizard(context, initialCatalogId: catalogId),
+                _openNpcWizard(
+                  context,
+                  initialCatalogId: catalogId,
+                  selectPublishedInStory: true,
+                ),
               ),
               createQuestDraft: (parentCatalogId) => unawaited(
                 _openQuestWizard(
@@ -3562,7 +3566,11 @@ class _ManagedRevision3ProjectViewState
                     );
                   },
                   createBaseNpcDraft: (catalogId) => unawaited(
-                    _openNpcWizard(context, initialCatalogId: catalogId),
+                    _openNpcWizard(
+                      context,
+                      initialCatalogId: catalogId,
+                      selectPublishedInStory: true,
+                    ),
                   ),
                   createBaseQuestDraft: (catalogId) => unawaited(
                     _openQuestWizard(
@@ -5621,6 +5629,7 @@ class _ManagedRevision3ProjectViewState
   }) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || !_storyMutationsEnabled) return;
+    final l10n = AppLocalizations.of(context);
     final selectionOrigin = _storySelectionOrigin;
     final publication = await showDialog<Revision3NpcDraftPublication>(
       context: context,
@@ -5630,25 +5639,86 @@ class _ManagedRevision3ProjectViewState
         publish: publishNpcDraft,
         chooseArchetype: chooseNpcArchetype,
         initialCatalogId: initialCatalogId,
+        copy: l10n.localeName.startsWith('de')
+            ? Revision3NpcWizardCopy.german
+            : Revision3NpcWizardCopy.english,
       ),
     );
     if (!context.mounted || publication == null) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted ||
+        !context.mounted ||
+        !_isCurrentStorySelectionOrigin(selectionOrigin) ||
+        !_isCurrentPublishedNpc(selectionOrigin, publication)) {
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          'NPC draft saved in project revision ${publication.projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.',
-        ),
+        content: Text(l10n.managedNpcDraftSaved(publication.projectRevision)),
       ),
     );
-    if (selectPublishedInStory &&
-        publication.projectId == selectionOrigin.projectId &&
-        _isCurrentStorySelectionOrigin(selectionOrigin)) {
-      _selectPublishedStoryEntity(
-        selectionOrigin,
-        entityId: publication.npcId,
-        projectRevision: publication.projectRevision,
-      );
+    if (selectPublishedInStory) {
+      await _openPublishedNpcInStory(context, selectionOrigin, publication);
     }
+  }
+
+  Future<void> _openPublishedNpcInStory(
+    BuildContext context,
+    _ManagedStorySelectionOrigin origin,
+    Revision3NpcDraftPublication publication,
+  ) async {
+    // Let the coordinator publication rebuild this managed-project owner before
+    // binding the continuation to its newly published exact checkpoint.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted ||
+        !context.mounted ||
+        !_isCurrentStorySelectionOrigin(origin)) {
+      return;
+    }
+    final checkpoint = currentManagedProject;
+    if (checkpoint == null ||
+        !_isCurrentPublishedNpc(origin, publication) ||
+        !_isCurrentQuestOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+
+    // Story pages are mounted lazily. Navigate first so the controller can
+    // attach, reload the exact new index, and resolve the pending deep link.
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.story,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted ||
+        !context.mounted ||
+        !_isCurrentStorySelectionOrigin(origin) ||
+        !_isCurrentPublishedNpc(origin, publication) ||
+        !_isCurrentQuestOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+    _selectPublishedStoryEntity(
+      origin,
+      entityId: publication.npcId,
+      projectRevision: publication.projectRevision,
+      projectHeadCanonicalJson: publication.head.canonicalJson,
+      section: Revision3StoryWorkbenchSection.dialogVoice,
+    );
+  }
+
+  bool _isCurrentPublishedNpc(
+    _ManagedStorySelectionOrigin origin,
+    Revision3NpcDraftPublication publication,
+  ) {
+    final current = currentManagedProject;
+    return current != null &&
+        !current.requiresReopen &&
+        current.root.path == origin.projectRoot &&
+        current.projectId == origin.projectId &&
+        current.projectId == publication.projectId &&
+        current.projectRevision == publication.projectRevision &&
+        current.head.canonicalJson == publication.head.canonicalJson;
   }
 
   void _selectPublishedStoryEntity(
@@ -5999,6 +6069,11 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
   editOverview: l10n.managedStoryWorkbenchEditOverview,
   editNpcProfile: l10n.managedStoryWorkbenchEditNpcProfile,
+  npcDialogVoiceNextStepTitle:
+      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepTitle,
+  npcDialogVoiceNextStepDescription:
+      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepDescription,
+  continueToNpcDialogVoice: l10n.managedStoryWorkbenchContinueToNpcDialogVoice,
   editStory: l10n.managedStoryWorkbenchEditStory,
   editLogic: l10n.managedStoryWorkbenchEditLogic,
   inspectQuest: l10n.managedStoryWorkbenchInspectQuest,

@@ -3222,6 +3222,7 @@ void main() {
           return Revision3NpcDraftPublication(
             projectId: projectId,
             projectRevision: 19,
+            head: lease.head,
             npcId: '28282828282828282828282828282828',
             scriptModuleId: '38383838383838383838383838383838',
           );
@@ -3246,6 +3247,7 @@ void main() {
       );
 
       expect(published.projectRevision, 19);
+      expect(published.head.canonicalJson, _head(19).canonicalJson);
       expect(receivedInput.displayName, 'North Gate Guard');
       expect(receivedInput.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
       expect(managed.npcPublishCalls, 1);
@@ -3254,6 +3256,47 @@ void main() {
       expect(state.head.canonicalJson, _head(19).canonicalJson);
     },
   );
+
+  test('NPC publication rejects a reused pre-publication head', () async {
+    const projectId = '18181818181818181818181818181818';
+    final managed = _FakeManagedLease(
+      root: Directory('managed-npc-reused-head'),
+      projectIdValue: projectId,
+      projectRevision: 18,
+      head: _head(18),
+      onNpcPublish: (lease, _, _) {
+        lease.projectRevision = 19;
+        return Revision3NpcDraftPublication(
+          projectId: projectId,
+          projectRevision: 19,
+          head: lease.head,
+          npcId: '28282828282828282828282828282828',
+          scriptModuleId: '38383838383838383838383838383838',
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.createCurrentRevision3NpcDraft(
+        expectedRoot: managed.root.path,
+        expectedHead: _head(18),
+        expectedProjectId: projectId,
+        expectedProjectRevision: 18,
+        gameRoot: r'C:\Games\Gothic Remake',
+        input: _npcInput(),
+      ),
+      throwsA(isA<CurrentProjectCoordinatorException>()),
+    );
+    expect(managed.npcPublishCalls, 1);
+  });
 
   test(
     'NPC publication rejects divergent root or head before lease access',

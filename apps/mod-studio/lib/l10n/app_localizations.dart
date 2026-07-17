@@ -2300,6 +2300,12 @@ abstract class AppLocalizations {
   /// **'Create a bounded offline NPC draft from verified installed-game evidence.'**
   String get managedActionNewNpcDescription;
 
+  /// No description provided for @managedNpcDraftSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft saved in project revision {projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.'**
+  String managedNpcDraftSaved(int projectRevision);
+
   /// No description provided for @managedActionNewQuestTitle.
   ///
   /// In en, this message translates to:
@@ -4331,6 +4337,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Edit name & archetype'**
   String get managedStoryWorkbenchEditNpcProfile;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Next step: Dialog & Voice'**
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.'**
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription;
+
+  /// No description provided for @managedStoryWorkbenchContinueToNpcDialogVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue to Dialog & Voice'**
+  String get managedStoryWorkbenchContinueToNpcDialogVoice;
 
   /// No description provided for @managedStoryWorkbenchNpcDisplayNameLabel.
   ///

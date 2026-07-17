@@ -29,6 +29,10 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.problemsChecksTab,
     required this.editOverview,
     this.editNpcProfile = 'Edit name & archetype',
+    this.npcDialogVoiceNextStepTitle = 'Next step: Dialog & Voice',
+    this.npcDialogVoiceNextStepDescription =
+        'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.',
+    this.continueToNpcDialogVoice = 'Continue to Dialog & Voice',
     required this.editStory,
     required this.editLogic,
     required this.inspectQuest,
@@ -87,6 +91,10 @@ final class Revision3StoryEntityWorkbenchCopy {
        problemsChecksTab = 'Problems & Checks',
        editOverview = 'Edit name & objectives',
        editNpcProfile = 'Edit name & archetype',
+       npcDialogVoiceNextStepTitle = 'Next step: Dialog & Voice',
+       npcDialogVoiceNextStepDescription =
+           'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.',
+       continueToNpcDialogVoice = 'Continue to Dialog & Voice',
        editStory = 'Edit description & connections',
        editLogic = 'Edit states & transitions',
        inspectQuest = 'Open source & compiler checks',
@@ -148,6 +156,9 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String problemsChecksTab;
   final String editOverview;
   final String editNpcProfile;
+  final String npcDialogVoiceNextStepTitle;
+  final String npcDialogVoiceNextStepDescription;
+  final String continueToNpcDialogVoice;
   final String editStory;
   final String editLogic;
   final String inspectQuest;
@@ -746,6 +757,20 @@ class _Revision3StoryEntityWorkbenchState
       ),
       const SizedBox(height: 12),
       _Fact(label: widget.copy.npcDisplayNameLabel, value: entity.displayName),
+      if (widget.npcDialogVoice != null) ...[
+        const SizedBox(height: 4),
+        _NpcDialogVoiceNextStepCard(
+          key: Key(
+            'revision3-story-workbench-npc-dialog-next-step-${entity.id}',
+          ),
+          title: widget.copy.npcDialogVoiceNextStepTitle,
+          description: widget.copy.npcDialogVoiceNextStepDescription,
+          actionLabel: widget.copy.continueToNpcDialogVoice,
+          onPressed: () =>
+              _selectSection(Revision3StoryWorkbenchSection.dialogVoice),
+        ),
+        const SizedBox(height: 4),
+      ],
       const SizedBox(height: 4),
       _TechnicalDetails(entity: entity, copy: widget.copy),
     ];
@@ -1061,6 +1086,60 @@ class _AtomicActionCard extends StatelessWidget {
           : const Icon(Icons.chevron_right),
       enabled: onPressed != null && !blocked,
       onTap: blocked ? null : onPressed,
+    ),
+  );
+}
+
+class _NpcDialogVoiceNextStepCard extends StatelessWidget {
+  const _NpcDialogVoiceNextStepCard({
+    required this.title,
+    required this.description,
+    required this.actionLabel,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String title;
+  final String description;
+  final String actionLabel;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.chat_bubble_outline),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(description),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: onPressed,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(actionLabel, textAlign: TextAlign.center),
+              ),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
