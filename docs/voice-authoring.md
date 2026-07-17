@@ -413,6 +413,37 @@ deployment, or runtime state. A stale graph can be refreshed;
 Store/head/receipt uncertainty instead requires a verified project reopen.
 Successful desktop playback does not qualify audible in-game behavior.
 
+### Exact managed-take media QA V1
+
+The native core and FFI now also provide a separate on-demand, read-only media
+inspection for one exact-current managed take. It reuses the complete line ->
+localization -> locale slot -> take -> sealed asset binding, reads no caller-
+supplied media path, and reopens and rebinds the Store after deriving the
+result. The second pass rereads the selected CAS bytes and repeats media
+inspection, so head drift, graph drift, and same-path asset replacement fail
+closed.
+
+The pathless result reports codec metadata plus an integer duration as
+`sample_frames / timebase_hz`. For Vorbis, a complete packet-by-packet PCM decode
+establishes the timeline; validated initial PCM origin and final EOS trim yield
+the playable duration. The Voice profile accepts mono or stereo and rejects
+broader channel layouts before decode. Opus uses the normative 48 kHz clock
+with granule origin, pre-skip, and EOS trim, but deliberately reports only
+packet-and-timing structural assurance because no Opus PCM decode occurs in
+this check. The operation evaluates neither loudness, clipping, performance,
+subtitle fit, desktop audibility, build/deployment readiness, nor in-game
+behavior. It writes no project, Store, game, save, build, or deployment state.
+
+**Manage Voice takes** exposes this as an explicit per-take **Check media**
+action, separate from Preview and never as an automatic scan. Studio presents a
+friendly duration and either full-decode or structure/timing assurance without
+showing paths, hashes, or technical identities. A result is cached only for the
+exact project checkpoint, line, locale, take, and take revision; reload,
+mutation, context change, or checkpoint drift discards it. Recoverable drift
+offers a catalog reload, while uncertain Store/session authority requires the
+managed project to be reopened. The visible result states that it is not an
+audio-quality or in-game playback test.
+
 **Manage takes** also closes the empty-slot dead end. Once a line/language
 VoiceSlot has no candidate and no selection, a separately confirmed exact-head
 transaction can remove that line/locale edge and its uniquely owned generated
@@ -452,7 +483,9 @@ The managed-R3 workflow still does not provide:
 - explicit choice among ambiguous installed archive matches;
 - recording, trimming, normalization, transcoding, loudness comparison, actor
   notes, or lineage. Exact managed-CAS take preview and the selected local
-  pre-import Ogg preview are integrated, but neither is an in-game proof;
+  pre-import Ogg preview and on-demand exact media QA are integrated, but media
+  QA currently reports only duration and its codec-specific validation
+  assurance; none is an in-game proof;
 - recursive, partial, or multi-locale folder import, translation/Voice coverage,
   CSV/XLIFF, or review queues;
 - qualified Opus output; or

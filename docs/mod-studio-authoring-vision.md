@@ -628,6 +628,19 @@ Publication reloads the content index, binds the exact managed checkpoint, and
 refreshes the visible project revision/head. This is the landed subset below,
 not the complete production surface described by the remaining requirements.
 
+Exact managed-take media QA is integrated as a separate on-demand action in
+**Manage Voice takes**. One pathless read-only request binds an exact current
+managed take through the complete line/localization/slot/take/asset chain,
+performs a second Store and CAS read to close races, and reports integer
+sample-frame duration with explicit assurance. Vorbis receives full-PCM-decode
+assurance after validating initial PCM origin and EOS trim; Opus remains
+honestly packet-and-timing-only. The dialog caches only the exact project,
+line, locale, take, and take revision, discards the result on reload/mutation/
+context drift, and exposes no media path, digest, or entity ID. Subtitle-
+duration comparison, loudness/clipping checks, and batch review remain product
+work; the action grants no project/game/save write, build, deployment,
+audibility, or runtime authority.
+
 For every line and project language, the author can:
 
 - work in the line's automatically created language slot and import, record, or

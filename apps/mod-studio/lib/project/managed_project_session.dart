@@ -1220,6 +1220,16 @@ abstract interface class ManagedRevision3VoiceTakePreviewStore {
   Future<void> releaseVoiceTakePreviewV1({required String cleanupToken});
 }
 
+/// Narrow pathless read-only capability for exact managed VoiceTake media QA.
+/// Alternate checkpoint stores must opt in and receive no materialization or
+/// mutation authority by implementing it.
+abstract interface class ManagedRevision3VoiceTakeMediaQaStore {
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaV1({
+    required String root,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  });
+}
+
 /// Narrow capability for atomically detaching one exact VoiceTake candidate.
 /// Separate capability discovery avoids granting deletion authority to
 /// checkpoint-only alternate stores and test fakes.
@@ -1263,6 +1273,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3VoiceBatchStore,
         ManagedRevision3QuestTranscriptStore,
         ManagedRevision3StoryDraftRemovalStore,
+        ManagedRevision3VoiceTakeMediaQaStore,
         ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
@@ -1580,6 +1591,15 @@ final class ModFfiManagedRevision3AuthoringStore
   Future<AuthoringRevision3VoiceTakePreviewRegistration>
   registerVoiceTakePreviewV1({required String root}) =>
       ffi.authoringStoreRegisterRevision3VoiceTakePreviewV1(root: root);
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaV1({
+    required String root,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) => ffi.authoringStoreInspectRevision3VoiceTakeMediaV1(
+    root: root,
+    request: request,
+  );
 
   @override
   Future<AuthoringRevision3VoiceTakePreviewMaterialization>
@@ -2160,6 +2180,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3StoryDraftRemovalStore;
   bool get supportsVoiceTakePreview =>
       _store is ManagedRevision3VoiceTakePreviewStore;
+  bool get supportsVoiceTakeMediaQa =>
+      _store is ManagedRevision3VoiceTakeMediaQaStore;
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
   bool get supportsVoiceBatch => _store is ManagedRevision3VoiceBatchStore;
@@ -3659,6 +3681,118 @@ class ManagedRevision3AuthoringProjectSession {
     } catch (error, stackTrace) {
       _core._throwRevision3VoicePreviewReadError(error, stackTrace);
     }
+  }
+
+  /// Inspect one exact-current managed VoiceTake without materializing bytes.
+  /// The operation is serialized with project mutation and preserves the
+  /// current checkpoint on success.
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaQaV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) {
+    final store = _store;
+    if (store is! ManagedRevision3VoiceTakeMediaQaStore) {
+      return Future<AuthoringRevision3VoiceTakeMediaQaResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Voice take media QA capability',
+        ),
+      );
+    }
+    final mediaStore = store as ManagedRevision3VoiceTakeMediaQaStore;
+    return _core.readExact<AuthoringRevision3VoiceTakeMediaQaResult>(
+      (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw UnsupportedError(
+            'this managed revision-3 Store has no Voice take media QA capability',
+          );
+        }
+        final request = AuthoringRevision3VoiceTakePreviewRequestV1(
+          expectedHead: basis.head,
+          expectedProjectId: projectId,
+          expectedRevision: projectRevision,
+          lineId: plan.lineId,
+          expectedLineRevision: plan.expectedLineRevision,
+          localizationId: plan.localizationId,
+          expectedLocalizationRevision: plan.expectedLocalizationRevision,
+          expectedLocId: plan.locId,
+          slotId: plan.slotId,
+          expectedSlotRevision: plan.expectedSlotRevision,
+          locale: plan.locale,
+          takeId: plan.takeId,
+          expectedTakeRevision: plan.expectedTakeRevision,
+          expectedAsset: AuthoringRevision3VoiceTakePreviewExpectedAsset(
+            sha256: plan.assetSha256,
+            byteLength: plan.assetByteLength,
+            logicalName: plan.assetLogicalName,
+          ),
+        );
+        final result = await mediaStore.inspectVoiceTakeMediaV1(
+          root: root.path,
+          request: request,
+        );
+        final assuranceMatchesPlan = switch (plan.codec) {
+          Revision3ContentVoiceOggCodec.vorbis =>
+            result.assurance ==
+                AuthoringRevision3VoiceTakeMediaAssurance.vorbisFullPcmDecode,
+          Revision3ContentVoiceOggCodec.opus =>
+            result.assurance ==
+                AuthoringRevision3VoiceTakeMediaAssurance
+                    .opusPacketAndTimingStructureOnly,
+        };
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.projectRevision != projectRevision ||
+            result.lineId != plan.lineId ||
+            result.lineRevision != plan.expectedLineRevision ||
+            result.localizationId != plan.localizationId ||
+            result.localizationRevision != plan.expectedLocalizationRevision ||
+            result.locId != plan.locId ||
+            result.slotId != plan.slotId ||
+            result.slotRevision != plan.expectedSlotRevision ||
+            result.locale != plan.locale ||
+            result.takeId != plan.takeId ||
+            result.takeRevision != plan.expectedTakeRevision ||
+            result.asset.sha256 != plan.assetSha256 ||
+            result.asset.byteLength != plan.assetByteLength ||
+            result.asset.logicalName != plan.assetLogicalName ||
+            result.status.name != plan.status.name ||
+            result.ogg.codec.name != plan.codec.name ||
+            result.ogg.channels != plan.channels ||
+            result.ogg.sampleRate != plan.sampleRate ||
+            result.duration.timebaseHz != plan.sampleRate ||
+            !assuranceMatchesPlan ||
+            result.mediaAuthority !=
+                AuthoringRevision3VoiceTakeMediaAuthority
+                    .exactCurrentManagedCasVoiceTakeMediaQaV1 ||
+            result.inspectionScope !=
+                AuthoringRevision3VoiceTakeMediaInspectionScope
+                    .selectedVoiceTakeMediaInputOnly ||
+            result.qualityStatus !=
+                AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated ||
+            result.audibilityStatus !=
+                AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated ||
+            result.projectWriteStatus !=
+                AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed ||
+            result.gameWriteStatus !=
+                AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed ||
+            result.saveWriteStatus !=
+                AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed ||
+            result.buildStatus !=
+                AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated ||
+            result.deploymentStatus !=
+                AuthoringRevision3VoiceTakeMediaDeploymentStatus.notPerformed ||
+            result.runtimeStatus !=
+                AuthoringRevision3VoiceTakeMediaRuntimeStatus.notQualified) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice media QA disagrees with its exact session basis or plan',
+          );
+        }
+        return result;
+      },
+      operation: 'inspectVoiceTakeMediaQaV1',
+      handleReadError: _core._throwRevision3VoiceMediaQaReadError,
+    );
   }
 
   /// Read and seal one exact-current, filesystem-safe Voice folder plan.
@@ -6601,6 +6735,39 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceMediaQaReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (_revision3VoiceMediaQaReadErrorIsRetryable(error.code)) {
+        // readExact independently proved that the fixed head is still exact.
+        // A stale line/locale/slot/take/asset selection can be refreshed.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is UnsupportedError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice media QA could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBatchPlanError(
     Object error,
     StackTrace stackTrace,
@@ -7881,6 +8048,14 @@ bool _revision3VoicePreviewReadErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CHANGED',
   'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_OUTPUT_CONFLICT',
   'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+}.contains(code);
+
+bool _revision3VoiceMediaQaReadErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_MEDIA_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_CONFLICT',
 }.contains(code);
 
 bool _revision3VoicePreviewMaterializationFailureRequiresReopen(Object error) {

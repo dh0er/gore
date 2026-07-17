@@ -264,6 +264,7 @@ void main() {
         'authoring_store_inspect_revision3_installed_dataasset_v1',
         'authoring_store_inspect_revision3_npc_source_v1',
         'authoring_store_inspect_revision3_quest_source_v1',
+        'authoring_store_inspect_revision3_voice_take_media_v1',
         'authoring_store_list_revision3_dataasset_stages_v1',
         'authoring_store_list_revision3_history_v1',
         'authoring_store_materialize_revision3_voice_take_preview_v1',

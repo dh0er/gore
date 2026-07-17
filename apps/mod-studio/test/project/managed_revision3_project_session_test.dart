@@ -1538,6 +1538,176 @@ void main() {
   );
 
   test(
+    'Voice media QA is pathless, exact, and read-only for the checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_media_qa');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice media QA'),
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactProject = session.projectJson;
+
+      final result = await session.inspectVoiceTakeMediaQaV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+
+      expect(session.supportsVoiceTakeMediaQa, isTrue);
+      expect(store.voiceMediaQaCalls, 1);
+      final request = store.voiceMediaQaRequests.single;
+      expect(request.expectedHead.canonicalJson, exactHead);
+      expect(request.lineId, revision3VoicePreviewLineId);
+      expect(request.locale, 'de');
+      expect(request.takeId, revision3VoicePreviewTakeId);
+      expect(result.duration.sampleFrames, 3840);
+      expect(result.duration.timebaseHz, 48000);
+      expect(
+        result.assurance,
+        AuthoringRevision3VoiceTakeMediaAssurance.vorbisFullPcmDecode,
+      );
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, exactProject);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice media QA leaf graph drift is stale and remains retryable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_media_qa_retryable',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice media QA retry'),
+      );
+      final exactHead = session.head.canonicalJson;
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_MEDIA_LINE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_LOCALIZATION_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_SLOT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_TAKE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_CONFLICT',
+      ];
+
+      for (final code in retryableCodes) {
+        store.nextVoiceMediaQaError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+          code: code,
+          message: 'fake closed Voice media QA graph rejection',
+        );
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+      }
+
+      await session.inspectVoiceTakeMediaQaV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice media QA Store and invariant uncertainty require reopen',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_MEDIA_INPUT_INVALID',
+        'AUTHORING_REVISION3_VOICE_MEDIA_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_SIGNED_WIRE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_INVALID',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_UNSAFE',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_INVARIANT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_MEDIA_FUTURE_UNKNOWN',
+      ];
+
+      for (var index = 0; index < poisonCodes.length; index++) {
+        final code = poisonCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_media_qa_poison_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 7,
+            name: 'Voice media QA poison $index',
+          ),
+        );
+        final exactHead = session.head.canonicalJson;
+        store.nextVoiceMediaQaError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+          code: code,
+          message: 'fake Voice media QA integrity failure',
+        );
+
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        final calls = store.voiceMediaQaCalls;
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voiceMediaQaCalls, calls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice media QA valid receipt drift poisons the exact session',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_media_qa_receipt_drift',
+      );
+      final store = _FakeRevision3Store()..nextVoiceMediaQaStatus = 'approved';
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 7,
+          name: 'Voice media QA receipt drift',
+        ),
+      );
+
+      await expectLater(
+        session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
     'Voice preview materializes one exact temp capability without changing the checkpoint',
     () async {
       final root = await _projectRoot(fixture, suffix: 'voice_preview');
@@ -7912,6 +8082,7 @@ Map<String, Object?> _npcProfilePreparedResponse({
 class _FakeRevision3Store
     implements
         ManagedRevision3AuthoringStore,
+        ManagedRevision3VoiceTakeMediaQaStore,
         ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3NpcProfileEditStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
@@ -7935,6 +8106,7 @@ class _FakeRevision3Store
   int npcProfilePrepareCalls = 0;
   int dialogLinePrepareCalls = 0;
   int voicePrepareCalls = 0;
+  int voiceMediaQaCalls = 0;
   int voicePreviewCalls = 0;
   int voiceSelectionPrepareCalls = 0;
   int voiceTakeStatusPrepareCalls = 0;
@@ -7993,6 +8165,8 @@ class _FakeRevision3Store
   final List<String> voiceCurrentProjects = <String>[];
   final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
       <AuthoringRevision3VoiceTakeRequestV1>[];
+  final List<AuthoringRevision3VoiceTakePreviewRequestV1> voiceMediaQaRequests =
+      <AuthoringRevision3VoiceTakePreviewRequestV1>[];
   final List<String> voicePreviewRoots = <String>[];
   String? _registeredVoicePreviewRoot;
   final List<AuthoringRevision3VoiceTakePreviewRequestV1> voicePreviewRequests =
@@ -8017,6 +8191,8 @@ class _FakeRevision3Store
   Object? nextNpcProfileError;
   String? nextNpcProfileResponseMismatch;
   Object? nextVoiceError;
+  Object? nextVoiceMediaQaError;
+  String? nextVoiceMediaQaStatus;
   Object? nextVoicePreviewError;
   bool blockVoicePreviewCleanupOnError = false;
   Object? nextVoiceSelectionError;
@@ -8834,6 +9010,32 @@ class _FakeRevision3Store
     return AuthoringRevision3VoiceTakePreparation.fromJson(
       fixture.response(),
       currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaV1({
+    required String root,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    voiceMediaQaCalls++;
+    voiceMediaQaRequests.add(request);
+    final injectedError = nextVoiceMediaQaError;
+    nextVoiceMediaQaError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+        code: 'AUTHORING_REVISION3_VOICE_MEDIA_HEAD_CONFLICT',
+        message: 'fake native Voice media QA basis CAS rejected',
+      );
+    }
+    final status = nextVoiceMediaQaStatus ?? 'recorded';
+    nextVoiceMediaQaStatus = null;
+    return AuthoringRevision3VoiceTakeMediaQaResult.fromJson(
+      revision3VoiceMediaQaResponse(request: request, status: status),
       request: request,
     );
   }

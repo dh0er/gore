@@ -178,6 +178,69 @@ Map<String, Object?> revision3VoicePreviewResponse({
   };
 }
 
+Map<String, Object?> revision3VoiceMediaQaResponse({
+  AuthoringRevision3VoiceTakePreviewRequestV1? request,
+  String status = 'recorded',
+  String codec = 'vorbis',
+  int channels = 1,
+  int sampleRate = 48000,
+  int pages = 3,
+  int logicalStreams = 1,
+  int durationSampleFrames = 3840,
+  int? durationTimebaseHz,
+  String? assurance,
+}) {
+  final exactRequest = request ?? revision3VoicePreviewRequest();
+  final isOpus = codec == 'opus';
+  return <String, Object?>{
+    'ok': true,
+    'outcome': 'media_qa_complete',
+    'basis_head_json': exactRequest.expectedHead.canonicalJson,
+    'project_id': exactRequest.expectedProjectId,
+    'project_revision': exactRequest.expectedRevision,
+    'line_id': exactRequest.lineId,
+    'line_revision': exactRequest.expectedLineRevision,
+    'localization_id': exactRequest.localizationId,
+    'localization_revision': exactRequest.expectedLocalizationRevision,
+    'loc_id': exactRequest.expectedLocId,
+    'slot_id': exactRequest.slotId,
+    'slot_revision': exactRequest.expectedSlotRevision,
+    'locale': exactRequest.locale,
+    'take_id': exactRequest.takeId,
+    'take_revision': exactRequest.expectedTakeRevision,
+    'asset': <String, Object?>{
+      'sha256': exactRequest.expectedAsset.sha256,
+      'byte_len': exactRequest.expectedAsset.byteLength,
+      'logical_name': exactRequest.expectedAsset.logicalName,
+    },
+    'status': status,
+    'ogg': <String, Object?>{
+      'codec': codec,
+      'channels': channels,
+      'sample_rate': sampleRate,
+      'pages': pages,
+      'logical_streams': logicalStreams,
+    },
+    'duration_sample_frames': durationSampleFrames,
+    'duration_timebase_hz': durationTimebaseHz ?? (isOpus ? 48000 : sampleRate),
+    'assurance':
+        assurance ??
+        (isOpus
+            ? 'opus_packet_and_timing_structure_only'
+            : 'vorbis_full_pcm_decode'),
+    'media_authority': 'exact_current_managed_cas_voice_take_media_qa_v1',
+    'inspection_scope': 'selected_voice_take_media_input_only',
+    'quality_status': 'not_evaluated',
+    'audibility_status': 'not_evaluated',
+    'project_write_status': 'not_performed',
+    'game_write_status': 'not_performed',
+    'save_write_status': 'not_performed',
+    'build_status': 'not_evaluated',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'not_qualified',
+  };
+}
+
 Map<String, Object?> revision3VoicePreviewRegistrationResponse({
   required String previewRoot,
   String cleanupToken = revision3VoicePreviewCleanupToken,

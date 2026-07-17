@@ -262,6 +262,21 @@ writes no project, Store, game, save, build, deployment, or runtime state and
 does not qualify in-game audio. Recording, editing/transcoding, coverage, and
 an isolated audible game profile remain separate work.
 
+Voice media-QA addendum (2026-07-17): **Manage Voice takes** now offers a
+separate on-demand **Check media** action for one exact-current managed take.
+The pathless native/FFI route double-reopens the complete line/localization/
+slot/take/asset binding, rereads and rechecks the sealed CAS object, and reports
+rational sample-frame duration plus an explicit assurance level. Vorbis uses a
+complete packet-by-packet PCM decode with validated initial origin and EOS trim;
+the Voice profile accepts mono/stereo only. Opus is labelled structure-and-
+timing-only and uses its normative 48 kHz clock with origin, pre-skip, and EOS
+trim. Dart/session/controller boundaries revalidate the exact checkpoint, and
+the dialog caches only that project/line/locale/take revision. Reloads,
+mutations, and context drift discard the result; stale state can reload while
+uncertain authority requires reopen. The UI shows no path, digest, or entity ID
+and explicitly grants no loudness, clipping, subtitle-fit, audibility, build,
+deployment, runtime, project-write, game-write, or save-write authority.
+
 "Complete" does not mean exposing every Unreal file type. It means every
 advertised operation is semantic, reversible, deterministic, inspectable, and
 qualified for the selected game version. Unknown game-source/property

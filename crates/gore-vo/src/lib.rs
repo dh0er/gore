@@ -22,4 +22,6 @@ pub use archive::{
 };
 pub use error::{Error, OggError, Result};
 pub use limits::Limits;
-pub use ogg::{validate_ogg, OggCodec, OggInfo};
+pub use ogg::{
+    validate_ogg, validate_ogg_with_timing, OggCodec, OggInfo, OggTiming, OggValidation,
+};

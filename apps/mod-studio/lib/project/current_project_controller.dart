@@ -27,6 +27,7 @@ import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_project_history.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_media_qa_service.dart';
 import 'revision3_voice_take_preview_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
@@ -336,6 +337,14 @@ const _revision3VoiceTakePreviewStaleCodes = <String>{
   'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
   'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
   'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
+};
+
+const _revision3VoiceTakeMediaQaStaleCodes = <String>{
+  'AUTHORING_REVISION3_VOICE_MEDIA_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_CONFLICT',
 };
 
 const _revision3DialogVoiceSlotRemovalCorrectableCodes = <String>{
@@ -727,6 +736,18 @@ abstract interface class ManagedRevision3VoiceTakePreviewLease {
   });
 }
 
+/// Optional pathless exact-current authority for native VoiceTake media QA.
+/// It is distinct from Preview because it grants no temporary-file capability.
+abstract interface class ManagedRevision3VoiceTakeMediaQaLease {
+  bool get supportsVoiceTakeMediaQa;
+
+  void markRequiresReopenAfterVoiceTakeMediaQaUncertainty();
+
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaQaV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  });
+}
+
 /// Optional authority for one read-only Voice-folder plan and one atomic
 /// project-only publication of its complete ready set. Keeping this capability
 /// separate prevents legacy leases and narrow test doubles from accidentally
@@ -961,6 +982,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3NpcProfileEditLease,
         ManagedRevision3QuestTranscriptLease,
         ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3VoiceTakeMediaQaLease,
         ManagedRevision3VoiceTakePreviewLease,
         ManagedRevision3VoiceBatchLease,
         ManagedRevision3VoiceTakeRemovalLease,
@@ -1040,6 +1062,9 @@ final class _ManagedRevision3SessionLease
   bool get supportsVoiceTakePreview => _session.supportsVoiceTakePreview;
 
   @override
+  bool get supportsVoiceTakeMediaQa => _session.supportsVoiceTakeMediaQa;
+
+  @override
   bool get supportsVoiceBatch => _session.supportsVoiceBatch;
 
   @override
@@ -1062,6 +1087,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterVoiceTakePreviewUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterVoiceTakeMediaQaUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1498,6 +1527,11 @@ final class _ManagedRevision3SessionLease
   Future<Revision3VoiceTakePreviewCapability> materializeVoiceTakePreviewV1({
     required Revision3VoiceTakePreviewTechnicalPlan plan,
   }) => _session.materializeVoiceTakePreviewV1(plan: plan);
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaQaV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) => _session.inspectVoiceTakeMediaQaV1(plan: plan);
 
   @override
   Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
@@ -4112,6 +4146,105 @@ final class CurrentProjectCoordinator
     }
   });
 
+  /// Inspect one exact-current managed CAS VoiceTake without exposing a path or
+  /// granting mutation, build, deployment, or runtime authority.
+  Future<AuthoringRevision3VoiceTakeMediaQaResult>
+  inspectCurrentRevision3VoiceTakeMediaQa({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice take media QA is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakeMediaQaRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakeMediaQaStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3VoiceTakeMediaQaLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project lease has no Voice take media QA capability',
+      );
+    }
+    final mediaLease = lease as ManagedRevision3VoiceTakeMediaQaLease;
+    if (!mediaLease.supportsVoiceTakeMediaQa) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project Store has no Voice take media QA capability',
+      );
+    }
+
+    try {
+      final result = await mediaLease.inspectVoiceTakeMediaQaV1(plan: plan);
+      final matches =
+          identical(_current, current) &&
+          identical(current.lease, lease) &&
+          !lease.requiresReopen &&
+          lease.root.path == expectedRoot &&
+          lease.projectId == expectedProjectId &&
+          lease.projectRevision == expectedProjectRevision &&
+          lease.head.canonicalJson == expectedHead.canonicalJson &&
+          result.basisHead.canonicalJson == expectedHead.canonicalJson &&
+          _revision3VoiceTakeMediaQaReceiptMatches(
+            result,
+            projectId: expectedProjectId,
+            projectRevision: expectedProjectRevision,
+            plan: plan,
+          );
+      if (!matches) {
+        mediaLease.markRequiresReopenAfterVoiceTakeMediaQaUncertainty();
+        throw Revision3VoiceTakeMediaQaRequiresReopenException(
+          cause: StateError(
+            'Voice media QA receipt disagrees with the current checkpoint',
+          ),
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (error is Revision3VoiceTakeMediaQaRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          mediaLease.markRequiresReopenAfterVoiceTakeMediaQaUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          Revision3VoiceTakeMediaQaRequiresReopenException(cause: error),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3VoiceTakeMediaQaStaleCodes.contains(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeMediaQaStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error is Revision3VoiceTakeMediaQaStaleCheckpointException ||
+          error is CurrentProjectOperationUnsupportedException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      mediaLease.markRequiresReopenAfterVoiceTakeMediaQaUncertainty();
+      Error.throwWithStackTrace(
+        Revision3VoiceTakeMediaQaRequiresReopenException(cause: error),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
   /// Register, materialize, and adopt one exact-current managed CAS Voice take
   /// through a native-owned opaque cleanup capability. This read-only operation
   /// leaves the project head and revision unchanged and grants no build/runtime
@@ -5851,6 +5984,67 @@ final class CurrentProjectCoordinator
     );
     super.dispose();
   }
+}
+
+bool _revision3VoiceTakeMediaQaReceiptMatches(
+  AuthoringRevision3VoiceTakeMediaQaResult result, {
+  required String projectId,
+  required int projectRevision,
+  required Revision3VoiceTakePreviewTechnicalPlan plan,
+}) {
+  final assuranceMatches = switch (plan.codec) {
+    Revision3ContentVoiceOggCodec.vorbis =>
+      result.assurance ==
+              AuthoringRevision3VoiceTakeMediaAssurance.vorbisFullPcmDecode &&
+          result.duration.timebaseHz == plan.sampleRate,
+    Revision3ContentVoiceOggCodec.opus =>
+      result.assurance ==
+              AuthoringRevision3VoiceTakeMediaAssurance
+                  .opusPacketAndTimingStructureOnly &&
+          result.duration.timebaseHz == 48000,
+  };
+  return result.projectId == projectId &&
+      result.projectRevision == projectRevision &&
+      result.lineId == plan.lineId &&
+      result.lineRevision == plan.expectedLineRevision &&
+      result.localizationId == plan.localizationId &&
+      result.localizationRevision == plan.expectedLocalizationRevision &&
+      result.locId == plan.locId &&
+      result.slotId == plan.slotId &&
+      result.slotRevision == plan.expectedSlotRevision &&
+      result.locale == plan.locale &&
+      result.takeId == plan.takeId &&
+      result.takeRevision == plan.expectedTakeRevision &&
+      result.asset.sha256 == plan.assetSha256 &&
+      result.asset.byteLength == plan.assetByteLength &&
+      result.asset.logicalName == plan.assetLogicalName &&
+      result.status.name == plan.status.name &&
+      result.ogg.codec.name == plan.codec.name &&
+      result.ogg.channels == plan.channels &&
+      result.ogg.sampleRate == plan.sampleRate &&
+      assuranceMatches &&
+      result.mediaAuthority ==
+          AuthoringRevision3VoiceTakeMediaAuthority
+              .exactCurrentManagedCasVoiceTakeMediaQaV1 &&
+      result.inspectionScope ==
+          AuthoringRevision3VoiceTakeMediaInspectionScope
+              .selectedVoiceTakeMediaInputOnly &&
+      result.qualityStatus ==
+          AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated &&
+      result.audibilityStatus ==
+          AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated &&
+      result.projectWriteStatus ==
+          AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed &&
+      result.gameWriteStatus ==
+          AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed &&
+      result.saveWriteStatus ==
+          AuthoringRevision3VoiceTakeMediaWriteStatus.notPerformed &&
+      result.buildStatus ==
+          AuthoringRevision3VoiceTakeMediaEvaluationStatus.notEvaluated &&
+      result.deploymentStatus ==
+          AuthoringRevision3VoiceTakeMediaDeploymentStatus.notPerformed &&
+      result.runtimeStatus ==
+          AuthoringRevision3VoiceTakeMediaRuntimeStatus.notQualified;
 }
 
 sealed class _OwnedCurrentProject {

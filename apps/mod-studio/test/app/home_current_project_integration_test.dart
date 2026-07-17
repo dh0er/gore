@@ -42,6 +42,7 @@ import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_folder_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_production_card.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -54,6 +55,7 @@ import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_project_problems_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_voice_preview_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
@@ -5166,6 +5168,60 @@ void main() {
   );
 
   testWidgets(
+    'managed Voice media QA is wired through Home without a game root or write',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      tester.view.physicalSize = const Size(1600, 1200);
+      final managed = _FakeVoiceMediaQaManagedLease(
+        root: Directory(r'C:\mods\voice-media-qa'),
+        projectId: revision3VoicePreviewProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) =>
+            revision3VoicePreviewContentIndex(revision: 7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-manage-voice-takes'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+      await tester.pump();
+
+      final check = find.byKey(const Key('voice-media-qa-start-0'));
+      await tester.ensureVisible(check);
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceMediaQaCalls, 1);
+      expect(find.byKey(const Key('voice-media-qa-result-0')), findsOneWidget);
+      expect(find.textContaining('0.08 s'), findsOneWidget);
+      expect(find.textContaining('fully decoded'), findsOneWidget);
+      expect(find.textContaining('not audio quality'), findsOneWidget);
+      expect(find.textContaining('in-game playback'), findsOneWidget);
+      expect(managed.projectRevision, 7);
+      expect(managed.requiresReopen, isFalse);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        7,
+      );
+    },
+  );
+
+  testWidgets(
     'managed Voice selection works without a game root and retains Library selection',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -7861,6 +7917,60 @@ class _FakeManagedLease
       requiresReopenValue = true;
       throw error;
     }
+  }
+}
+
+final class _FakeVoiceMediaQaManagedLease extends _FakeManagedLease
+    implements ManagedRevision3VoiceTakeMediaQaLease {
+  _FakeVoiceMediaQaManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required super.contentIndexBuilder,
+  });
+
+  int voiceMediaQaCalls = 0;
+  Revision3VoiceTakePreviewTechnicalPlan? lastVoiceMediaQaPlan;
+
+  @override
+  bool get supportsVoiceTakeMediaQa => true;
+
+  @override
+  void markRequiresReopenAfterVoiceTakeMediaQaUncertainty() {
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaQaV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) async {
+    voiceMediaQaCalls++;
+    lastVoiceMediaQaPlan = plan;
+    final request = AuthoringRevision3VoiceTakePreviewRequestV1(
+      expectedHead: head,
+      expectedProjectId: projectId,
+      expectedRevision: projectRevision,
+      lineId: plan.lineId,
+      expectedLineRevision: plan.expectedLineRevision,
+      localizationId: plan.localizationId,
+      expectedLocalizationRevision: plan.expectedLocalizationRevision,
+      expectedLocId: plan.locId,
+      slotId: plan.slotId,
+      expectedSlotRevision: plan.expectedSlotRevision,
+      locale: plan.locale,
+      takeId: plan.takeId,
+      expectedTakeRevision: plan.expectedTakeRevision,
+      expectedAsset: AuthoringRevision3VoiceTakePreviewExpectedAsset(
+        sha256: plan.assetSha256,
+        byteLength: plan.assetByteLength,
+        logicalName: plan.assetLogicalName,
+      ),
+    );
+    return AuthoringRevision3VoiceTakeMediaQaResult.fromJson(
+      revision3VoiceMediaQaResponse(request: request),
+      request: request,
+    );
   }
 }
 

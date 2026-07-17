@@ -252,6 +252,7 @@ mod authoring_story_quest_transcript_revision3;
 mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_batch_revision3;
 mod authoring_voice_build_revision3;
+mod authoring_voice_media_revision3;
 mod authoring_voice_plan_revision3;
 mod authoring_voice_preview_revision3;
 mod authoring_voice_revision3;
@@ -303,6 +304,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
     "authoring_store_inspect_revision3_quest_source_v1",
+    authoring_voice_media_revision3::COMMAND,
     "authoring_store_list_revision3_dataasset_stages_v1",
     authoring_history_revision3::LIST_COMMAND,
     authoring_voice_preview_revision3::COMMAND,
@@ -640,6 +642,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_inspect_revision3_quest_source_v1" => Some(
             authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw,
+        ),
+        authoring_voice_media_revision3::COMMAND => Some(
+            authoring_voice_media_revision3::inspect_revision3_voice_take_media_v1_raw,
         ),
         authoring_history_revision3::LIST_COMMAND => {
             Some(authoring_history_revision3::list_revision3_history_v1_raw)
@@ -1790,6 +1795,7 @@ mod tests {
                     "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
                     "authoring_store_inspect_revision3_quest_source_v1",
+                    "authoring_store_inspect_revision3_voice_take_media_v1",
                     "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_list_revision3_history_v1",
                     "authoring_store_materialize_revision3_voice_take_preview_v1",
@@ -1929,6 +1935,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_inspect_revision3_quest_source_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_inspect_revision3_voice_take_media_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_read_dataasset_extract_receipt_v2"));

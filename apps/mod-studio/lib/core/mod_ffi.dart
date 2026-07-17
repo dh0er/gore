@@ -40,6 +40,7 @@ part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_batch.dart';
 part '../project/revision3_voice_take.dart';
+part '../project/revision3_voice_take_media_qa_authoring.dart';
 part '../project/revision3_voice_take_preview.dart';
 part '../project/revision3_voice_take_removal.dart';
 part '../project/revision3_voice_take_selection.dart';
@@ -1591,6 +1592,40 @@ class ModFfi {
       // A malformed same-build success is fail-closed: never guess a token or ambient path.
       // Native may retain that isolated slot/root until process exit in this exceptional ABI
       // mismatch; validated successes expose only token-bound release authority.
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Inspect one exact-current managed VoiceTake in place. The response is
+  /// pathless and grants no preview-file, mutation, build, or runtime authority.
+  Future<AuthoringRevision3VoiceTakeMediaQaResult>
+  authoringStoreInspectRevision3VoiceTakeMediaV1({
+    required String root,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    const command = 'authoring_store_inspect_revision3_voice_take_media_v1';
+    _authoringRevision3Path(root, 'root');
+    if (!p.isAbsolute(root)) {
+      throw ArgumentError.value(
+        '<${root.length} characters>',
+        'root',
+        'must be an absolute managed Store directory',
+      );
+    }
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('root', root),
+      ('voiceTakePreviewRequestJson', request.canonicalJson),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'root': root,
+      'voice_take_preview_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakeMediaQaResult.fromJson(
+        response,
+        request: request,
+      );
+    } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);
     }
   }

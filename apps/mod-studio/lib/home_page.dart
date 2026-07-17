@@ -86,6 +86,7 @@ import 'project/revision3_voice_folder_authoring.dart';
 import 'project/revision3_voice_folder_import_dialog.dart';
 import 'project/revision3_voice_folder_managed_adapter.dart';
 import 'project/revision3_voice_take_removal_authoring.dart';
+import 'project/revision3_voice_take_media_qa_service.dart';
 import 'project/revision3_voice_take_preview_authoring.dart';
 import 'project/revision3_voice_take_preview_playback.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
@@ -1426,6 +1427,28 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          inspectVoiceTakeMediaQa:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3VoiceTakeMediaQaStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .inspectCurrentRevision3VoiceTakeMediaQa(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTakeSelection:
               ({
                 required expectedProjectId,
@@ -2110,6 +2133,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.pickVoiceFolder,
     required this.isVoiceFolderPublicationCurrent,
     required this.materializeVoiceTakePreview,
+    required this.inspectVoiceTakeMediaQa,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTakeStatus,
     required this.publishVoiceTakeRemoval,
@@ -2188,6 +2212,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   isVoiceFolderPublicationCurrent;
   final Revision3VoiceTakePreviewTechnicalMaterializer
   materializeVoiceTakePreview;
+  final Revision3VoiceTakeMediaQaTechnicalInspector inspectVoiceTakeMediaQa;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
   final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
@@ -2283,6 +2308,8 @@ class _ManagedRevision3ProjectViewState
       widget.pickVoiceFolder;
   Revision3VoiceTakePreviewTechnicalMaterializer
   get materializeVoiceTakePreview => widget.materializeVoiceTakePreview;
+  Revision3VoiceTakeMediaQaTechnicalInspector get inspectVoiceTakeMediaQa =>
+      widget.inspectVoiceTakeMediaQa;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
       widget.publishVoiceTakeSelection;
   Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
@@ -4038,6 +4065,10 @@ class _ManagedRevision3ProjectViewState
       loadContentIndex: loadContentIndex,
       materializeTechnicalPlan: materializeVoiceTakePreview,
     );
+    final mediaQaService = Revision3VoiceTakeMediaQaAuthoringService(
+      loadContentIndex: loadContentIndex,
+      inspectTechnicalPlan: inspectVoiceTakeMediaQa,
+    );
     final previewPlayback =
         Revision3VoiceTakePreviewPlaybackController.standard();
     try {
@@ -4063,6 +4094,21 @@ class _ManagedRevision3ProjectViewState
                     publishTechnicalPlan: publishDialogVoiceSlotRemoval,
                   ),
               previewPlayback: previewPlayback,
+              mediaQaInspect:
+                  ({
+                    required checkpoint,
+                    required lineId,
+                    required locale,
+                    required takeId,
+                  }) async =>
+                      Revision3VoiceTakeMediaQaDialogResult.fromAuthoring(
+                        await mediaQaService.inspect(
+                          checkpoint: checkpoint,
+                          lineId: lineId,
+                          locale: locale,
+                          takeId: takeId,
+                        ),
+                      ),
               previewMaterialize:
                   ({
                     required checkpoint,

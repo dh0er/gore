@@ -11,6 +11,7 @@ import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_preview_playback.dart';
+import 'package:gore_mod/project/revision3_voice_take_media_qa_service.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -156,6 +157,364 @@ void main() {
     expect(find.byKey(const Key('voice-preview-progress-0')), findsOneWidget);
     expect(tester.takeException(), isNull);
     unawaited(playback.dispose());
+  });
+
+  testWidgets(
+    'media QA is on demand, per take, and keeps its exact safe result separate from preview',
+    (tester) async {
+      final pending = Completer<Revision3VoiceTakeMediaQaDialogResult>();
+      var inspections = 0;
+      final index = _index(previewable: true);
+      final privateTakeId = _candidateIds(index).first;
+      await _openDialog(
+        tester,
+        index: index,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        mediaQaInspect:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) {
+              inspections++;
+              return pending.future;
+            },
+      );
+
+      expect(inspections, 0);
+      expect(find.byKey(const Key('voice-media-qa-result-0')), findsNothing);
+      expect(find.byKey(const Key('voice-preview-start-0')), findsNothing);
+
+      final check = find.byKey(const Key('voice-media-qa-start-0'));
+      await tester.ensureVisible(check);
+      await tester.tap(check);
+      await tester.pump();
+
+      expect(inspections, 1);
+      expect(find.byKey(const Key('voice-media-qa-loading-0')), findsOneWidget);
+      expect(find.byKey(const Key('voice-media-qa-loading-1')), findsNothing);
+
+      pending.complete(
+        Revision3VoiceTakeMediaQaDialogResult(
+          sampleFrames: 72000,
+          timebaseHz: 48000,
+          assurance: Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.textContaining('1.50 s'), findsOneWidget);
+      expect(find.textContaining('fully decoded'), findsOneWidget);
+      expect(find.textContaining('not audio quality'), findsOneWidget);
+      expect(find.textContaining('in-game playback'), findsOneWidget);
+      expect(find.textContaining(privateTakeId), findsNothing);
+      expect(find.textContaining(r'C:\'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Opus media QA states its limited assurance without overclaiming',
+    (tester) async {
+      await _openDialog(
+        tester,
+        index: _index(previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        mediaQaInspect:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async => Revision3VoiceTakeMediaQaDialogResult(
+              sampleFrames: 123456,
+              timebaseHz: 48000,
+              assurance: Revision3VoiceTakeMediaQaDialogAssurance
+                  .timingAndStructureOnly,
+            ),
+      );
+
+      final check = find.byKey(const Key('voice-media-qa-start-0'));
+      await tester.ensureVisible(check);
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining(
+          'timing/structure checked; audio not fully decoded',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('not audio quality'), findsOneWidget);
+    },
+  );
+
+  testWidgets('German media QA copy stays author-friendly', (tester) async {
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      copy: Revision3VoiceTakeSelectionDialogCopy.german,
+      mediaQaInspect:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async => Revision3VoiceTakeMediaQaDialogResult(
+            sampleFrames: 48000,
+            timebaseHz: 48000,
+            assurance: Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+          ),
+    );
+
+    final check = find.byKey(const Key('voice-media-qa-start-0'));
+    expect(find.widgetWithText(TextButton, 'Audiodatei prüfen'), findsWidgets);
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Audiodatei geprüft'), findsOneWidget);
+    expect(find.textContaining('vollständig dekodiert'), findsOneWidget);
+    expect(find.textContaining('nicht Audioqualität'), findsOneWidget);
+    expect(find.textContaining('Wiedergabe im Spiel'), findsOneWidget);
+  });
+
+  testWidgets(
+    'unknown media QA failure stays per take, hides details, and retries',
+    (tester) async {
+      var inspections = 0;
+      await _openDialog(
+        tester,
+        index: _index(previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        mediaQaInspect:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async {
+              inspections++;
+              if (inspections == 1) {
+                throw StateError(
+                  r'C:\private\take.ogg aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                );
+              }
+              return Revision3VoiceTakeMediaQaDialogResult(
+                sampleFrames: 48000,
+                timebaseHz: 48000,
+                assurance:
+                    Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+              );
+            },
+      );
+
+      final check = find.byKey(const Key('voice-media-qa-start-0'));
+      await tester.ensureVisible(check);
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('voice-media-qa-error-0')), findsOneWidget);
+      expect(find.byKey(const Key('voice-media-qa-error-1')), findsNothing);
+      expect(find.textContaining('private'), findsNothing);
+      expect(find.textContaining('aaaaaaaaaaaaaaaa'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+      expect(inspections, 2);
+      expect(find.byKey(const Key('voice-media-qa-error-0')), findsNothing);
+      expect(find.byKey(const Key('voice-media-qa-result-0')), findsOneWidget);
+    },
+  );
+
+  testWidgets('stale media QA offers a catalog reload and discards its state', (
+    tester,
+  ) async {
+    var inspections = 0;
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      mediaQaInspect:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async {
+            inspections++;
+            throw const Revision3VoiceTakeMediaQaStaleCheckpointException();
+          },
+    );
+
+    final check = find.byKey(const Key('voice-media-qa-start-0'));
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+
+    expect(inspections, 1);
+    expect(find.byKey(const Key('voice-media-qa-error-0')), findsOneWidget);
+    expect(find.textContaining('project changed'), findsWidgets);
+    expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+    expect(tester.widget<TextButton>(check).onPressed, isNull);
+
+    await tester.tap(find.byKey(const Key('voice-status-reload')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('voice-media-qa-error-0')), findsNothing);
+    expect(find.byKey(const Key('voice-media-qa-result-0')), findsNothing);
+    expect(inspections, 1);
+  });
+
+  testWidgets('requires-reopen media QA is per-take and terminal', (
+    tester,
+  ) async {
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      mediaQaInspect:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async =>
+              throw const Revision3VoiceTakeMediaQaRequiresReopenException(),
+    );
+
+    final check = find.byKey(const Key('voice-media-qa-start-0'));
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('voice-media-qa-error-0')), findsOneWidget);
+    expect(find.textContaining('Reopen the managed project'), findsWidgets);
+    expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+    expect(find.widgetWithText(TextButton, 'Close'), findsOneWidget);
+    expect(tester.widget<TextButton>(check).onPressed, isNull);
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+  });
+
+  testWidgets('media QA result is discarded on line change and mutation', (
+    tester,
+  ) async {
+    var current = _index(previewable: true, sharedFirstTake: true);
+    await _openDialog(
+      tester,
+      index: current,
+      load: () async => current,
+      mediaQaInspect:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async => Revision3VoiceTakeMediaQaDialogResult(
+            sampleFrames: 48000,
+            timebaseHz: 48000,
+            assurance: Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+          ),
+      publishStatus:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            current = _index(
+              revision: 8,
+              secondApproved: true,
+              secondTakeRevision: 1,
+              previewable: true,
+              sharedFirstTake: true,
+            );
+            return _statusPublication(
+              projectId: expectedProjectId,
+              revision: 8,
+              plan: plan,
+            );
+          },
+    );
+
+    await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+    await tester.pump();
+    final check = find.byKey(const Key('voice-media-qa-start-0'));
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('voice-media-qa-result-0')), findsOneWidget);
+
+    final secondLine = find.byKey(const Key('voice-selection-line-1'));
+    await tester.ensureVisible(secondLine);
+    await tester.tap(secondLine);
+    await tester.pump();
+    expect(find.byKey(const Key('voice-media-qa-result-0')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+    await tester.pump();
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('voice-media-qa-result-0')), findsOneWidget);
+
+    final statusChange = find.byKey(const Key('voice-status-change-1'));
+    await tester.ensureVisible(statusChange);
+    await tester.pump();
+    await tester.tap(statusChange);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('voice-status-option-1-approved')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('voice-media-qa-result-0')), findsNothing);
+  });
+
+  testWidgets('media QA result remains usable at a narrow dialog width', (
+    tester,
+  ) async {
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      surfaceSize: const Size(390, 680),
+      mediaQaInspect:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async => Revision3VoiceTakeMediaQaDialogResult(
+            sampleFrames: 48000,
+            timebaseHz: 48000,
+            assurance: Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+          ),
+    );
+
+    final check = find.byKey(const Key('voice-media-qa-start-0'));
+    await tester.ensureVisible(check);
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('voice-media-qa-result-0')),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('not audio quality'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('barrier dismissal unloads playback before closing its lease', (
@@ -2362,6 +2721,7 @@ Future<void> _openDialog(
   Revision3DialogVoiceSlotRemovalTechnicalPublisher? publishSlotRemoval,
   Revision3VoiceTakePreviewPlaybackController? previewPlayback,
   Revision3VoiceTakePreviewDialogMaterializer? previewMaterialize,
+  Revision3VoiceTakeMediaQaDialogInspector? mediaQaInspect,
   Locale locale = const Locale('en'),
   Size surfaceSize = const Size(1200, 1000),
   String? initialLineId,
@@ -2408,6 +2768,7 @@ Future<void> _openDialog(
                     slotRemovalService: slotRemovalService,
                     previewPlayback: previewPlayback,
                     previewMaterialize: previewMaterialize,
+                    mediaQaInspect: mediaQaInspect,
                     initialLineId: initialLineId,
                     initialLocale: initialLocale,
                     fixedContext: fixedContext,

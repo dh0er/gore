@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, io::Cursor};
+use std::collections::BTreeMap;
 
 use crate::{Limits, OggError};
 
@@ -20,6 +20,33 @@ pub struct OggInfo {
     pub codec: OggCodec,
     pub pages: usize,
     pub logical_streams: usize,
+}
+
+/// Codec timing and decode-assurance facts from complete Ogg validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OggTiming {
+    /// Exact playable sample frames per channel after codec start/end trimming.
+    ///
+    /// One frame contains one sample for every channel. Interpret this integer only together with
+    /// [`Self::duration_timebase_hz`]; no floating-point rounding is involved.
+    pub duration_sample_frames: u64,
+    /// Clock rate for [`Self::duration_sample_frames`]. Vorbis uses its identification-header
+    /// sample rate. Ogg Opus always uses the normative 48 kHz playback clock, independently of the
+    /// informational input sample rate carried by `OpusHead`.
+    pub duration_timebase_hz: u32,
+    /// Whether validation decoded the complete compressed audio stream to PCM.
+    ///
+    /// This is true for Vorbis. It is false for Opus because Opus validation proves packet framing
+    /// and timing/granule consistency without decoding the SILK/CELT payload. Neither value is a
+    /// loudness, perceptual-quality, desktop-audibility, or in-game qualification claim.
+    pub pcm_decode_complete: bool,
+}
+
+/// Backward-compatible Ogg metadata plus additive timing facts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OggValidation {
+    pub info: OggInfo,
+    pub timing: OggTiming,
 }
 
 #[derive(Default)]
@@ -52,6 +79,11 @@ struct StreamState {
 /// SILK/CELT payload is not decoded. Consequently, successful Opus validation is strong structural
 /// decodability evidence, not proof that every decoder can play the asset.
 pub fn validate_ogg(data: &[u8], limits: &Limits) -> Result<OggInfo, OggError> {
+    validate_ogg_with_timing(data, limits).map(|validation| validation.info)
+}
+
+/// Validate an Ogg voice asset and also derive exact codec timing.
+pub fn validate_ogg_with_timing(data: &[u8], limits: &Limits) -> Result<OggValidation, OggError> {
     if data.is_empty() {
         return Err(OggError::Empty);
     }
@@ -266,24 +298,27 @@ pub fn validate_ogg(data: &[u8], limits: &Limits) -> Result<OggInfo, OggError> {
             return Err(OggError::Identification("logical stream has no packet"));
         }
         if let Some(codec) = &stream.codec {
-            validate_complete_audio_stream(*serial, stream, codec, data, limits)?;
-            recognized.push((*serial, codec.clone()));
+            let timing = validate_complete_audio_stream(*serial, stream, codec, data, limits)?;
+            recognized.push((*serial, codec.clone(), timing));
         }
     }
-    let codec = match recognized.as_slice() {
+    let (codec, timing) = match recognized.as_slice() {
         [] => {
             return Err(OggError::Identification(
                 "no Vorbis or Opus audio logical stream was found",
             ));
         }
-        [(_, codec)] => codec.clone(),
+        [(_, codec, timing)] => (codec.clone(), *timing),
         _ => return Err(OggError::MultipleAudioStreams),
     };
 
-    Ok(OggInfo {
-        codec,
-        pages,
-        logical_streams: streams.len(),
+    Ok(OggValidation {
+        info: OggInfo {
+            codec,
+            pages,
+            logical_streams: streams.len(),
+        },
+        timing,
     })
 }
 
@@ -312,6 +347,11 @@ fn identify_vorbis(packet: &[u8]) -> Result<OggCodec, OggError> {
     if channels == 0 || sample_rate == 0 {
         return Err(OggError::Identification(
             "Vorbis channels and sample rate must be non-zero",
+        ));
+    }
+    if channels > 2 {
+        return Err(OggError::Identification(
+            "Vorbis voice assets support at most two channels",
         ));
     }
     let block_sizes = packet[28];
@@ -731,7 +771,7 @@ fn validate_complete_audio_stream(
     codec: &OggCodec,
     data: &[u8],
     limits: &Limits,
-) -> Result<(), OggError> {
+) -> Result<OggTiming, OggError> {
     let malformed = |reason| OggError::AudioStructure { serial, reason };
     if stream.bos_completed_packets != 1 || stream.bos_had_partial_packet {
         return Err(malformed(
@@ -752,13 +792,22 @@ fn validate_complete_audio_stream(
         .ok_or_else(|| malformed("audio EOS page has no positive duration granule"))?;
 
     match codec {
-        OggCodec::Vorbis { channels, .. } => {
+        OggCodec::Vorbis {
+            channels,
+            sample_rate,
+        } => {
             if stream.completed_packets < 4 || stream.audio_packets == 0 {
                 return Err(malformed(
                     "Vorbis requires identification, comment, setup, and audio packets",
                 ));
             }
-            decode_probe_vorbis(serial, *channels, stream, data, limits)?;
+            let timeline = decode_probe_vorbis(serial, *channels, stream, data, limits)?;
+            let duration_sample_frames = validate_vorbis_timing(serial, &timeline)?;
+            Ok(OggTiming {
+                duration_sample_frames,
+                duration_timebase_hz: *sample_rate,
+                pcm_decode_complete: true,
+            })
         }
         OggCodec::Opus { .. } => {
             if stream.completed_packets < 3 || stream.audio_packets == 0 {
@@ -779,10 +828,35 @@ fn validate_complete_audio_stream(
                     "Opus EOS granule exceeds the parsed packet duration",
                 ));
             }
+            let duration_sample_frames = relative_eos
+                .checked_sub(u64::from(stream.opus_pre_skip))
+                .filter(|frames| *frames > 0)
+                .ok_or_else(|| {
+                    malformed("Opus duration underflowed while applying its pre-skip")
+                })?;
+            Ok(OggTiming {
+                duration_sample_frames,
+                duration_timebase_hz: 48_000,
+                pcm_decode_complete: false,
+            })
         }
-        OggCodec::Unknown => return Err(malformed("unsupported recognized audio codec")),
+        OggCodec::Unknown => Err(malformed("unsupported recognized audio codec")),
     }
-    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VorbisAudioPageTiming {
+    granule: u64,
+    audio_packets_before: usize,
+    audio_packets_after: usize,
+    audio_packet_in_progress: bool,
+    eos: bool,
+}
+
+struct DecodedVorbisTimeline {
+    /// Cumulative untrimmed decoder output after each audio packet; element zero is the origin.
+    packet_end_frames: Vec<u64>,
+    audio_pages: Vec<VorbisAudioPageTiming>,
 }
 
 fn decode_probe_vorbis(
@@ -791,57 +865,271 @@ fn decode_probe_vorbis(
     stream: &StreamState,
     data: &[u8],
     limits: &Limits,
-) -> Result<(), OggError> {
+) -> Result<DecodedVorbisTimeline, OggError> {
     let malformed = |reason| OggError::AudioStructure { serial, reason };
-    let byte_len = stream
-        .page_ranges
-        .iter()
-        .try_fold(0usize, |total, (_, len)| total.checked_add(*len))
-        .ok_or_else(|| malformed("Vorbis page byte count overflowed"))?;
-    let mut logical_stream = Vec::with_capacity(byte_len);
-    for (offset, len) in &stream.page_ranges {
-        logical_stream.extend_from_slice(&data[*offset..*offset + *len]);
-    }
-
-    let mut reader = lewton::inside_ogg::OggStreamReader::new(Cursor::new(logical_stream))
-        .map_err(|_| malformed("Vorbis codec headers failed the decode probe"))?;
-    if reader.ident_hdr.audio_channels != channels {
-        return Err(malformed(
-            "Vorbis decode probe disagrees with the identification header",
-        ));
-    }
-    let channels = usize::from(channels);
+    let mut packet = Vec::new();
+    let mut packet_index = 0usize;
+    let mut ident_header = None;
+    let mut setup_header = None;
+    let mut previous_window = lewton::audio::PreviousWindowRight::new();
     let mut decoded_samples_per_channel = 0usize;
-    while let Some(samples) = reader
-        .read_dec_packet_itl()
-        .map_err(|_| malformed("Vorbis audio packet failed the decode probe"))?
-    {
-        if !samples.len().is_multiple_of(channels) {
-            return Err(malformed(
-                "Vorbis decoder returned a non-integral channel frame",
-            ));
+    let mut packet_end_frames = Vec::with_capacity(stream.audio_packets.saturating_add(1));
+    packet_end_frames.push(0);
+    let mut audio_pages = Vec::with_capacity(stream.page_ranges.len());
+
+    for (page_offset, page_len) in &stream.page_ranges {
+        let page = &data[*page_offset..*page_offset + *page_len];
+        let segment_count = usize::from(page[26]);
+        let header_len = 27 + segment_count;
+        let lacing = &page[27..header_len];
+        let packet_index_before_page = packet_index;
+        let audio_packets_before = packet_end_frames.len() - 1;
+        let mut body_offset = header_len;
+
+        for segment_len in lacing.iter().copied().map(usize::from) {
+            let end = body_offset + segment_len;
+            packet.extend_from_slice(&page[body_offset..end]);
+            body_offset = end;
+            if segment_len == 255 {
+                continue;
+            }
+
+            match packet_index {
+                0 => {
+                    let ident = lewton::header::read_header_ident(&packet)
+                        .map_err(|_| malformed("Vorbis identification failed the decode probe"))?;
+                    if ident.audio_channels != channels {
+                        return Err(malformed(
+                            "Vorbis decode probe disagrees with the identification header",
+                        ));
+                    }
+                    ident_header = Some(ident);
+                }
+                1 => {
+                    lewton::header::read_header_comment(&packet)
+                        .map_err(|_| malformed("Vorbis comment failed the decode probe"))?;
+                }
+                2 => {
+                    let ident = ident_header
+                        .as_ref()
+                        .ok_or_else(|| malformed("Vorbis identification header is missing"))?;
+                    setup_header = Some(
+                        lewton::header::read_header_setup(
+                            &packet,
+                            ident.audio_channels,
+                            (ident.blocksize_0, ident.blocksize_1),
+                        )
+                        .map_err(|_| malformed("Vorbis setup failed the decode probe"))?,
+                    );
+                }
+                _ => {
+                    let ident = ident_header
+                        .as_ref()
+                        .ok_or_else(|| malformed("Vorbis identification header is missing"))?;
+                    let setup = setup_header
+                        .as_ref()
+                        .ok_or_else(|| malformed("Vorbis setup header is missing"))?;
+                    let samples = lewton::audio::read_audio_packet(
+                        ident,
+                        setup,
+                        &packet,
+                        &mut previous_window,
+                    )
+                    .map_err(|_| malformed("Vorbis audio packet failed the decode probe"))?;
+                    let packet_samples_per_channel = samples.first().map_or(0, Vec::len);
+                    if samples.len() != usize::from(channels)
+                        || samples
+                            .iter()
+                            .any(|channel| channel.len() != packet_samples_per_channel)
+                    {
+                        return Err(malformed(
+                            "Vorbis decoder returned inconsistent channel frames",
+                        ));
+                    }
+                    let actual = decoded_samples_per_channel
+                        .checked_add(packet_samples_per_channel)
+                        .ok_or(OggError::LimitExceeded {
+                            kind: "decoded samples per channel",
+                            actual: usize::MAX,
+                            limit: limits.max_ogg_decoded_samples_per_channel,
+                        })?;
+                    if actual > limits.max_ogg_decoded_samples_per_channel {
+                        return Err(OggError::LimitExceeded {
+                            kind: "decoded samples per channel",
+                            actual,
+                            limit: limits.max_ogg_decoded_samples_per_channel,
+                        });
+                    }
+                    decoded_samples_per_channel = actual;
+                    packet_end_frames.push(u64::try_from(actual).map_err(|_| {
+                        OggError::LimitExceeded {
+                            kind: "decoded samples per channel",
+                            actual,
+                            limit: limits.max_ogg_decoded_samples_per_channel,
+                        }
+                    })?);
+                }
+            }
+            packet_index = packet_index
+                .checked_add(1)
+                .ok_or_else(|| malformed("Vorbis packet index overflowed"))?;
+            packet.clear();
         }
-        let packet_samples_per_channel = samples.len() / channels;
-        let actual = decoded_samples_per_channel
-            .checked_add(packet_samples_per_channel)
-            .ok_or(OggError::LimitExceeded {
-                kind: "decoded samples per channel",
-                actual: usize::MAX,
-                limit: limits.max_ogg_decoded_samples_per_channel,
-            })?;
-        if actual > limits.max_ogg_decoded_samples_per_channel {
-            return Err(OggError::LimitExceeded {
-                kind: "decoded samples per channel",
-                actual,
-                limit: limits.max_ogg_decoded_samples_per_channel,
+
+        let audio_packets_after = packet_end_frames.len() - 1;
+        let granule = u64::from_le_bytes(page[6..14].try_into().expect("fixed slice"));
+        let eos = page[5] & 0x04 != 0;
+        if packet_index_before_page < 3 {
+            if audio_packets_after != audio_packets_before
+                || (packet_index >= 3 && !packet.is_empty())
+            {
+                return Err(malformed(
+                    "Vorbis setup and audio packets must end on separate pages",
+                ));
+            }
+            if granule != 0 {
+                return Err(malformed("Vorbis header page granule must be zero"));
+            }
+        } else {
+            if audio_packets_after == audio_packets_before {
+                if granule != u64::MAX {
+                    return Err(malformed(
+                        "Vorbis audio page without a completed packet must use granule -1",
+                    ));
+                }
+            } else if granule == u64::MAX || granule == 0 {
+                return Err(malformed(
+                    "Vorbis audio page with completed packets needs a positive granule",
+                ));
+            }
+            audio_pages.push(VorbisAudioPageTiming {
+                granule,
+                audio_packets_before,
+                audio_packets_after,
+                audio_packet_in_progress: !packet.is_empty(),
+                eos,
             });
         }
-        decoded_samples_per_channel = actual;
+    }
+
+    if !packet.is_empty()
+        || packet_index != stream.completed_packets
+        || packet_end_frames.len() != stream.audio_packets.saturating_add(1)
+    {
+        return Err(malformed(
+            "Vorbis decode probe disagrees with parsed packet boundaries",
+        ));
     }
     if decoded_samples_per_channel == 0 {
         return Err(malformed("Vorbis decode probe yielded no PCM samples"));
     }
-    Ok(())
+    Ok(DecodedVorbisTimeline {
+        packet_end_frames,
+        audio_pages,
+    })
+}
+
+fn validate_vorbis_timing(serial: u32, timeline: &DecodedVorbisTimeline) -> Result<u64, OggError> {
+    let malformed = |reason| OggError::AudioStructure { serial, reason };
+    let timed_pages = timeline
+        .audio_pages
+        .iter()
+        .filter(|page| page.audio_packets_after > page.audio_packets_before)
+        .collect::<Vec<_>>();
+    let first = *timed_pages
+        .first()
+        .ok_or_else(|| malformed("Vorbis audio stream has no timestamped packet page"))?;
+    let eos = *timed_pages
+        .last()
+        .filter(|page| page.eos)
+        .ok_or_else(|| malformed("Vorbis EOS page has no completed audio packet"))?;
+    let total_packets = timeline.packet_end_frames.len() - 1;
+    if eos.audio_packets_after != total_packets {
+        return Err(malformed(
+            "Vorbis EOS granule does not cover every decoded audio packet",
+        ));
+    }
+
+    let decoded_at = |packet_count: usize| -> Result<i128, OggError> {
+        timeline
+            .packet_end_frames
+            .get(packet_count)
+            .copied()
+            .map(i128::from)
+            .ok_or_else(|| malformed("Vorbis page packet count exceeds the decoded timeline"))
+    };
+
+    if first.eos {
+        let decoded_end = decoded_at(first.audio_packets_after)?;
+        if i128::from(first.granule) > decoded_end {
+            return Err(malformed(
+                "Vorbis EOS granule exceeds the decoded PCM frame bound",
+            ));
+        }
+        // With no earlier timestamp, a positive origin is indistinguishable from an inflated EOS
+        // granule. A.2 provides an unambiguous non-zero origin only when packet two flushes an
+        // earlier page. More than two packets on this page therefore has a zero origin and may
+        // trim only the final decoded packet. With one or two packets, a smaller granule can also
+        // be the spec-defined negative start trim; either interpretation has the same duration.
+        if first.audio_packets_after > 2 {
+            let final_packet_start = decoded_at(first.audio_packets_after - 1)?;
+            if i128::from(first.granule) < final_packet_start {
+                return Err(malformed(
+                    "Vorbis EOS granule trims beyond the final decoded packet",
+                ));
+            }
+        }
+        return Ok(first.granule);
+    }
+
+    let first_decoded_end = decoded_at(first.audio_packets_after)?;
+    let origin = i128::from(first.granule) - first_decoded_end;
+    if origin != 0
+        && (first.audio_packets_before != 0
+            || first.audio_packets_after != 2
+            || first.audio_packet_in_progress
+            || total_packets <= 2)
+    {
+        return Err(malformed(
+            "non-zero Vorbis PCM origin requires packet two to flush an earlier audio page",
+        ));
+    }
+
+    let mut previous_granule = None;
+    for page in timed_pages {
+        if let Some(previous) = previous_granule {
+            if page.granule < previous {
+                return Err(malformed("Vorbis audio granules are not monotonic"));
+            }
+        }
+        let nominal_end = origin + decoded_at(page.audio_packets_after)?;
+        if page.eos {
+            if i128::from(page.granule) > nominal_end {
+                return Err(malformed(
+                    "Vorbis EOS granule exceeds the decoded PCM frame bound",
+                ));
+            }
+            let final_packet_start = origin + decoded_at(total_packets - 1)?;
+            if i128::from(page.granule) < final_packet_start {
+                return Err(malformed(
+                    "Vorbis EOS granule trims beyond the final decoded packet",
+                ));
+            }
+        } else if i128::from(page.granule) != nominal_end {
+            return Err(malformed(
+                "Vorbis intermediate granule disagrees with decoded packet timing",
+            ));
+        }
+        previous_granule = Some(page.granule);
+    }
+
+    let duration = i128::from(eos.granule) - origin.max(0);
+    if duration <= 0 || duration > i128::from(u64::MAX) {
+        return Err(malformed(
+            "Vorbis duration is not positive after applying its PCM origin",
+        ));
+    }
+    Ok(duration as u64)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1169,9 +1457,68 @@ pub(crate) mod tests {
         data
     }
 
+    fn decoded_vorbis_packet_ends(data: &[u8]) -> Vec<u64> {
+        let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(data))
+            .expect("fixture headers decode");
+        let channels = usize::from(reader.ident_hdr.audio_channels);
+        let mut total = 0u64;
+        let mut ends = vec![0];
+        while let Some(samples) = reader
+            .read_dec_packet_itl()
+            .expect("fixture packet decodes")
+        {
+            assert!(samples.len().is_multiple_of(channels));
+            total += u64::try_from(samples.len() / channels).unwrap();
+            ends.push(total);
+        }
+        ends
+    }
+
+    fn split_final_vorbis_audio_page(
+        data: &[u8],
+        packet_ends: &[usize],
+        granules: &[u64],
+    ) -> Vec<u8> {
+        assert_eq!(packet_ends.len(), granules.len());
+        let final_page = *page_offsets(data).last().expect("fixture has pages");
+        let serial = u32::from_le_bytes(data[final_page + 14..final_page + 18].try_into().unwrap());
+        let sequence =
+            u32::from_le_bytes(data[final_page + 18..final_page + 22].try_into().unwrap());
+        let segment_count = usize::from(data[final_page + 26]);
+        let lacing = &data[final_page + 27..final_page + 27 + segment_count];
+        assert!(lacing.iter().all(|value| *value < 255));
+        assert_eq!(packet_ends.last().copied(), Some(lacing.len()));
+        let body = &data[final_page + 27 + segment_count..];
+
+        let mut split = data[..final_page].to_vec();
+        let mut packet_start = 0usize;
+        let mut body_start = 0usize;
+        for (page_index, (&packet_end, &granule)) in packet_ends.iter().zip(granules).enumerate() {
+            let body_end = body_start
+                + lacing[packet_start..packet_end]
+                    .iter()
+                    .map(|value| usize::from(*value))
+                    .sum::<usize>();
+            let is_last = page_index + 1 == packet_ends.len();
+            split.extend_from_slice(&make_page_with_lacing_and_granule(
+                serial,
+                sequence + u32::try_from(page_index).unwrap(),
+                if is_last { 0x04 } else { 0 },
+                granule,
+                &lacing[packet_start..packet_end],
+                &body[body_start..body_end],
+            ));
+            packet_start = packet_end;
+            body_start = body_end;
+        }
+        assert_eq!(body_start, body.len());
+        split
+    }
+
     #[test]
     fn validates_vorbis_identification() {
-        let info = validate_ogg(&vorbis_ogg(44_100), &Limits::default()).unwrap();
+        let validation = validate_ogg_with_timing(&vorbis_ogg(44_100), &Limits::default()).unwrap();
+        let info = &validation.info;
         assert_eq!(
             info.codec,
             OggCodec::Vorbis {
@@ -1180,19 +1527,202 @@ pub(crate) mod tests {
             }
         );
         assert!(info.pages >= 2);
+        assert_eq!(validation.timing.duration_sample_frames, 3_840);
+        assert_eq!(validation.timing.duration_timebase_hz, 44_100);
+        assert!(validation.timing.pcm_decode_complete);
+    }
+
+    #[test]
+    fn legacy_validation_shape_stays_metadata_only() {
+        let legacy = validate_ogg(&vorbis_ogg(48_000), &Limits::default()).unwrap();
+        let OggInfo {
+            codec,
+            pages,
+            logical_streams,
+        } = legacy.clone();
+        assert_eq!(
+            codec,
+            OggCodec::Vorbis {
+                channels: 1,
+                sample_rate: 48_000
+            }
+        );
+        assert_eq!(pages, 3);
+        assert_eq!(logical_streams, 1);
+        assert_eq!(
+            validate_ogg_with_timing(&vorbis_ogg(48_000), &Limits::default())
+                .unwrap()
+                .info,
+            legacy
+        );
+    }
+
+    #[test]
+    fn vorbis_voice_profile_accepts_stereo_and_rejects_more_channels() {
+        let data = vorbis_ogg(48_000);
+        let ident_offset = find_bytes(&data, b"\x01vorbis").expect("fixture has identification");
+        let mut ident = data[ident_offset..ident_offset + 30].to_vec();
+        ident[11] = 2;
+        assert_eq!(
+            identify_vorbis(&ident).unwrap(),
+            OggCodec::Vorbis {
+                channels: 2,
+                sample_rate: 48_000,
+            }
+        );
+        ident[11] = 3;
+        assert!(matches!(
+            identify_vorbis(&ident),
+            Err(OggError::Identification(
+                "Vorbis voice assets support at most two channels"
+            ))
+        ));
+    }
+
+    #[test]
+    fn reports_exact_vorbis_eos_trim_and_rejects_unbacked_duration() {
+        let mut trimmed = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&trimmed).last().expect("fixture has pages");
+        trimmed[final_page + 6..final_page + 14].copy_from_slice(&3_700u64.to_le_bytes());
+        rewrite_page_checksums(&mut trimmed);
+
+        let trimmed_info = validate_ogg_with_timing(&trimmed, &Limits::default()).unwrap();
+        assert_eq!(trimmed_info.timing.duration_sample_frames, 3_700);
+        assert_eq!(trimmed_info.timing.duration_timebase_hz, 48_000);
+        assert!(trimmed_info.timing.pcm_decode_complete);
+
+        let mut over_trimmed = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&over_trimmed)
+            .last()
+            .expect("fixture has pages");
+        over_trimmed[final_page + 6..final_page + 14].copy_from_slice(&3_000u64.to_le_bytes());
+        rewrite_page_checksums(&mut over_trimmed);
+        assert!(matches!(
+            validate_ogg_with_timing(&over_trimmed, &Limits::default()),
+            Err(OggError::AudioStructure {
+                reason: "Vorbis EOS granule trims beyond the final decoded packet",
+                ..
+            })
+        ));
+
+        let mut inflated = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&inflated).last().expect("fixture has pages");
+        inflated[final_page + 6..final_page + 14].copy_from_slice(&10_000u64.to_le_bytes());
+        rewrite_page_checksums(&mut inflated);
+        assert!(matches!(
+            validate_ogg(&inflated, &Limits::default()),
+            Err(OggError::AudioStructure {
+                reason: "Vorbis EOS granule exceeds the decoded PCM frame bound",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reports_vorbis_duration_relative_to_positive_and_negative_pcm_origins() {
+        let data = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&data).last().expect("fixture has pages");
+        let original_eos =
+            u64::from_le_bytes(data[final_page + 6..final_page + 14].try_into().unwrap());
+        let decoded_ends = decoded_vorbis_packet_ends(&data);
+        assert_eq!(decoded_ends.len(), 7);
+        assert!(decoded_ends[2] > 128);
+
+        let positive_origin = 60_000u64;
+        let positive = split_final_vorbis_audio_page(
+            &data,
+            &[2, 4, 6],
+            &[
+                positive_origin + decoded_ends[2],
+                positive_origin + decoded_ends[4],
+                positive_origin + original_eos,
+            ],
+        );
+        let positive_info = validate_ogg_with_timing(&positive, &Limits::default()).unwrap();
+        assert_eq!(positive_info.timing.duration_sample_frames, original_eos);
+
+        let leading_trim = 128u64;
+        let negative = split_final_vorbis_audio_page(
+            &data,
+            &[2, 4, 6],
+            &[
+                decoded_ends[2] - leading_trim,
+                decoded_ends[4] - leading_trim,
+                original_eos - leading_trim,
+            ],
+        );
+        let negative_info = validate_ogg_with_timing(&negative, &Limits::default()).unwrap();
+        assert_eq!(
+            negative_info.timing.duration_sample_frames,
+            original_eos - leading_trim
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_vorbis_origin_layout_and_intermediate_granule() {
+        let data = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&data).last().expect("fixture has pages");
+        let original_eos =
+            u64::from_le_bytes(data[final_page + 6..final_page + 14].try_into().unwrap());
+        let decoded_ends = decoded_vorbis_packet_ends(&data);
+        let origin = 60_000u64;
+
+        let wrong_flush = split_final_vorbis_audio_page(
+            &data,
+            &[3, 6],
+            &[origin + decoded_ends[3], origin + original_eos],
+        );
+        assert!(matches!(
+            validate_ogg_with_timing(&wrong_flush, &Limits::default()),
+            Err(OggError::AudioStructure {
+                reason:
+                    "non-zero Vorbis PCM origin requires packet two to flush an earlier audio page",
+                ..
+            })
+        ));
+
+        let mut bad_intermediate = split_final_vorbis_audio_page(
+            &data,
+            &[2, 4, 6],
+            &[
+                origin + decoded_ends[2],
+                origin + decoded_ends[4],
+                origin + original_eos,
+            ],
+        );
+        let middle_page = page_offsets(&bad_intermediate)[3];
+        let middle_granule = u64::from_le_bytes(
+            bad_intermediate[middle_page + 6..middle_page + 14]
+                .try_into()
+                .unwrap(),
+        );
+        bad_intermediate[middle_page + 6..middle_page + 14]
+            .copy_from_slice(&(middle_granule + 1).to_le_bytes());
+        rewrite_page_checksums(&mut bad_intermediate);
+        assert!(matches!(
+            validate_ogg_with_timing(&bad_intermediate, &Limits::default()),
+            Err(OggError::AudioStructure {
+                reason: "Vorbis intermediate granule disagrees with decoded packet timing",
+                ..
+            })
+        ));
     }
 
     #[test]
     fn validates_opus_identification() {
-        let data = opus_ogg(48_000);
-        let info = validate_ogg(&data, &Limits::default()).unwrap();
+        let data = opus_ogg(44_100);
+        let validation = validate_ogg_with_timing(&data, &Limits::default()).unwrap();
+        let info = &validation.info;
         assert_eq!(
             info.codec,
             OggCodec::Opus {
                 channels: 1,
-                input_sample_rate: 48_000
+                input_sample_rate: 44_100
             }
         );
+        assert_eq!(validation.timing.duration_sample_frames, 3_840);
+        assert_eq!(validation.timing.duration_timebase_hz, 48_000);
+        assert!(!validation.timing.pcm_decode_complete);
     }
 
     #[test]
@@ -1276,6 +1806,7 @@ pub(crate) mod tests {
     #[test]
     fn accepts_opus_initial_granule_offset_and_relative_following_pages() {
         let data = opus_ogg(48_000);
+        let original_info = validate_ogg_with_timing(&data, &Limits::default()).unwrap();
         let final_page = *page_offsets(&data).last().expect("fixture has pages");
         let serial = u32::from_le_bytes(data[final_page + 14..final_page + 18].try_into().unwrap());
         let sequence =
@@ -1317,7 +1848,42 @@ pub(crate) mod tests {
             &body[first_body_len..],
         ));
 
-        validate_ogg(&shifted, &Limits::default()).unwrap();
+        let shifted_info = validate_ogg_with_timing(&shifted, &Limits::default()).unwrap();
+        assert_eq!(
+            shifted_info.timing.duration_sample_frames,
+            original_info.timing.duration_sample_frames
+        );
+        assert_eq!(shifted_info.timing.duration_timebase_hz, 48_000);
+        assert!(!shifted_info.timing.pcm_decode_complete);
+    }
+
+    #[test]
+    fn reports_exact_opus_pre_skip_and_eos_trim_duration() {
+        let mut changed_pre_skip = opus_ogg(48_000);
+        let head = find_bytes(&changed_pre_skip, b"OpusHead").expect("fixture has OpusHead");
+        changed_pre_skip[head + 10..head + 12].copy_from_slice(&1_000u16.to_le_bytes());
+        rewrite_page_checksums(&mut changed_pre_skip);
+        let changed_pre_skip_info =
+            validate_ogg_with_timing(&changed_pre_skip, &Limits::default()).unwrap();
+        assert_eq!(changed_pre_skip_info.timing.duration_sample_frames, 3_152);
+        assert_eq!(changed_pre_skip_info.timing.duration_timebase_hz, 48_000);
+
+        let mut eos_trimmed = opus_ogg(48_000);
+        let final_page = *page_offsets(&eos_trimmed)
+            .last()
+            .expect("fixture has pages");
+        let pre_skip = 312u64;
+        let retained_frames = 777u64;
+        eos_trimmed[final_page + 6..final_page + 14]
+            .copy_from_slice(&(pre_skip + retained_frames).to_le_bytes());
+        rewrite_page_checksums(&mut eos_trimmed);
+        let eos_trimmed_info = validate_ogg_with_timing(&eos_trimmed, &Limits::default()).unwrap();
+        assert_eq!(
+            eos_trimmed_info.timing.duration_sample_frames,
+            retained_frames
+        );
+        assert_eq!(eos_trimmed_info.timing.duration_timebase_hz, 48_000);
+        assert!(!eos_trimmed_info.timing.pcm_decode_complete);
     }
 
     #[test]

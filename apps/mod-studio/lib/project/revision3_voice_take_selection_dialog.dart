@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/mod_ffi.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_media_qa_service.dart';
 import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_preview_playback.dart';
 import 'revision3_voice_take_selection_authoring.dart';
@@ -19,6 +20,54 @@ typedef Revision3VoiceTakePreviewDialogMaterializer =
       required String locale,
       required String takeId,
     });
+
+typedef Revision3VoiceTakeMediaQaDialogInspector =
+    Future<Revision3VoiceTakeMediaQaDialogResult> Function({
+      required Revision3VoiceCatalog checkpoint,
+      required String lineId,
+      required String locale,
+      required String takeId,
+    });
+
+enum Revision3VoiceTakeMediaQaDialogAssurance {
+  fullyDecoded,
+  timingAndStructureOnly,
+}
+
+/// Presentation-safe projection of one exact managed-take media receipt.
+///
+/// Home owns the small adapter from the authoring service. Technical entity,
+/// asset, CAS, and path details never cross into the visible dialog state.
+@immutable
+final class Revision3VoiceTakeMediaQaDialogResult {
+  Revision3VoiceTakeMediaQaDialogResult({
+    required this.sampleFrames,
+    required this.timebaseHz,
+    required this.assurance,
+  }) {
+    if (sampleFrames <= 0 || timebaseHz <= 0) {
+      throw ArgumentError('Voice media QA duration must be positive.');
+    }
+  }
+
+  factory Revision3VoiceTakeMediaQaDialogResult.fromAuthoring(
+    AuthoringRevision3VoiceTakeMediaQaResult result,
+  ) => Revision3VoiceTakeMediaQaDialogResult(
+    sampleFrames: result.duration.sampleFrames,
+    timebaseHz: result.duration.timebaseHz,
+    assurance: switch (result.assurance) {
+      AuthoringRevision3VoiceTakeMediaAssurance.vorbisFullPcmDecode =>
+        Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded,
+      AuthoringRevision3VoiceTakeMediaAssurance
+          .opusPacketAndTimingStructureOnly =>
+        Revision3VoiceTakeMediaQaDialogAssurance.timingAndStructureOnly,
+    },
+  );
+
+  final int sampleFrames;
+  final int timebaseHz;
+  final Revision3VoiceTakeMediaQaDialogAssurance assurance;
+}
 
 /// Complete author-facing copy for [Revision3VoiceTakeSelectionDialog].
 @immutable
@@ -232,6 +281,41 @@ final class Revision3VoiceTakeSelectionDialogCopy {
   String get previewCleanupFailed => _german
       ? 'Die vorige Vorschau konnte nicht sicher geschlossen werden. Stoppe sie und versuche die sichere Bereinigung erneut.'
       : 'The previous preview could not be closed safely. Stop it and retry the safe cleanup.';
+  String get mediaQaAction => _german ? 'Audiodatei prüfen' : 'Check media';
+  String get mediaQaChecking =>
+      _german ? 'Audiodatei wird geprüft…' : 'Checking media…';
+  String get mediaQaUnavailable => _german
+      ? 'Für diesen Take ist keine intakte gespeicherte Audiodatei prüfbar.'
+      : 'No intact stored media is available to check for this take.';
+  String get mediaQaComplete =>
+      _german ? 'Audiodatei geprüft' : 'Media checked';
+  String get mediaQaFullyDecoded =>
+      _german ? 'vollständig dekodiert' : 'fully decoded';
+  String get mediaQaTimingOnly => _german
+      ? 'Timing/Struktur geprüft; Audio nicht vollständig dekodiert'
+      : 'timing/structure checked; audio not fully decoded';
+  String get mediaQaBoundary => _german
+      ? 'Dies prüft nur die gespeicherte Audiodatei – nicht Audioqualität oder Wiedergabe im Spiel.'
+      : 'This checks the stored media input only—not audio quality or in-game playback.';
+  String get mediaQaFailed => _german
+      ? 'Die Audiodatei konnte nicht sicher geprüft werden. Versuche es erneut.'
+      : 'The media could not be checked safely. Try again.';
+  String get mediaQaStale => _german
+      ? 'Das Projekt wurde seit dem Laden dieses Takes geändert. Lade die aktuellen Takes neu.'
+      : 'The project changed since this take was loaded. Reload the latest takes.';
+  String get mediaQaRequiresReopen => _german
+      ? 'Öffne das verwaltete Projekt erneut, bevor du weitere Audiodateien prüfst.'
+      : 'Reopen the managed project before checking more media.';
+  String mediaQaSummary(Revision3VoiceTakeMediaQaDialogResult result) {
+    final assurance = switch (result.assurance) {
+      Revision3VoiceTakeMediaQaDialogAssurance.fullyDecoded =>
+        mediaQaFullyDecoded,
+      Revision3VoiceTakeMediaQaDialogAssurance.timingAndStructureOnly =>
+        mediaQaTimingOnly,
+    };
+    return '${_friendlyMediaDuration(result)} • $assurance';
+  }
+
   String get retry => _german ? 'Erneut versuchen' : 'Retry';
   String get reloadTakes => _german ? 'Takes neu laden' : 'Reload takes';
   String get close => _german ? 'Schließen' : 'Close';
@@ -294,6 +378,7 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     required this.copy,
     this.previewMaterialize,
     this.previewPlayback,
+    this.mediaQaInspect,
     this.initialLineId,
     this.initialLocale,
     this.fixedContext = false,
@@ -308,6 +393,7 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
   final Revision3DialogVoiceSlotRemovalAuthoringService slotRemovalService;
   final Revision3VoiceTakePreviewDialogMaterializer? previewMaterialize;
   final Revision3VoiceTakePreviewPlaybackController? previewPlayback;
+  final Revision3VoiceTakeMediaQaDialogInspector? mediaQaInspect;
   final String? initialLineId;
   final String? initialLocale;
   final Revision3VoiceTakeSelectionDialogCopy copy;
@@ -348,6 +434,9 @@ class _Revision3VoiceTakeSelectionDialogState
   bool _fixedContextInvalid = false;
   bool _catalogLoadFailed = false;
   int _loadGeneration = 0;
+  int _mediaQaGeneration = 0;
+  int _mediaQaRequestSerial = 0;
+  final Map<String, _VoiceTakeMediaQaViewState> _mediaQaStates = {};
 
   bool get _interactionLocked =>
       _loading ||
@@ -381,6 +470,7 @@ class _Revision3VoiceTakeSelectionDialogState
         !identical(oldWidget.slotRemovalService, widget.slotRemovalService) ||
         !identical(oldWidget.previewMaterialize, widget.previewMaterialize) ||
         !identical(oldWidget.previewPlayback, widget.previewPlayback) ||
+        !identical(oldWidget.mediaQaInspect, widget.mediaQaInspect) ||
         oldWidget.fixedContext != widget.fixedContext ||
         oldWidget.initialLineId != widget.initialLineId ||
         oldWidget.initialLocale != widget.initialLocale) {
@@ -405,6 +495,11 @@ class _Revision3VoiceTakeSelectionDialogState
     if (mounted) setState(() {});
   }
 
+  void _invalidateMediaQa() {
+    _mediaQaGeneration++;
+    _mediaQaStates.clear();
+  }
+
   void _previewPlaybackChanged() {
     if (!mounted) return;
     switch (widget.previewPlayback?.snapshot.failure) {
@@ -415,6 +510,7 @@ class _Revision3VoiceTakeSelectionDialogState
           return;
         }
         setState(() {
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _requiresClose = true;
           _reloadRequired = false;
@@ -427,6 +523,7 @@ class _Revision3VoiceTakeSelectionDialogState
           return;
         }
         setState(() {
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _reloadRequired = true;
           _error = widget.copy.previewStale;
@@ -474,10 +571,12 @@ class _Revision3VoiceTakeSelectionDialogState
       _previewCleanupLocked = false;
       switch (failure) {
         case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+          _invalidateMediaQa();
           _reloadRequired = true;
           _error = widget.copy.previewStale;
           break;
         case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+          _invalidateMediaQa();
           _requiresClose = true;
           _reloadRequired = false;
           _error = widget.copy.previewRequiresReopen;
@@ -515,11 +614,13 @@ class _Revision3VoiceTakeSelectionDialogState
           _notice = null;
           break;
         case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _reloadRequired = true;
           _error = widget.copy.previewStale;
           break;
         case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _requiresClose = true;
           _reloadRequired = false;
@@ -537,6 +638,7 @@ class _Revision3VoiceTakeSelectionDialogState
     if (_catalog != null) unawaited(widget.previewPlayback?.stop());
     final generation = ++_loadGeneration;
     setState(() {
+      _invalidateMediaQa();
       if (resetRecovery) {
         if (_reloadRequired) _busy = false;
         _reloadRequired = false;
@@ -668,6 +770,7 @@ class _Revision3VoiceTakeSelectionDialogState
     final locales = _intactLocales(line);
     final locale = locales.length == 1 ? locales.single : null;
     setState(() {
+      _invalidateMediaQa();
       _lineId = line.lineId;
       _locale = locale;
       _selectionValue = locale == null
@@ -682,6 +785,7 @@ class _Revision3VoiceTakeSelectionDialogState
     unawaited(widget.previewPlayback?.stop());
     final line = _selectedLine;
     setState(() {
+      _invalidateMediaQa();
       _locale = locale;
       _selectionValue = line == null || locale == null
           ? null
@@ -731,6 +835,7 @@ class _Revision3VoiceTakeSelectionDialogState
     switch (playback.snapshot.failure) {
       case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
         setState(() {
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _reloadRequired = true;
           _error = widget.copy.previewStale;
@@ -738,6 +843,7 @@ class _Revision3VoiceTakeSelectionDialogState
         break;
       case Revision3VoiceTakePreviewFailureKind.requiresReopen:
         setState(() {
+          _invalidateMediaQa();
           _previewCleanupLocked = false;
           _requiresClose = true;
           _reloadRequired = false;
@@ -757,6 +863,132 @@ class _Revision3VoiceTakeSelectionDialogState
     }
   }
 
+  Future<void> _checkTakeMedia(Revision3VoiceCandidateTake take) async {
+    final inspect = widget.mediaQaInspect;
+    final catalog = _catalog;
+    final lineId = _lineId;
+    final locale = _locale;
+    if (_interactionLocked ||
+        inspect == null ||
+        !take.canPreview ||
+        catalog == null ||
+        lineId == null ||
+        locale == null ||
+        _mediaQaStates[take.id]?.isLoading == true) {
+      return;
+    }
+
+    final generation = _mediaQaGeneration;
+    final requestId = ++_mediaQaRequestSerial;
+    final key = _VoiceTakeMediaQaCacheKey.capture(
+      catalog: catalog,
+      lineId: lineId,
+      locale: locale,
+      take: take,
+    );
+    setState(() {
+      _mediaQaStates[take.id] = _VoiceTakeMediaQaViewState.loading(
+        key: key,
+        requestId: requestId,
+      );
+    });
+
+    bool requestIsCurrent() {
+      if (!mounted ||
+          generation != _mediaQaGeneration ||
+          !identical(inspect, widget.mediaQaInspect) ||
+          _reloadRequired ||
+          _requiresClose) {
+        return false;
+      }
+      final currentCatalog = _catalog;
+      final currentLineId = _lineId;
+      final currentLocale = _locale;
+      final currentTake = currentLineId == null || currentLocale == null
+          ? null
+          : currentCatalog
+                ?.line(currentLineId)
+                ?.slotSummaryForLocale(currentLocale)
+                ?.candidate(take.id);
+      return currentCatalog != null &&
+          catalog.sameCheckpoint(currentCatalog) &&
+          key.matches(
+            catalog: currentCatalog,
+            lineId: currentLineId,
+            locale: currentLocale,
+            take: currentTake,
+          ) &&
+          _mediaQaStates[take.id]?.requestId == requestId;
+    }
+
+    try {
+      final result = await inspect(
+        checkpoint: catalog,
+        lineId: lineId,
+        locale: locale,
+        takeId: take.id,
+      );
+      if (!requestIsCurrent()) return;
+      setState(() {
+        _mediaQaStates[take.id] = _VoiceTakeMediaQaViewState.complete(
+          key: key,
+          requestId: requestId,
+          result: result,
+        );
+      });
+    } on Revision3VoiceTakeMediaQaStaleCheckpointException {
+      if (!requestIsCurrent()) return;
+      setState(() {
+        _invalidateMediaQa();
+        _mediaQaStates[take.id] = _VoiceTakeMediaQaViewState.failed(
+          key: key,
+          requestId: requestId,
+          failure: _VoiceTakeMediaQaFailure.staleCheckpoint,
+        );
+        _reloadRequired = true;
+        _notice = null;
+      });
+    } on Revision3VoiceTakeMediaQaRequiresReopenException {
+      if (!requestIsCurrent()) return;
+      setState(() {
+        _invalidateMediaQa();
+        _mediaQaStates[take.id] = _VoiceTakeMediaQaViewState.failed(
+          key: key,
+          requestId: requestId,
+          failure: _VoiceTakeMediaQaFailure.requiresReopen,
+        );
+        _requiresClose = true;
+        _reloadRequired = false;
+        _notice = null;
+      });
+    } catch (_) {
+      if (!requestIsCurrent()) return;
+      setState(() {
+        _mediaQaStates[take.id] = _VoiceTakeMediaQaViewState.failed(
+          key: key,
+          requestId: requestId,
+          failure: _VoiceTakeMediaQaFailure.unknown,
+        );
+      });
+    }
+  }
+
+  _VoiceTakeMediaQaViewState? _mediaQaStateFor(
+    Revision3VoiceCandidateTake take,
+  ) {
+    final state = _mediaQaStates[take.id];
+    final catalog = _catalog;
+    if (state == null || catalog == null) return null;
+    return state.key.matches(
+          catalog: catalog,
+          lineId: _lineId,
+          locale: _locale,
+          take: take,
+        )
+        ? state
+        : null;
+  }
+
   Future<void> _save() async {
     final catalog = _catalog;
     final lineId = _lineId;
@@ -771,6 +1003,7 @@ class _Revision3VoiceTakeSelectionDialogState
       return;
     }
     setState(() {
+      _invalidateMediaQa();
       _busy = true;
       _error = null;
       _notice = null;
@@ -824,6 +1057,7 @@ class _Revision3VoiceTakeSelectionDialogState
     }
     var publishedThisAttempt = false;
     setState(() {
+      _invalidateMediaQa();
       _busy = true;
       _statusBusyTakeId = take.id;
       _error = null;
@@ -1029,6 +1263,7 @@ class _Revision3VoiceTakeSelectionDialogState
     var publishedThisAttempt = false;
     Revision3VoiceTakeRemovalPublication? publication;
     setState(() {
+      _invalidateMediaQa();
       _busy = true;
       _removalBusyTakeId = take.id;
       _error = null;
@@ -1192,6 +1427,7 @@ class _Revision3VoiceTakeSelectionDialogState
     var publishedThisAttempt = false;
     Revision3DialogVoiceSlotRemovalPublication? publication;
     setState(() {
+      _invalidateMediaQa();
       _busy = true;
       _error = null;
       _notice = null;
@@ -1286,6 +1522,7 @@ class _Revision3VoiceTakeSelectionDialogState
     final pendingRemoval = _pendingRemovalPublication;
     final pendingSlotRemoval = _pendingSlotRemovalPublication;
     setState(() {
+      _invalidateMediaQa();
       _busy = true;
       _error = null;
       _notice = null;
@@ -1583,6 +1820,12 @@ class _Revision3VoiceTakeSelectionDialogState
                             onPreview: () =>
                                 _previewTake(summary.candidates[index]),
                             onPreviewStop: () => unawaited(_stopPreview()),
+                            mediaQaAvailable: widget.mediaQaInspect != null,
+                            mediaQaState: _mediaQaStateFor(
+                              summary.candidates[index],
+                            ),
+                            onMediaQa: () =>
+                                _checkTakeMedia(summary.candidates[index]),
                           ),
                       ],
                     ),
@@ -1759,6 +2002,9 @@ class _TakeChoiceTile extends StatelessWidget {
     required this.previewStopEnabled,
     required this.onPreview,
     required this.onPreviewStop,
+    required this.mediaQaAvailable,
+    required this.mediaQaState,
+    required this.onMediaQa,
   });
 
   final int index;
@@ -1776,6 +2022,9 @@ class _TakeChoiceTile extends StatelessWidget {
   final bool previewStopEnabled;
   final VoidCallback onPreview;
   final VoidCallback onPreviewStop;
+  final bool mediaQaAvailable;
+  final _VoiceTakeMediaQaViewState? mediaQaState;
+  final VoidCallback onMediaQa;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1806,6 +2055,15 @@ class _TakeChoiceTile extends StatelessWidget {
           onStop: onPreviewStop,
           copy: copy,
         ),
+      if (mediaQaAvailable)
+        _TakeMediaQaControl(
+          index: index,
+          take: take,
+          state: mediaQaState,
+          enabled: !busy,
+          onCheck: onMediaQa,
+          copy: copy,
+        ),
       _TakeStatusControl(
         index: index,
         take: take,
@@ -1820,6 +2078,117 @@ class _TakeChoiceTile extends StatelessWidget {
       ),
     ],
   );
+}
+
+class _TakeMediaQaControl extends StatelessWidget {
+  const _TakeMediaQaControl({
+    required this.index,
+    required this.take,
+    required this.state,
+    required this.enabled,
+    required this.onCheck,
+    required this.copy,
+  });
+
+  final int index;
+  final Revision3VoiceCandidateTake take;
+  final _VoiceTakeMediaQaViewState? state;
+  final bool enabled;
+  final VoidCallback onCheck;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!take.canPreview) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+        child: Row(
+          children: [
+            const Icon(Icons.fact_check_outlined, size: 18),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                copy.mediaQaUnavailable,
+                key: ValueKey('voice-media-qa-unavailable-$index'),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final current = state;
+    final loading = current?.isLoading == true;
+    final failure = current?.failure;
+    final result = current?.result;
+    final failureText = switch (failure) {
+      _VoiceTakeMediaQaFailure.staleCheckpoint => copy.mediaQaStale,
+      _VoiceTakeMediaQaFailure.requiresReopen => copy.mediaQaRequiresReopen,
+      _VoiceTakeMediaQaFailure.unknown => copy.mediaQaFailed,
+      null => null,
+    };
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextButton.icon(
+            key: ValueKey('voice-media-qa-start-$index'),
+            onPressed: enabled && !loading ? onCheck : null,
+            icon: loading
+                ? SizedBox.square(
+                    key: ValueKey('voice-media-qa-loading-$index'),
+                    dimension: 16,
+                    child: const CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.fact_check_outlined),
+            label: Text(
+              loading
+                  ? copy.mediaQaChecking
+                  : failure == _VoiceTakeMediaQaFailure.unknown
+                  ? copy.retry
+                  : copy.mediaQaAction,
+            ),
+          ),
+          if (result != null) ...[
+            const SizedBox(height: 4),
+            Container(
+              key: ValueKey('voice-media-qa-result-$index'),
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${copy.mediaQaComplete}: ${copy.mediaQaSummary(result)}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    copy.mediaQaBoundary,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (failureText != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              failureText,
+              key: ValueKey('voice-media-qa-error-$index'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _TakePreviewControl extends StatelessWidget {
@@ -2177,6 +2546,114 @@ class _TakeStatusControl extends StatelessWidget {
       ],
     );
   }
+}
+
+String _friendlyMediaDuration(Revision3VoiceTakeMediaQaDialogResult result) {
+  final milliseconds =
+      (result.sampleFrames * 1000 + result.timebaseHz ~/ 2) ~/
+      result.timebaseHz;
+  if (milliseconds < 60000) {
+    final seconds = milliseconds / 1000;
+    return '${seconds.toStringAsFixed(seconds < 10 ? 2 : 1)} s';
+  }
+  final totalSeconds = milliseconds ~/ 1000;
+  final remainderTenths = (milliseconds % 1000) ~/ 100;
+  final seconds = totalSeconds % 60;
+  final minutes = (totalSeconds ~/ 60) % 60;
+  final hours = totalSeconds ~/ 3600;
+  final secondsText = '${seconds.toString().padLeft(2, '0')}.$remainderTenths';
+  return hours == 0
+      ? '$minutes:$secondsText'
+      : '$hours:${minutes.toString().padLeft(2, '0')}:$secondsText';
+}
+
+enum _VoiceTakeMediaQaFailure { staleCheckpoint, requiresReopen, unknown }
+
+final class _VoiceTakeMediaQaCacheKey {
+  const _VoiceTakeMediaQaCacheKey._({
+    required this.projectId,
+    required this.projectRevision,
+    required this.checkpointFingerprint,
+    required this.lineId,
+    required this.locale,
+    required this.takeId,
+    required this.takeRevision,
+  });
+
+  factory _VoiceTakeMediaQaCacheKey.capture({
+    required Revision3VoiceCatalog catalog,
+    required String lineId,
+    required String locale,
+    required Revision3VoiceCandidateTake take,
+  }) => _VoiceTakeMediaQaCacheKey._(
+    projectId: catalog.projectId,
+    projectRevision: catalog.projectRevision,
+    checkpointFingerprint: catalog.checkpointFingerprint,
+    lineId: lineId,
+    locale: locale,
+    takeId: take.id,
+    takeRevision: take.revision,
+  );
+
+  final String projectId;
+  final int projectRevision;
+  final String checkpointFingerprint;
+  final String lineId;
+  final String locale;
+  final String takeId;
+  final int takeRevision;
+
+  bool matches({
+    required Revision3VoiceCatalog catalog,
+    required String? lineId,
+    required String? locale,
+    required Revision3VoiceCandidateTake? take,
+  }) =>
+      catalog.projectId == projectId &&
+      catalog.projectRevision == projectRevision &&
+      catalog.checkpointFingerprint == checkpointFingerprint &&
+      lineId == this.lineId &&
+      locale == this.locale &&
+      take?.id == takeId &&
+      take?.revision == takeRevision;
+}
+
+final class _VoiceTakeMediaQaViewState {
+  const _VoiceTakeMediaQaViewState._({
+    required this.key,
+    required this.requestId,
+    required this.isLoading,
+    this.result,
+    this.failure,
+  });
+
+  const _VoiceTakeMediaQaViewState.loading({
+    required _VoiceTakeMediaQaCacheKey key,
+    required int requestId,
+  }) : this._(key: key, requestId: requestId, isLoading: true);
+
+  const _VoiceTakeMediaQaViewState.complete({
+    required _VoiceTakeMediaQaCacheKey key,
+    required int requestId,
+    required Revision3VoiceTakeMediaQaDialogResult result,
+  }) : this._(key: key, requestId: requestId, isLoading: false, result: result);
+
+  const _VoiceTakeMediaQaViewState.failed({
+    required _VoiceTakeMediaQaCacheKey key,
+    required int requestId,
+    required _VoiceTakeMediaQaFailure failure,
+  }) : this._(
+         key: key,
+         requestId: requestId,
+         isLoading: false,
+         failure: failure,
+       );
+
+  final _VoiceTakeMediaQaCacheKey key;
+  final int requestId;
+  final bool isLoading;
+  final Revision3VoiceTakeMediaQaDialogResult? result;
+  final _VoiceTakeMediaQaFailure? failure;
 }
 
 bool _catalogConfirmsStatusPublication(

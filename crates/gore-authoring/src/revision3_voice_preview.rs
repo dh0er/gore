@@ -373,36 +373,150 @@ pub enum Revision3VoiceTakePreviewOggErrorV1 {
     MetadataLimit,
 }
 
-/// Derive the exact revision-3 metadata expected for preview bytes.
+/// Honest strength of the codec validation that produced one exact media-QA result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Revision3VoiceTakeMediaAssuranceV1 {
+    /// Every Vorbis packet was decoded through the end of the logical stream and yielded PCM.
+    VorbisFullPcmDecode,
+    /// Opus packet framing, durations, pre-skip, granule origin, and EOS trim were validated, but
+    /// the compressed SILK/CELT payload was not decoded.
+    OpusPacketAndTimingStructureOnly,
+}
+
+/// Exact rational duration of one Voice take without floating-point rounding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Revision3VoiceTakeMediaDurationV1 {
+    sample_frames: u64,
+    timebase_hz: u32,
+}
+
+impl Revision3VoiceTakeMediaDurationV1 {
+    /// Playable frames per channel after codec start/end trimming.
+    pub const fn sample_frames(self) -> u64 {
+        self.sample_frames
+    }
+
+    /// Frames per second for interpreting [`Self::sample_frames`].
+    pub const fn timebase_hz(self) -> u32 {
+        self.timebase_hz
+    }
+}
+
+/// Exact media facts derived from one bounded managed Ogg object.
 ///
-/// Vorbis is decode-probed by `gore-vo`; Opus is currently structurally validated only. Success
-/// therefore grants preview-input evidence, never audible runtime or deployment qualification.
-pub fn inspect_revision3_voice_take_preview_ogg_v1(
+/// This is media-input evidence only. It does not assess loudness, clipping, acting, subtitle
+/// fit, desktop audibility, build/deployment readiness, or in-game behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Revision3VoiceTakeMediaQaV1 {
+    ogg: OggMetadata,
+    duration: Revision3VoiceTakeMediaDurationV1,
+    assurance: Revision3VoiceTakeMediaAssuranceV1,
+}
+
+impl Revision3VoiceTakeMediaQaV1 {
+    pub fn ogg(&self) -> &OggMetadata {
+        &self.ogg
+    }
+
+    pub const fn duration(&self) -> Revision3VoiceTakeMediaDurationV1 {
+        self.duration
+    }
+
+    pub const fn assurance(&self) -> Revision3VoiceTakeMediaAssuranceV1 {
+        self.assurance
+    }
+
+    fn into_ogg(self) -> OggMetadata {
+        self.ogg
+    }
+}
+
+/// Backward-compatible error alias for the broader media-QA inspector.
+pub type Revision3VoiceTakeMediaQaErrorV1 = Revision3VoiceTakePreviewOggErrorV1;
+
+/// Derive exact revision-3 Ogg metadata, rational duration, and validation assurance.
+///
+/// Vorbis duration is the validated decoded timeline after PCM origin and EOS trimming. Opus
+/// duration is the validated 48 kHz granule duration after origin, pre-skip, and EOS trim. The
+/// result remains media-input evidence and never grants audible runtime or deployment
+/// qualification.
+pub fn inspect_revision3_voice_take_media_qa_v1(
     bytes: &[u8],
-) -> Result<OggMetadata, Revision3VoiceTakePreviewOggErrorV1> {
-    let info = gore_vo::validate_ogg(bytes, &gore_vo::Limits::default())
+) -> Result<Revision3VoiceTakeMediaQaV1, Revision3VoiceTakeMediaQaErrorV1> {
+    let validation = gore_vo::validate_ogg_with_timing(bytes, &gore_vo::Limits::default())
         .map_err(|error| Revision3VoiceTakePreviewOggErrorV1::Invalid(error.to_string()))?;
-    let (codec, channels, sample_rate) = match info.codec {
+    let info = validation.info;
+    let timing = validation.timing;
+    let pages = u32::try_from(info.pages)
+        .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?;
+    let logical_streams = u32::try_from(info.logical_streams)
+        .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?;
+    if timing.duration_sample_frames == 0 || i64::try_from(timing.duration_sample_frames).is_err() {
+        return Err(Revision3VoiceTakePreviewOggErrorV1::MetadataLimit);
+    }
+
+    let inconsistent = || {
+        Revision3VoiceTakePreviewOggErrorV1::Invalid(
+            "validated Ogg duration or decode assurance is internally inconsistent".to_owned(),
+        )
+    };
+    let (codec, channels, sample_rate, assurance) = match info.codec {
         gore_vo::OggCodec::Vorbis {
             channels,
             sample_rate,
-        } => (OggCodec::Vorbis, channels, sample_rate),
-        gore_vo::OggCodec::Opus { channels, .. } => (OggCodec::Opus, channels, 48_000),
+        } => {
+            if !timing.pcm_decode_complete || timing.duration_timebase_hz != sample_rate {
+                return Err(inconsistent());
+            }
+            (
+                OggCodec::Vorbis,
+                channels,
+                sample_rate,
+                Revision3VoiceTakeMediaAssuranceV1::VorbisFullPcmDecode,
+            )
+        }
+        gore_vo::OggCodec::Opus { channels, .. } => {
+            if timing.pcm_decode_complete || timing.duration_timebase_hz != 48_000 {
+                return Err(inconsistent());
+            }
+            (
+                OggCodec::Opus,
+                channels,
+                48_000,
+                Revision3VoiceTakeMediaAssuranceV1::OpusPacketAndTimingStructureOnly,
+            )
+        }
         gore_vo::OggCodec::Unknown => {
             return Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(
                 "Ogg codec is not Vorbis or Opus".to_owned(),
             ));
         }
     };
-    Ok(OggMetadata {
-        codec,
-        channels,
-        sample_rate,
-        pages: u32::try_from(info.pages)
-            .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?,
-        logical_streams: u32::try_from(info.logical_streams)
-            .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?,
+    Ok(Revision3VoiceTakeMediaQaV1 {
+        ogg: OggMetadata {
+            codec,
+            channels,
+            sample_rate,
+            pages,
+            logical_streams,
+        },
+        duration: Revision3VoiceTakeMediaDurationV1 {
+            sample_frames: timing.duration_sample_frames,
+            timebase_hz: timing.duration_timebase_hz,
+        },
+        assurance,
     })
+}
+
+/// Derive the exact revision-3 metadata expected for preview bytes.
+///
+/// This compatibility API intentionally retains its original return type and serialized shape.
+/// New media-QA callers should use [`inspect_revision3_voice_take_media_qa_v1`].
+pub fn inspect_revision3_voice_take_preview_ogg_v1(
+    bytes: &[u8],
+) -> Result<OggMetadata, Revision3VoiceTakePreviewOggErrorV1> {
+    inspect_revision3_voice_take_media_qa_v1(bytes).map(Revision3VoiceTakeMediaQaV1::into_ogg)
 }
 
 fn is_zero_entity_id(value: &EntityId) -> bool {
@@ -769,12 +883,74 @@ mod tests {
     }
 
     #[test]
-    fn inspection_matches_the_real_tiny_vorbis_fixture() {
+    fn media_qa_reports_exact_real_vorbis_and_opus_timing_and_assurance() {
+        let vorbis = inspect_revision3_voice_take_media_qa_v1(include_bytes!(
+            "../../gore-vo/testdata/tiny-vorbis.ogg"
+        ))
+        .unwrap();
+        assert_eq!(vorbis.ogg().codec, OggCodec::Vorbis);
+        assert_eq!(vorbis.ogg().sample_rate, 48_000);
+        assert_eq!(vorbis.duration().sample_frames(), 3_840);
+        assert_eq!(vorbis.duration().timebase_hz(), 48_000);
+        assert_eq!(
+            vorbis.assurance(),
+            Revision3VoiceTakeMediaAssuranceV1::VorbisFullPcmDecode
+        );
+
+        let opus = inspect_revision3_voice_take_media_qa_v1(include_bytes!(
+            "../../gore-vo/testdata/tiny-opus.ogg"
+        ))
+        .unwrap();
+        assert_eq!(opus.ogg().codec, OggCodec::Opus);
+        assert_eq!(opus.ogg().sample_rate, 48_000);
+        assert_eq!(opus.duration().sample_frames(), 3_840);
+        assert_eq!(opus.duration().timebase_hz(), 48_000);
+        assert_eq!(
+            opus.assurance(),
+            Revision3VoiceTakeMediaAssuranceV1::OpusPacketAndTimingStructureOnly
+        );
+    }
+
+    #[test]
+    fn preview_ogg_inspector_remains_a_metadata_only_compatibility_wrapper() {
         let bytes = include_bytes!("../../gore-vo/testdata/tiny-vorbis.ogg");
+        let media = inspect_revision3_voice_take_media_qa_v1(bytes).unwrap();
         let metadata = inspect_revision3_voice_take_preview_ogg_v1(bytes).unwrap();
-        assert_eq!(metadata.codec, OggCodec::Vorbis);
-        assert!(metadata.channels > 0);
-        assert!(metadata.pages > 0);
-        assert!(inspect_revision3_voice_take_preview_ogg_v1(b"not ogg").is_err());
+        assert_eq!(&metadata, media.ogg());
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap(),
+            serde_json::json!({
+                "codec": "vorbis",
+                "channels": 1,
+                "sample_rate": 48_000,
+                "pages": 3,
+                "logical_streams": 1,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&media).unwrap(),
+            serde_json::json!({
+                "ogg": {
+                    "codec": "vorbis",
+                    "channels": 1,
+                    "sample_rate": 48_000,
+                    "pages": 3,
+                    "logical_streams": 1,
+                },
+                "duration": {
+                    "sample_frames": 3_840,
+                    "timebase_hz": 48_000,
+                },
+                "assurance": "vorbis_full_pcm_decode",
+            })
+        );
+        assert!(matches!(
+            inspect_revision3_voice_take_media_qa_v1(b"not ogg"),
+            Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(_))
+        ));
+        assert!(matches!(
+            inspect_revision3_voice_take_preview_ogg_v1(b"not ogg"),
+            Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(_))
+        ));
     }
 }

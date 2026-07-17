@@ -23,6 +23,7 @@ import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_project_history.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_media_qa_service.dart';
 import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -3740,6 +3741,209 @@ void main() {
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test(
+    'Voice media QA is exact-checkpoint bound and leaves state unchanged',
+    () async {
+      final plan = revision3VoicePreviewPlan();
+      final managed = _FakeVoiceTakeMediaQaManagedLease(
+        root: Directory('managed-voice-media-qa'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: _head(6),
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakeMediaQaStaleCheckpointException>()),
+      );
+      expect(managed.inspectCalls, 0);
+
+      final result = await coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: plan,
+      );
+      expect(managed.inspectCalls, 1);
+      expect(result.basisHead.canonicalJson, visible.head.canonicalJson);
+      expect(result.projectRevision, 7);
+      expect(result.lineId, plan.lineId);
+      expect(result.locale, plan.locale);
+      expect(result.takeId, plan.takeId);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 7);
+      expect(state.head.canonicalJson, visible.head.canonicalJson);
+      expect(state.requiresReopen, isFalse);
+    },
+  );
+
+  test('Voice media QA maps only graph-leaf conflicts to stale', () async {
+    final managed = _FakeVoiceTakeMediaQaManagedLease(
+      root: Directory('managed-voice-media-qa-stale'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    for (final code in <String>[
+      'AUTHORING_REVISION3_VOICE_MEDIA_LINE_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_MEDIA_LOCALIZATION_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_MEDIA_SLOT_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_MEDIA_TAKE_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_CONFLICT',
+    ]) {
+      managed.nextError = ModFfiException(
+        command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+        code: code,
+        message: 'fake exact Voice media graph drift',
+      );
+      await expectLater(
+        coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(isA<Revision3VoiceTakeMediaQaStaleCheckpointException>()),
+        reason: code,
+      );
+      expect(managed.requiresReopen, isFalse, reason: code);
+      expect(managed.relatchCalls, 0, reason: code);
+    }
+  });
+
+  test('Voice media QA uncertainty maps to reopen and locks retry', () async {
+    final managed = _FakeVoiceTakeMediaQaManagedLease(
+      root: Directory('managed-voice-media-qa-poison'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      nextError: const ModFfiException(
+        command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+        code: 'AUTHORING_REVISION3_VOICE_MEDIA_STORE_INVARIANT',
+        message: 'fake Voice media Store uncertainty',
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    Future<void> inspect() async {
+      await coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: revision3VoicePreviewPlan(),
+      );
+    }
+
+    await expectLater(
+      inspect(),
+      throwsA(isA<Revision3VoiceTakeMediaQaRequiresReopenException>()),
+    );
+    expect(managed.inspectCalls, 1);
+    expect(managed.relatchCalls, 1);
+    expect(managed.requiresReopen, isTrue);
+    await expectLater(
+      inspect(),
+      throwsA(isA<Revision3VoiceTakeMediaQaRequiresReopenException>()),
+    );
+    expect(managed.inspectCalls, 1);
+  });
+
+  test('Voice media QA receipt mismatch relatches the lease', () async {
+    final managed = _FakeVoiceTakeMediaQaManagedLease(
+      root: Directory('managed-voice-media-qa-mismatch'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      receiptMismatch: true,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: revision3VoicePreviewPlan(),
+      ),
+      throwsA(isA<Revision3VoiceTakeMediaQaRequiresReopenException>()),
+    );
+    expect(managed.inspectCalls, 1);
+    expect(managed.relatchCalls, 1);
+    expect(managed.requiresReopen, isTrue);
+  });
+
+  test(
+    'Voice media QA remains an explicit optional lease capability',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-media-qa-unsupported'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.inspectCurrentRevision3VoiceTakeMediaQa(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
     },
   );
 
@@ -8339,6 +8543,57 @@ final class _FakeStoryDraftRemovalManagedLease extends _FakeManagedLease
       removedDraftRevision: expectedDraftRevision,
       removedScriptModuleId: scriptModuleId,
       removedScriptModuleRevision: expectedScriptModuleRevision,
+    );
+  }
+}
+
+final class _FakeVoiceTakeMediaQaManagedLease extends _FakeManagedLease
+    implements ManagedRevision3VoiceTakeMediaQaLease {
+  _FakeVoiceTakeMediaQaManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    this.supportsMediaQa = true,
+    this.receiptMismatch = false,
+    this.poisonOnError = false,
+    this.nextError,
+  });
+
+  final bool supportsMediaQa;
+  final bool receiptMismatch;
+  final bool poisonOnError;
+  Object? nextError;
+  int inspectCalls = 0;
+  int relatchCalls = 0;
+
+  @override
+  bool get supportsVoiceTakeMediaQa => supportsMediaQa;
+
+  @override
+  void markRequiresReopenAfterVoiceTakeMediaQaUncertainty() {
+    relatchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaQaV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) async {
+    inspectCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) {
+      if (poisonOnError) requiresReopenValue = true;
+      throw injected;
+    }
+    final request = revision3VoicePreviewRequest(head: head);
+    return AuthoringRevision3VoiceTakeMediaQaResult.fromJson(
+      revision3VoiceMediaQaResponse(
+        request: request,
+        status: receiptMismatch ? 'approved' : 'recorded',
+      ),
+      request: request,
     );
   }
 }
