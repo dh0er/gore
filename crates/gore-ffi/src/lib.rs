@@ -147,6 +147,14 @@
 //! - `authoring_store_plan_revision3_voice_v1` fully reopens one exact current revision-3 project
 //!   around the pure Voice planner and returns only bounded readiness evidence. It accepts no game
 //!   installation or output path, creates no artifact, and grants no build or deployment authority.
+//! - `authoring_store_register_revision3_voice_take_preview_v1`,
+//!   `authoring_store_materialize_revision3_voice_take_preview_v1`, and
+//!   `authoring_store_release_revision3_voice_take_preview_v1` create, use, and release one
+//!   native-owned opaque system-temp capability. Materialization binds one exact-current
+//!   line/localization/locale/slot/candidate-take/asset graph and copies only its fully verified
+//!   Ogg bytes into the fixed `preview.ogg` leaf. The lifecycle never exposes the private CAS path,
+//!   overwrites output, mutates the Store/project/game/save, builds, deploys, publishes, or grants
+//!   runtime qualification.
 //! - `authoring_store_build_revision3_reviewed_dataasset_v1` builds exactly one exact-current
 //!   reviewed DataAsset stage into a verified no-clobber triplet plus canonical receipt. It
 //!   accepts no package/USMAP bytes, selector, replacement, receipt path, overwrite, deployment,
@@ -245,6 +253,7 @@ mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_batch_revision3;
 mod authoring_voice_build_revision3;
 mod authoring_voice_plan_revision3;
+mod authoring_voice_preview_revision3;
 mod authoring_voice_revision3;
 mod authoring_voice_selection_revision3;
 mod authoring_voice_take_remove_revision3;
@@ -296,6 +305,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_inspect_revision3_quest_source_v1",
     "authoring_store_list_revision3_dataasset_stages_v1",
     authoring_history_revision3::LIST_COMMAND,
+    authoring_voice_preview_revision3::COMMAND,
     "authoring_store_open",
     "authoring_store_open_document",
     "authoring_store_open_head_bytes",
@@ -335,6 +345,8 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_read_revision3_dataasset_package_index_v1",
     "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
     "authoring_store_read_revision3_dialog_localization_v1",
+    authoring_voice_preview_revision3::REGISTER_COMMAND,
+    authoring_voice_preview_revision3::RELEASE_COMMAND,
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -599,6 +611,15 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         authoring_voice_plan_revision3::COMMAND => {
             Some(authoring_voice_plan_revision3::plan_revision3_voice_v1_raw)
         }
+        authoring_voice_preview_revision3::REGISTER_COMMAND => Some(
+            authoring_voice_preview_revision3::register_revision3_voice_take_preview_v1_raw,
+        ),
+        authoring_voice_preview_revision3::COMMAND => Some(
+            authoring_voice_preview_revision3::materialize_revision3_voice_take_preview_v1_raw,
+        ),
+        authoring_voice_preview_revision3::RELEASE_COMMAND => Some(
+            authoring_voice_preview_revision3::release_revision3_voice_take_preview_v1_raw,
+        ),
         authoring_voice_batch_revision3::PLAN_COMMAND => {
             Some(authoring_voice_batch_revision3::plan_revision3_voice_batch_v1_raw)
         }
@@ -1771,6 +1792,7 @@ mod tests {
                     "authoring_store_inspect_revision3_quest_source_v1",
                     "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_list_revision3_history_v1",
+                    "authoring_store_materialize_revision3_voice_take_preview_v1",
                     "authoring_store_open",
                     "authoring_store_open_document",
                     "authoring_store_open_head_bytes",
@@ -1810,6 +1832,8 @@ mod tests {
                     "authoring_store_read_revision3_dataasset_package_index_v1",
                     "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
                     "authoring_store_read_revision3_dialog_localization_v1",
+                    "authoring_store_register_revision3_voice_take_preview_v1",
+                    "authoring_store_release_revision3_voice_take_preview_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
@@ -1890,6 +1914,15 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_list_revision3_dataasset_stages_v1"));
+        assert!(commands.iter().any(
+            |command| command == "authoring_store_materialize_revision3_voice_take_preview_v1"
+        ));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_register_revision3_voice_take_preview_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_release_revision3_voice_take_preview_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_inspect_revision3_npc_source_v1"));

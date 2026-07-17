@@ -4443,6 +4443,7 @@ void main() {
           matching: find.byType(OutlinedButton),
         );
         expect(button, findsOneWidget);
+        expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
         await tester.ensureVisible(button);
         await tester.tap(button);
         await tester.pumpAndSettle();

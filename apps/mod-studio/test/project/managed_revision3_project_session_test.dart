@@ -14,6 +14,7 @@ import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../dataasset/dataasset_test_fixtures.dart';
@@ -24,6 +25,7 @@ import '../support/revision3_npc_profile_edit_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_voice_preview_fixture.dart';
 import '../support/revision3_voice_selection_fixture.dart';
 
 const _dialogLocalizationEditId = '01010101010101010101010101010101';
@@ -1532,6 +1534,300 @@ void main() {
       });
       expect(reentrantStore.exportCalls, 0);
       await reentrantSession.close();
+    },
+  );
+
+  test(
+    'Voice preview materializes one exact temp capability without changing the checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_preview');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview'),
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactProject = session.projectJson;
+
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+
+      expect(session.supportsVoiceTakePreview, isTrue);
+      expect(store.voicePreviewCalls, 1);
+      expect(
+        store.voicePreviewRequests.single.expectedHead.canonicalJson,
+        exactHead,
+      );
+      expect(
+        await File(capability.path).readAsBytes(),
+        revision3VoicePreviewBytes,
+      );
+      expect(capability.projectId, session.projectId);
+      expect(capability.projectRevision, 7);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, exactProject);
+      expect(session.requiresReopen, isFalse);
+
+      final previewRoot = Directory(p.dirname(capability.path));
+      await capability.close();
+      expect(await previewRoot.exists(), isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview semantic drift and temp capability failures remain local',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_retryable',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview retry'),
+      );
+      final exactHead = session.head.canonicalJson;
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_PREVIEW_LINE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_LOCALIZATION_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_CLEANUP_TOKEN_UNKNOWN',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CHANGED',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_OUTPUT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+      ];
+
+      for (final code in retryableCodes) {
+        store.nextVoicePreviewError = ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: code,
+          message: 'fake closed Voice preview rejection',
+        );
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        expect(
+          await Directory(store.voicePreviewRoots.last).exists(),
+          isFalse,
+          reason: code,
+        );
+      }
+
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      await capability.close();
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview cleanup-only and local materialization obligations stay retryable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_cleanup_obligation',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview cleanup'),
+      );
+      final generic = Revision3VoiceTakePreviewCleanupException(
+        StateError('fake local cleanup lock'),
+      );
+      store.nextVoicePreviewError = generic;
+      await expectLater(
+        session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(same(generic)),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(await Directory(store.voicePreviewRoots.last).exists(), isFalse);
+
+      store.blockVoicePreviewCleanupOnError = true;
+      store.nextVoicePreviewError = const ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+        message: 'fake local materialization failure',
+      );
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      try {
+        await session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        );
+        fail('local materialization must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+      expect(
+        retained.materializationCause,
+        isA<ModFfiException>().having(
+          (error) => error.code,
+          'code',
+          'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+        ),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(retained.isCleaned, isFalse);
+      expect(retained.diagnosticPreviewRoot, store.voicePreviewRoots.last);
+
+      await File(p.join(retained.diagnosticPreviewRoot, 'unexpected')).delete();
+      await retained.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      await capability.close();
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview integrity failure poisons while retaining failed cleanup ownership',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_poison_cleanup_obligation',
+      );
+      final store = _FakeRevision3Store()
+        ..blockVoicePreviewCleanupOnError = true
+        ..nextVoicePreviewError = const ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: 'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_INVALID',
+          message: 'fake invalid immutable asset',
+        );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 7,
+          name: 'Voice preview poison cleanup',
+        ),
+      );
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      try {
+        await session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        );
+        fail('integrity failure must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+
+      expect(
+        retained.materializationCause,
+        isA<ManagedProjectVerificationException>(),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(retained.isCleaned, isFalse);
+      expect(retained.diagnosticPreviewRoot, store.voicePreviewRoots.single);
+      final calls = store.voicePreviewCalls;
+      await expectLater(
+        session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.voicePreviewCalls, calls);
+
+      await File(p.join(retained.diagnosticPreviewRoot, 'unexpected')).delete();
+      await retained.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview request, head, response, and Store uncertainty poison',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INPUT_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_SIGNED_WIRE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_STORE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_PREVIEW_FUTURE_UNKNOWN',
+      ];
+
+      for (var index = 0; index < poisonCodes.length; index++) {
+        final code = poisonCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_preview_poison_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 7,
+            name: 'Voice preview poison $index',
+          ),
+        );
+        final exactHead = session.head.canonicalJson;
+        store.nextVoicePreviewError = ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: code,
+          message: 'fake Voice preview integrity failure',
+        );
+
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        expect(
+          await Directory(store.voicePreviewRoots.single).exists(),
+          isFalse,
+          reason: code,
+        );
+        final calls = store.voicePreviewCalls;
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voicePreviewCalls, calls);
+        await session.close();
+      }
     },
   );
 
@@ -7616,6 +7912,7 @@ Map<String, Object?> _npcProfilePreparedResponse({
 class _FakeRevision3Store
     implements
         ManagedRevision3AuthoringStore,
+        ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3NpcProfileEditStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
 
@@ -7638,6 +7935,7 @@ class _FakeRevision3Store
   int npcProfilePrepareCalls = 0;
   int dialogLinePrepareCalls = 0;
   int voicePrepareCalls = 0;
+  int voicePreviewCalls = 0;
   int voiceSelectionPrepareCalls = 0;
   int voiceTakeStatusPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
@@ -7695,6 +7993,10 @@ class _FakeRevision3Store
   final List<String> voiceCurrentProjects = <String>[];
   final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
       <AuthoringRevision3VoiceTakeRequestV1>[];
+  final List<String> voicePreviewRoots = <String>[];
+  String? _registeredVoicePreviewRoot;
+  final List<AuthoringRevision3VoiceTakePreviewRequestV1> voicePreviewRequests =
+      <AuthoringRevision3VoiceTakePreviewRequestV1>[];
   final List<AuthoringRevision3VoiceTakeSelectionRequestV1>
   voiceSelectionRequests = <AuthoringRevision3VoiceTakeSelectionRequestV1>[];
   final List<AuthoringRevision3VoiceTakeStatusRequestV1>
@@ -7715,6 +8017,8 @@ class _FakeRevision3Store
   Object? nextNpcProfileError;
   String? nextNpcProfileResponseMismatch;
   Object? nextVoiceError;
+  Object? nextVoicePreviewError;
+  bool blockVoicePreviewCleanupOnError = false;
   Object? nextVoiceSelectionError;
   Object? nextVoiceTakeStatusError;
   Object? nextVoiceTargetError;
@@ -8532,6 +8836,82 @@ class _FakeRevision3Store
       currentProjectJson: currentProjectJson,
       request: request,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewRegistration>
+  registerVoiceTakePreviewV1({required String root}) async {
+    final previewRoot = (await createRevision3VoicePreviewTestRoot()).path;
+    _registeredVoicePreviewRoot = previewRoot;
+    return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(
+      revision3VoicePreviewRegistrationResponse(previewRoot: previewRoot),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewMaterialization>
+  materializeVoiceTakePreviewV1({
+    required String root,
+    required String cleanupToken,
+    required String previewRoot,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    voicePreviewCalls++;
+    voicePreviewRoots.add(previewRoot);
+    voicePreviewRequests.add(request);
+    final injectedError = nextVoicePreviewError;
+    nextVoicePreviewError = null;
+    if (injectedError != null) {
+      if (blockVoicePreviewCleanupOnError) {
+        blockVoicePreviewCleanupOnError = false;
+        await File(p.join(previewRoot, 'unexpected')).writeAsString('lock');
+      }
+      throw injectedError;
+    }
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PREVIEW_HEAD_CONFLICT',
+        message: 'fake native Voice preview basis CAS rejected',
+      );
+    }
+    await File(
+      p.join(previewRoot, 'preview.ogg'),
+    ).writeAsBytes(revision3VoicePreviewBytes, flush: true);
+    return AuthoringRevision3VoiceTakePreviewMaterialization.fromJson(
+      revision3VoicePreviewResponse(
+        previewRoot: previewRoot,
+        cleanupToken: cleanupToken,
+        request: request,
+      ),
+      previewRoot: previewRoot,
+      cleanupToken: cleanupToken,
+      request: request,
+    );
+  }
+
+  @override
+  Future<void> releaseVoiceTakePreviewV1({required String cleanupToken}) async {
+    if (cleanupToken != revision3VoicePreviewCleanupToken ||
+        _registeredVoicePreviewRoot == null) {
+      throw StateError('unknown fake Voice preview cleanup token');
+    }
+    final root = Directory(_registeredVoicePreviewRoot!);
+    final entries = await root.list(followLinks: false).toList();
+    if (entries.length > 1 ||
+        (entries.isNotEmpty &&
+            (p.basename(entries.single.path) != 'preview.ogg' ||
+                await FileSystemEntity.type(
+                      entries.single.path,
+                      followLinks: false,
+                    ) !=
+                    FileSystemEntityType.file))) {
+      throw const FileSystemException('fake retained cleanup failure');
+    }
+    if (entries.isNotEmpty) await entries.single.delete();
+    await root.delete();
+    _registeredVoicePreviewRoot = null;
   }
 
   @override

@@ -23,15 +23,18 @@ import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_project_history.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
+import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_npc_profile_edit_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_voice_preview_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
@@ -3739,6 +3742,470 @@ void main() {
       expect(state.head.canonicalJson, _head(8).canonicalJson);
     },
   );
+
+  test(
+    'Voice preview is exact-checkpoint bound and leaves current state unchanged',
+    () async {
+      final plan = revision3VoicePreviewPlan();
+      final managed = _FakeVoiceTakePreviewManagedLease(
+        root: Directory('managed-voice-preview'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: _head(6),
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakePreviewStaleCheckpointException>()),
+      );
+      expect(managed.materializeCalls, 0);
+
+      final capability = await coordinator
+          .materializeCurrentRevision3VoiceTakePreview(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: plan,
+          );
+      expect(managed.materializeCalls, 1);
+      expect(capability.projectRevision, 7);
+      expect(
+        await File(capability.path).readAsBytes(),
+        revision3VoicePreviewBytes,
+      );
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 7);
+      expect(state.head.canonicalJson, visible.head.canonicalJson);
+      expect(state.requiresReopen, isFalse);
+      await capability.close();
+    },
+  );
+
+  test('Voice preview maps only exact graph-leaf conflicts to stale', () async {
+    final plan = revision3VoicePreviewPlan();
+    final managed = _FakeVoiceTakePreviewManagedLease(
+      root: Directory('managed-voice-preview-stale'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    for (final code in <String>[
+      'AUTHORING_REVISION3_VOICE_PREVIEW_LINE_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_LOCALIZATION_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
+    ]) {
+      managed.nextError = ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: code,
+        message: 'fake semantic preview drift',
+      );
+      await expectLater(
+        coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakePreviewStaleCheckpointException>()),
+        reason: code,
+      );
+      expect(managed.requiresReopen, isFalse, reason: code);
+    }
+  });
+
+  test(
+    'Voice preview preserves stale classification with failed cleanup',
+    () async {
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      late String registeredRoot;
+      try {
+        await Revision3VoiceTakePreviewCapability.materialize(
+          register: () async {
+            final previewRoot =
+                (await createRevision3VoicePreviewTestRoot()).path;
+            registeredRoot = previewRoot;
+            return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(
+              revision3VoicePreviewRegistrationResponse(
+                previewRoot: previewRoot,
+              ),
+            );
+          },
+          materialize: (token, previewRoot) async {
+            await File(
+              '$previewRoot${Platform.pathSeparator}unexpected',
+            ).writeAsString('lock');
+            throw const ModFfiException(
+              command:
+                  'authoring_store_materialize_revision3_voice_take_preview_v1',
+              code: 'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+              message: 'fake stale Voice take',
+            );
+          },
+          release: (token) => _deleteFakeVoicePreviewRoot(registeredRoot),
+        );
+        fail('stale materialization must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+      final managed = _FakeVoiceTakePreviewManagedLease(
+        root: Directory('managed-voice-preview-stale-cleanup'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        nextError: retained,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      late Revision3VoiceTakePreviewStaleCheckpointException failure;
+
+      try {
+        await coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: revision3VoicePreviewPlan(),
+        );
+        fail('graph drift must remain stale while cleanup is retained');
+      } on Revision3VoiceTakePreviewStaleCheckpointException catch (error) {
+        failure = error;
+      }
+
+      expect(failure.cleanupObligation, same(retained));
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.relatchCalls, 0);
+      await File(
+        '${retained.diagnosticPreviewRoot}${Platform.pathSeparator}unexpected',
+      ).delete();
+      await failure.cleanupObligation!.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+
+      final retry = await coordinator
+          .materializeCurrentRevision3VoiceTakePreview(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: revision3VoicePreviewPlan(),
+          );
+      await retry.close();
+      expect(managed.materializeCalls, 2);
+    },
+  );
+
+  test('Voice preview temp-output failure stays local and retryable', () async {
+    final plan = revision3VoicePreviewPlan();
+    final managed = _FakeVoiceTakePreviewManagedLease(
+      root: Directory('managed-voice-preview-local'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    const localCodes = <String>[
+      'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CONFLICT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_LIMIT',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_UNAVAILABLE',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_CLEANUP_TOKEN_UNKNOWN',
+      'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+    ];
+    for (final code in localCodes) {
+      managed.nextError = ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: code,
+        message: 'fake local preview capability failure',
+      );
+      await expectLater(
+        coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(
+          isA<ModFfiException>().having((error) => error.code, 'code', code),
+        ),
+        reason: code,
+      );
+      expect(managed.requiresReopen, isFalse, reason: code);
+    }
+
+    final capability = await coordinator
+        .materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        );
+    expect(managed.materializeCalls, localCodes.length + 1);
+    await capability.close();
+  });
+
+  test(
+    'Voice preview cleanup obligation crosses coordinator unchanged',
+    () async {
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      late String registeredRoot;
+      try {
+        await Revision3VoiceTakePreviewCapability.materialize(
+          register: () async {
+            final previewRoot =
+                (await createRevision3VoicePreviewTestRoot()).path;
+            registeredRoot = previewRoot;
+            return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(
+              revision3VoicePreviewRegistrationResponse(
+                previewRoot: previewRoot,
+              ),
+            );
+          },
+          materialize: (token, previewRoot) async {
+            await File(
+              '$previewRoot${Platform.pathSeparator}unexpected',
+            ).writeAsString('lock');
+            throw const ModFfiException(
+              command:
+                  'authoring_store_materialize_revision3_voice_take_preview_v1',
+              code: 'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+              message: 'fake local preview failure',
+            );
+          },
+          release: (token) => _deleteFakeVoicePreviewRoot(registeredRoot),
+        );
+        fail('nested capability must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+      final managed = _FakeVoiceTakePreviewManagedLease(
+        root: Directory('managed-voice-preview-cleanup-retainer'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        nextError: retained,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(same(retained)),
+      );
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.relatchCalls, 0);
+
+      await File(
+        '${retained.diagnosticPreviewRoot}${Platform.pathSeparator}unexpected',
+      ).delete();
+      await retained.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+    },
+  );
+
+  test(
+    'poisoned Voice preview maps to requires-reopen and locks retry',
+    () async {
+      final plan = revision3VoicePreviewPlan();
+      final managed = _FakeVoiceTakePreviewManagedLease(
+        root: Directory('managed-voice-preview-poison'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        poisonOnError: true,
+        nextError: StateError('fake Store verification uncertainty'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> materialize() async {
+        await coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        materialize(),
+        throwsA(isA<Revision3VoiceTakePreviewRequiresReopenException>()),
+      );
+      expect(managed.materializeCalls, 1);
+      expect(managed.requiresReopen, isTrue);
+      await expectLater(
+        materialize(),
+        throwsA(isA<Revision3VoiceTakePreviewRequiresReopenException>()),
+      );
+      expect(managed.materializeCalls, 1);
+    },
+  );
+
+  test(
+    'Voice preview receipt mismatch relatches and preserves failed cleanup ownership',
+    () async {
+      final plan = revision3VoicePreviewPlan();
+      final managed = _FakeVoiceTakePreviewManagedLease(
+        root: Directory('managed-voice-preview-mismatch'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        receiptMismatch: true,
+        cleanupFailure: true,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      late Revision3VoiceTakePreviewRequiresReopenException failure;
+
+      try {
+        await coordinator.materializeCurrentRevision3VoiceTakePreview(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        );
+        fail('mismatched receipt must fail closed');
+      } on Revision3VoiceTakePreviewRequiresReopenException catch (error) {
+        failure = error;
+      }
+
+      final capability = managed.lastCapability!;
+      expect(managed.relatchCalls, 1);
+      expect(managed.requiresReopen, isTrue);
+      expect(capability.isClosed, isFalse);
+      expect(failure.cleanupObligation, same(capability));
+      await Directory(capability.path).delete();
+      await failure.cleanupObligation!.retryCleanup();
+      expect(capability.isClosed, isTrue);
+    },
+  );
+
+  test('Voice preview remains an explicit optional lease capability', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('managed-voice-preview-unsupported'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.materializeCurrentRevision3VoiceTakePreview(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: revision3VoicePreviewPlan(),
+      ),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+
+    final disabled = _FakeVoiceTakePreviewManagedLease(
+      root: Directory('managed-voice-preview-disabled'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      supportsPreview: false,
+    );
+    final disabledCoordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => disabled,
+    );
+    addTearDown(() async {
+      await disabledCoordinator.shutdown();
+      disabledCoordinator.dispose();
+    });
+    final disabledVisible = await disabledCoordinator.openManagedRevision3(
+      disabled.root,
+    );
+    await expectLater(
+      disabledCoordinator.materializeCurrentRevision3VoiceTakePreview(
+        expectedRoot: disabledVisible.root.path,
+        expectedProjectId: disabledVisible.projectId,
+        expectedProjectRevision: disabledVisible.projectRevision,
+        expectedHead: disabledVisible.head,
+        plan: revision3VoicePreviewPlan(),
+      ),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+    expect(disabled.materializeCalls, 0);
+  });
 
   test('poisoned Voice failure locks retries behind requires-reopen', () async {
     final plan = _voicePlan();
@@ -7876,6 +8343,64 @@ final class _FakeStoryDraftRemovalManagedLease extends _FakeManagedLease
   }
 }
 
+final class _FakeVoiceTakePreviewManagedLease extends _FakeManagedLease
+    implements ManagedRevision3VoiceTakePreviewLease {
+  _FakeVoiceTakePreviewManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    this.supportsPreview = true,
+    this.receiptMismatch = false,
+    this.cleanupFailure = false,
+    this.poisonOnError = false,
+    this.nextError,
+  });
+
+  final bool supportsPreview;
+  final bool receiptMismatch;
+  final bool cleanupFailure;
+  final bool poisonOnError;
+  Object? nextError;
+  int materializeCalls = 0;
+  int relatchCalls = 0;
+  Revision3VoiceTakePreviewCapability? lastCapability;
+
+  @override
+  bool get supportsVoiceTakePreview => supportsPreview;
+
+  @override
+  void markRequiresReopenAfterVoiceTakePreviewUncertainty() {
+    relatchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3VoiceTakePreviewCapability> materializeVoiceTakePreviewV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) async {
+    materializeCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) {
+      if (poisonOnError) requiresReopenValue = true;
+      throw injected;
+    }
+    final capability = await _voicePreviewCapability(
+      head: head,
+      projectId: projectId,
+      projectRevision: receiptMismatch ? projectRevision + 1 : projectRevision,
+      plan: plan,
+    );
+    if (cleanupFailure) {
+      await File(capability.path).delete();
+      await Directory(capability.path).create();
+    }
+    lastCapability = capability;
+    return capability;
+  }
+}
+
 final class _FakeVoiceTakeRemovalManagedLease extends _FakeManagedLease
     implements ManagedRevision3VoiceTakeRemovalLease {
   _FakeVoiceTakeRemovalManagedLease({
@@ -8096,6 +8621,77 @@ Revision3VoiceTakeTechnicalPlan _voicePlan() {
       status: AuthoringRevision3VoiceTakeStatus.recorded,
     ),
   );
+}
+
+Future<Revision3VoiceTakePreviewCapability> _voicePreviewCapability({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required Revision3VoiceTakePreviewTechnicalPlan plan,
+}) {
+  final request = AuthoringRevision3VoiceTakePreviewRequestV1(
+    expectedHead: head,
+    expectedProjectId: projectId,
+    expectedRevision: projectRevision,
+    lineId: plan.lineId,
+    expectedLineRevision: plan.expectedLineRevision,
+    localizationId: plan.localizationId,
+    expectedLocalizationRevision: plan.expectedLocalizationRevision,
+    expectedLocId: plan.locId,
+    slotId: plan.slotId,
+    expectedSlotRevision: plan.expectedSlotRevision,
+    locale: plan.locale,
+    takeId: plan.takeId,
+    expectedTakeRevision: plan.expectedTakeRevision,
+    expectedAsset: AuthoringRevision3VoiceTakePreviewExpectedAsset(
+      sha256: plan.assetSha256,
+      byteLength: plan.assetByteLength,
+      logicalName: plan.assetLogicalName,
+    ),
+  );
+  late String registeredRoot;
+  return Revision3VoiceTakePreviewCapability.materialize(
+    register: () async {
+      final previewRoot = (await createRevision3VoicePreviewTestRoot()).path;
+      registeredRoot = previewRoot;
+      return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(
+        revision3VoicePreviewRegistrationResponse(previewRoot: previewRoot),
+      );
+    },
+    materialize: (token, previewRoot) async {
+      await File(
+        '$previewRoot${Platform.pathSeparator}preview.ogg',
+      ).writeAsBytes(revision3VoicePreviewBytes, flush: true);
+      return AuthoringRevision3VoiceTakePreviewMaterialization.fromJson(
+        revision3VoicePreviewResponse(
+          previewRoot: previewRoot,
+          cleanupToken: token,
+          request: request,
+        ),
+        previewRoot: previewRoot,
+        cleanupToken: token,
+        request: request,
+      );
+    },
+    release: (token) => _deleteFakeVoicePreviewRoot(registeredRoot),
+  );
+}
+
+Future<void> _deleteFakeVoicePreviewRoot(String rootPath) async {
+  final root = Directory(rootPath);
+  final entries = await root.list(followLinks: false).toList();
+  if (entries.length > 1 ||
+      (entries.isNotEmpty &&
+          (p.basename(entries.single.path) != 'preview.ogg' ||
+              await FileSystemEntity.type(
+                    entries.single.path,
+                    followLinks: false,
+                  ) !=
+                  FileSystemEntityType.file))) {
+    throw const FileSystemException('fake retained cleanup failure');
+  }
+  if (entries.isNotEmpty) await entries.single.delete();
+  await root.delete();
 }
 
 Revision3VoiceTargetTechnicalPlan _voiceTargetPlan() {

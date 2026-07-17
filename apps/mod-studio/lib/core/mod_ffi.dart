@@ -40,6 +40,7 @@ part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_batch.dart';
 part '../project/revision3_voice_take.dart';
+part '../project/revision3_voice_take_preview.dart';
 part '../project/revision3_voice_take_removal.dart';
 part '../project/revision3_voice_take_selection.dart';
 part '../project/revision3_voice_take_status.dart';
@@ -1565,6 +1566,113 @@ class ModFfi {
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Atomically create and retain one native-owned temp directory after
+  /// proving it cannot overlap the managed Store.
+  Future<AuthoringRevision3VoiceTakePreviewRegistration>
+  authoringStoreRegisterRevision3VoiceTakePreviewV1({
+    required String root,
+  }) async {
+    const command = 'authoring_store_register_revision3_voice_take_preview_v1';
+    _authoringRevision3Path(root, 'root');
+    if (!p.isAbsolute(root)) {
+      throw ArgumentError.value(
+        '<${root.length} characters>',
+        'root',
+        'must be an absolute managed Store directory',
+      );
+    }
+    final response = await _call(command, <String, Object?>{'root': root});
+    try {
+      return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(response);
+    } on FormatException catch (error) {
+      // A malformed same-build success is fail-closed: never guess a token or ambient path.
+      // Native may retain that isolated slot/root until process exit in this exceptional ABI
+      // mismatch; validated successes expose only token-bound release authority.
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Materialize one exact-current managed CAS VoiceTake through an already
+  /// retained opaque preview capability. Ownership is never consumed here.
+  Future<AuthoringRevision3VoiceTakePreviewMaterialization>
+  authoringStoreMaterializeRevision3VoiceTakePreviewV1({
+    required String root,
+    required String cleanupToken,
+    required String previewRoot,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    const command =
+        'authoring_store_materialize_revision3_voice_take_preview_v1';
+    _authoringRevision3Path(root, 'root');
+    if (!_authoringRevision3VoiceTakePreviewCleanupTokenPattern.hasMatch(
+      cleanupToken,
+    )) {
+      throw ArgumentError('cleanupToken is not one opaque preview token');
+    }
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('cleanupToken', cleanupToken),
+      ('root', root),
+      ('voiceTakePreviewRequestJson', request.canonicalJson),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'root': root,
+      'cleanup_token': cleanupToken,
+      'voice_take_preview_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakePreviewMaterialization.fromJson(
+        response,
+        previewRoot: previewRoot,
+        cleanupToken: cleanupToken,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Release one opaque preview capability. Failures retain the token. A
+  /// successful repeat is recognized only within the bounded process-local
+  /// tombstone window, with no cross-restart guarantee.
+  Future<void> authoringStoreReleaseRevision3VoiceTakePreviewV1({
+    required String cleanupToken,
+  }) async {
+    const command = 'authoring_store_release_revision3_voice_take_preview_v1';
+    if (!_authoringRevision3VoiceTakePreviewCleanupTokenPattern.hasMatch(
+      cleanupToken,
+    )) {
+      throw ArgumentError('cleanupToken is not one opaque preview token');
+    }
+    final response = await _call(command, <String, Object?>{
+      'cleanup_token': cleanupToken,
+    });
+    _authoringExactFields(response, const <String>{
+      'ok',
+      'outcome',
+      'cleanup_status',
+      'project_write_status',
+      'game_write_status',
+      'save_write_status',
+      'build_status',
+      'deployment_status',
+      'runtime_status',
+    }, 'revision-3 Voice take preview cleanup response');
+    if (response['ok'] != true ||
+        response['outcome'] != 'preview_cleanup_complete' ||
+        response['cleanup_status'] != 'performed' ||
+        response['project_write_status'] != 'not_performed' ||
+        response['game_write_status'] != 'not_performed' ||
+        response['save_write_status'] != 'not_performed' ||
+        response['build_status'] != 'not_performed' ||
+        response['deployment_status'] != 'not_performed' ||
+        response['runtime_status'] != 'not_qualified') {
+      throw const ModFfiException._malformed(
+        command: command,
+        reason: 'cleanup response grants invalid authority',
+      );
     }
   }
 

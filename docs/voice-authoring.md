@@ -382,6 +382,37 @@ review status, and it never claims codec, loudness, runtime, or in-game
 qualification. Native Ogg validation remains mandatory before the project can
 change.
 
+Existing managed takes now have a separate **Preview** action in **Manage
+takes**. The dialog refreshes the exact current content index and binds the
+chosen line, localization, locale slot, take revision, and immutable audio
+asset before asking native code to materialize anything. Native code reopens
+that complete graph, fully verifies the selected CAS object's byte length and
+SHA-256 plus its Ogg metadata, and copies only that object to a fixed
+`preview.ogg` leaf in a new native-owned system-temporary capability. Before any
+CAS work on Windows, native registration pins the managed Store read-only and
+the temporary parent, atomically creates and retains a fresh non-overlapping
+preview-root identity, rejects identity drift, and returns an opaque cleanup
+token plus the private playback path; materialization and release must present
+that token. Unsupported desktop platforms fail closed before creating a
+capability. The response never exposes the private CAS path, and Studio never
+renders or persists the temporary playback path.
+
+Studio rehashes the materialized file before adopting it and plays supported
+Ogg Vorbis or Ogg Opus takes in-app with Play/Pause, Replay, seeking, progress,
+and Stop. Replacement, selection changes, refresh, Stop, and dialog close first
+unload the native decoder handle and then ask native code to release the exact
+token-owned leaf and its empty non-recursive root through the retained
+capability. Cleanup never follows a later ambient path replacement. A failed
+release retains the opaque token as an explicit retry obligation; the serialized
+playback lifecycle must settle it before adopting another preview. Abrupt Studio
+termination, or an exceptional registration failure whose exact deletion cannot
+be proved, can leave an isolated temporary root behind; no unsafe startup sweep
+guesses ownership, although a user or operating-system policy may remove the
+orphan later. It cannot change the project, Store, game, save, build,
+deployment, or runtime state. A stale graph can be refreshed;
+Store/head/receipt uncertainty instead requires a verified project reopen.
+Successful desktop playback does not qualify audible in-game behavior.
+
 **Manage takes** also closes the empty-slot dead end. Once a line/language
 VoiceSlot has no candidate and no selection, a separately confirmed exact-head
 transaction can remove that line/locale edge and its uniquely owned generated
@@ -419,9 +450,9 @@ The managed-R3 workflow still does not provide:
 - audible in-game qualification for the selected line, persistence, save/load,
   or clean runtime removal;
 - explicit choice among ambiguous installed archive matches;
-- managed-CAS take preview, recording, trimming, normalization, transcoding,
-  loudness comparison, actor notes, or lineage (only the selected local
-  pre-import Ogg has an author preview);
+- recording, trimming, normalization, transcoding, loudness comparison, actor
+  notes, or lineage. Exact managed-CAS take preview and the selected local
+  pre-import Ogg preview are integrated, but neither is an in-game proof;
 - recursive, partial, or multi-locale folder import, translation/Voice coverage,
   CSV/XLIFF, or review queues;
 - qualified Opus output; or

@@ -14,6 +14,7 @@ import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_project_history.dart';
 import 'revision3_quest_transcript_authoring.dart';
+import 'revision3_voice_take_preview_authoring.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
 
@@ -1202,6 +1203,23 @@ abstract interface class ManagedRevision3StoryDraftRemovalStore {
   });
 }
 
+/// Narrow read-only capability for copying one exact managed CAS VoiceTake
+/// into a native-owned ephemeral preview directory.
+abstract interface class ManagedRevision3VoiceTakePreviewStore {
+  Future<AuthoringRevision3VoiceTakePreviewRegistration>
+  registerVoiceTakePreviewV1({required String root});
+
+  Future<AuthoringRevision3VoiceTakePreviewMaterialization>
+  materializeVoiceTakePreviewV1({
+    required String root,
+    required String cleanupToken,
+    required String previewRoot,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  });
+
+  Future<void> releaseVoiceTakePreviewV1({required String cleanupToken});
+}
+
 /// Narrow capability for atomically detaching one exact VoiceTake candidate.
 /// Separate capability discovery avoids granting deletion authority to
 /// checkpoint-only alternate stores and test fakes.
@@ -1245,6 +1263,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3VoiceBatchStore,
         ManagedRevision3QuestTranscriptStore,
         ManagedRevision3StoryDraftRemovalStore,
+        ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
         ManagedRevision3NpcProfileEditStore {
@@ -1556,6 +1575,31 @@ final class ModFfiManagedRevision3AuthoringStore
     currentProjectJson: currentProjectJson,
     request: request,
   );
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewRegistration>
+  registerVoiceTakePreviewV1({required String root}) =>
+      ffi.authoringStoreRegisterRevision3VoiceTakePreviewV1(root: root);
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewMaterialization>
+  materializeVoiceTakePreviewV1({
+    required String root,
+    required String cleanupToken,
+    required String previewRoot,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) => ffi.authoringStoreMaterializeRevision3VoiceTakePreviewV1(
+    root: root,
+    cleanupToken: cleanupToken,
+    previewRoot: previewRoot,
+    request: request,
+  );
+
+  @override
+  Future<void> releaseVoiceTakePreviewV1({required String cleanupToken}) =>
+      ffi.authoringStoreReleaseRevision3VoiceTakePreviewV1(
+        cleanupToken: cleanupToken,
+      );
 
   @override
   Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
@@ -2114,6 +2158,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3ExactSnapshotExportStore;
   bool get supportsStoryDraftRemoval =>
       _store is ManagedRevision3StoryDraftRemovalStore;
+  bool get supportsVoiceTakePreview =>
+      _store is ManagedRevision3VoiceTakePreviewStore;
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
   bool get supportsVoiceBatch => _store is ManagedRevision3VoiceBatchStore;
@@ -3516,6 +3562,104 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Copy one exact-current managed CAS VoiceTake into a unique native-owned
+  /// system-temp capability. The project head and revision remain unchanged.
+  Future<Revision3VoiceTakePreviewCapability> materializeVoiceTakePreviewV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) async {
+    final store = _store;
+    if (store is! ManagedRevision3VoiceTakePreviewStore) {
+      throw UnsupportedError(
+        'this managed revision-3 Store has no Voice take preview capability',
+      );
+    }
+    if (_core.requiresReopen) {
+      throw const ManagedProjectVerificationException(
+        'managed revision-3 Voice preview requires a verified reopen',
+      );
+    }
+    final previewStore = store as ManagedRevision3VoiceTakePreviewStore;
+    try {
+      return await Revision3VoiceTakePreviewCapability.materialize(
+        register: () =>
+            previewStore.registerVoiceTakePreviewV1(root: root.path),
+        release: (cleanupToken) =>
+            previewStore.releaseVoiceTakePreviewV1(cleanupToken: cleanupToken),
+        materialize: (cleanupToken, previewRoot) =>
+            _core.readExact<AuthoringRevision3VoiceTakePreviewMaterialization>(
+              (basis) async {
+                final projectId = basis.projectId;
+                final projectRevision = basis.projectRevision;
+                if (projectId == null || projectRevision == null) {
+                  throw UnsupportedError(
+                    'this managed revision-3 Store has no Voice take preview capability',
+                  );
+                }
+                final request = AuthoringRevision3VoiceTakePreviewRequestV1(
+                  expectedHead: basis.head,
+                  expectedProjectId: projectId,
+                  expectedRevision: projectRevision,
+                  lineId: plan.lineId,
+                  expectedLineRevision: plan.expectedLineRevision,
+                  localizationId: plan.localizationId,
+                  expectedLocalizationRevision:
+                      plan.expectedLocalizationRevision,
+                  expectedLocId: plan.locId,
+                  slotId: plan.slotId,
+                  expectedSlotRevision: plan.expectedSlotRevision,
+                  locale: plan.locale,
+                  takeId: plan.takeId,
+                  expectedTakeRevision: plan.expectedTakeRevision,
+                  expectedAsset:
+                      AuthoringRevision3VoiceTakePreviewExpectedAsset(
+                        sha256: plan.assetSha256,
+                        byteLength: plan.assetByteLength,
+                        logicalName: plan.assetLogicalName,
+                      ),
+                );
+                final result = await previewStore.materializeVoiceTakePreviewV1(
+                  root: root.path,
+                  cleanupToken: cleanupToken,
+                  previewRoot: previewRoot,
+                  request: request,
+                );
+                if (result.basisHead.canonicalJson !=
+                        basis.head.canonicalJson ||
+                    result.projectId != projectId ||
+                    result.projectRevision != projectRevision ||
+                    result.lineId != plan.lineId ||
+                    result.lineRevision != plan.expectedLineRevision ||
+                    result.localizationId != plan.localizationId ||
+                    result.localizationRevision !=
+                        plan.expectedLocalizationRevision ||
+                    result.locId != plan.locId ||
+                    result.slotId != plan.slotId ||
+                    result.slotRevision != plan.expectedSlotRevision ||
+                    result.locale != plan.locale ||
+                    result.takeId != plan.takeId ||
+                    result.takeRevision != plan.expectedTakeRevision ||
+                    result.asset.sha256 != plan.assetSha256 ||
+                    result.asset.byteLength != plan.assetByteLength ||
+                    result.asset.logicalName != plan.assetLogicalName ||
+                    result.status.name != plan.status.name ||
+                    result.ogg.codec.name != plan.codec.name ||
+                    result.ogg.channels != plan.channels ||
+                    result.ogg.sampleRate != plan.sampleRate) {
+                  throw const ManagedProjectVerificationException(
+                    'revision-3 Voice preview disagrees with its exact session basis or plan',
+                  );
+                }
+                return result;
+              },
+              operation: 'materializeVoiceTakePreviewV1',
+              handleReadError: _core._throwRevision3VoicePreviewReadError,
+            ),
+      );
+    } catch (error, stackTrace) {
+      _core._throwRevision3VoicePreviewReadError(error, stackTrace);
+    }
+  }
 
   /// Read and seal one exact-current, filesystem-safe Voice folder plan.
   /// The operation is serialized with project mutation and rechecks the fixed
@@ -6405,6 +6549,58 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoicePreviewReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is Revision3VoiceTakePreviewMaterializationCleanupException) {
+      // Preserve the bounded cleanup owner, but classify its primary failure
+      // exactly as if it had crossed this boundary directly.
+      if (_revision3VoicePreviewMaterializationFailureRequiresReopen(
+        error.materializationCause,
+      )) {
+        _requiresReopen = true;
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is Revision3VoiceTakePreviewCleanupException) {
+      // A cleanup-only failure is capability-local and says nothing about
+      // managed Store integrity. Playback still owns its retry lifecycle.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is Revision3VoiceTakePreviewVerificationException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is ModFfiException) {
+      if (_revision3VoicePreviewReadErrorIsRetryable(error.code)) {
+        // readExact has independently proved that the fixed head is still the
+        // session basis. Exact graph-leaf drift is safe to refresh, while
+        // temporary output-capability failures are safe to retry locally.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is UnsupportedError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice preview could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBatchPlanError(
     Object error,
     StackTrace stackTrace,
@@ -7670,6 +7866,41 @@ bool _revision3VoicePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_STATUS_INVALID',
   'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS',
 }.contains(code);
+
+bool _revision3VoicePreviewReadErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_PREVIEW_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_INVALID',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_LIMIT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_UNAVAILABLE',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_CLEANUP_TOKEN_UNKNOWN',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CHANGED',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_OUTPUT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+}.contains(code);
+
+bool _revision3VoicePreviewMaterializationFailureRequiresReopen(Object error) {
+  if (error is Revision3VoiceTakePreviewMaterializationCleanupException) {
+    return _revision3VoicePreviewMaterializationFailureRequiresReopen(
+      error.materializationCause,
+    );
+  }
+  if (error is Revision3VoiceTakePreviewCleanupException ||
+      error is Revision3VoiceTakePreviewVerificationException ||
+      error is ArgumentError ||
+      error is FormatException ||
+      error is UnsupportedError) {
+    return false;
+  }
+  if (error is ModFfiException) {
+    return !_revision3VoicePreviewReadErrorIsRetryable(error.code);
+  }
+  return true;
+}
 
 bool _revision3VoiceBatchPlanErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_BATCH_REQUEST_INVALID',

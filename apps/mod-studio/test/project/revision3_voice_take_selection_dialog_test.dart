@@ -9,6 +9,8 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_playback.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -44,6 +46,500 @@ void main() {
       );
       expect(recorded.enabled, isFalse);
       expect(find.textContaining('Approval required'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'inline preview uses injected playback and preserves a pending selection',
+    (tester) async {
+      final events = <String>[];
+      final player = _DialogFakePreviewPlayer(events);
+      final playback = Revision3VoiceTakePreviewPlaybackController(
+        player: player,
+      );
+      final lease = _DialogFakeLease('C:\\hidden\\preview.ogg', events);
+      var materializations = 0;
+      await _openDialog(
+        tester,
+        index: _index(secondApproved: true, previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        previewPlayback: playback,
+        previewMaterialize:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async {
+              materializations++;
+              return lease.value;
+            },
+      );
+
+      await tester.tap(find.byKey(const Key('voice-selection-take-1')));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('voice-status-selection-pending')),
+        findsOneWidget,
+      );
+
+      final start = find.byKey(const Key('voice-preview-start-0'));
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pump();
+      await tester.pump();
+
+      expect(materializations, 1);
+      expect(events, contains('player:open:C:\\hidden\\preview.ogg'));
+      expect(find.byKey(const Key('voice-preview-active-0')), findsOneWidget);
+      expect(
+        find.byKey(const Key('voice-status-selection-pending')),
+        findsOneWidget,
+      );
+      expect(_button(tester, 'voice-selection-save').onPressed, isNotNull);
+      expect(find.textContaining('C:\\hidden'), findsNothing);
+      expect(find.textContaining(revision3VoiceContentLineId), findsNothing);
+
+      await tester.tap(find.byKey(const Key('voice-preview-toggle-0')));
+      await tester.pump();
+      expect(events, contains('player:pause'));
+      expect(
+        playback.snapshot.phase,
+        Revision3VoiceTakePreviewPlaybackPhase.paused,
+      );
+
+      final slider = tester.widget<Slider>(
+        find.byKey(const Key('voice-preview-progress-0')),
+      );
+      slider.onChanged!(5000);
+      await tester.pump();
+      expect(events, contains('player:seek:5000'));
+
+      unawaited(playback.dispose());
+    },
+  );
+
+  testWidgets('preview controls remain usable at a compact dialog width', (
+    tester,
+  ) async {
+    final events = <String>[];
+    final player = _DialogFakePreviewPlayer(events);
+    final playback = Revision3VoiceTakePreviewPlaybackController(
+      player: player,
+    );
+    final lease = _DialogFakeLease('compact.ogg', events);
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      surfaceSize: const Size(620, 720),
+      previewPlayback: playback,
+      previewMaterialize:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async => lease.value,
+    );
+
+    final start = find.byKey(const Key('voice-preview-start-0'));
+    await tester.ensureVisible(start);
+    await tester.tap(start);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('voice-preview-progress-0')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    unawaited(playback.dispose());
+  });
+
+  testWidgets('barrier dismissal unloads playback before closing its lease', (
+    tester,
+  ) async {
+    final events = <String>[];
+    final player = _DialogFakePreviewPlayer(events);
+    final playback = Revision3VoiceTakePreviewPlaybackController(
+      player: player,
+    );
+    final lease = _DialogFakeLease('barrier.ogg', events);
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      previewPlayback: playback,
+      previewMaterialize:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async => lease.value,
+    );
+    final start = find.byKey(const Key('voice-preview-start-0'));
+    await tester.ensureVisible(start);
+    await tester.tap(start);
+    await tester.pump();
+    await tester.pump();
+    events.clear();
+
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    await tester.pump();
+
+    expect(
+      events,
+      containsAllInOrder(<String>['player:stop', 'lease:close:barrier.ogg']),
+    );
+    expect(lease.closed, isTrue);
+    unawaited(playback.dispose());
+  });
+
+  testWidgets('stale preview offers catalog reload instead of blind retry', (
+    tester,
+  ) async {
+    final playback = Revision3VoiceTakePreviewPlaybackController(
+      player: _DialogFakePreviewPlayer(<String>[]),
+    );
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      previewPlayback: playback,
+      previewMaterialize:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async =>
+              throw const Revision3VoiceTakePreviewStaleCheckpointException(),
+    );
+    final start = find.byKey(const Key('voice-preview-start-0'));
+    await tester.ensureVisible(start);
+    await tester.tap(start);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('project changed'), findsWidgets);
+    expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+    expect(find.byKey(const Key('voice-preview-retry-0')), findsNothing);
+    unawaited(playback.dispose());
+  });
+
+  testWidgets('requires-reopen preview failure is terminal and not retryable', (
+    tester,
+  ) async {
+    final playback = Revision3VoiceTakePreviewPlaybackController(
+      player: _DialogFakePreviewPlayer(<String>[]),
+    );
+    await _openDialog(
+      tester,
+      index: _index(previewable: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      previewPlayback: playback,
+      previewMaterialize:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async =>
+              throw const Revision3VoiceTakePreviewRequiresReopenException(),
+    );
+    final start = find.byKey(const Key('voice-preview-start-0'));
+    await tester.ensureVisible(start);
+    await tester.tap(start);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.textContaining('Reopen the managed project'), findsWidgets);
+    expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+    expect(find.byKey(const Key('voice-preview-retry-0')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('voice-selection-cancel')),
+        matching: find.text('Close'),
+      ),
+      findsOneWidget,
+    );
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    unawaited(playback.dispose());
+  });
+
+  testWidgets(
+    'cleanup retry restores terminal requires-reopen state and locks actions',
+    (tester) async {
+      final cleanup = _DialogFakeCleanupObligation(failuresBeforeClean: 1);
+      final playback = Revision3VoiceTakePreviewPlaybackController(
+        player: _DialogFakePreviewPlayer(<String>[]),
+      );
+      await _openDialog(
+        tester,
+        index: _index(secondApproved: true, previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        previewPlayback: playback,
+        previewMaterialize:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async => throw Revision3VoiceTakePreviewRequiresReopenException(
+              cause: StateError('fake receipt mismatch'),
+              cleanupObligation: cleanup,
+            ),
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-take-1')));
+      await tester.pump();
+      expect(_button(tester, 'voice-selection-save').onPressed, isNotNull);
+
+      final start = find.byKey(const Key('voice-preview-start-0'));
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pump();
+      await tester.pump();
+
+      expect(cleanup.attempts, 1);
+      expect(find.textContaining('could not be closed safely'), findsOneWidget);
+      expect(find.byKey(const Key('voice-preview-retry-0')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextButton>(find.byKey(const Key('voice-preview-retry-0')))
+            .onPressed,
+        isNull,
+      );
+      expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('voice-selection-cancel')),
+          matching: find.text('Close'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('voice-preview-stop-0')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(cleanup.attempts, 2);
+      expect(cleanup.isCleaned, isTrue);
+      expect(find.textContaining('Reopen the managed project'), findsWidgets);
+      expect(find.byKey(const Key('voice-preview-retry-0')), findsNothing);
+      expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+      expect(
+        tester
+            .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+              find.byKey(const Key('voice-status-change-0')),
+            )
+            .enabled,
+        isFalse,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('voice-selection-cancel')),
+          matching: find.text('Close'),
+        ),
+        findsOneWidget,
+      );
+      unawaited(playback.dispose());
+    },
+  );
+
+  testWidgets(
+    'status mutation locks the route before preview Stop and aborts on cleanup',
+    (tester) async {
+      final events = <String>[];
+      final player = _DialogFakePreviewPlayer(events);
+      final playback = Revision3VoiceTakePreviewPlaybackController(
+        player: player,
+      );
+      final lease = _DialogFakeLease('status-stop.ogg', events);
+      var statusPublishes = 0;
+      await _openDialog(
+        tester,
+        index: _index(previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        previewPlayback: playback,
+        previewMaterialize:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async => lease.value,
+        publishStatus:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              statusPublishes++;
+              throw StateError('status publish must not follow failed Stop');
+            },
+      );
+      final start = find.byKey(const Key('voice-preview-start-0'));
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pump();
+      await tester.pump();
+
+      final stopGate = Completer<void>();
+      player
+        ..stopGate = stopGate
+        ..failuresBeforeStop = player.stopAttempts + 1;
+      await tester.tap(find.byKey(const Key('voice-status-change-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-status-option-1-approved')));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(player.stopGate, isNull);
+      expect(statusPublishes, 0);
+      expect(_button(tester, 'voice-selection-cancel').onPressed, isNull);
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+
+      stopGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(statusPublishes, 0);
+      expect(find.textContaining('could not be closed safely'), findsWidgets);
+      expect(
+        tester
+            .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+              find.byKey(const Key('voice-status-change-1')),
+            )
+            .enabled,
+        isFalse,
+      );
+      expect(_button(tester, 'voice-take-remove-1').onPressed, isNull);
+      expect(_button(tester, 'voice-selection-cancel').onPressed, isNotNull);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('voice-selection-cancel')),
+          matching: find.text('Close'),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('voice-preview-stop-0')));
+      await tester.pumpAndSettle();
+
+      expect(lease.closed, isTrue);
+      expect(find.textContaining('could not be closed safely'), findsNothing);
+      expect(
+        tester
+            .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+              find.byKey(const Key('voice-status-change-1')),
+            )
+            .enabled,
+        isTrue,
+      );
+      expect(_button(tester, 'voice-take-remove-1').onPressed, isNotNull);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('voice-selection-cancel')),
+          matching: find.text('Cancel'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-cancel')));
+      await tester.pumpAndSettle();
+      await playback.dispose();
+    },
+  );
+
+  testWidgets(
+    'take removal locks the route before preview Stop and never publishes on cleanup',
+    (tester) async {
+      final events = <String>[];
+      final player = _DialogFakePreviewPlayer(events);
+      final playback = Revision3VoiceTakePreviewPlaybackController(
+        player: player,
+      );
+      final lease = _DialogFakeLease('removal-stop.ogg', events);
+      var removalPublishes = 0;
+      await _openDialog(
+        tester,
+        index: _index(previewable: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        previewPlayback: playback,
+        previewMaterialize:
+            ({
+              required checkpoint,
+              required lineId,
+              required locale,
+              required takeId,
+            }) async => lease.value,
+        publishRemoval:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              removalPublishes++;
+              throw StateError('removal publish must not follow failed Stop');
+            },
+      );
+      final start = find.byKey(const Key('voice-preview-start-0'));
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pump();
+      await tester.pump();
+
+      final stopGate = Completer<void>();
+      player
+        ..stopGate = stopGate
+        ..failuresBeforeStop = player.stopAttempts + 1;
+      await tester.tap(find.byKey(const Key('voice-take-remove-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-take-remove-confirm')));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(player.stopGate, isNull);
+      expect(removalPublishes, 0);
+      expect(_button(tester, 'voice-selection-cancel').onPressed, isNull);
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+
+      stopGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(removalPublishes, 0);
+      expect(find.textContaining('could not be closed safely'), findsWidgets);
+      expect(_button(tester, 'voice-take-remove-1').onPressed, isNull);
+      expect(_button(tester, 'voice-selection-cancel').onPressed, isNotNull);
+      await tester.tap(find.byKey(const Key('voice-preview-stop-0')));
+      await tester.pumpAndSettle();
+      expect(lease.closed, isTrue);
+      expect(_button(tester, 'voice-take-remove-1').onPressed, isNotNull);
+      await tester.tap(find.byKey(const Key('voice-selection-cancel')));
+      await tester.pumpAndSettle();
+      await playback.dispose();
     },
   );
 
@@ -1864,6 +2360,8 @@ Future<void> _openDialog(
   Revision3VoiceTakeStatusTechnicalPublisher? publishStatus,
   Revision3VoiceTakeRemovalTechnicalPublisher? publishRemoval,
   Revision3DialogVoiceSlotRemovalTechnicalPublisher? publishSlotRemoval,
+  Revision3VoiceTakePreviewPlaybackController? previewPlayback,
+  Revision3VoiceTakePreviewDialogMaterializer? previewMaterialize,
   Locale locale = const Locale('en'),
   Size surfaceSize = const Size(1200, 1000),
   String? initialLineId,
@@ -1908,6 +2406,8 @@ Future<void> _openDialog(
                     statusService: statusService,
                     removalService: removalService,
                     slotRemovalService: slotRemovalService,
+                    previewPlayback: previewPlayback,
+                    previewMaterialize: previewMaterialize,
                     initialLineId: initialLineId,
                     initialLocale: initialLocale,
                     fixedContext: fixedContext,
@@ -1925,6 +2425,139 @@ Future<void> _openDialog(
   await tester.pumpAndSettle();
 }
 
+final class _DialogFakeLease {
+  _DialogFakeLease(this.path, this.events);
+
+  final String path;
+  final List<String> events;
+  bool closed = false;
+
+  late final Revision3VoiceTakePreviewPlaybackLease value =
+      Revision3VoiceTakePreviewPlaybackLease(
+        path: path,
+        isClosed: () => closed,
+        close: () async {
+          events.add('lease:close:$path');
+          closed = true;
+        },
+      );
+}
+
+final class _DialogFakeCleanupObligation
+    implements Revision3VoiceTakePreviewCleanupObligation {
+  _DialogFakeCleanupObligation({required this.failuresBeforeClean});
+
+  final int failuresBeforeClean;
+  int attempts = 0;
+  bool _cleaned = false;
+
+  @override
+  bool get isCleaned => _cleaned;
+
+  @override
+  Future<void> retryCleanup() async {
+    attempts++;
+    if (attempts <= failuresBeforeClean) {
+      throw StateError('fake retained cleanup failure');
+    }
+    _cleaned = true;
+  }
+}
+
+final class _DialogFakePreviewPlayer
+    implements Revision3VoiceTakePreviewPlayer {
+  _DialogFakePreviewPlayer(this.events);
+
+  final List<String> events;
+  final StreamController<Revision3VoiceTakePreviewPlayerSnapshot> _snapshots =
+      StreamController<Revision3VoiceTakePreviewPlayerSnapshot>.broadcast();
+  Revision3VoiceTakePreviewPlayerSnapshot _snapshot =
+      const Revision3VoiceTakePreviewPlayerSnapshot.idle();
+  Completer<void>? stopGate;
+  int stopAttempts = 0;
+  int failuresBeforeStop = 0;
+
+  @override
+  Revision3VoiceTakePreviewPlayerSnapshot get snapshot => _snapshot;
+
+  @override
+  Stream<Revision3VoiceTakePreviewPlayerSnapshot> get snapshots =>
+      _snapshots.stream;
+
+  void _emit(Revision3VoiceTakePreviewPlayerSnapshot value) {
+    _snapshot = value;
+    _snapshots.add(value);
+  }
+
+  @override
+  Future<void> open(String path) async {
+    events.add('player:open:$path');
+    _emit(
+      const Revision3VoiceTakePreviewPlayerSnapshot(
+        phase: Revision3VoiceTakePreviewPlaybackPhase.playing,
+        duration: Duration(seconds: 10),
+      ),
+    );
+  }
+
+  @override
+  Future<void> pause() async {
+    events.add('player:pause');
+    _emit(
+      Revision3VoiceTakePreviewPlayerSnapshot(
+        phase: Revision3VoiceTakePreviewPlaybackPhase.paused,
+        position: _snapshot.position,
+        duration: _snapshot.duration,
+      ),
+    );
+  }
+
+  @override
+  Future<void> play() async {
+    events.add('player:play');
+    _emit(
+      Revision3VoiceTakePreviewPlayerSnapshot(
+        phase: Revision3VoiceTakePreviewPlaybackPhase.playing,
+        position: _snapshot.position,
+        duration: _snapshot.duration,
+      ),
+    );
+  }
+
+  @override
+  Future<void> seek(Duration position) async {
+    events.add('player:seek:${position.inMilliseconds}');
+    _emit(
+      Revision3VoiceTakePreviewPlayerSnapshot(
+        phase: _snapshot.phase,
+        position: position,
+        duration: _snapshot.duration,
+      ),
+    );
+  }
+
+  @override
+  Future<void> stopAndUnload() async {
+    stopAttempts++;
+    events.add('player:stop');
+    final gate = stopGate;
+    if (gate != null) {
+      stopGate = null;
+      await gate.future;
+    }
+    if (stopAttempts <= failuresBeforeStop) {
+      throw StateError('fake player stop failure');
+    }
+    _snapshot = const Revision3VoiceTakePreviewPlayerSnapshot.idle();
+  }
+
+  @override
+  Future<void> dispose() async {
+    events.add('player:dispose');
+    await _snapshots.close();
+  }
+}
+
 Revision3ContentIndex _index({
   int revision = 7,
   bool secondApproved = false,
@@ -1934,6 +2567,7 @@ Revision3ContentIndex _index({
   bool selected = true,
   bool sharedFirstTake = false,
   bool generatedSlot = false,
+  bool previewable = false,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
@@ -1962,6 +2596,30 @@ Revision3ContentIndex _index({
     takes[1]['summary'] = summary;
   }
   if (takes.length > 1) takes[1]['revision'] = secondTakeRevision;
+  if (previewable) {
+    final assets = <Object?>[];
+    for (var index = 0; index < takes.length; index++) {
+      final sha = ''.padLeft(64, index.isEven ? 'b' : 'c');
+      final logicalName = 'asghan_take_$index.ogg';
+      takes[index]['asset_references'] = <Object?>[
+        <String, Object?>{
+          'role': 'voice_audio',
+          'sha256': sha,
+          'byte_len': 42 + index,
+          'logical_name': logicalName,
+          'expected_media_type': 'audio/ogg',
+          'resolution': 'resolved',
+        },
+      ];
+      assets.add(<String, Object?>{
+        'sha256': sha,
+        'byte_len': 42 + index,
+        'media_type': 'audio/ogg',
+        'class': 'voice_audio',
+      });
+    }
+    json['assets'] = assets;
+  }
   if (sharedFirstTake) {
     _addSharedVoiceCandidateUse(json, takeId: takes.first['id']! as String);
   }

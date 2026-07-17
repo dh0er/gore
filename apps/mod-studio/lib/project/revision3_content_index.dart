@@ -650,15 +650,31 @@ enum Revision3ContentVoiceTakeStatus {
       );
 }
 
+enum Revision3ContentVoiceOggCodec {
+  vorbis,
+  opus;
+
+  static Revision3ContentVoiceOggCodec parse(Object? value, String context) =>
+      Revision3ContentVoiceOggCodec.values.byName(
+        _enumString(value, const {'vorbis', 'opus'}, context),
+      );
+}
+
 /// Structured VoiceTake facts used for fail-closed authoring decisions.
 final class Revision3ContentVoiceTakeSummary {
   const Revision3ContentVoiceTakeSummary({
     required this.locale,
     required this.status,
+    required this.codec,
+    required this.channels,
+    required this.sampleRate,
   });
 
   final String locale;
   final Revision3ContentVoiceTakeStatus status;
+  final Revision3ContentVoiceOggCodec codec;
+  final int channels;
+  final int sampleRate;
 }
 
 /// Structured DialogLine facts bound to its exact projected slot references.
@@ -864,21 +880,31 @@ final class Revision3ContentSummary {
           data['status'],
           '$context status',
         );
-        final codec = _enumString(data['codec'], const {
-          'vorbis',
-          'opus',
-        }, '$context codec');
+        final codec = Revision3ContentVoiceOggCodec.parse(
+          data['codec'],
+          '$context codec',
+        );
         final channels = _integer(data['channels'], '$context channels');
         final sampleRate = _integer(
           data['sample_rate'],
           '$context sample_rate',
         );
+        if (channels < 1 || channels > 0xff) {
+          throw FormatException('$context channels is outside its domain');
+        }
+        if (sampleRate < 1 || sampleRate > 0xffffffff) {
+          throw FormatException('$context sample_rate is outside its domain');
+        }
         voiceTake = Revision3ContentVoiceTakeSummary(
           locale: primary,
           status: status,
+          codec: codec,
+          channels: channels,
+          sampleRate: sampleRate,
         );
-        secondary = '${status.name} · $codec · ${channels}ch · $sampleRate Hz';
-        terms.addAll([status.name, codec]);
+        secondary =
+            '${status.name} · ${codec.name} · ${channels}ch · $sampleRate Hz';
+        terms.addAll([status.name, codec.name]);
       case Revision3ContentEntityKind.npcDraft:
         _requireKeys(data, const [
           'unique_name',

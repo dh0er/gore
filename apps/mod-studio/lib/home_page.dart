@@ -85,6 +85,8 @@ import 'project/revision3_voice_folder_authoring.dart';
 import 'project/revision3_voice_folder_import_dialog.dart';
 import 'project/revision3_voice_folder_managed_adapter.dart';
 import 'project/revision3_voice_take_removal_authoring.dart';
+import 'project/revision3_voice_take_preview_authoring.dart';
+import 'project/revision3_voice_take_preview_playback.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
 import 'project/revision3_voice_take_selection_dialog.dart';
 import 'project/revision3_voice_take_status_authoring.dart';
@@ -1395,6 +1397,28 @@ class _HomePageState extends ConsumerState<HomePage>
               publication: publication,
             );
           },
+          materializeVoiceTakePreview:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3VoiceTakePreviewStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .materializeCurrentRevision3VoiceTakePreview(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTakeSelection:
               ({
                 required expectedProjectId,
@@ -2077,6 +2101,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceFolder,
     required this.pickVoiceFolder,
     required this.isVoiceFolderPublicationCurrent,
+    required this.materializeVoiceTakePreview,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTakeStatus,
     required this.publishVoiceTakeRemoval,
@@ -2151,6 +2176,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3VoiceFolderDirectoryPicker pickVoiceFolder;
   final bool Function(Revision3VoiceFolderImportPublication publication)
   isVoiceFolderPublicationCurrent;
+  final Revision3VoiceTakePreviewTechnicalMaterializer
+  materializeVoiceTakePreview;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
   final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
@@ -2239,6 +2266,8 @@ class _ManagedRevision3ProjectViewState
       widget.publishVoiceFolder;
   Revision3VoiceFolderDirectoryPicker get pickVoiceFolder =>
       widget.pickVoiceFolder;
+  Revision3VoiceTakePreviewTechnicalMaterializer
+  get materializeVoiceTakePreview => widget.materializeVoiceTakePreview;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
       widget.publishVoiceTakeSelection;
   Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
@@ -3970,45 +3999,79 @@ class _ManagedRevision3ProjectViewState
   }) async {
     if (project.requiresReopen) return;
     final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
     final german = l10n.localeName.startsWith('de');
-    final publication =
-        await showDialog<Revision3VoiceTakeSelectionPublication>(
-          context: context,
-          builder: (context) => Revision3VoiceTakeSelectionDialog(
-            service: Revision3VoiceTakeSelectionAuthoringService(
-              loadContentIndex: loadContentIndex,
-              publishTechnicalPlan: publishVoiceTakeSelection,
-            ),
-            statusService: Revision3VoiceTakeStatusAuthoringService(
-              loadContentIndex: loadContentIndex,
-              publishTechnicalPlan: publishVoiceTakeStatus,
-            ),
-            removalService: Revision3VoiceTakeRemovalAuthoringService(
-              loadContentIndex: loadContentIndex,
-              publishTechnicalPlan: publishVoiceTakeRemoval,
-            ),
-            slotRemovalService: Revision3DialogVoiceSlotRemovalAuthoringService(
-              loadContentIndex: loadContentIndex,
-              publishTechnicalPlan: publishDialogVoiceSlotRemoval,
-            ),
-            copy: german
-                ? Revision3VoiceTakeSelectionDialogCopy.german
-                : Revision3VoiceTakeSelectionDialogCopy.english,
-            initialLineId: initialLineId,
-            initialLocale: initialLocale,
-            fixedContext: fixedContext,
-          ),
-        );
-    if (!context.mounted || publication == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          publication.cleared
-              ? l10n.managedVoiceSelectionCleared(publication.projectRevision)
-              : l10n.managedVoiceSelectionSelected(publication.projectRevision),
-        ),
-      ),
+    final previewService = Revision3VoiceTakePreviewAuthoringService(
+      loadContentIndex: loadContentIndex,
+      materializeTechnicalPlan: materializeVoiceTakePreview,
     );
+    final previewPlayback =
+        Revision3VoiceTakePreviewPlaybackController.standard();
+    try {
+      final publication =
+          await showDialog<Revision3VoiceTakeSelectionPublication>(
+            context: context,
+            builder: (context) => Revision3VoiceTakeSelectionDialog(
+              service: Revision3VoiceTakeSelectionAuthoringService(
+                loadContentIndex: loadContentIndex,
+                publishTechnicalPlan: publishVoiceTakeSelection,
+              ),
+              statusService: Revision3VoiceTakeStatusAuthoringService(
+                loadContentIndex: loadContentIndex,
+                publishTechnicalPlan: publishVoiceTakeStatus,
+              ),
+              removalService: Revision3VoiceTakeRemovalAuthoringService(
+                loadContentIndex: loadContentIndex,
+                publishTechnicalPlan: publishVoiceTakeRemoval,
+              ),
+              slotRemovalService:
+                  Revision3DialogVoiceSlotRemovalAuthoringService(
+                    loadContentIndex: loadContentIndex,
+                    publishTechnicalPlan: publishDialogVoiceSlotRemoval,
+                  ),
+              previewPlayback: previewPlayback,
+              previewMaterialize:
+                  ({
+                    required checkpoint,
+                    required lineId,
+                    required locale,
+                    required takeId,
+                  }) async {
+                    final capability = await previewService.materialize(
+                      checkpoint: checkpoint,
+                      lineId: lineId,
+                      locale: locale,
+                      takeId: takeId,
+                    );
+                    return Revision3VoiceTakePreviewPlaybackLease(
+                      path: capability.path,
+                      isClosed: () => capability.isClosed,
+                      close: capability.close,
+                    );
+                  },
+              copy: german
+                  ? Revision3VoiceTakeSelectionDialogCopy.german
+                  : Revision3VoiceTakeSelectionDialogCopy.english,
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
+              fixedContext: fixedContext,
+            ),
+          );
+      if (!messenger.mounted || publication == null) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            publication.cleared
+                ? l10n.managedVoiceSelectionCleared(publication.projectRevision)
+                : l10n.managedVoiceSelectionSelected(
+                    publication.projectRevision,
+                  ),
+          ),
+        ),
+      );
+    } finally {
+      await previewPlayback.dispose();
+    }
   }
 
   Future<void> _openVoiceTargetResolver(

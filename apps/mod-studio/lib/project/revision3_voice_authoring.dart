@@ -39,6 +39,7 @@ final class Revision3VoiceDialogLineChoice {
     required this.lineId,
     required this.lineRevision,
     required this.localizationId,
+    required this.localizationRevision,
     required this.localizationIdentity,
     required this.displayName,
     required this.speaker,
@@ -59,6 +60,7 @@ final class Revision3VoiceDialogLineChoice {
   final String lineId;
   final int lineRevision;
   final String localizationId;
+  final int localizationRevision;
   final String localizationIdentity;
   final String displayName;
   final String? speaker;
@@ -152,6 +154,7 @@ final class Revision3VoiceCandidateTake {
     required this.displayName,
     required this.displayLabel,
     required this.status,
+    required this.previewFacts,
   });
 
   final String id;
@@ -159,6 +162,13 @@ final class Revision3VoiceCandidateTake {
   final String displayName;
   final String displayLabel;
   final Revision3ContentVoiceTakeStatus status;
+
+  /// Exact hidden CAS and Ogg facts used only by the preview planner. They are
+  /// deliberately absent when the projected take does not expose one fully
+  /// resolved `voice_audio` reference.
+  final Revision3VoiceCandidatePreviewFacts? previewFacts;
+
+  bool get canPreview => previewFacts != null;
 
   bool get isApproved => status == Revision3ContentVoiceTakeStatus.approved;
 
@@ -168,6 +178,26 @@ final class Revision3VoiceCandidateTake {
     Revision3ContentVoiceTakeStatus.reviewed => 'Reviewed',
     Revision3ContentVoiceTakeStatus.approved => 'Approved',
   };
+}
+
+/// Hidden exact-current VoiceTake facts. Presentation code must not render
+/// these identities, seals, or logical filenames.
+final class Revision3VoiceCandidatePreviewFacts {
+  const Revision3VoiceCandidatePreviewFacts._({
+    required this.assetSha256,
+    required this.assetByteLength,
+    required this.assetLogicalName,
+    required this.codec,
+    required this.channels,
+    required this.sampleRate,
+  });
+
+  final String assetSha256;
+  final int assetByteLength;
+  final String assetLogicalName;
+  final Revision3ContentVoiceOggCodec codec;
+  final int channels;
+  final int sampleRate;
 }
 
 /// Closed, friendly projection of all Voice-authorable lines in one exact R3
@@ -276,6 +306,7 @@ final class Revision3VoiceCatalog {
           lineId: entity.id,
           lineRevision: entity.revision,
           localizationId: localization.target.entityId,
+          localizationRevision: localizationEntity.revision,
           localizationIdentity: localizationIdentity,
           displayName: entity.displayName,
           speaker: entity.summary.primaryIdentity,
@@ -317,6 +348,7 @@ final class Revision3VoiceCatalog {
           lineId: line.lineId,
           lineRevision: line.lineRevision,
           localizationId: line.localizationId,
+          localizationRevision: line.localizationRevision,
           localizationIdentity: line.localizationIdentity,
           displayName: line.displayName,
           speaker: line.speaker,
@@ -377,6 +409,7 @@ final class _Revision3VoiceProjectedLine {
     required this.lineId,
     required this.lineRevision,
     required this.localizationId,
+    required this.localizationRevision,
     required this.localizationIdentity,
     required this.displayName,
     required this.speaker,
@@ -389,6 +422,7 @@ final class _Revision3VoiceProjectedLine {
   final String lineId;
   final int lineRevision;
   final String localizationId;
+  final int localizationRevision;
   final String localizationIdentity;
   final String displayName;
   final String? speaker;
@@ -575,9 +609,13 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
   }
   final labelOrdinals = <String, int>{};
   final records = <Revision3VoiceCandidateTake>[];
-  for (var index = 0; index < orderedCandidates.length; index++) {
-    final take = orderedCandidates[index];
-    final label = baseLabels[index];
+  for (
+    var candidateIndex = 0;
+    candidateIndex < orderedCandidates.length;
+    candidateIndex++
+  ) {
+    final take = orderedCandidates[candidateIndex];
+    final label = baseLabels[candidateIndex];
     final folded = label.toLowerCase();
     final ordinal = (labelOrdinals[folded] ?? 0) + 1;
     labelOrdinals[folded] = ordinal;
@@ -590,6 +628,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
             ? label
             : '$label · $ordinal of ${labelCounts[folded]}',
         status: take.summary.voiceTake!.status,
+        previewFacts: _voiceCandidatePreviewFacts(index, take),
       ),
     );
   }
@@ -601,6 +640,42 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
     targetResolution: details.targetResolution,
     candidates: records,
     selectedTakeId: selectedTakeId,
+  );
+}
+
+Revision3VoiceCandidatePreviewFacts? _voiceCandidatePreviewFacts(
+  Revision3ContentIndex index,
+  Revision3ContentEntity take,
+) {
+  final references = take.assetReferences
+      .where((reference) => reference.role == 'voice_audio')
+      .toList(growable: false);
+  if (references.length != 1) return null;
+  final reference = references.single;
+  final logicalName = reference.logicalName;
+  final asset = index.assetBySha256(reference.sha256);
+  final takeFacts = take.summary.voiceTake;
+  if (reference.resolution !=
+          Revision3ContentAssetReferenceResolution.resolved ||
+      reference.expectedMediaType != 'audio/ogg' ||
+      logicalName == null ||
+      !_voiceLogicalNameIsSafe(logicalName) ||
+      asset == null ||
+      asset.sha256 != reference.sha256 ||
+      asset.byteLength != reference.byteLength ||
+      asset.byteLength < 1 ||
+      asset.mediaType != 'audio/ogg' ||
+      asset.assetClass != Revision3ContentAssetClass.voiceAudio ||
+      takeFacts == null) {
+    return null;
+  }
+  return Revision3VoiceCandidatePreviewFacts._(
+    assetSha256: reference.sha256,
+    assetByteLength: reference.byteLength,
+    assetLogicalName: logicalName,
+    codec: takeFacts.codec,
+    channels: takeFacts.channels,
+    sampleRate: takeFacts.sampleRate,
   );
 }
 

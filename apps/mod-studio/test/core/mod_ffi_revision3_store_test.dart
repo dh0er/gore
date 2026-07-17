@@ -266,6 +266,7 @@ void main() {
         'authoring_store_inspect_revision3_quest_source_v1',
         'authoring_store_list_revision3_dataasset_stages_v1',
         'authoring_store_list_revision3_history_v1',
+        'authoring_store_materialize_revision3_voice_take_preview_v1',
         'authoring_store_open_revision3',
         'authoring_store_open_revision3_head_bytes',
         'authoring_store_plan_revision3_voice_v1',
@@ -297,6 +298,8 @@ void main() {
         'authoring_store_read_revision3_dataasset_package_index_v1',
         'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
         'authoring_store_read_revision3_dialog_localization_v1',
+        'authoring_store_register_revision3_voice_take_preview_v1',
+        'authoring_store_release_revision3_voice_take_preview_v1',
       ],
     );
     expect(

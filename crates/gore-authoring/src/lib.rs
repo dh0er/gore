@@ -21,6 +21,7 @@ mod revision3_content_index;
 mod revision3_quest;
 mod revision3_quest_source_v2;
 mod revision3_voice_build;
+mod revision3_voice_preview;
 mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
@@ -185,6 +186,12 @@ pub use revision3_voice_build::{
     Revision3VoiceBuildPlanEvaluationV1, Revision3VoiceBuildPlanV1,
     MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1,
     MAX_REVISION3_VOICE_BUILD_SELECTED_PAYLOAD_BYTES_V1, MAX_REVISION3_VOICE_BUILD_SLOTS_V1,
+};
+pub use revision3_voice_preview::{
+    bind_revision3_voice_take_preview_v1, inspect_revision3_voice_take_preview_ogg_v1,
+    Revision3VoiceTakePreviewBindingV1, Revision3VoiceTakePreviewConflictV1,
+    Revision3VoiceTakePreviewOggErrorV1, Revision3VoiceTakePreviewRequestJsonErrorV1,
+    Revision3VoiceTakePreviewRequestV1, MAX_REVISION3_VOICE_TAKE_PREVIEW_REQUEST_JSON_BYTES_V1,
 };
 pub use story_collision::{
     collect_project_story_collision_identities, ProjectStoryCollisionIdentities,

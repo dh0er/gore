@@ -997,6 +997,7 @@ name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
  "cap-std",
+ "getrandom 0.3.4",
  "gore-as",
  "gore-asset",
  "gore-authoring",

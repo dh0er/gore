@@ -1,13 +1,24 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
+import 'revision3_voice_take_preview_playback.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
 const _clearSelectionValue = '__no_voice_take_selected__';
+
+typedef Revision3VoiceTakePreviewDialogMaterializer =
+    Future<Revision3VoiceTakePreviewPlaybackLease> Function({
+      required Revision3VoiceCatalog checkpoint,
+      required String lineId,
+      required String locale,
+      required String takeId,
+    });
 
 /// Complete author-facing copy for [Revision3VoiceTakeSelectionDialog].
 @immutable
@@ -198,6 +209,29 @@ final class Revision3VoiceTakeSelectionDialogCopy {
   String get noTakes => _german
       ? 'Dieses Voice-Setup hat keine Takes.'
       : 'This Voice setup has no takes.';
+  String get previewAction => _german ? 'Anhören' : 'Preview';
+  String get previewPause => _german ? 'Pause' : 'Pause';
+  String get previewResume => _german ? 'Fortsetzen' : 'Resume';
+  String get previewReplay => _german ? 'Erneut anhören' : 'Replay';
+  String get previewStop => _german ? 'Vorschau stoppen' : 'Stop preview';
+  String get previewPreparing => _german
+      ? 'Sichere Vorschau wird vorbereitet…'
+      : 'Preparing secure preview…';
+  String get previewUnavailable => _german
+      ? 'Für diesen Take ist keine intakte Vorschau verfügbar.'
+      : 'No intact preview is available for this take.';
+  String get previewFailed => _german
+      ? 'Die Vorschau konnte nicht im Mod Studio abgespielt werden.'
+      : 'The preview could not be played inside Mod Studio.';
+  String get previewStale => _german
+      ? 'Das Projekt wurde seit dem Laden dieser Takes geändert. Lade die aktuellen Takes neu.'
+      : 'The project changed since these takes were loaded. Reload the latest takes.';
+  String get previewRequiresReopen => _german
+      ? 'Öffne das verwaltete Projekt erneut, bevor du weitere Takes anhörst.'
+      : 'Reopen the managed project before previewing more takes.';
+  String get previewCleanupFailed => _german
+      ? 'Die vorige Vorschau konnte nicht sicher geschlossen werden. Stoppe sie und versuche die sichere Bereinigung erneut.'
+      : 'The previous preview could not be closed safely. Stop it and retry the safe cleanup.';
   String get retry => _german ? 'Erneut versuchen' : 'Retry';
   String get reloadTakes => _german ? 'Takes neu laden' : 'Reload takes';
   String get close => _german ? 'Schließen' : 'Close';
@@ -258,15 +292,22 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     required this.removalService,
     required this.slotRemovalService,
     required this.copy,
+    this.previewMaterialize,
+    this.previewPlayback,
     this.initialLineId,
     this.initialLocale,
     this.fixedContext = false,
-  });
+  }) : assert(
+         (previewMaterialize == null) == (previewPlayback == null),
+         'Preview authoring and playback must be supplied together.',
+       );
 
   final Revision3VoiceTakeSelectionAuthoringService service;
   final Revision3VoiceTakeStatusAuthoringService statusService;
   final Revision3VoiceTakeRemovalAuthoringService removalService;
   final Revision3DialogVoiceSlotRemovalAuthoringService slotRemovalService;
+  final Revision3VoiceTakePreviewDialogMaterializer? previewMaterialize;
+  final Revision3VoiceTakePreviewPlaybackController? previewPlayback;
   final String? initialLineId;
   final String? initialLocale;
   final Revision3VoiceTakeSelectionDialogCopy copy;
@@ -301,6 +342,8 @@ class _Revision3VoiceTakeSelectionDialogState
   bool _slotRemovalWasSaved = false;
   bool _requiresClose = false;
   bool _reloadRequired = false;
+  bool _previewCleanupLocked = false;
+  bool _previewStopInFlight = false;
   bool _initialSelectionConsumed = false;
   bool _fixedContextInvalid = false;
   bool _catalogLoadFailed = false;
@@ -313,26 +356,36 @@ class _Revision3VoiceTakeSelectionDialogState
       _busy ||
       _requiresClose ||
       _reloadRequired ||
+      _previewCleanupLocked ||
+      _previewStopInFlight ||
       !_fixedContextIsCurrent;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_searchChanged);
+    widget.previewPlayback?.addListener(_previewPlaybackChanged);
     _load();
   }
 
   @override
   void didUpdateWidget(covariant Revision3VoiceTakeSelectionDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.previewPlayback, widget.previewPlayback)) {
+      oldWidget.previewPlayback?.removeListener(_previewPlaybackChanged);
+      widget.previewPlayback?.addListener(_previewPlaybackChanged);
+    }
     if (!identical(oldWidget.service, widget.service) ||
         !identical(oldWidget.statusService, widget.statusService) ||
         !identical(oldWidget.removalService, widget.removalService) ||
         !identical(oldWidget.slotRemovalService, widget.slotRemovalService) ||
+        !identical(oldWidget.previewMaterialize, widget.previewMaterialize) ||
+        !identical(oldWidget.previewPlayback, widget.previewPlayback) ||
         oldWidget.fixedContext != widget.fixedContext ||
         oldWidget.initialLineId != widget.initialLineId ||
         oldWidget.initialLocale != widget.initialLocale) {
       _initialSelectionConsumed = false;
+      unawaited(oldWidget.previewPlayback?.stop());
       _load(resetRecovery: true);
     }
   }
@@ -340,6 +393,8 @@ class _Revision3VoiceTakeSelectionDialogState
   @override
   void dispose() {
     _loadGeneration++;
+    widget.previewPlayback?.removeListener(_previewPlaybackChanged);
+    unawaited(widget.previewPlayback?.stop());
     _searchController
       ..removeListener(_searchChanged)
       ..dispose();
@@ -350,7 +405,136 @@ class _Revision3VoiceTakeSelectionDialogState
     if (mounted) setState(() {});
   }
 
+  void _previewPlaybackChanged() {
+    if (!mounted) return;
+    switch (widget.previewPlayback?.snapshot.failure) {
+      case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+        if (_requiresClose &&
+            !_reloadRequired &&
+            _error == widget.copy.previewRequiresReopen) {
+          return;
+        }
+        setState(() {
+          _previewCleanupLocked = false;
+          _requiresClose = true;
+          _reloadRequired = false;
+          _error = widget.copy.previewRequiresReopen;
+        });
+        break;
+      case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+        if (_requiresClose ||
+            (_reloadRequired && _error == widget.copy.previewStale)) {
+          return;
+        }
+        setState(() {
+          _previewCleanupLocked = false;
+          _reloadRequired = true;
+          _error = widget.copy.previewStale;
+        });
+        break;
+      case Revision3VoiceTakePreviewFailureKind.cleanup:
+        if (_previewCleanupLocked) return;
+        setState(() {
+          _previewCleanupLocked = true;
+          _notice = null;
+        });
+        break;
+      case null ||
+          Revision3VoiceTakePreviewFailureKind.materialize ||
+          Revision3VoiceTakePreviewFailureKind.playback:
+        break;
+    }
+  }
+
+  Future<void> _stopPreview() async {
+    final playback = widget.previewPlayback;
+    if (playback == null || _busy || _previewStopInFlight) return;
+    setState(() => _previewStopInFlight = true);
+    var stopFailed = false;
+    try {
+      await playback.stop();
+    } catch (_) {
+      stopFailed = true;
+    }
+    if (!mounted) return;
+    if (!identical(playback, widget.previewPlayback)) {
+      setState(() => _previewStopInFlight = false);
+      return;
+    }
+    final failure = stopFailed
+        ? Revision3VoiceTakePreviewFailureKind.cleanup
+        : playback.snapshot.failure;
+    setState(() {
+      _previewStopInFlight = false;
+      if (failure == Revision3VoiceTakePreviewFailureKind.cleanup) {
+        _previewCleanupLocked = true;
+        _notice = null;
+        return;
+      }
+      _previewCleanupLocked = false;
+      switch (failure) {
+        case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+          _reloadRequired = true;
+          _error = widget.copy.previewStale;
+          break;
+        case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+          _requiresClose = true;
+          _reloadRequired = false;
+          _error = widget.copy.previewRequiresReopen;
+          break;
+        case null ||
+            Revision3VoiceTakePreviewFailureKind.materialize ||
+            Revision3VoiceTakePreviewFailureKind.playback ||
+            Revision3VoiceTakePreviewFailureKind.cleanup:
+          break;
+      }
+    });
+  }
+
+  Future<bool> _stopPreviewBeforeMutation() async {
+    final playback = widget.previewPlayback;
+    if (playback == null) return true;
+    try {
+      await playback.stop();
+    } catch (_) {
+      if (mounted && identical(playback, widget.previewPlayback)) {
+        setState(() {
+          _previewCleanupLocked = true;
+          _notice = null;
+        });
+      }
+      return false;
+    }
+    if (!mounted || !identical(playback, widget.previewPlayback)) return false;
+    final failure = playback.snapshot.failure;
+    if (failure == null) return true;
+    setState(() {
+      switch (failure) {
+        case Revision3VoiceTakePreviewFailureKind.cleanup:
+          _previewCleanupLocked = true;
+          _notice = null;
+          break;
+        case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+          _previewCleanupLocked = false;
+          _reloadRequired = true;
+          _error = widget.copy.previewStale;
+          break;
+        case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+          _previewCleanupLocked = false;
+          _requiresClose = true;
+          _reloadRequired = false;
+          _error = widget.copy.previewRequiresReopen;
+          break;
+        case Revision3VoiceTakePreviewFailureKind.materialize ||
+            Revision3VoiceTakePreviewFailureKind.playback:
+          break;
+      }
+    });
+    return false;
+  }
+
   Future<void> _load({bool resetRecovery = false}) async {
+    if (_catalog != null) unawaited(widget.previewPlayback?.stop());
     final generation = ++_loadGeneration;
     setState(() {
       if (resetRecovery) {
@@ -480,6 +664,7 @@ class _Revision3VoiceTakeSelectionDialogState
   }
 
   void _chooseLine(Revision3VoiceDialogLineChoice line) {
+    unawaited(widget.previewPlayback?.stop());
     final locales = _intactLocales(line);
     final locale = locales.length == 1 ? locales.single : null;
     setState(() {
@@ -494,6 +679,7 @@ class _Revision3VoiceTakeSelectionDialogState
   }
 
   void _chooseLocale(String? locale) {
+    unawaited(widget.previewPlayback?.stop());
     final line = _selectedLine;
     setState(() {
       _locale = locale;
@@ -513,6 +699,62 @@ class _Revision3VoiceTakeSelectionDialogState
     final value = _selectionValue;
     if (summary == null || value == null) return false;
     return value != _selectionValueFor(summary);
+  }
+
+  Future<void> _previewTake(Revision3VoiceCandidateTake take) async {
+    final playback = widget.previewPlayback;
+    final materialize = widget.previewMaterialize;
+    final catalog = _catalog;
+    final lineId = _lineId;
+    final locale = _locale;
+    if (_interactionLocked ||
+        !take.canPreview ||
+        playback == null ||
+        materialize == null ||
+        catalog == null ||
+        lineId == null ||
+        locale == null) {
+      return;
+    }
+    await playback.preview(
+      takeKey: take.id,
+      materialize: () async {
+        return materialize(
+          checkpoint: catalog,
+          lineId: lineId,
+          locale: locale,
+          takeId: take.id,
+        );
+      },
+    );
+    if (!mounted || !playback.snapshot.isActive(take.id)) return;
+    switch (playback.snapshot.failure) {
+      case Revision3VoiceTakePreviewFailureKind.staleCheckpoint:
+        setState(() {
+          _previewCleanupLocked = false;
+          _reloadRequired = true;
+          _error = widget.copy.previewStale;
+        });
+        break;
+      case Revision3VoiceTakePreviewFailureKind.requiresReopen:
+        setState(() {
+          _previewCleanupLocked = false;
+          _requiresClose = true;
+          _reloadRequired = false;
+          _error = widget.copy.previewRequiresReopen;
+        });
+        break;
+      case Revision3VoiceTakePreviewFailureKind.cleanup:
+        setState(() {
+          _previewCleanupLocked = true;
+          _notice = null;
+        });
+        break;
+      case null ||
+          Revision3VoiceTakePreviewFailureKind.materialize ||
+          Revision3VoiceTakePreviewFailureKind.playback:
+        break;
+    }
   }
 
   Future<void> _save() async {
@@ -587,6 +829,15 @@ class _Revision3VoiceTakeSelectionDialogState
       _error = null;
       _notice = null;
     });
+    if (!await _stopPreviewBeforeMutation()) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _statusBusyTakeId = null;
+      });
+      return;
+    }
+    if (!mounted) return;
     try {
       final publication = await widget.statusService.publish(
         checkpoint: catalog,
@@ -783,6 +1034,15 @@ class _Revision3VoiceTakeSelectionDialogState
       _error = null;
       _notice = null;
     });
+    if (!await _stopPreviewBeforeMutation()) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _removalBusyTakeId = null;
+      });
+      return;
+    }
+    if (!mounted) return;
     try {
       publication = await widget.removalService.publish(
         checkpoint: catalog,
@@ -1153,6 +1413,13 @@ class _Revision3VoiceTakeSelectionDialogState
     final lines = _visibleLines;
     final line = _selectedLine;
     final summary = _selectedSummary;
+    final previewCleanupNeedsBanner =
+        _previewCleanupLocked &&
+        widget.previewPlayback?.snapshot.failure !=
+            Revision3VoiceTakePreviewFailureKind.cleanup;
+    final visibleError = previewCleanupNeedsBanner
+        ? copy.previewCleanupFailed
+        : _error;
     return PopScope(
       canPop: !_busy,
       child: AlertDialog(
@@ -1310,6 +1577,12 @@ class _Revision3VoiceTakeSelectionDialogState
                                 summary.candidates[index].id,
                             onRemove: () =>
                                 _confirmRemove(summary.candidates[index]),
+                            previewPlayback: widget.previewPlayback,
+                            previewEnabled: !_interactionLocked,
+                            previewStopEnabled: !_busy && !_previewStopInFlight,
+                            onPreview: () =>
+                                _previewTake(summary.candidates[index]),
+                            onPreviewStop: () => unawaited(_stopPreview()),
                           ),
                       ],
                     ),
@@ -1364,10 +1637,10 @@ class _Revision3VoiceTakeSelectionDialogState
                       ),
                     ),
                 ],
-                if (_error != null) ...[
+                if (visibleError != null) ...[
                   const SizedBox(height: 12),
                   Text(
-                    _error!,
+                    visibleError,
                     key: const Key('voice-selection-error'),
                     style: TextStyle(color: theme.colorScheme.error),
                   ),
@@ -1408,7 +1681,8 @@ class _Revision3VoiceTakeSelectionDialogState
                       _removalWasSaved ||
                       _slotRemovalWasSaved ||
                       _requiresClose ||
-                      _reloadRequired
+                      _reloadRequired ||
+                      _previewCleanupLocked
                   ? copy.close
                   : copy.cancel,
             ),
@@ -1480,6 +1754,11 @@ class _TakeChoiceTile extends StatelessWidget {
     required this.copy,
     required this.removeBusy,
     required this.onRemove,
+    required this.previewPlayback,
+    required this.previewEnabled,
+    required this.previewStopEnabled,
+    required this.onPreview,
+    required this.onPreviewStop,
   });
 
   final int index;
@@ -1492,6 +1771,11 @@ class _TakeChoiceTile extends StatelessWidget {
   final Revision3VoiceTakeSelectionDialogCopy copy;
   final bool removeBusy;
   final VoidCallback onRemove;
+  final Revision3VoiceTakePreviewPlaybackController? previewPlayback;
+  final bool previewEnabled;
+  final bool previewStopEnabled;
+  final VoidCallback onPreview;
+  final VoidCallback onPreviewStop;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -1511,6 +1795,17 @@ class _TakeChoiceTile extends StatelessWidget {
           ),
         ),
       ),
+      if (previewPlayback != null)
+        _TakePreviewControl(
+          index: index,
+          take: take,
+          playback: previewPlayback!,
+          enabled: previewEnabled,
+          stopEnabled: previewStopEnabled,
+          onPreview: onPreview,
+          onStop: onPreviewStop,
+          copy: copy,
+        ),
       _TakeStatusControl(
         index: index,
         take: take,
@@ -1525,6 +1820,238 @@ class _TakeChoiceTile extends StatelessWidget {
       ),
     ],
   );
+}
+
+class _TakePreviewControl extends StatelessWidget {
+  const _TakePreviewControl({
+    required this.index,
+    required this.take,
+    required this.playback,
+    required this.enabled,
+    required this.stopEnabled,
+    required this.onPreview,
+    required this.onStop,
+    required this.copy,
+  });
+
+  final int index;
+  final Revision3VoiceCandidateTake take;
+  final Revision3VoiceTakePreviewPlaybackController playback;
+  final bool enabled;
+  final bool stopEnabled;
+  final VoidCallback onPreview;
+  final VoidCallback onStop;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: playback,
+    builder: (context, _) {
+      final snapshot = playback.snapshot;
+      final active = snapshot.isActive(take.id);
+      if (!take.canPreview) {
+        return Padding(
+          padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.volume_off_outlined, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  copy.previewUnavailable,
+                  key: ValueKey('voice-preview-unavailable-$index'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+      if (!active) {
+        return Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: Padding(
+            padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+            child: TextButton.icon(
+              key: ValueKey('voice-preview-start-$index'),
+              onPressed: enabled ? onPreview : null,
+              icon: const Icon(Icons.play_arrow),
+              label: Text(copy.previewAction),
+            ),
+          ),
+        );
+      }
+      return _ActiveTakePreviewControl(
+        index: index,
+        snapshot: snapshot,
+        playback: playback,
+        enabled: enabled,
+        stopEnabled: stopEnabled,
+        onPreview: onPreview,
+        onStop: onStop,
+        copy: copy,
+      );
+    },
+  );
+}
+
+class _ActiveTakePreviewControl extends StatelessWidget {
+  const _ActiveTakePreviewControl({
+    required this.index,
+    required this.snapshot,
+    required this.playback,
+    required this.enabled,
+    required this.stopEnabled,
+    required this.onPreview,
+    required this.onStop,
+    required this.copy,
+  });
+
+  final int index;
+  final Revision3VoiceTakePreviewPlaybackSnapshot snapshot;
+  final Revision3VoiceTakePreviewPlaybackController playback;
+  final bool enabled;
+  final bool stopEnabled;
+  final VoidCallback onPreview;
+  final VoidCallback onStop;
+  final Revision3VoiceTakeSelectionDialogCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final phase = snapshot.phase;
+    final durationMs = snapshot.duration.inMilliseconds;
+    final positionMs = snapshot.position.inMilliseconds.clamp(
+      0,
+      durationMs > 0 ? durationMs : 0,
+    );
+    final canSeek = enabled && durationMs > 0;
+    final failure = snapshot.failure;
+    return Container(
+      key: ValueKey('voice-preview-active-$index'),
+      margin: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (phase == Revision3VoiceTakePreviewPlaybackPhase.preparing)
+            Row(
+              children: [
+                const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    copy.previewPreparing,
+                    key: ValueKey('voice-preview-preparing-$index'),
+                  ),
+                ),
+                _stopButton(),
+              ],
+            )
+          else if (phase == Revision3VoiceTakePreviewPlaybackPhase.failed)
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(switch (failure) {
+                  Revision3VoiceTakePreviewFailureKind.cleanup =>
+                    copy.previewCleanupFailed,
+                  Revision3VoiceTakePreviewFailureKind.staleCheckpoint =>
+                    copy.previewStale,
+                  Revision3VoiceTakePreviewFailureKind.requiresReopen =>
+                    copy.previewRequiresReopen,
+                  _ => copy.previewFailed,
+                }, key: ValueKey('voice-preview-error-$index')),
+                if (failure !=
+                        Revision3VoiceTakePreviewFailureKind.staleCheckpoint &&
+                    failure !=
+                        Revision3VoiceTakePreviewFailureKind.requiresReopen)
+                  TextButton.icon(
+                    key: ValueKey('voice-preview-retry-$index'),
+                    onPressed: enabled ? onPreview : null,
+                    icon: const Icon(Icons.refresh),
+                    label: Text(copy.retry),
+                  ),
+                _stopButton(),
+              ],
+            )
+          else
+            Row(
+              children: [
+                IconButton(
+                  key: ValueKey('voice-preview-toggle-$index'),
+                  onPressed: enabled
+                      ? () => unawaited(
+                          phase ==
+                                  Revision3VoiceTakePreviewPlaybackPhase.playing
+                              ? playback.pause()
+                              : playback.play(),
+                        )
+                      : null,
+                  tooltip: switch (phase) {
+                    Revision3VoiceTakePreviewPlaybackPhase.playing =>
+                      copy.previewPause,
+                    Revision3VoiceTakePreviewPlaybackPhase.completed =>
+                      copy.previewReplay,
+                    _ => copy.previewResume,
+                  },
+                  icon: Icon(
+                    phase == Revision3VoiceTakePreviewPlaybackPhase.playing
+                        ? Icons.pause
+                        : phase ==
+                              Revision3VoiceTakePreviewPlaybackPhase.completed
+                        ? Icons.replay
+                        : Icons.play_arrow,
+                  ),
+                ),
+                Expanded(
+                  child: Slider(
+                    key: ValueKey('voice-preview-progress-$index'),
+                    value: durationMs > 0 ? positionMs.toDouble() : 0,
+                    max: durationMs > 0 ? durationMs.toDouble() : 1,
+                    onChanged: canSeek
+                        ? (value) => unawaited(
+                            playback.seek(
+                              Duration(milliseconds: value.round()),
+                            ),
+                          )
+                        : null,
+                  ),
+                ),
+                Text(
+                  '${_formatDuration(snapshot.position)} / '
+                  '${_formatDuration(snapshot.duration)}',
+                  key: ValueKey('voice-preview-time-$index'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                _stopButton(),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stopButton() => IconButton(
+    key: ValueKey('voice-preview-stop-$index'),
+    onPressed: stopEnabled ? onStop : null,
+    tooltip: copy.previewStop,
+    icon: const Icon(Icons.stop),
+  );
+
+  static String _formatDuration(Duration value) {
+    final totalSeconds = value.inSeconds < 0 ? 0 : value.inSeconds;
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
 }
 
 class _TakeStatusControl extends StatelessWidget {

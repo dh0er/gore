@@ -27,6 +27,7 @@ import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_project_history.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_preview_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
@@ -327,6 +328,14 @@ const _revision3VoiceTakeRemovalCorrectableCodes = <String>{
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_REJECTED',
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
+};
+
+const _revision3VoiceTakePreviewStaleCodes = <String>{
+  'AUTHORING_REVISION3_VOICE_PREVIEW_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
 };
 
 const _revision3DialogVoiceSlotRemovalCorrectableCodes = <String>{
@@ -706,6 +715,18 @@ abstract interface class ManagedRevision3VoiceTakeStatusLease {
   });
 }
 
+/// Optional exact-current authority for registering, materializing, and
+/// releasing one native-created, native-owned managed CAS Voice preview.
+abstract interface class ManagedRevision3VoiceTakePreviewLease {
+  bool get supportsVoiceTakePreview;
+
+  void markRequiresReopenAfterVoiceTakePreviewUncertainty();
+
+  Future<Revision3VoiceTakePreviewCapability> materializeVoiceTakePreviewV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  });
+}
+
 /// Optional authority for one read-only Voice-folder plan and one atomic
 /// project-only publication of its complete ready set. Keeping this capability
 /// separate prevents legacy leases and narrow test doubles from accidentally
@@ -940,6 +961,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3NpcProfileEditLease,
         ManagedRevision3QuestTranscriptLease,
         ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3VoiceTakePreviewLease,
         ManagedRevision3VoiceBatchLease,
         ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3DialogVoiceSlotRemovalLease,
@@ -1015,6 +1037,9 @@ final class _ManagedRevision3SessionLease
   bool get supportsVoiceTakeRemoval => _session.supportsVoiceTakeRemoval;
 
   @override
+  bool get supportsVoiceTakePreview => _session.supportsVoiceTakePreview;
+
+  @override
   bool get supportsVoiceBatch => _session.supportsVoiceBatch;
 
   @override
@@ -1033,6 +1058,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterVoiceTakeRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterVoiceTakePreviewUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1464,6 +1493,11 @@ final class _ManagedRevision3SessionLease
       selected: checkpoint.selected,
     );
   }
+
+  @override
+  Future<Revision3VoiceTakePreviewCapability> materializeVoiceTakePreviewV1({
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) => _session.materializeVoiceTakePreviewV1(plan: plan);
 
   @override
   Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
@@ -4071,6 +4105,148 @@ final class CurrentProjectCoordinator
           const Revision3VoiceTakeRequiresReopenException(),
           stackTrace,
         );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Register, materialize, and adopt one exact-current managed CAS Voice take
+  /// through a native-owned opaque cleanup capability. This read-only operation
+  /// leaves the project head and revision unchanged and grants no build/runtime
+  /// authority.
+  Future<Revision3VoiceTakePreviewCapability>
+  materializeCurrentRevision3VoiceTakePreview({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3VoiceTakePreviewTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice take preview is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakePreviewRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakePreviewStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3VoiceTakePreviewLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project lease has no Voice take preview capability',
+      );
+    }
+    final previewLease = lease as ManagedRevision3VoiceTakePreviewLease;
+    if (!previewLease.supportsVoiceTakePreview) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project Store has no Voice take preview capability',
+      );
+    }
+
+    try {
+      final capability = await previewLease.materializeVoiceTakePreviewV1(
+        plan: plan,
+      );
+      final matches =
+          identical(_current, current) &&
+          identical(current.lease, lease) &&
+          !lease.requiresReopen &&
+          lease.root.path == expectedRoot &&
+          lease.projectId == expectedProjectId &&
+          lease.projectRevision == expectedProjectRevision &&
+          lease.head.canonicalJson == expectedHead.canonicalJson &&
+          capability.basisHead.canonicalJson == expectedHead.canonicalJson &&
+          capability.projectId == expectedProjectId &&
+          capability.projectRevision == expectedProjectRevision &&
+          capability.lineId == plan.lineId &&
+          capability.lineRevision == plan.expectedLineRevision &&
+          capability.localizationId == plan.localizationId &&
+          capability.localizationRevision ==
+              plan.expectedLocalizationRevision &&
+          capability.locId == plan.locId &&
+          capability.slotId == plan.slotId &&
+          capability.slotRevision == plan.expectedSlotRevision &&
+          capability.locale == plan.locale &&
+          capability.takeId == plan.takeId &&
+          capability.takeRevision == plan.expectedTakeRevision &&
+          capability.asset.sha256 == plan.assetSha256 &&
+          capability.asset.byteLength == plan.assetByteLength &&
+          capability.asset.logicalName == plan.assetLogicalName &&
+          capability.status.name == plan.status.name &&
+          capability.ogg.codec.name == plan.codec.name &&
+          capability.ogg.channels == plan.channels &&
+          capability.ogg.sampleRate == plan.sampleRate;
+      if (!matches) {
+        previewLease.markRequiresReopenAfterVoiceTakePreviewUncertainty();
+        Object? cleanupCause;
+        try {
+          await capability.close();
+        } catch (error) {
+          cleanupCause = error;
+        }
+        throw Revision3VoiceTakePreviewRequiresReopenException(
+          cause:
+              cleanupCause ??
+              StateError(
+                'Voice preview receipt disagrees with the current checkpoint',
+              ),
+          cleanupObligation: capability.isClosed ? null : capability,
+        );
+      }
+      return capability;
+    } catch (error, stackTrace) {
+      if (error is Revision3VoiceTakePreviewRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          previewLease.markRequiresReopenAfterVoiceTakePreviewUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          Revision3VoiceTakePreviewRequiresReopenException(
+            cause: error,
+            cleanupObligation:
+                error
+                    is Revision3VoiceTakePreviewMaterializationCleanupException
+                ? error
+                : null,
+          ),
+          stackTrace,
+        );
+      }
+      final materializationCause =
+          error is Revision3VoiceTakePreviewMaterializationCleanupException
+          ? error.materializationCause
+          : error;
+      if (materializationCause is ModFfiException &&
+          _revision3VoiceTakePreviewStaleCodes.contains(
+            materializationCause.code,
+          )) {
+        Error.throwWithStackTrace(
+          Revision3VoiceTakePreviewStaleCheckpointException(
+            cleanupObligation:
+                error
+                    is Revision3VoiceTakePreviewMaterializationCleanupException
+                ? error
+                : null,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is Revision3VoiceTakePreviewStaleCheckpointException ||
+          error is Revision3VoiceTakePreviewCleanupException ||
+          error is CurrentProjectOperationUnsupportedException) {
+        Error.throwWithStackTrace(error, stackTrace);
       }
       Error.throwWithStackTrace(error, stackTrace);
     } finally {
