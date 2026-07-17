@@ -45,6 +45,16 @@ typedef Revision3ProjectWorkspacePageBuilder =
       Revision3ProjectWorkspaceLocation location,
     );
 
+/// Builds persistent workspace chrome for the currently selected location.
+///
+/// Unlike destination pages, this builder is not mounted lazily and remains
+/// above the page area while primary and secondary locations change.
+typedef Revision3ProjectWorkspaceChromeBuilder =
+    Widget Function(
+      BuildContext context,
+      Revision3ProjectWorkspaceLocation location,
+    );
+
 /// Immutable description of one primary workspace destination.
 @immutable
 final class Revision3ProjectWorkspaceDestination {
@@ -72,11 +82,17 @@ class Revision3ProjectWorkspace extends StatefulWidget {
   Revision3ProjectWorkspace({
     required this.projectIdentity,
     required List<Revision3ProjectWorkspaceDestination> destinations,
+    this.chromeBuilder,
     super.key,
   }) : destinations = _validatedDestinations(destinations);
 
   final Object projectIdentity;
   final List<Revision3ProjectWorkspaceDestination> destinations;
+  final Revision3ProjectWorkspaceChromeBuilder? chromeBuilder;
+
+  static const chromeScrollKey = Key(
+    'revision3-project-workspace-chrome-scroll',
+  );
 
   /// Selects an exact workspace location from any descendant context.
   static void navigate(
@@ -225,7 +241,7 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
             ),
           ),
         ),
-        Expanded(child: pages),
+        Expanded(child: _buildPageArea(pages)),
       ],
     );
   }
@@ -284,9 +300,56 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
         ),
       ),
       const VerticalDivider(width: 1),
-      Expanded(child: pages),
+      Expanded(child: _buildPageArea(pages)),
     ],
   );
+
+  Widget _buildPageArea(Widget pages) {
+    final chromeBuilder = widget.chromeBuilder;
+    if (chromeBuilder == null) return pages;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final chrome = KeyedSubtree(
+          key: ValueKey(('chrome', _projectEpoch)),
+          child: Semantics(
+            key: const Key('revision3-project-workspace-chrome'),
+            container: true,
+            child: Builder(
+              builder: (context) =>
+                  chromeBuilder(context, _locationFor(_selected)),
+            ),
+          ),
+        );
+        if (!constraints.maxHeight.isFinite) {
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [chrome, pages],
+          );
+        }
+
+        const minimumPageHeight = 96.0;
+        final maximumChromeHeight = constraints.maxHeight > minimumPageHeight
+            ? constraints.maxHeight - minimumPageHeight
+            : constraints.maxHeight * 0.45;
+        return Column(
+          children: [
+            KeyedSubtree(
+              key: ValueKey(('chrome-scroll', _projectEpoch)),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maximumChromeHeight),
+                child: SingleChildScrollView(
+                  key: Revision3ProjectWorkspace.chromeScrollKey,
+                  primary: false,
+                  child: chrome,
+                ),
+              ),
+            ),
+            Expanded(child: pages),
+          ],
+        );
+      },
+    );
+  }
 
   Widget _buildPages() => IndexedStack(
     key: const Key('revision3-project-workspace-pages'),

@@ -5,6 +5,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 import 'app/domain/asset_entry_tracker.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
@@ -75,6 +76,7 @@ import 'project/revision3_project_history.dart';
 import 'project/revision3_project_history_page.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
+import 'project/revision3_project_command_bar.dart';
 import 'project/revision3_project_section_page.dart';
 import 'project/revision3_project_workspace.dart';
 import 'project/revision3_scoped_content_browser.dart';
@@ -139,6 +141,8 @@ final class _ManagedStorySelectionOrigin {
 }
 
 enum _StoryDraftHandoffOutcome { opened, stale, selectionFailed }
+
+enum _ProjectQuickCreateAction { npc, questOpening, dialogLine }
 
 _Revision3ManagedCompilerSelection? _revision3ManagedCompilerSelection({
   required Revision3ContentIndex index,
@@ -2272,6 +2276,9 @@ class _ManagedRevision3ProjectViewState
   late Revision3LocalizationVoiceWorkspaceController
   _localizationVoiceWorkspaceController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
+  late Revision3ScopedContentBrowserController _scopedContentBrowserController;
+  late FocusNode _globalSearchQueryFocusNode;
+  late final VoidCallback _activateGlobalSearchQuery;
   bool _recoveryStarting = false;
   bool _recoveryTerminal = false;
   String? _recoveryError;
@@ -2279,13 +2286,15 @@ class _ManagedRevision3ProjectViewState
   final Revision3QuestOpeningRecipe _questOpeningRecipe =
       Revision3QuestOpeningRecipe();
   bool _questOpeningRecipeUiBusy = false;
+  String? _projectDisplayName;
 
   ManagedRevision3CurrentProjectState get project => widget.project;
   ManagedRevision3CurrentProjectState? get currentManagedProject =>
       widget.readCurrentManagedProject();
   String? get gameRoot => widget.gameRoot;
   Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
-  Revision3ContentIndexLoader get loadContentIndex => widget.loadContentIndex;
+  Revision3ContentIndexLoader get loadContentIndex =>
+      _loadContentIndexAndRememberProjectName;
   Revision3StoryWorkspaceRemoveDraftAction? get removeStoryDraft =>
       widget.removeStoryDraft;
   String? get removeStoryDraftDisabledReason =>
@@ -2392,6 +2401,22 @@ class _ManagedRevision3ProjectViewState
   Revision3ManagedCompilerPublisher get checkManagedCompiler =>
       widget.checkManagedCompiler;
 
+  Future<Revision3ContentIndex>
+  _loadContentIndexAndRememberProjectName() async {
+    final expected = project;
+    final index = await widget.loadContentIndex();
+    final name = index.projectName.trim();
+    if (name.isNotEmpty &&
+        mounted &&
+        index.projectId == expected.projectId &&
+        index.projectRevision == expected.projectRevision &&
+        _isCurrentQuestOpeningCheckpoint(expected) &&
+        _projectDisplayName != name) {
+      setState(() => _projectDisplayName = name);
+    }
+    return index;
+  }
+
   Revision3ContentProjectIdentity get _contentProjectIdentity =>
       Revision3ContentProjectIdentity(
         projectRoot: project.root.path,
@@ -2421,6 +2446,18 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
+    _scopedContentBrowserController = Revision3ScopedContentBrowserController(
+      projectIdentity: (project.root.path, project.projectId),
+    );
+    _globalSearchQueryFocusNode = FocusNode(
+      debugLabel: 'managed project global content search',
+    );
+    _activateGlobalSearchQuery = () {
+      final expected = project;
+      if (mounted && _isCurrentQuestOpeningCheckpoint(expected)) {
+        _globalSearchQueryFocusNode.requestFocus();
+      }
+    };
   }
 
   @override
@@ -2436,6 +2473,9 @@ class _ManagedRevision3ProjectViewState
       _storyAuthorityEpoch = 0;
     } else if (oldWidget.project.requiresReopen && !project.requiresReopen) {
       _storyAuthorityEpoch++;
+    }
+    if (identityChanged || checkpointChanged) {
+      _projectDisplayName = null;
     }
     if (identityChanged || checkpointChanged || !project.requiresReopen) {
       _recoveryStarting = false;
@@ -2456,6 +2496,11 @@ class _ManagedRevision3ProjectViewState
         Revision3LocalizationVoiceWorkspaceController();
     _dataAssetStagePanelController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
+    _scopedContentBrowserController.dispose();
+    _scopedContentBrowserController = Revision3ScopedContentBrowserController(
+      projectIdentity: (project.root.path, project.projectId),
+    );
+    _globalSearchQueryFocusNode.unfocus();
   }
 
   bool _stillShowsRecoveryFor(ManagedRevision3CurrentProjectState expected) =>
@@ -2550,6 +2595,8 @@ class _ManagedRevision3ProjectViewState
     _storyWorkspaceController.dispose();
     _localizationVoiceWorkspaceController.dispose();
     _dataAssetStagePanelController.dispose();
+    _scopedContentBrowserController.dispose();
+    _globalSearchQueryFocusNode.dispose();
     super.dispose();
   }
 
@@ -2559,208 +2606,215 @@ class _ManagedRevision3ProjectViewState
     return Column(
       key: const Key('managed-revision3-project-view'),
       children: [
-        Card(
-          margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 10, 2),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final identity = Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          l10n.projectManagedRevision3Title,
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                        if (project.requiresReopen) ...[
-                          const SizedBox(height: 2),
-                          Text(l10n.managedProjectRecoveryContentLocked),
-                        ],
-                      ],
-                    );
-                    final settings = IconButton.outlined(
-                      key: const Key('managed-open-settings'),
-                      onPressed: widget.recoveryBusy || _recoveryStarting
-                          ? null
-                          : () => unawaited(_openSettings(context)),
-                      tooltip: l10n.managedActionSettingsTitle,
-                      icon: const Icon(Icons.settings_outlined),
-                    );
-                    if (constraints.maxWidth < 500) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+        if (project.requiresReopen)
+          Card(
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 10, 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final identity = Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          identity,
-                          const SizedBox(height: 6),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: settings,
+                          Text(
+                            l10n.projectManagedRevision3Title,
+                            style: Theme.of(context).textTheme.titleMedium,
                           ),
+                          if (project.requiresReopen) ...[
+                            const SizedBox(height: 2),
+                            Text(l10n.managedProjectRecoveryContentLocked),
+                          ],
                         ],
                       );
-                    }
-                    return Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(child: identity),
-                        const SizedBox(width: 16),
-                        settings,
-                      ],
-                    );
-                  },
-                ),
-                if (project.requiresReopen) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    key: const Key('managed-project-requires-reopen-warning'),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                          Icons.warning_amber_rounded,
-                          color: Theme.of(context).colorScheme.onErrorContainer,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                l10n.managedProjectRecoveryDescription,
-                                style: TextStyle(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onErrorContainer,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                l10n.managedProjectRecoveryAlternative,
-                                style: TextStyle(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onErrorContainer,
-                                ),
-                              ),
-                              if (_recoveryError case final error?) ...[
-                                const SizedBox(height: 8),
+                      final settings = IconButton.outlined(
+                        key: const Key('managed-open-settings'),
+                        onPressed: widget.recoveryBusy || _recoveryStarting
+                            ? null
+                            : () => unawaited(_openSettings(context)),
+                        tooltip: l10n.managedActionSettingsTitle,
+                        icon: const Icon(Icons.settings_outlined),
+                      );
+                      if (constraints.maxWidth < 500) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            identity,
+                            const SizedBox(height: 6),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: settings,
+                            ),
+                          ],
+                        );
+                      }
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(child: identity),
+                          const SizedBox(width: 16),
+                          settings,
+                        ],
+                      );
+                    },
+                  ),
+                  if (project.requiresReopen) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      key: const Key('managed-project-requires-reopen-warning'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onErrorContainer,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
                                 Text(
-                                  error,
-                                  key: const Key(
-                                    'managed-project-recovery-error',
-                                  ),
+                                  l10n.managedProjectRecoveryDescription,
                                   style: TextStyle(
                                     color: Theme.of(
                                       context,
                                     ).colorScheme.onErrorContainer,
-                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  l10n.managedProjectRecoveryAlternative,
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onErrorContainer,
+                                  ),
+                                ),
+                                if (_recoveryError case final error?) ...[
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    error,
+                                    key: const Key(
+                                      'managed-project-recovery-error',
+                                    ),
+                                    style: TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onErrorContainer,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 10),
+                                FilledButton.icon(
+                                  key: const Key(
+                                    'managed-project-try-recovery',
+                                  ),
+                                  onPressed:
+                                      _recoveryStarting ||
+                                          widget.recoveryBusy ||
+                                          _recoveryTerminal
+                                      ? null
+                                      : () => unawaited(_tryRecovery()),
+                                  icon: _recoveryStarting
+                                      ? const SizedBox.square(
+                                          key: Key(
+                                            'managed-project-recovery-progress',
+                                          ),
+                                          dimension: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.restart_alt),
+                                  label: Text(
+                                    _recoveryStarting
+                                        ? l10n.managedProjectRecoveryTrying
+                                        : l10n.managedProjectRecoveryTry,
                                   ),
                                 ),
                               ],
-                              const SizedBox(height: 10),
-                              FilledButton.icon(
-                                key: const Key('managed-project-try-recovery'),
-                                onPressed:
-                                    _recoveryStarting ||
-                                        widget.recoveryBusy ||
-                                        _recoveryTerminal
-                                    ? null
-                                    : () => unawaited(_tryRecovery()),
-                                icon: _recoveryStarting
-                                    ? const SizedBox.square(
-                                        key: Key(
-                                          'managed-project-recovery-progress',
-                                        ),
-                                        dimension: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.restart_alt),
-                                label: Text(
-                                  _recoveryStarting
-                                      ? l10n.managedProjectRecoveryTrying
-                                      : l10n.managedProjectRecoveryTry,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                ExpansionTile(
-                  key: const Key('managed-project-technical-details'),
-                  dense: true,
-                  visualDensity: VisualDensity.compact,
-                  tilePadding: EdgeInsets.zero,
-                  childrenPadding: const EdgeInsets.only(top: 4),
-                  title: Text(l10n.managedProjectTechnicalDetails),
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Wrap(
-                        spacing: 20,
-                        runSpacing: 2,
-                        children: [
-                          SizedBox(
-                            width: 360,
-                            child: _ProjectFact(
-                              label: l10n.projectRoot,
-                              value: project.root.path,
-                              valueKey: const Key('managed-project-root'),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 300,
-                            child: _ProjectFact(
-                              label: l10n.projectId,
-                              value: project.projectId,
-                              valueKey: const Key('managed-project-id'),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 160,
-                            child: _ProjectFact(
-                              label: l10n.projectRevision,
-                              value: '${project.projectRevision}',
-                              valueKey: const Key('managed-project-revision'),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 460,
-                            child: _ProjectFact(
-                              label: l10n.projectHeadSha256,
-                              value: project.head.snapshotSha256,
-                              valueKey: const Key('managed-project-head'),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 160,
-                            child: _ProjectFact(
-                              label: l10n.projectSnapshotBytes,
-                              value: '${project.head.snapshotByteLength}',
-                              valueKey: const Key('managed-project-head-bytes'),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ],
-                ),
-              ],
+                  ExpansionTile(
+                    key: const Key('managed-project-technical-details'),
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(top: 4),
+                    title: Text(l10n.managedProjectTechnicalDetails),
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Wrap(
+                          spacing: 20,
+                          runSpacing: 2,
+                          children: [
+                            SizedBox(
+                              width: 360,
+                              child: _ProjectFact(
+                                label: l10n.projectRoot,
+                                value: project.root.path,
+                                valueKey: const Key('managed-project-root'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 300,
+                              child: _ProjectFact(
+                                label: l10n.projectId,
+                                value: project.projectId,
+                                valueKey: const Key('managed-project-id'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 160,
+                              child: _ProjectFact(
+                                label: l10n.projectRevision,
+                                value: '${project.projectRevision}',
+                                valueKey: const Key('managed-project-revision'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 460,
+                              child: _ProjectFact(
+                                label: l10n.projectHeadSha256,
+                                value: project.head.snapshotSha256,
+                                valueKey: const Key('managed-project-head'),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 160,
+                              child: _ProjectFact(
+                                label: l10n.projectSnapshotBytes,
+                                value: '${project.head.snapshotByteLength}',
+                                valueKey: const Key(
+                                  'managed-project-head-bytes',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
         Expanded(
           child: project.requiresReopen
               ? Center(
@@ -2781,6 +2835,8 @@ class _ManagedRevision3ProjectViewState
                 )
               : Revision3ProjectWorkspace(
                   projectIdentity: (project.root.path, project.projectId),
+                  chromeBuilder: (workspaceContext, location) =>
+                      _buildProjectCommandBar(workspaceContext, location, l10n),
                   destinations: [
                     Revision3ProjectWorkspaceDestination(
                       section: Revision3ProjectWorkspaceSection.home,
@@ -2864,7 +2920,7 @@ class _ManagedRevision3ProjectViewState
                         expertStatusLabel: l10n.managedCapabilityUnavailable,
                         expertStatusDescription:
                             l10n.managedSectionSettingsExpertDescription,
-                        settings: const SettingsTab(),
+                        settings: _buildManagedSettingsArea(l10n),
                       ),
                     ),
                   ],
@@ -2872,6 +2928,313 @@ class _ManagedRevision3ProjectViewState
         ),
       ],
     );
+  }
+
+  Widget _buildProjectCommandBar(
+    BuildContext context,
+    Revision3ProjectWorkspaceLocation location,
+    AppLocalizations l10n,
+  ) {
+    final mutationDisabledReason = _storyMutationDisabledReason(l10n);
+    final busy = widget.recoveryBusy
+        ? Revision3ProjectCommandBarBusyState(
+            label: l10n.managedProjectHistoryBusy,
+            disabledReason: l10n.managedProjectHistoryBusy,
+          )
+        : null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      child: Revision3ProjectCommandBar(
+        projectDisplayName: _projectCommandBarDisplayName(l10n),
+        currentSectionLabel: _workspaceSectionLabel(l10n, location.section),
+        searchCommand: Revision3ProjectCommand.enabled(
+          () => _openProjectSearch(context),
+        ),
+        createCommand: mutationDisabledReason == null
+            ? Revision3ProjectCommand.enabled(
+                () => _openProjectQuickCreate(context, l10n),
+              )
+            : Revision3ProjectCommand.disabled(mutationDisabledReason),
+        problemsCommand: Revision3ProjectCommand.enabled(
+          () => Revision3ProjectWorkspace.navigate(
+            context,
+            const Revision3ProjectWorkspaceLocation(
+              Revision3ProjectWorkspaceSection.validateTest,
+            ),
+          ),
+        ),
+        settingsCommand: Revision3ProjectCommand.enabled(
+          () => _openSettings(context),
+        ),
+        busy: busy,
+        copy: l10n.localeName.startsWith('de')
+            ? Revision3ProjectCommandBarCopy.german
+            : const Revision3ProjectCommandBarCopy(),
+      ),
+    );
+  }
+
+  Widget _buildManagedProjectTechnicalDetails(AppLocalizations l10n) =>
+      ExpansionTile(
+        key: const Key('managed-project-technical-details'),
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+        title: Text(l10n.managedProjectTechnicalDetails),
+        children: [
+          LayoutBuilder(
+            builder: (context, constraints) {
+              double factWidth(double preferred) {
+                final available = constraints.maxWidth;
+                return available.isFinite && available < preferred
+                    ? available
+                    : preferred;
+              }
+
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 20,
+                  runSpacing: 2,
+                  children: [
+                    SizedBox(
+                      width: factWidth(360),
+                      child: _ProjectFact(
+                        label: l10n.projectRoot,
+                        value: project.root.path,
+                        valueKey: const Key('managed-project-root'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: factWidth(300),
+                      child: _ProjectFact(
+                        label: l10n.projectId,
+                        value: project.projectId,
+                        valueKey: const Key('managed-project-id'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: factWidth(160),
+                      child: _ProjectFact(
+                        label: l10n.projectRevision,
+                        value: '${project.projectRevision}',
+                        valueKey: const Key('managed-project-revision'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: factWidth(460),
+                      child: _ProjectFact(
+                        label: l10n.projectHeadSha256,
+                        value: project.head.snapshotSha256,
+                        valueKey: const Key('managed-project-head'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: factWidth(160),
+                      child: _ProjectFact(
+                        label: l10n.projectSnapshotBytes,
+                        value: '${project.head.snapshotByteLength}',
+                        valueKey: const Key('managed-project-head-bytes'),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      );
+
+  Widget _buildManagedSettingsArea(AppLocalizations l10n) => LayoutBuilder(
+    builder: (context, constraints) {
+      final detailsMaximumHeight = constraints.maxHeight.isFinite
+          ? constraints.maxHeight * 0.45
+          : 320.0;
+      return Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: detailsMaximumHeight),
+            child: SingleChildScrollView(
+              key: const Key('managed-project-technical-details-scroll'),
+              primary: false,
+              child: _buildManagedProjectTechnicalDetails(l10n),
+            ),
+          ),
+          const Expanded(child: SettingsTab()),
+        ],
+      );
+    },
+  );
+
+  String _projectCommandBarDisplayName(AppLocalizations l10n) {
+    final loaded = _projectDisplayName?.trim();
+    if (loaded != null && loaded.isNotEmpty) return loaded;
+    final folderName = p.basename(p.normalize(project.root.path)).trim();
+    return folderName.isEmpty || folderName == '.'
+        ? l10n.managedDashboardUntitledProject
+        : folderName;
+  }
+
+  String _workspaceSectionLabel(
+    AppLocalizations l10n,
+    Revision3ProjectWorkspaceSection section,
+  ) => switch (section) {
+    Revision3ProjectWorkspaceSection.home => l10n.managedWorkspaceHomeLabel,
+    Revision3ProjectWorkspaceSection.content =>
+      l10n.managedWorkspaceContentLabel,
+    Revision3ProjectWorkspaceSection.story => l10n.managedWorkspaceStoryLabel,
+    Revision3ProjectWorkspaceSection.world => l10n.managedWorkspaceWorldLabel,
+    Revision3ProjectWorkspaceSection.localizationVoice =>
+      l10n.managedWorkspaceLocalizationVoiceLabel,
+    Revision3ProjectWorkspaceSection.validateTest =>
+      l10n.managedWorkspaceValidateTestLabel,
+    Revision3ProjectWorkspaceSection.buildRelease =>
+      l10n.managedWorkspaceBuildReleaseLabel,
+    Revision3ProjectWorkspaceSection.history =>
+      l10n.managedWorkspaceHistoryLabel,
+    Revision3ProjectWorkspaceSection.settingsExpert =>
+      l10n.managedWorkspaceSettingsExpertLabel,
+  };
+
+  Future<void> _openProjectSearch(BuildContext context) async {
+    final expected = project;
+    if (!_isCurrentQuestOpeningCheckpoint(expected)) return;
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+        secondary: Revision3ScopedContentBrowser.searchAllSecondaryRoute,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!context.mounted || !_isCurrentQuestOpeningCheckpoint(expected)) return;
+    await _scopedContentBrowserController.openSearchAll();
+  }
+
+  Future<void> _openProjectQuickCreate(
+    BuildContext context,
+    AppLocalizations l10n,
+  ) async {
+    final expected = project;
+    if (!_isCurrentQuestOpeningCheckpoint(expected) ||
+        !_storyMutationsEnabled) {
+      return;
+    }
+    final gameConfigured = gameRoot != null;
+    final gameRequiredReason = l10n.managedDashboardMissingGameDescription;
+    final action = await showModalBottomSheet<_ProjectQuickCreateAction>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        Widget option({
+          required Key key,
+          required IconData icon,
+          required String title,
+          required String description,
+          required _ProjectQuickCreateAction action,
+          String? disabledReason,
+        }) {
+          final enabled = disabledReason == null;
+          return Tooltip(
+            message: disabledReason ?? title,
+            child: Semantics(
+              button: true,
+              enabled: enabled,
+              label: title,
+              hint: disabledReason ?? description,
+              child: ListTile(
+                key: key,
+                enabled: enabled,
+                leading: Icon(icon),
+                title: Text(title),
+                subtitle: Text(disabledReason ?? description),
+                trailing: Icon(
+                  enabled ? Icons.chevron_right : Icons.lock_outline,
+                ),
+                onTap: enabled
+                    ? () => Navigator.of(sheetContext).pop(action)
+                    : null,
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 560),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    child: Text(
+                      l10n.managedDashboardCreateHeading,
+                      style: Theme.of(sheetContext).textTheme.titleLarge,
+                    ),
+                  ),
+                  option(
+                    key: const Key('managed-project-create-npc'),
+                    icon: Icons.person_add_alt_1_outlined,
+                    title: l10n.managedActionNewNpcTitle,
+                    description: l10n.managedActionNewNpcDescription,
+                    action: _ProjectQuickCreateAction.npc,
+                    disabledReason: gameConfigured ? null : gameRequiredReason,
+                  ),
+                  option(
+                    key: const Key('managed-project-create-quest-opening'),
+                    icon: Icons.auto_stories_outlined,
+                    title: l10n.managedStoryWorkspaceCreateQuestOpening,
+                    description: l10n.managedQuestOpeningRecipeDescription,
+                    action: _ProjectQuickCreateAction.questOpening,
+                    disabledReason: gameConfigured ? null : gameRequiredReason,
+                  ),
+                  option(
+                    key: const Key('managed-project-create-dialog-line'),
+                    icon: Icons.chat_bubble_outline,
+                    title: l10n.managedActionNewDialogLineTitle,
+                    description: l10n.managedActionNewDialogLineDescription,
+                    action: _ProjectQuickCreateAction.dialogLine,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (action == null || !context.mounted) return;
+    if (!_isCurrentQuestOpeningCheckpoint(expected) ||
+        !_storyMutationsEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.managedStoryWorkspaceCheckpointMismatch)),
+      );
+      return;
+    }
+    switch (action) {
+      case _ProjectQuickCreateAction.npc:
+        await _openNpcWizard(context, selectPublishedInStory: true);
+        return;
+      case _ProjectQuickCreateAction.questOpening:
+        await _openQuestOpeningRecipe(context);
+        return;
+      case _ProjectQuickCreateAction.dialogLine:
+        Revision3ProjectWorkspace.navigate(
+          context,
+          const Revision3ProjectWorkspaceLocation(
+            Revision3ProjectWorkspaceSection.localizationVoice,
+          ),
+        );
+        await WidgetsBinding.instance.endOfFrame;
+        if (context.mounted && _isCurrentQuestOpeningCheckpoint(expected)) {
+          await _openDialogLineEntry(context);
+        }
+        return;
+    }
   }
 
   Widget _buildHistorySection(AppLocalizations l10n) =>
@@ -2952,6 +3315,13 @@ class _ManagedRevision3ProjectViewState
       builder: (context, contentLibraryController, globalSearchController) =>
           Revision3ScopedContentBrowser(
             projectIdentity: (project.root.path, project.projectId),
+            controller: _scopedContentBrowserController,
+            onAllSourcesActivated: _activateGlobalSearchQuery,
+            initialScope:
+                location.secondary ==
+                    Revision3ScopedContentBrowser.searchAllSecondaryRoute
+                ? Revision3ScopedContentScope.allSources
+                : Revision3ScopedContentScope.thisMod,
             thisModLabel: l10n.managedContentWorkspaceLibraryLabel,
             baseGameLabel: l10n.managedContentScopeBaseGameLabel,
             installedLabel: l10n.managedContentScopeInstalledLabel,
@@ -3093,6 +3463,7 @@ class _ManagedRevision3ProjectViewState
             allSources: Builder(
               builder: (globalContext) => Revision3GlobalContentSearchView(
                 controller: globalSearchController,
+                queryFocusNode: _globalSearchQueryFocusNode,
                 copy: _globalContentSearchCopy(l10n),
                 callbacks: Revision3GlobalContentSearchCallbacks(
                   openThisModEntity: (entityId) {

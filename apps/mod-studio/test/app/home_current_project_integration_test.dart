@@ -32,6 +32,7 @@ import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
+import 'package:gore_mod/project/revision3_project_command_bar.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
@@ -1092,6 +1093,8 @@ void main() {
       final advancedCreate = find.byKey(
         const Key('revision3-story-workspace-create-advanced'),
       );
+      await tester.ensureVisible(advancedCreate);
+      await tester.pumpAndSettle();
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
       expect(
@@ -1686,6 +1689,8 @@ void main() {
         const Key('revision3-story-workspace-create-advanced'),
       );
       expect(advancedCreate, findsOneWidget);
+      await tester.ensureVisible(advancedCreate);
+      await tester.pumpAndSettle();
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
       expect(
@@ -2385,6 +2390,9 @@ void main() {
       final advancedCreate = find.byKey(
         const Key('revision3-story-workspace-create-advanced'),
       );
+      await tester.ensureVisible(advancedCreate);
+      await tester.pumpAndSettle();
+      expect(advancedCreate.hitTestable(), findsOneWidget);
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
       expect(
@@ -5177,8 +5185,8 @@ void main() {
         tester.element(sectionAction),
       ).managedActionAddVoiceTakeRequiresDialogLine;
       expect(find.text(sectionPrerequisite), findsOneWidget);
-      expect(tester.takeException(), isNull);
       expect(managed.voicePublishCalls, 0);
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -7671,6 +7679,399 @@ void main() {
   );
 
   testWidgets(
+    'project command bar remembers the friendly index name and follows the current section',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\project-command-orientation'),
+        projectId: 'd1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1',
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(1));
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.projectNameKey))
+            .data,
+        'Home Quest project',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
+            .data,
+        'Current section: Home',
+      );
+
+      await _navigateManagedStory(tester);
+
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
+            .data,
+        'Current section: Story',
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.projectNameKey))
+            .data,
+        'Home Quest project',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'project command Search opens focused Search all without eager source reads',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_project_command_search_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      var baseCatalogCalls = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\project-command-search'),
+        projectId: 'd2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2',
+        projectRevision: 8,
+        head: _head(8),
+        contentIndexBuilder: (lease) => _globalSearchContentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          targetEntityId: 'd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3',
+        ),
+        onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          return _homeDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadBaseGameCatalog: (_) async {
+          baseCatalogCalls++;
+          return _baseGameCatalog();
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final contentReadsBeforeCommand = managed.contentReadCalls;
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.searchKey));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(
+          const Key('revision3-scoped-content-browser-page-all-sources'),
+        ),
+        findsOneWidget,
+      );
+      final query = find.byKey(
+        const Key('revision3-global-content-search-field'),
+      );
+      expect(query, findsOneWidget);
+      expect(tester.widget<TextField>(query).focusNode?.hasFocus, isTrue);
+      expect(managed.contentReadCalls, contentReadsBeforeCommand);
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-global-content-search-submit')),
+      );
+      await tester.pumpAndSettle();
+      expect(managed.contentReadCalls, contentReadsBeforeCommand);
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await tester.enterText(query, 'asghan');
+      await tester.tap(
+        find.byKey(const Key('revision3-global-content-search-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.contentReadCalls, greaterThan(contentReadsBeforeCommand));
+      expect(baseCatalogCalls, 1);
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'project command Create explains game-gated choices and keeps Dialog line available',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\project-command-create'),
+        projectId: 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4',
+        projectRevision: 9,
+        head: _head(9),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+
+      final npc = find.byKey(const Key('managed-project-create-npc'));
+      final quest = find.byKey(
+        const Key('managed-project-create-quest-opening'),
+      );
+      final dialog = find.byKey(
+        const Key('managed-project-create-dialog-line'),
+      );
+      expect(npc, findsOneWidget);
+      expect(quest, findsOneWidget);
+      expect(dialog, findsOneWidget);
+      final reason = AppLocalizations.of(
+        tester.element(npc),
+      ).managedDashboardMissingGameDescription;
+      for (final gated in <Finder>[npc, quest]) {
+        final tile = tester.widget<ListTile>(gated);
+        expect(tile.enabled, isFalse);
+        expect(tile.onTap, isNull);
+        expect((tile.subtitle! as Text).data, reason);
+      }
+      final dialogTile = tester.widget<ListTile>(dialog);
+      expect(dialogTile.enabled, isTrue);
+      expect(dialogTile.onTap, isNotNull);
+      expect((dialogTile.subtitle! as Text).data, isNot(reason));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('project command Problems opens Validate and Test', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\project-command-problems'),
+      projectId: 'd5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5',
+      projectRevision: 10,
+      head: _head(10),
+      contentIndexBuilder: (lease) => _contentIndex(
+        projectId: lease.projectId,
+        revision: lease.projectRevision,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.problemsKey));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-workspace-page-validate-test')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-problems-view')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
+          .data,
+      'Current section: Validate & Test',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'stale project command fails closed after a project switch with an equal checkpoint',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final oldRoot = Directory(r'C:\mods\project-command-stale-old');
+      final newRoot = Directory(r'C:\mods\project-command-stale-new');
+      final oldProject = _FakeManagedLease(
+        root: oldRoot,
+        projectId: 'd6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6',
+        projectRevision: 11,
+        head: _head(11),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          projectName: 'Old friendly project',
+        ),
+      );
+      final newProject = _FakeManagedLease(
+        root: newRoot,
+        projectId: 'd7d7d7d7d7d7d7d7d7d7d7d7d7d7d7d7',
+        projectRevision: 11,
+        head: _head(11),
+        contentIndexBuilder: (_) => throw StateError('new index unavailable'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async =>
+            root.path == oldRoot.path ? oldProject : newProject,
+      );
+      await coordinator.openManagedRevision3(oldRoot);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final oldContentReads = oldProject.contentReadCalls;
+      final staleOnPressed = tester
+          .widget<OutlinedButton>(
+            find.byKey(Revision3ProjectCommandBar.searchKey),
+          )
+          .onPressed!;
+
+      await coordinator.closeCurrent();
+      await coordinator.openManagedRevision3(newRoot);
+      staleOnPressed();
+      await tester.pumpAndSettle();
+
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectId, newProject.projectId);
+      expect(current.projectRevision, oldProject.projectRevision);
+      expect(oldProject.closeCalls, 1);
+      expect(oldProject.contentReadCalls, oldContentReads);
+      expect(
+        find.byKey(
+          const Key('revision3-scoped-content-browser-page-all-sources'),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.projectNameKey))
+            .data,
+        'project-command-stale-new',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'project command bar survives compact German two-hundred-percent text',
+    (tester) async {
+      await _setTestSurface(tester, const Size(360, 480));
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\project-command-compact'),
+        projectId: 'd8d8d8d8d8d8d8d8d8d8d8d8d8d8d8d8',
+        projectRevision: 12,
+        head: _head(12),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(Revision3ProjectCommandBar.rootKey), findsOneWidget);
+      expect(find.byKey(Revision3ProjectCommandBar.searchKey), findsOneWidget);
+      expect(find.byKey(Revision3ProjectCommandBar.moreKey), findsOneWidget);
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
+            .data,
+        'Aktueller Bereich: Start',
+      );
+
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.moreKey));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(Revision3ProjectCommandBar.compactSettingsKey),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('managed-settings-dialog')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('managed-settings-close')));
+      await tester.pumpAndSettle();
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-settings-expert'),
+      );
+      expect(
+        tester
+            .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
+            .data,
+        'Aktueller Bereich: Einstellungen & Expertenmodus',
+      );
+      await _expandManagedTechnicalDetails(tester);
+      expect(
+        find.byKey(const Key('managed-project-technical-details-scroll')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('managed-project-head')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'successful managed transition surfaces cleanup warning without details',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -7820,9 +8221,28 @@ Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
   if (find.byKey(const Key('managed-project-revision')).evaluate().isNotEmpty) {
     return;
   }
-  final details = find.byKey(const Key('managed-project-technical-details'));
+  var details = find.byKey(const Key('managed-project-technical-details'));
+  if (details.evaluate().isEmpty) {
+    await _navigateManagedWorkspace(
+      tester,
+      const Key('revision3-project-workspace-nav-settings-expert'),
+    );
+    details = find.byKey(const Key('managed-project-technical-details'));
+  }
   expect(details, findsOneWidget);
-  await tester.tap(details);
+  await tester.ensureVisible(details);
+  await tester.pumpAndSettle();
+  if (details.hitTestable().evaluate().isNotEmpty) {
+    await tester.tap(details);
+  } else {
+    final scroll = find.byKey(
+      const Key('managed-project-technical-details-scroll'),
+    );
+    expect(scroll, findsOneWidget);
+    final visible = tester.getRect(details).intersect(tester.getRect(scroll));
+    expect(visible.isEmpty, isFalse);
+    await tester.tapAt(visible.center);
+  }
   await tester.pumpAndSettle();
 }
 
@@ -7941,8 +8361,18 @@ Future<Finder> _revealManagedDataAssetExpertAction(
 }
 
 Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
+  final narrowMenu = find.byKey(
+    const Key('revision3-project-workspace-narrow-menu'),
+  );
+  if (narrowMenu.evaluate().isNotEmpty) {
+    await tester.tap(narrowMenu);
+    await tester.pumpAndSettle();
+  }
   final destination = find.byKey(key);
   expect(destination, findsOneWidget);
+  await tester.ensureVisible(destination);
+  await tester.pump();
+  expect(destination.hitTestable(), findsOneWidget);
   await tester.tap(destination);
   await tester.pumpAndSettle();
 }
@@ -8033,11 +8463,16 @@ Future<void> _openStoryWorkbenchEntity(
 ) async {
   final entity = find.byKey(Key('revision3-content-entity-$entityId'));
   expect(entity, findsOneWidget);
+  await tester.ensureVisible(entity);
+  await tester.pumpAndSettle();
+  expect(entity.hitTestable(), findsOneWidget);
   await tester.tap(entity);
   await tester.pumpAndSettle();
   final openStory = find.byKey(Key('revision3-content-open-story-$entityId'));
   expect(openStory, findsOneWidget);
   await tester.ensureVisible(openStory);
+  await tester.pumpAndSettle();
+  expect(openStory.hitTestable(), findsOneWidget);
   await tester.tap(openStory);
   await tester.pumpAndSettle();
   expect(find.byKey(const Key('revision3-story-workspace')), findsOneWidget);
@@ -9408,11 +9843,12 @@ ManagedRevision3RecoveryCheckpoint _recoveryCheckpoint({
 Revision3ContentIndex _contentIndex({
   required String projectId,
   required int revision,
+  String projectName = 'Home Quest project',
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': projectId,
   'project_revision': revision,
-  'project_name': 'Home Quest project',
+  'project_name': projectName,
   'project_version': '1.0.0',
   'project_author': 'tests',
   'target': <String, Object?>{

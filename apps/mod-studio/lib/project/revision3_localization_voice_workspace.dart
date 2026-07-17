@@ -1692,61 +1692,66 @@ class _Revision3LocalizationVoiceWorkspaceState
       return Column(
         key: const Key('revision3-localization-voice-workspace'),
         children: [
-          _WorkspaceHeader(
-            copy: widget.copy,
-            notice: widget.notice,
-            onCreateDialogLine:
-                widget.onCreateDialogLine == null ||
-                    _loadingCatalog ||
-                    _saving ||
-                    _runningExternalAction
-                ? null
-                : () => _runExternalAction(() => widget.onCreateDialogLine),
-            onAddVoiceTake:
-                widget.onAddVoiceTake == null ||
-                    _loadingCatalog ||
-                    _saving ||
-                    _runningExternalAction
-                ? null
-                : () => _runExternalAction(
-                    () => widget.onAddVoiceTake,
-                    requiresVoiceAuthority: true,
-                  ),
-            onImportVoiceFolder:
-                widget.onImportVoiceFolder == null ||
-                    _loadingCatalog ||
-                    _saving ||
-                    _runningExternalAction
-                ? null
-                : () => _runExternalAction(
-                    () => widget.onImportVoiceFolder,
-                    requiresVoiceAuthority: true,
-                  ),
-            onManageVoiceTakes:
-                widget.onManageVoiceTakes == null ||
-                    _loadingCatalog ||
-                    _saving ||
-                    _runningExternalAction
-                ? null
-                : () => _runExternalAction(
-                    () => widget.onManageVoiceTakes,
-                    requiresVoiceAuthority: true,
-                  ),
-            onResolveVoiceTarget:
-                widget.onResolveVoiceTarget == null ||
-                    _loadingCatalog ||
-                    _saving ||
-                    _runningExternalAction
-                ? null
-                : () => _runExternalAction(
-                    () => widget.onResolveVoiceTarget,
-                    requiresVoiceAuthority: true,
-                  ),
-            dense: denseHeader,
-            compactActions: !wide || denseHeader,
+          _LocalizationVoiceWorkspaceChrome(
+            availableHeight: constraints.maxHeight,
+            children: [
+              _WorkspaceHeader(
+                copy: widget.copy,
+                notice: widget.notice,
+                onCreateDialogLine:
+                    widget.onCreateDialogLine == null ||
+                        _loadingCatalog ||
+                        _saving ||
+                        _runningExternalAction
+                    ? null
+                    : () => _runExternalAction(() => widget.onCreateDialogLine),
+                onAddVoiceTake:
+                    widget.onAddVoiceTake == null ||
+                        _loadingCatalog ||
+                        _saving ||
+                        _runningExternalAction
+                    ? null
+                    : () => _runExternalAction(
+                        () => widget.onAddVoiceTake,
+                        requiresVoiceAuthority: true,
+                      ),
+                onImportVoiceFolder:
+                    widget.onImportVoiceFolder == null ||
+                        _loadingCatalog ||
+                        _saving ||
+                        _runningExternalAction
+                    ? null
+                    : () => _runExternalAction(
+                        () => widget.onImportVoiceFolder,
+                        requiresVoiceAuthority: true,
+                      ),
+                onManageVoiceTakes:
+                    widget.onManageVoiceTakes == null ||
+                        _loadingCatalog ||
+                        _saving ||
+                        _runningExternalAction
+                    ? null
+                    : () => _runExternalAction(
+                        () => widget.onManageVoiceTakes,
+                        requiresVoiceAuthority: true,
+                      ),
+                onResolveVoiceTarget:
+                    widget.onResolveVoiceTarget == null ||
+                        _loadingCatalog ||
+                        _saving ||
+                        _runningExternalAction
+                    ? null
+                    : () => _runExternalAction(
+                        () => widget.onResolveVoiceTarget,
+                        requiresVoiceAuthority: true,
+                      ),
+                dense: denseHeader,
+                compactActions: !wide || denseHeader,
+              ),
+              if (widget.enableProductionQueue)
+                _buildWorkspaceModeSwitcher(dense: denseHeader, compact: !wide),
+            ],
           ),
-          if (widget.enableProductionQueue)
-            _buildWorkspaceModeSwitcher(dense: denseHeader, compact: !wide),
           const Divider(height: 1),
           Expanded(
             child: widget.enableProductionQueue && _showProductionQueue
@@ -2675,6 +2680,39 @@ enum _WorkspaceHeaderAction {
   importVoiceFolder,
   manageVoice,
   resolveVoice,
+}
+
+class _LocalizationVoiceWorkspaceChrome extends StatelessWidget {
+  const _LocalizationVoiceWorkspaceChrome({
+    required this.availableHeight,
+    required this.children,
+  });
+
+  static const _minimumBodyHeight = 80.0;
+
+  final double availableHeight;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+    if (!availableHeight.isFinite) return content;
+
+    final maximumHeight = availableHeight <= _minimumBodyHeight + 1
+        ? 0.0
+        : availableHeight - _minimumBodyHeight - 1;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maximumHeight),
+      child: SingleChildScrollView(
+        key: const Key('revision3-localization-voice-workspace-chrome-scroll'),
+        child: content,
+      ),
+    );
+  }
 }
 
 class _WorkspaceHeader extends StatelessWidget {

@@ -123,12 +123,14 @@ final class Revision3GlobalContentSearchView extends StatefulWidget {
     required this.controller,
     required this.copy,
     required this.callbacks,
+    this.queryFocusNode,
     super.key,
   });
 
   final Revision3GlobalContentSearchController controller;
   final Revision3GlobalContentSearchCopy copy;
   final Revision3GlobalContentSearchCallbacks callbacks;
+  final FocusNode? queryFocusNode;
 
   @override
   State<Revision3GlobalContentSearchView> createState() =>
@@ -213,6 +215,7 @@ final class _Revision3GlobalContentSearchViewState
             final field = TextField(
               key: const Key('revision3-global-content-search-field'),
               controller: _queryController,
+              focusNode: widget.queryFocusNode,
               textInputAction: TextInputAction.search,
               onSubmitted: widget.controller.isLoading
                   ? null

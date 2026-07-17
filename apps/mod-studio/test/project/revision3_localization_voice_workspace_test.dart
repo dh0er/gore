@@ -677,6 +677,43 @@ void main() {
   );
 
   testWidgets(
+    'short workspace scrolls its chrome and preserves a usable content body',
+    (tester) async {
+      await _setSurface(tester, width: 640, height: 162);
+      await _pumpWorkspace(
+        tester,
+        service: _successfulService(),
+        enableProductionQueue: true,
+      );
+
+      final chrome = find.byKey(
+        const Key('revision3-localization-voice-workspace-chrome-scroll'),
+      );
+      expect(chrome, findsOneWidget);
+      expect(tester.getSize(chrome).height, lessThanOrEqualTo(81));
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      final projectTexts = find.byKey(
+        const Key('revision3-localization-voice-mode-project-texts'),
+      );
+      await tester.ensureVisible(projectTexts);
+      await tester.pumpAndSettle();
+      expect(projectTexts.hitTestable(), findsOneWidget);
+      await tester.tap(projectTexts);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-localization-text-browser')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'speaker search explains a Project text result and keeps locales visible',
     (tester) async {
       await _setSurface(tester, width: 360, height: 900);

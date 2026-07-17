@@ -447,6 +447,55 @@ void main() {
   });
 
   testWidgets(
+    'host focus node targets the query without starting source loads',
+    (tester) async {
+      var loads = 0;
+      final controller = Revision3GlobalContentSearchController(
+        loadThisMod: () async {
+          loads++;
+          return _contentIndex(const <String>[]);
+        },
+        loadBaseGame: () async {
+          loads++;
+          return _baseCatalog();
+        },
+        loadInstalled: () async {
+          loads++;
+          return _packageIndex(const <String>[]);
+        },
+      );
+      final focusNode = FocusNode();
+      addTearDown(controller.dispose);
+      addTearDown(focusNode.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Revision3GlobalContentSearchView(
+              controller: controller,
+              copy: _copy(),
+              callbacks: Revision3GlobalContentSearchCallbacks(
+                openThisModEntity: (_) {},
+                openThisModAsset: (_) {},
+                createBaseNpcDraft: (_) {},
+                createBaseQuestDraft: (_) {},
+                inspectInstalledDataAsset: (_) {},
+              ),
+              queryFocusNode: focusNode,
+            ),
+          ),
+        ),
+      );
+
+      focusNode.requestFocus();
+      await tester.pump();
+
+      expect(focusNode.hasFocus, isTrue);
+      expect(loads, 0);
+    },
+  );
+
+  testWidgets(
     'narrow layout searches explicitly and dispatches exact actions',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(320, 700));

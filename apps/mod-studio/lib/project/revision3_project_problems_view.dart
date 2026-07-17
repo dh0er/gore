@@ -742,7 +742,7 @@ class _ProblemsAssessmentStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    height: compact ? 72 : 112,
+    height: compact ? 76 : 112,
     child: ListView.separated(
       key: const Key('revision3-project-problems-assessments'),
       scrollDirection: Axis.horizontal,

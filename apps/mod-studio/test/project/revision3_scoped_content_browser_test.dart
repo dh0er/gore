@@ -46,6 +46,19 @@ void main() {
     );
   });
 
+  testWidgets('Search-all deep link never mounts This mod first', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const _Harness(initialScope: Revision3ScopedContentScope.allSources),
+    );
+
+    expect(find.text('ALL SOURCES BODY'), findsOneWidget);
+    expect(find.text('THIS MOD BODY', skipOffstage: false), findsNothing);
+    expect(find.text('BASE GAME BODY', skipOffstage: false), findsNothing);
+    expect(find.text('INSTALLED BODY', skipOffstage: false), findsNothing);
+  });
+
   testWidgets('retains state in every mounted scope while switching', (
     tester,
   ) async {
@@ -155,10 +168,170 @@ void main() {
 
     expect(find.text('THIS MOD TARGET'), findsOneWidget);
   });
+
+  testWidgets(
+    'buffered controller opens Search all, focuses query, and stays lazy',
+    (tester) async {
+      final controller = Revision3ScopedContentBrowserController(
+        projectIdentity: 'project-a',
+      );
+      final queryFocus = FocusNode();
+      addTearDown(controller.dispose);
+      addTearDown(queryFocus.dispose);
+      var sourceLoads = 0;
+      final focusQuery = queryFocus.requestFocus;
+
+      final opened = controller.openSearchAll();
+      await tester.pumpWidget(
+        _Harness(
+          controller: controller,
+          onAllSourcesActivated: focusQuery,
+          allSources: _SearchAllProbe(
+            focusNode: queryFocus,
+            onSourceLoad: () => sourceLoads++,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(await opened, isTrue);
+      expect(
+        find.byKey(const Key('revision3-scoped-content-search-query')),
+        findsOneWidget,
+      );
+      expect(queryFocus.hasFocus, isTrue);
+      expect(sourceLoads, 0);
+
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      expect(sourceLoads, 0, reason: 'an empty query never starts a load');
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-scoped-content-search-query')),
+        'asghan',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      expect(sourceLoads, 1);
+    },
+  );
+
+  testWidgets('attached controller supersedes a scheduled Search-all handoff', (
+    tester,
+  ) async {
+    final controller = Revision3ScopedContentBrowserController(
+      projectIdentity: 'project-a',
+    );
+    addTearDown(controller.dispose);
+    var focusHandoffs = 0;
+    await tester.pumpWidget(
+      _Harness(
+        controller: controller,
+        onAllSourcesActivated: () => focusHandoffs++,
+      ),
+    );
+
+    final superseded = controller.openSearchAll();
+    final newest = controller.openSearchAll();
+    await tester.pump();
+
+    expect(await superseded, isFalse);
+    expect(await newest, isTrue);
+    expect(focusHandoffs, 1);
+    expect(find.text('ALL SOURCES BODY'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('project identity change invalidates a late focus handoff', (
+    tester,
+  ) async {
+    final key = GlobalKey<_HarnessState>();
+    final controller = Revision3ScopedContentBrowserController(
+      projectIdentity: 'project-a',
+    );
+    addTearDown(controller.dispose);
+    var focusHandoffs = 0;
+    void focusQuery() => focusHandoffs++;
+    await tester.pumpWidget(
+      _Harness(
+        key: key,
+        controller: controller,
+        onAllSourcesActivated: focusQuery,
+      ),
+    );
+
+    final opened = controller.openSearchAll();
+    key.currentState!.openDifferentProject();
+    await tester.pump();
+
+    expect(await opened, isFalse);
+    expect(focusHandoffs, 0);
+    expect(find.text('THIS MOD BODY'), findsOneWidget);
+    expect(find.text('ALL SOURCES BODY', skipOffstage: false), findsNothing);
+    expect(controller.projectIdentity, 'project-a');
+    expect(
+      await controller.openSearchAll(),
+      isFalse,
+      reason: 'the old project-bound controller cannot follow project-b',
+    );
+  });
+
+  testWidgets('disposed controller suppresses a scheduled focus handoff', (
+    tester,
+  ) async {
+    final controller = Revision3ScopedContentBrowserController(
+      projectIdentity: 'project-a',
+    );
+    var focusHandoffs = 0;
+    void focusQuery() => focusHandoffs++;
+    await tester.pumpWidget(
+      _Harness(controller: controller, onAllSourcesActivated: focusQuery),
+    );
+
+    final opened = controller.openSearchAll();
+    controller.dispose();
+    await tester.pump();
+
+    expect(await opened, isFalse);
+    expect(await controller.openSearchAll(), isFalse);
+    expect(focusHandoffs, 0);
+  });
+
+  testWidgets('browser detach suppresses a scheduled focus handoff', (
+    tester,
+  ) async {
+    final controller = Revision3ScopedContentBrowserController(
+      projectIdentity: 'project-a',
+    );
+    addTearDown(controller.dispose);
+    var focusHandoffs = 0;
+    void focusQuery() => focusHandoffs++;
+    await tester.pumpWidget(
+      _Harness(controller: controller, onAllSourcesActivated: focusQuery),
+    );
+
+    final opened = controller.openSearchAll();
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump();
+
+    expect(await opened, isFalse);
+    expect(focusHandoffs, 0);
+  });
 }
 
 class _Harness extends StatefulWidget {
-  const _Harness({super.key});
+  const _Harness({
+    this.controller,
+    this.onAllSourcesActivated,
+    this.allSources,
+    this.initialScope = Revision3ScopedContentScope.thisMod,
+    super.key,
+  });
+
+  final Revision3ScopedContentBrowserController? controller;
+  final VoidCallback? onAllSourcesActivated;
+  final Widget? allSources;
+  final Revision3ScopedContentScope initialScope;
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -187,8 +360,32 @@ class _HarnessState extends State<_Harness> {
         thisMod: _ScopeProbe(name: 'THIS MOD', revision: _revision),
         baseGame: _ScopeProbe(name: 'BASE GAME', revision: _revision),
         installed: _ScopeProbe(name: 'INSTALLED', revision: _revision),
-        allSources: _ScopeProbe(name: 'ALL SOURCES', revision: _revision),
+        allSources:
+            widget.allSources ??
+            _ScopeProbe(name: 'ALL SOURCES', revision: _revision),
+        controller: widget.controller,
+        onAllSourcesActivated: widget.onAllSourcesActivated,
+        initialScope: widget.initialScope,
       ),
+    ),
+  );
+}
+
+class _SearchAllProbe extends StatelessWidget {
+  const _SearchAllProbe({required this.focusNode, required this.onSourceLoad});
+
+  final FocusNode focusNode;
+  final VoidCallback onSourceLoad;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: TextField(
+      key: const Key('revision3-scoped-content-search-query'),
+      focusNode: focusNode,
+      textInputAction: TextInputAction.search,
+      onSubmitted: (query) {
+        if (query.trim().isNotEmpty) onSourceLoad();
+      },
     ),
   );
 }

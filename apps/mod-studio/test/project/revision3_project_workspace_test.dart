@@ -128,6 +128,138 @@ void main() {
     expect(find.text('Localization & Voice fixture'), findsOneWidget);
   });
 
+  testWidgets(
+    'persistent chrome follows primary and secondary navigation above pages',
+    (tester) async {
+      _setSurface(tester, const Size(1000, 800));
+      await _pumpWorkspace(
+        tester,
+        chromeBuilder: (context, location) => Material(
+          child: Text(
+            'chrome:${location.section.name}:'
+            '${location.secondary ?? 'none'}',
+          ),
+        ),
+        destinations: _destinations(
+          pageBuilder: (section) =>
+              (context, location) => Center(
+                child: FilledButton(
+                  key: ValueKey('set-secondary-${section.name}'),
+                  onPressed: () => Revision3ProjectWorkspace.navigate(
+                    context,
+                    Revision3ProjectWorkspaceLocation(
+                      section,
+                      secondary: 'details',
+                    ),
+                  ),
+                  child: Text('${section.name} page'),
+                ),
+              ),
+        ),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-project-workspace-chrome')),
+        findsOneWidget,
+      );
+      expect(find.text('chrome:home:none'), findsOneWidget);
+      final chromeTop = tester.getTopLeft(
+        find.byKey(const Key('revision3-project-workspace-chrome')),
+      );
+      final pageTop = tester.getTopLeft(find.text('home page'));
+      expect(chromeTop.dy, lessThan(pageTop.dy));
+
+      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
+      expect(find.text('chrome:story:none'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('set-secondary-story')));
+      await tester.pumpAndSettle();
+      expect(find.text('chrome:story:details'), findsOneWidget);
+
+      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.home);
+      expect(find.text('chrome:home:none'), findsOneWidget);
+      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
+      expect(find.text('chrome:story:details'), findsOneWidget);
+    },
+  );
+
+  testWidgets('persistent chrome follows compact popup navigation', (
+    tester,
+  ) async {
+    _setSurface(tester, const Size(360, 480));
+    await _pumpWorkspace(
+      tester,
+      chromeBuilder: (context, location) => SizedBox(
+        width: double.infinity,
+        child: Text('compact chrome:${location.section.name}'),
+      ),
+    );
+
+    expect(find.text('compact chrome:home'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const Key('revision3-project-workspace-narrow-menu')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(_navigationKey(Revision3ProjectWorkspaceSection.history)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('compact chrome:history'), findsOneWidget);
+    expect(find.text('History fixture'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('oversized persistent chrome scrolls and preserves page space', (
+    tester,
+  ) async {
+    _setSurface(tester, const Size(360, 240));
+    await _pumpWorkspace(
+      tester,
+      chromeBuilder: (context, location) => const SizedBox(
+        height: 240,
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: Text('chrome bottom action'),
+        ),
+      ),
+    );
+
+    final chromeScroll = find.byKey(Revision3ProjectWorkspace.chromeScrollKey);
+    expect(chromeScroll, findsOneWidget);
+    expect(tester.getSize(chromeScroll).height, 80);
+    expect(find.text('home page / secondary:none'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.drag(chromeScroll, const Offset(0, -220));
+    await tester.pumpAndSettle();
+    expect(find.text('chrome bottom action').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('project switch resets an oversized chrome scroll position', (
+    tester,
+  ) async {
+    _setSurface(tester, const Size(360, 300));
+    await tester.pumpWidget(
+      const MaterialApp(home: _ChromeScrollIdentityHarness()),
+    );
+
+    final chromeScroll = find.byKey(Revision3ProjectWorkspace.chromeScrollKey);
+    await tester.drag(chromeScroll, const Offset(0, -220));
+    await tester.pumpAndSettle();
+    expect(_chromeScrollOffset(tester, chromeScroll), greaterThan(0));
+    expect(find.text('chrome bottom A').hitTestable(), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('change-chrome-project')));
+    await tester.pumpAndSettle();
+
+    expect(_chromeScrollOffset(tester, chromeScroll), 0);
+    expect(find.text('chrome top B').hitTestable(), findsOneWidget);
+    expect(find.text('home-B'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('desktop rail remains scroll-safe at short height', (
     tester,
   ) async {
@@ -279,6 +411,9 @@ void main() {
       await tester.tap(find.byKey(const Key('open-content-secondary')));
       await tester.pumpAndSettle();
       expect(find.text('content-A secondary:data-assets'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('chrome-counter-increment')));
+      await tester.pump();
+      expect(find.text('chrome:content-A:data-assets count:1'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('change-project-identity')));
       await tester.pump();
@@ -288,6 +423,8 @@ void main() {
       expect(events, containsAll(['dispose:home-A', 'dispose:content-A']));
       expect(events, contains('init:home-B'));
       expect(events, isNot(contains('init:content-B')));
+      expect(find.text('chrome:home-B:none count:0'), findsOneWidget);
+      expect(find.text('chrome:content-A:data-assets count:1'), findsNothing);
       expect(
         tester
             .widget<NavigationRail>(find.byType(NavigationRail))
@@ -308,12 +445,14 @@ void _setSurface(WidgetTester tester, Size size) {
 Future<void> _pumpWorkspace(
   WidgetTester tester, {
   List<Revision3ProjectWorkspaceDestination>? destinations,
+  Revision3ProjectWorkspaceChromeBuilder? chromeBuilder,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
       body: Revision3ProjectWorkspace(
         projectIdentity: 'project-fixture',
         destinations: destinations ?? _destinations(),
+        chromeBuilder: chromeBuilder,
       ),
     ),
   ),
@@ -348,6 +487,13 @@ Future<void> _tapDesktopSection(
   await tester.tap(find.byKey(_navigationKey(section)));
   await tester.pumpAndSettle();
 }
+
+double _chromeScrollOffset(WidgetTester tester, Finder chromeScroll) => tester
+    .state<ScrollableState>(
+      find.descendant(of: chromeScroll, matching: find.byType(Scrollable)),
+    )
+    .position
+    .pixels;
 
 Key _navigationKey(Revision3ProjectWorkspaceSection section) =>
     Key('revision3-project-workspace-nav-${_sectionKey(section)}');
@@ -553,6 +699,8 @@ class _IdentityHarnessState extends State<_IdentityHarness> {
         Expanded(
           child: Revision3ProjectWorkspace(
             projectIdentity: project,
+            chromeBuilder: (context, location) =>
+                _IdentityChrome(project: project, location: location),
             destinations: _destinations(
               pageBuilder: (section) => (context, location) {
                 final id = '${section.name}-$project';
@@ -574,6 +722,35 @@ class _IdentityHarnessState extends State<_IdentityHarness> {
         ),
       ],
     ),
+  );
+}
+
+class _IdentityChrome extends StatefulWidget {
+  const _IdentityChrome({required this.project, required this.location});
+
+  final String project;
+  final Revision3ProjectWorkspaceLocation location;
+
+  @override
+  State<_IdentityChrome> createState() => _IdentityChromeState();
+}
+
+class _IdentityChromeState extends State<_IdentityChrome> {
+  int count = 0;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Text(
+        'chrome:${widget.location.section.name}-${widget.project}:'
+        '${widget.location.secondary ?? 'none'} count:$count',
+      ),
+      IconButton(
+        key: const Key('chrome-counter-increment'),
+        onPressed: () => setState(() => count++),
+        icon: const Icon(Icons.add),
+      ),
+    ],
   );
 }
 
@@ -621,6 +798,52 @@ class _IdentityHomePageState extends State<_IdentityHomePage> {
             ),
           ),
           child: const Text('Open content fixture'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ChromeScrollIdentityHarness extends StatefulWidget {
+  const _ChromeScrollIdentityHarness();
+
+  @override
+  State<_ChromeScrollIdentityHarness> createState() =>
+      _ChromeScrollIdentityHarnessState();
+}
+
+class _ChromeScrollIdentityHarnessState
+    extends State<_ChromeScrollIdentityHarness> {
+  String project = 'A';
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Column(
+      children: [
+        FilledButton(
+          key: const Key('change-chrome-project'),
+          onPressed: () => setState(() => project = 'B'),
+          child: const Text('Change chrome project'),
+        ),
+        Expanded(
+          child: Revision3ProjectWorkspace(
+            projectIdentity: project,
+            chromeBuilder: (context, location) => SizedBox(
+              height: 240,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('chrome top $project'),
+                  Text('chrome bottom $project'),
+                ],
+              ),
+            ),
+            destinations: _destinations(
+              pageBuilder: (section) =>
+                  (context, location) =>
+                      Center(child: Text('${section.name}-$project')),
+            ),
+          ),
         ),
       ],
     ),
