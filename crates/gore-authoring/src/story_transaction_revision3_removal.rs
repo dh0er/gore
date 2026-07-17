@@ -617,6 +617,18 @@ fn validate_isolated_removal_closure(
                     // drops the edges but deliberately leaves shared DialogLine/localization/voice
                     // entities untouched.
                 }
+                (
+                    source,
+                    Revision3ContentReferenceRoleV1::NpcGreetingLine,
+                    _,
+                    EntityKind::DialogLine,
+                ) if source == request.draft_id
+                    && request.draft_kind == Revision3StoryDraftRemovalKindV1::NpcDraft =>
+                {
+                    // Greeting bindings are authoring-only outgoing edges. Removing their NPC
+                    // drops the edges but deliberately leaves shared DialogLine/localization/voice
+                    // entities untouched.
+                }
                 _ if reference.target.entity_id == request.draft_id => {
                     return Err(ClosureBlocker::DraftReferenced {
                         source_entity: source.id,
@@ -755,9 +767,9 @@ mod tests {
 
     use super::*;
     use crate::model_revision3::{
-        DialogLine, Entity, LocalizationEntry, NpcDraft, NpcDraftInput, NpcParentClassInput,
-        QuestCollisionArtifactRef, QuestDraft, QuestDraftInput, QuestGiverInput, QuestParentInput,
-        QuestTranscriptBindingV1, SchemaRevisionV3, TypedRef,
+        DialogLine, Entity, LocalizationEntry, NpcDraft, NpcDraftInput, NpcGreetingBindingV1,
+        NpcParentClassInput, QuestCollisionArtifactRef, QuestDraft, QuestDraftInput,
+        QuestGiverInput, QuestParentInput, QuestTranscriptBindingV1, SchemaRevisionV3, TypedRef,
     };
     use crate::{
         AssetMeta, AssetStoreIndex, ContentSeal, FormatV2, ProjectMeta, Sha256Digest,
@@ -889,6 +901,7 @@ mod tests {
                 module_id,
                 EntityKind::ScriptModule,
             ),
+            greetings: Vec::new(),
         };
         let module = draft.regenerate_script_module(owner.clone()).unwrap();
         project.entities.insert(
@@ -1168,6 +1181,75 @@ mod tests {
             evaluate(&fixture, &basis, &request(&fixture)).unwrap()
         else {
             panic!("Quest transcript outgoing edge blocked pair removal")
+        };
+
+        assert!(!outcome.project.entities.contains_key(&fixture.draft_id));
+        assert!(!outcome.project.entities.contains_key(&fixture.module_id));
+        assert_eq!(
+            outcome.project.entities.get(&line_id),
+            basis.entities.get(&line_id)
+        );
+        assert_eq!(
+            outcome.project.entities.get(&localization_id),
+            basis.entities.get(&localization_id)
+        );
+    }
+
+    #[test]
+    fn npc_removal_drops_outgoing_greeting_edges_without_deleting_shared_content() {
+        let mut fixture = npc_fixture();
+        let localization_id = entity_id(0x83);
+        let line_id = entity_id(0x84);
+        fixture.project.entities.insert(
+            localization_id,
+            Entity {
+                id: localization_id,
+                display_name: "Shared NPC greeting text".to_owned(),
+                origin: new_origin("GORE_SHARED_NPC_GREETING_TEXT"),
+                revision: 4,
+                payload: EntityPayload::LocalizationEntry(LocalizationEntry {
+                    loc_id: "GORE_SHARED_NPC_GREETING_TEXT_LOC".to_owned(),
+                    texts: BTreeMap::new(),
+                }),
+            },
+        );
+        fixture.project.entities.insert(
+            line_id,
+            Entity {
+                id: line_id,
+                display_name: "Shared NPC greeting line".to_owned(),
+                origin: new_origin("GORE_SHARED_NPC_GREETING_LINE"),
+                revision: 6,
+                payload: EntityPayload::DialogLine(DialogLine {
+                    localization: TypedRef::new(
+                        fixture.project.project_id,
+                        localization_id,
+                        EntityKind::LocalizationEntry,
+                    ),
+                    speaker_hint: Some("Asghan".to_owned()),
+                    voice_slots: BTreeMap::new(),
+                }),
+            },
+        );
+        let EntityPayload::NpcDraft(npc) = &mut fixture
+            .project
+            .entities
+            .get_mut(&fixture.draft_id)
+            .unwrap()
+            .payload
+        else {
+            panic!("fixture NPC kind")
+        };
+        npc.greetings.push(NpcGreetingBindingV1 {
+            line: TypedRef::new(fixture.project.project_id, line_id, EntityKind::DialogLine),
+        });
+        fixture.project.validate_closed_model().unwrap();
+        let basis = fixture.project.clone();
+
+        let Revision3StoryDraftRemovalEvaluationV1::Applied(outcome) =
+            evaluate(&fixture, &basis, &request(&fixture)).unwrap()
+        else {
+            panic!("NPC greeting outgoing edge blocked pair removal")
         };
 
         assert!(!outcome.project.entities.contains_key(&fixture.draft_id));

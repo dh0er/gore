@@ -66,6 +66,8 @@ import 'project/revision3_quest_outline_dialog.dart';
 import 'project/revision3_quest_source_inspection_dialog.dart';
 import 'project/revision3_quest_transcript_authoring.dart';
 import 'project/revision3_quest_transcript_panel.dart';
+import 'project/revision3_npc_greeting_authoring.dart';
+import 'project/revision3_npc_dialog_voice_panel.dart';
 import 'project/revision3_quest_transitions_authoring.dart';
 import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
@@ -1324,7 +1326,47 @@ class _HomePageState extends ConsumerState<HomePage>
                     expectedHead: expectedHead,
                     plan: plan,
                   ),
+          publishNpcGreetingReplace:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required expectedHead,
+                required plan,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .replaceCurrentRevision3NpcGreeting(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: expectedHead,
+                    plan: plan,
+                  ),
+          publishNpcGreetingCreate:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required expectedHead,
+                required plan,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .createCurrentRevision3NpcGreetingLine(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: expectedHead,
+                    plan: plan,
+                  ),
           isQuestTranscriptCheckpointCurrent:
+              ({required projectId, required projectRevision}) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                return latest is ManagedRevision3CurrentProjectState &&
+                    latest.root.path == currentProject.root.path &&
+                    latest.projectId == currentProject.projectId &&
+                    latest.projectId == projectId &&
+                    latest.projectRevision == projectRevision &&
+                    !latest.requiresReopen;
+              },
+          isNpcGreetingCheckpointCurrent:
               ({required projectId, required projectRevision}) {
                 final latest = ref.read(currentProjectCoordinatorProvider);
                 return latest is ManagedRevision3CurrentProjectState &&
@@ -2137,6 +2179,9 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishQuestTranscriptReplace,
     required this.publishQuestTranscriptCreate,
     required this.isQuestTranscriptCheckpointCurrent,
+    required this.publishNpcGreetingReplace,
+    required this.publishNpcGreetingCreate,
+    required this.isNpcGreetingCheckpointCurrent,
     required this.publishVoiceTake,
     required this.planVoiceFolder,
     required this.publishVoiceFolder,
@@ -2212,6 +2257,10 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3QuestTranscriptCreatePublisher publishQuestTranscriptCreate;
   final bool Function({required String projectId, required int projectRevision})
   isQuestTranscriptCheckpointCurrent;
+  final Revision3NpcGreetingReplacePublisher publishNpcGreetingReplace;
+  final Revision3NpcGreetingCreatePublisher publishNpcGreetingCreate;
+  final bool Function({required String projectId, required int projectRevision})
+  isNpcGreetingCheckpointCurrent;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceFolderNativePlanner planVoiceFolder;
   final Revision3VoiceFolderNativePublisher publishVoiceFolder;
@@ -2313,6 +2362,10 @@ class _ManagedRevision3ProjectViewState
       widget.publishQuestTranscriptReplace;
   Revision3QuestTranscriptCreatePublisher get publishQuestTranscriptCreate =>
       widget.publishQuestTranscriptCreate;
+  Revision3NpcGreetingReplacePublisher get publishNpcGreetingReplace =>
+      widget.publishNpcGreetingReplace;
+  Revision3NpcGreetingCreatePublisher get publishNpcGreetingCreate =>
+      widget.publishNpcGreetingCreate;
   Revision3VoiceTechnicalPublisher get publishVoiceTake =>
       widget.publishVoiceTake;
   Revision3VoiceFolderNativePlanner get planVoiceFolder =>
@@ -3655,6 +3708,20 @@ class _ManagedRevision3ProjectViewState
             selectedLineId: selectedLineId,
             onSelectedLineChanged: onSelectedLineChanged,
           ),
+      npcDialogVoiceBuilder:
+          ({
+            required index,
+            required npc,
+            required selectedLineId,
+            required onSelectedLineChanged,
+          }) => _buildNpcDialogVoicePanel(
+            context,
+            l10n,
+            index: index,
+            npc: npc,
+            selectedLineId: selectedLineId,
+            onSelectedLineChanged: onSelectedLineChanged,
+          ),
       onOpenExternalEntity: (entityId) =>
           _openStoryExternalEntity(context, entityId),
       onOpenExternalAsset: (assetSha256) =>
@@ -3856,6 +3923,133 @@ class _ManagedRevision3ProjectViewState
           },
       publishReplace: publishQuestTranscriptReplace,
       publishCreate: publishQuestTranscriptCreate,
+    );
+  }
+
+  Widget _buildNpcDialogVoicePanel(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required Revision3ContentIndex index,
+    required Revision3ContentEntity npc,
+    required String? selectedLineId,
+    required ValueChanged<String?> onSelectedLineChanged,
+  }) {
+    final basisProjectId = project.projectId;
+    final basisProjectRevision = project.projectRevision;
+    final basisHead = project.head;
+    final german = l10n.localeName.startsWith('de');
+    final copy = german
+        ? Revision3NpcDialogVoicePanelCopy.german
+        : Revision3NpcDialogVoicePanelCopy.english;
+    final mutationsEnabled = _storyMutationsEnabled;
+    final mutationDisabledReason = project.requiresReopen
+        ? copy.requiresReopen
+        : widget.managedWorkspaceDirty
+        ? (german
+              ? 'Speichere oder verwirf die offenen Text\u00e4nderungen, bevor du die NPC-Begr\u00fc\u00dfungen bearbeitest.'
+              : 'Save or discard the open text edits before changing NPC greetings.')
+        : widget.recoveryBusy
+        ? (german
+              ? 'Warte, bis die laufende Projektaktion abgeschlossen ist.'
+              : 'Wait for the current project action to finish.')
+        : null;
+    final service = _createNpcGreetingService(
+      basisProjectId: basisProjectId,
+      basisProjectRevision: basisProjectRevision,
+      basisHead: basisHead,
+    );
+    return Revision3NpcDialogVoicePanel(
+      projectId: index.projectId,
+      projectRevision: index.projectRevision,
+      projectCheckpointIdentity: basisHead.canonicalJson,
+      npcId: npc.id,
+      npcRevision: npc.revision,
+      service: service,
+      selectedLineId: selectedLineId,
+      onSelectedLineChanged: onSelectedLineChanged,
+      onCreateLine:
+          ({
+            required projection,
+            required insertionIndex,
+            required publishTechnicalPlan,
+          }) => _openNpcGreetingLineEntry(
+            context,
+            projection: projection,
+            publishTechnicalPlan: publishTechnicalPlan,
+          ),
+      onOpenTextVoice: ({required projection, required row, required locale}) =>
+          _openNpcGreetingTextVoice(
+            context,
+            projection: projection,
+            row: row,
+            locale: locale,
+          ),
+      onPublished: (publication) =>
+          _onNpcGreetingPublished(context, publication),
+      mutationsEnabled: mutationsEnabled,
+      mutationDisabledReason: mutationDisabledReason,
+      copy: copy,
+    );
+  }
+
+  Revision3NpcGreetingAuthoringService _createNpcGreetingService({
+    required String basisProjectId,
+    required int basisProjectRevision,
+    required AuthoringWorkingHead basisHead,
+  }) {
+    final loadContentForBasis = loadContentIndex;
+    final readLocalizationForBasis = readDialogLocalization;
+    return Revision3NpcGreetingAuthoringService(
+      expectedHead: basisHead,
+      loadContentIndex: () async {
+        final loaded = await loadContentForBasis();
+        if (!mounted ||
+            project.projectId != basisProjectId ||
+            project.projectRevision != basisProjectRevision ||
+            project.head.canonicalJson != basisHead.canonicalJson ||
+            loaded.projectId != basisProjectId ||
+            loaded.projectRevision != basisProjectRevision) {
+          throw const Revision3NpcGreetingStaleCheckpointException();
+        }
+        return loaded;
+      },
+      readExactLocalization:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedHead,
+            required localizationId,
+            required expectedLocalizationRevision,
+            required expectedLocId,
+          }) async {
+            if (expectedProjectId != basisProjectId ||
+                expectedProjectRevision != basisProjectRevision ||
+                expectedHead.canonicalJson != basisHead.canonicalJson) {
+              throw const Revision3NpcGreetingStaleCheckpointException();
+            }
+            try {
+              final loaded = await readLocalizationForBasis(
+                expectedProjectId: expectedProjectId,
+                expectedProjectRevision: expectedProjectRevision,
+                localizationId: localizationId,
+                expectedLocalizationRevision: expectedLocalizationRevision,
+                expectedLocId: expectedLocId,
+              );
+              if (!mounted ||
+                  project.projectId != basisProjectId ||
+                  project.projectRevision != basisProjectRevision ||
+                  project.head.canonicalJson != basisHead.canonicalJson) {
+                throw const Revision3NpcGreetingStaleCheckpointException();
+              }
+              return loaded;
+            } on Revision3DialogLineEntryRequiresReopenException {
+              throw const Revision3NpcGreetingRequiresReopenException();
+            } on Revision3DialogLineEntryStaleCheckpointException {
+              throw const Revision3NpcGreetingStaleCheckpointException();
+            }
+          },
+      publishReplace: publishNpcGreetingReplace,
+      publishCreate: publishNpcGreetingCreate,
     );
   }
 
@@ -4345,6 +4539,114 @@ class _ManagedRevision3ProjectViewState
     );
     await WidgetsBinding.instance.endOfFrame;
     if (!context.mounted || !_isCurrentQuestTranscriptProjection(projection)) {
+      return false;
+    }
+    return _localizationVoiceWorkspaceController.openExactTarget(
+      Revision3LocalizationVoiceTarget(
+        projectId: projection.projectId,
+        projectRevision: projection.projectRevision,
+        projectCheckpointIdentity: projection.checkpointIdentity,
+        localizationStableKey: row.localizationStableKey,
+        lineId: row.lineId,
+        locale: locale,
+      ),
+    );
+  }
+
+  bool _isCurrentNpcGreetingProjection(
+    Revision3NpcGreetingProjection projection,
+  ) =>
+      mounted &&
+      projection.projectId == project.projectId &&
+      projection.projectRevision == project.projectRevision &&
+      projection.checkpointIdentity == project.head.canonicalJson;
+
+  Future<bool> _openNpcGreetingLineEntry(
+    BuildContext context, {
+    required Revision3NpcGreetingProjection projection,
+    required Revision3DialogLineEntryTechnicalPublisher publishTechnicalPlan,
+  }) async {
+    if (project.requiresReopen ||
+        widget.managedWorkspaceDirty ||
+        widget.recoveryBusy ||
+        !_isCurrentNpcGreetingProjection(projection)) {
+      return false;
+    }
+    final l10n = AppLocalizations.of(context);
+    final result = await showDialog<Revision3DialogLineEntryDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Revision3DialogLineEntryDialog(
+        service: Revision3DialogLineEntryAuthoringService(
+          loadContentIndex: loadContentIndex,
+          readExactLocalization: readDialogLocalization,
+          publishTechnicalPlan: publishTechnicalPlan,
+        ),
+        copy: _dialogLineEntryCopy(l10n),
+        allowOpenVoiceNext: false,
+      ),
+    );
+    if (!context.mounted || result == null) return false;
+    final publication = result.publication;
+    if (publication.projectId != projection.projectId ||
+        publication.projectRevision != projection.projectRevision + 1 ||
+        !widget.isNpcGreetingCheckpointCurrent(
+          projectId: publication.projectId,
+          projectRevision: publication.projectRevision,
+        )) {
+      throw const Revision3NpcGreetingRequiresReopenException();
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          l10n.managedActionNewDialogLineSaved(publication.projectRevision),
+        ),
+      ),
+    );
+    return true;
+  }
+
+  Future<void> _onNpcGreetingPublished(
+    BuildContext context,
+    Revision3NpcGreetingPublication publication,
+  ) async {
+    if (!widget.isNpcGreetingCheckpointCurrent(
+      projectId: publication.projectId,
+      projectRevision: publication.projectRevision,
+    )) {
+      throw const Revision3NpcGreetingRequiresReopenException();
+    }
+    if (!context.mounted) return;
+    final german = AppLocalizations.of(context).localeName.startsWith('de');
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          german
+              ? 'NPC-Begr\u00fc\u00dfungen in Projektrevision ${publication.projectRevision} gespeichert. Das sind Authoring-Metadaten; Build bleibt blockiert und Runtime unqualifiziert.'
+              : 'NPC greetings saved in project revision ${publication.projectRevision}. These are authoring metadata; build remains blocked and runtime remains unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<bool> _openNpcGreetingTextVoice(
+    BuildContext context, {
+    required Revision3NpcGreetingProjection projection,
+    required Revision3NpcGreetingRow row,
+    required String locale,
+  }) async {
+    if (!_isCurrentNpcGreetingProjection(projection) ||
+        !projection.rows.any((candidate) => identical(candidate, row))) {
+      return false;
+    }
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.localizationVoice,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!context.mounted || !_isCurrentNpcGreetingProjection(projection)) {
       return false;
     }
     return _localizationVoiceWorkspaceController.openExactTarget(

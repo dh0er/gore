@@ -230,9 +230,10 @@ sheet. Its tabs are **Profile**, **Story**, **Routine**, **Inventory**, **Dialog
 Only authority that already exists is connected. **Profile** shows the friendly
 display name and exposes the bounded **Edit name & archetype** action described
 below; **Problems & Checks** owns the separate exact-current profile/source
-inspection. The Story, Routine, Inventory, and Dialog & Voice tabs explicitly
-say that those relationships are not yet modeled for NPC Drafts; they do not
-stage placeholder data or generate source. References shows current-index
+inspection. The Story, Routine, and Inventory tabs explicitly say that those
+relationships are not yet modeled for NPC Drafts. Dialog & Voice now owns the
+bounded greeting-line metadata workflow described below; it does not stage a
+topic or generate playable runtime source. References shows current-index
 outgoing entity/asset links and derived same-project incoming links. Its problem
 count means unresolved projected references only, not build, spawn, runtime, or
 save readiness. The workbench therefore shows **Draft only**, **Build blocked**,
@@ -255,9 +256,10 @@ concepts for one exact-current managed `NpcDraft`:
 
 The normal form never exposes or edits the NPC/entity ID, ScriptModule ID,
 `UniqueName`, module namespace/path, generator/owner/origin identities, or raw
-parent class names. Visuals, stats, faction, inventory, routine, AI, dialog,
-Quest links, localization/voice, placement, and spawn remain separate unmodeled
-fields. Closing or navigating back with unsaved changes requires an explicit
+parent class names. Visuals, stats, faction, inventory, routine, AI, general
+conversation/Quest links, placement, and spawn remain separate unmodeled
+fields. Existing greeting bindings are preserved exactly by both name-only and
+archetype edits. Closing or navigating back with unsaved changes requires an explicit
 discard decision.
 
 Studio loads an exact NPC/module seed and a fresh sealed Story+NPC catalog when
@@ -292,6 +294,46 @@ managed project. It performs no compiler or production build, deploy/undeploy,
 game or save mutation, class residence/discovery, spawn, runtime behavior, or
 qualification. A successful project edit therefore needs no game test and does
 not make the NPC playable.
+
+## Managed revision-3 NPC greeting lines V1
+
+The selected NPC's **Dialog & Voice** tab now exposes one responsive,
+plain-language greeting-line editor. It shows the authored order, friendly line
+and speaker labels, language coverage, exact lazy text previews, and Voice
+slot/take/selection coverage without rendering entity IDs, LocIDs, hashes, or
+paths. Authors can attach an existing intact project DialogLine, reorder or
+detach bindings, create a DialogLine plus localization and optional empty Voice
+slot atomically at the selected position, and open that exact line/language in
+the existing Localization & Voice workspace. The panel remains usable at 360
+logical pixels and 200% text scaling; its chrome and content scroll
+independently, mutations are single-flight, and stale/reopen-required authority
+fails closed.
+
+`NpcDraft.greetings` is optional authoring metadata outside the deterministic
+NPC generator input. Empty and migrated projects omit it and retain their old
+canonical bytes. Nonempty lists contain at most 256 unique, ordered,
+same-project DialogLine references. The content index emits the generated
+ScriptModule relationship first, then `npc_greeting_line` references in authored
+order plus an exact `greeting_count`. Detaching a binding never deletes the
+shared line, localization, Voice slots, takes, or assets. Removing the NPC drops
+only its outgoing greeting relationships and retains that shared content.
+
+The pure `apply_revision3_npc_greeting_edit_transaction_v1` operation either
+replaces the complete reviewed order or embeds one existing DialogLine creation
+and inserts it atomically. Both modes advance the project and selected NPC
+revisions exactly once while preserving the owned ScriptModule revision,
+source bytes, generator input/fingerprint, unrelated entities, assets, and
+target. The prepare-only FFI route has no game-root/install/save parameter,
+fully reopens the immutable candidate, repeats fixed-head guards, and returns
+only `blocked`, `runtime_unqualified`, `not_granted`, and `not_supported`
+status. Only the serialized managed session publishes through guarded
+fixed-head byte CAS, repair journaling, and a full published reopen.
+
+This metadata deliberately does **not** create an AngelScript topic, greeting
+condition, player choice, selection effect, Quest relationship, NPC runtime
+registration, build output, deployment, or playable conversation. It writes
+only the managed project and does not touch the game installation or a save.
+Those runtime and lowering mechanisms remain separate research gates.
 
 ## Managed revision-3 NPC Draft removal V1
 

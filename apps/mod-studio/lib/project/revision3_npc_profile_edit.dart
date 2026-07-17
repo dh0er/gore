@@ -729,11 +729,12 @@ _NpcProfileEditPair _npcProfileEditParsePair(
     'type',
     'authored_runtime_id',
   }, 'revision-3 NPC profile origin');
-  _authoringExactFields(npc.data, const <String>{
+  _authoringExactFields(npc.data, <String>{
     'generator_id',
     'generator_version',
     'input',
     'script_module',
+    if (npc.data.containsKey('greetings')) 'greetings',
   }, 'revision-3 NPC profile data');
   _authoringRevision3NpcRequireGenerator(npc.data, 'profile NPC data');
   final input = AuthoringRevision3NpcInspectionInput._fromJson(
@@ -879,6 +880,10 @@ void _npcProfileEditRequireExactDelta(
   if (candidatePair.displayName != request.displayName ||
       candidatePair.input.moduleNamespace != basePair.input.moduleNamespace ||
       candidatePair.input.uniqueName != basePair.input.uniqueName ||
+      !_authoringJsonDeepEquals(
+        basePair.npcData['greetings'],
+        candidatePair.npcData['greetings'],
+      ) ||
       !_authoringJsonDeepEquals(
         basePair.npcEntity['origin'],
         candidatePair.npcEntity['origin'],

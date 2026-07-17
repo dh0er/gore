@@ -519,11 +519,37 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
                 reason: error.to_string(),
             },
         )?;
-    let migrated = migrate_revision2_to_revision3(&nonquest_project).map_err(|error| {
+    let mut migrated = migrate_revision2_to_revision3(&nonquest_project).map_err(|error| {
         Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
             reason: error.to_string(),
         }
     })?;
+    // The revision-2 collision-source model cannot represent revision-3-only, authoring-only NPC
+    // greeting edges. Restore them after the generation-bearing roundtrip before proving exact
+    // split/recomposition; they do not contribute any Story collision identity.
+    for (id, source_entity) in &nonquest_revision3.entities {
+        let EntityPayload::NpcDraft(source_npc) = &source_entity.payload else {
+            continue;
+        };
+        if source_npc.greetings.is_empty() {
+            continue;
+        }
+        let Some(migrated_entity) = migrated.project.entities.get_mut(id) else {
+            return Err(
+                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
+                    reason: format!("NPC greeting restoration lost entity {id}"),
+                },
+            );
+        };
+        let EntityPayload::NpcDraft(migrated_npc) = &mut migrated_entity.payload else {
+            return Err(
+                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
+                    reason: format!("NPC greeting restoration changed entity kind at {id}"),
+                },
+            );
+        };
+        migrated_npc.greetings = source_npc.greetings.clone();
+    }
     if migrated.project != nonquest_revision3 {
         return Err(
             Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
@@ -1024,8 +1050,9 @@ impl Write for BoundedBytesWriter {
 mod tests {
     use super::*;
     use crate::model_revision3::{
-        DialogLine, Entity as Revision3Entity, LocalizationEntry, QuestCollisionArtifactRef,
-        QuestDraftInput, QuestTranscriptBindingV1,
+        DialogLine, Entity as Revision3Entity, LocalizationEntry, NpcDraft, NpcDraftInput,
+        NpcGreetingBindingV1, NpcParentClassInput, QuestCollisionArtifactRef, QuestDraftInput,
+        QuestTranscriptBindingV1,
     };
     use crate::{
         AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, QuestTransitionPlanV1, SchemaRevisionV3,
@@ -1295,6 +1322,116 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn npc_greetings_survive_exact_quest_collision_source_split_and_recomposition() {
+        let (mut project, head) = exact_project();
+        let npc_id = id(20);
+        let npc_module_id = id(21);
+        let localization_id = id(22);
+        let line_id = id(23);
+        let parent = |value: u8, runtime_class: &str| NpcParentClassInput {
+            generation: project.target.clone(),
+            source_seal: seal(value, 4_096),
+            catalog_layer: "base-game.g1r.npcs".to_owned(),
+            canonical_selector: format!("Catalog_{runtime_class}"),
+            runtime_class: runtime_class.to_owned(),
+        };
+        let owner = TypedRef::new(project.project_id, npc_id, EntityKind::NpcDraft);
+        let npc = NpcDraft {
+            generator_id: crate::LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
+            generator_version: crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+            input: NpcDraftInput {
+                target: project.target.clone(),
+                module_namespace: "GoreMods.Npcs.GreetingSource".to_owned(),
+                unique_name: "GORE_GREETING_SOURCE_NPC".to_owned(),
+                parent_character_definition: parent(0x31, "UCharacterDefinition_Asghan"),
+                parent_ai_agent_config: parent(0x32, "UAIAgentConfig_Asghan"),
+                parent_spawn_definition: parent(0x33, "USpawnAIAgentDefinition_Asghan"),
+            },
+            script_module: TypedRef::new(
+                project.project_id,
+                npc_module_id,
+                EntityKind::ScriptModule,
+            ),
+            greetings: vec![NpcGreetingBindingV1 {
+                line: TypedRef::new(project.project_id, line_id, EntityKind::DialogLine),
+            }],
+        };
+        let npc_module = npc.regenerate_script_module(owner.clone()).unwrap();
+        project.entities.insert(
+            localization_id,
+            Revision3Entity {
+                id: localization_id,
+                display_name: "NPC greeting localization".to_owned(),
+                origin: OriginRef::New {
+                    authored_runtime_id: "GORE_GREETING_SOURCE_LOC".to_owned(),
+                },
+                revision: 2,
+                payload: EntityPayload::LocalizationEntry(LocalizationEntry {
+                    loc_id: "GORE_GREETING_SOURCE".to_owned(),
+                    texts: BTreeMap::new(),
+                }),
+            },
+        );
+        project.entities.insert(
+            line_id,
+            Revision3Entity {
+                id: line_id,
+                display_name: "NPC greeting line".to_owned(),
+                origin: OriginRef::New {
+                    authored_runtime_id: "GORE_GREETING_SOURCE_LINE".to_owned(),
+                },
+                revision: 3,
+                payload: EntityPayload::DialogLine(DialogLine {
+                    localization: TypedRef::new(
+                        project.project_id,
+                        localization_id,
+                        EntityKind::LocalizationEntry,
+                    ),
+                    speaker_hint: Some("Asghan".to_owned()),
+                    voice_slots: BTreeMap::new(),
+                }),
+            },
+        );
+        project.entities.insert(
+            npc_id,
+            Revision3Entity {
+                id: npc_id,
+                display_name: "Greeting source NPC".to_owned(),
+                origin: OriginRef::New {
+                    authored_runtime_id: "GORE_GREETING_SOURCE_NPC".to_owned(),
+                },
+                revision: 4,
+                payload: EntityPayload::NpcDraft(npc),
+            },
+        );
+        project.entities.insert(
+            npc_module_id,
+            Revision3Entity {
+                id: npc_module_id,
+                display_name: "Greeting source NPC module".to_owned(),
+                origin: OriginRef::Generated {
+                    generator_id: crate::LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
+                    generator_version: crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+                    owner,
+                },
+                revision: 5,
+                payload: EntityPayload::ScriptModule(npc_module),
+            },
+        );
+        project.validate_closed_model().unwrap();
+
+        let prepared = prepare_exact_revision3_quest_collision_source_v2(&project, head)
+            .expect("authoring-only NPC greetings do not break exact Quest collision source");
+        assert_eq!(prepared.prior_quest_count(), 1);
+        assert_eq!(prepared.nonquest_basis().project().entities.len(), 4);
+        let revision2_npc = &prepared.nonquest_basis().project().entities[&npc_id];
+        assert!(matches!(
+            revision2_npc.payload,
+            crate::Revision2EntityPayload::NpcDraft(_)
+        ));
     }
 
     #[test]

@@ -64,6 +64,8 @@ import '../dataasset/dataasset_test_fixtures.dart';
 
 const _homeQuestTranscriptQuestId = '77777777777777777777777777777777';
 const _homeQuestTranscriptModuleId = '88888888888888888888888888888888';
+const _homeNpcGreetingNpcId = '79797979797979797979797979797979';
+const _homeNpcGreetingModuleId = '89898989898989898989898989898989';
 const _homeQuestOpeningRecipeQuestId = '67676767676767676767676767676767';
 const _homeQuestOpeningRecipeModuleId = '68686868686868686868686868686868';
 const _homeQuestOpeningRecipeTechnicalId = 'GORE_QUEST_OPENING_RECIPE';
@@ -2059,6 +2061,113 @@ void main() {
       expect(
         tester.widget<TextField>(germanText).controller?.text,
         'Homer ist noch nicht zurueck.',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'direct Story NPC greetings hand the exact line to Localization and Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const locId = 'GRD_263_ASGHAN_OPEN_INFO_06_02';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-npc-greetings'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _npcGreetingHomeIndex(revision: lease.projectRevision),
+        onDialogLocalizationRead:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationReadResult(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                nonemptyPreview: 'Willkommen am Mineneingang.',
+              );
+            },
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance greeting',
+                speaker: 'Asghan',
+                voiceSlotLocales: const <String>{'de'},
+                germanText: 'Willkommen am Mineneingang.',
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-story-workspace-entity-$_homeNpcGreetingNpcId'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final dialogVoiceTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$_homeNpcGreetingNpcId',
+        ),
+      );
+      await tester.ensureVisible(dialogVoiceTab);
+      await tester.tap(dialogVoiceTab);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-npc-dialog-voice-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('Willkommen am Mineneingang.'), findsOneWidget);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+      expect(find.text(_homeNpcGreetingNpcId), findsNothing);
+      final openTextVoice = find.byKey(
+        const Key('revision3-npc-greeting-open-text-voice'),
+      );
+      await tester.ensureVisible(openTextVoice);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(openTextVoice).onPressed, isNotNull);
+
+      await tester.tap(openTextVoice);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+      expect(managed.dialogLocalizationEditSeedCalls, greaterThanOrEqualTo(1));
+      final germanText = find.byKey(
+        const Key('revision3-localization-text-de'),
+      );
+      expect(germanText, findsOneWidget);
+      expect(
+        tester.widget<TextField>(germanText).controller?.text,
+        'Willkommen am Mineneingang.',
       );
       expect(tester.takeException(), isNull);
     },
@@ -11264,6 +11373,100 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
           role: 'origin_owner',
           targetId: _homeQuestTranscriptQuestId,
           expectedKind: 'quest_draft',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+  ]);
+  entities.sort(
+    (left, right) => (left['id']! as String).compareTo(right['id']! as String),
+  );
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Revision3ContentIndex _npcGreetingHomeIndex({required int revision}) {
+  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+  final counts = (json['entity_counts']! as Map).cast<String, Object?>();
+  counts['npc_draft'] = 1;
+  counts['script_module'] = 1;
+  final entities = (json['entities']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  final localization = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLocalizationId,
+  );
+  final localizationSummary = (localization['summary']! as Map)
+      .cast<String, Object?>();
+  final localizationData = (localizationSummary['data']! as Map)
+      .cast<String, Object?>();
+  localizationData['locales'] = <Object?>['de', 'en'];
+  entities.addAll(<Map<String, Object?>>[
+    <String, Object?>{
+      'id': _homeNpcGreetingNpcId,
+      'kind': 'npc_draft',
+      'display_name': 'Asghan',
+      'revision': 4,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'OM_GRD_Asghan_263',
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': 'OM_GRD_Asghan_263',
+          'module_namespace': 'PROJECT.NPCS.ASGHAN',
+          'parent_character_definition': 'C_HUMAN',
+          'parent_ai_agent_config': 'AIV_HUMAN',
+          'parent_spawn_definition': 'SPAWN_HUMAN',
+          'greeting_count': 1,
+        },
+      },
+      'references': <Object?>[
+        _homeContentReference(
+          role: 'draft_script_module',
+          targetId: _homeNpcGreetingModuleId,
+          expectedKind: 'script_module',
+        ),
+        _homeContentReference(
+          role: 'npc_greeting_line',
+          targetId: revision3VoiceContentLineId,
+          expectedKind: 'dialog_line',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': _homeNpcGreetingModuleId,
+      'kind': 'script_module',
+      'display_name': 'Asghan Script',
+      'revision': 5,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.draft-npc-skeleton',
+        'generator_version': 4,
+        'owner': <String, Object?>{
+          'project_id': revision3VoiceContentProjectId,
+          'entity_id': _homeNpcGreetingNpcId,
+          'expected_kind': 'npc_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': 'gore-authoring.draft-npc-skeleton',
+          'generator_version': 4,
+          'module_namespace': 'PROJECT.NPCS.ASGHAN',
+          'module_relative_path': 'PROJECT/NPCS/ASGHAN.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        _homeContentReference(
+          role: 'origin_owner',
+          targetId: _homeNpcGreetingNpcId,
+          expectedKind: 'npc_draft',
         ),
       ],
       'asset_references': <Object?>[],

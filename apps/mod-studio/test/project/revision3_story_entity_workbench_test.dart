@@ -396,6 +396,31 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('NPC Dialog & Voice hosts an exact supplied greeting editor', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(760, 720));
+    final index = _fixture();
+    await _pumpWorkbench(
+      tester,
+      index: index,
+      entityId: _npcId,
+      selectedSection: Revision3StoryWorkbenchSection.profile,
+      npcDialogVoice: const Text('Exact NPC greeting editor'),
+    );
+
+    final dialogTab = find.byKey(
+      Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+    );
+    await tester.ensureVisible(dialogTab);
+    await tester.tap(dialogTab);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Exact NPC greeting editor'), findsOneWidget);
+    expect(find.text('Not modeled yet'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final legacySection in const <Revision3StoryWorkbenchSection>[
     Revision3StoryWorkbenchSection.story,
     Revision3StoryWorkbenchSection.logic,
@@ -598,27 +623,30 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
 Future<void> _pumpWorkbench(
   WidgetTester tester, {
   required Revision3ContentIndex index,
+  String entityId = _questId,
   Revision3StoryWorkbenchSection selectedSection =
       Revision3StoryWorkbenchSection.overview,
   Widget? questJourney,
   Widget? questTranscript,
+  Widget? npcDialogVoice,
   Revision3StoryEntityWorkbenchActions actions = _actions,
   Revision3StoryEntityWorkbenchCopy copy =
       const Revision3StoryEntityWorkbenchCopy.english(),
 }) async {
-  final quest = index.entityById(_questId)!;
+  final entity = index.entityById(entityId)!;
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
         body: Revision3StoryEntityWorkbench(
           projectId: index.projectId,
           index: index,
-          entity: quest,
+          entity: entity,
           selectedSection: selectedSection,
           onSectionChanged: (_) {},
           actions: actions,
           questJourney: questJourney,
           questTranscript: questTranscript,
+          npcDialogVoice: npcDialogVoice,
           copy: copy,
         ),
       ),

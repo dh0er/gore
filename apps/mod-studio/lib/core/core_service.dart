@@ -84,6 +84,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_revision3_history_restore_v1',
   'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
   'authoring_store_prepare_revision3_npc_draft_v1',
+  'authoring_store_prepare_revision3_npc_greeting_v1',
   'authoring_store_prepare_revision3_npc_profile_edit_v1',
   'authoring_store_prepare_revision3_quest_context_edit_v1',
   'authoring_store_prepare_revision3_quest_draft_v3',

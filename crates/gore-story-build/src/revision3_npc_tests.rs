@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId,
     ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef, QuestTransitionPlanV1,
-    Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3NpcDraft, Revision3NpcDraftInput, Revision3OriginRef, Revision3QuestDraft,
+    Revision2DialogLine, Revision2LocalizationEntry, Revision2NpcParentClassInput, Revision3Entity,
+    Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcDraftInput,
+    Revision3NpcGreetingBindingV1, Revision3OriginRef, Revision3QuestDraft,
     Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
     Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest,
     LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
@@ -96,6 +97,7 @@ fn npc(project: ProjectId) -> Revision3NpcDraft {
             entity_id(NPC_MODULE_ID),
             Revision3EntityKind::ScriptModule,
         ),
+        greetings: Vec::new(),
     }
 }
 
@@ -333,6 +335,7 @@ fn exact_plan_is_deterministic_read_only_and_excludes_unrelated_v4_quest_content
         generator_version: first.npc().generator_version(),
         input: first.npc().input().clone(),
         script_module: first.npc().script_module().clone(),
+        greetings: Vec::new(),
     }
     .regenerate_script_module(first.npc().reference().clone())
     .expect("persisted parent triple remains independently regenerable");
@@ -380,6 +383,71 @@ fn exact_plan_is_deterministic_read_only_and_excludes_unrelated_v4_quest_content
         .unwrap()
         .entities
         .contains_key(&entity_id(QUEST_ID)));
+}
+
+#[test]
+fn authoring_only_greetings_leave_npc_source_inspection_and_verification_exact() {
+    let mut project = project();
+    let localization_id = entity_id(30);
+    let line_id = entity_id(31);
+    project.entities.insert(
+        localization_id,
+        Revision3Entity {
+            id: localization_id,
+            display_name: "Greeting localization".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_INSPECTION_GREETING_LOC".to_owned(),
+            },
+            revision: 1,
+            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                loc_id: "GORE_INSPECTION_GREETING".to_owned(),
+                texts: BTreeMap::new(),
+            }),
+        },
+    );
+    project.entities.insert(
+        line_id,
+        Revision3Entity {
+            id: line_id,
+            display_name: "Greeting line".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_INSPECTION_GREETING_LINE".to_owned(),
+            },
+            revision: 2,
+            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                localization: Revision3TypedRef::new(
+                    project.project_id,
+                    localization_id,
+                    Revision3EntityKind::LocalizationEntry,
+                ),
+                speaker_hint: Some("Asghan".to_owned()),
+                voice_slots: BTreeMap::new(),
+            }),
+        },
+    );
+    let Revision3EntityPayload::NpcDraft(npc) = &mut project
+        .entities
+        .get_mut(&entity_id(NPC_ID))
+        .unwrap()
+        .payload
+    else {
+        unreachable!()
+    };
+    npc.greetings = vec![Revision3NpcGreetingBindingV1 {
+        line: Revision3TypedRef::new(project.project_id, line_id, Revision3EntityKind::DialogLine),
+    }];
+    let module_before = project.entities[&entity_id(NPC_MODULE_ID)].clone();
+    let canonical = project.to_canonical_json().unwrap();
+
+    let plan = build_revision3_npc_source_inspection_plan_v1(&canonical, entity_id(NPC_ID))
+        .expect("greetings are outside deterministic source generation");
+    plan.verify_against_project(&canonical)
+        .expect("source plan remains exact against greeting-bearing project");
+    assert_eq!(project.entities[&entity_id(NPC_MODULE_ID)], module_before);
+    assert_eq!(
+        plan.source_status(),
+        NpcInspectionSourceStatusV1::PersistedAndRegeneratedExact
+    );
 }
 
 #[test]

@@ -409,6 +409,7 @@ pub fn apply_revision3_npc_draft_transaction_v1(
             parent_spawn_definition: selection.parent_spawn_definition,
         },
         script_module: module_ref,
+        greetings: Vec::new(),
     };
     let runtime_id = npc.input.unique_name.clone();
     let (module, generated_identity) =

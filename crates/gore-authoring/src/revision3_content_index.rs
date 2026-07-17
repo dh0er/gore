@@ -130,6 +130,7 @@ pub enum Revision3ContentEntitySummaryV1 {
     NpcDraft {
         unique_name: String,
         module_namespace: String,
+        greeting_count: u64,
         parent_character_definition: String,
         parent_ai_agent_config: String,
         parent_spawn_definition: String,
@@ -174,6 +175,7 @@ pub enum Revision3ContentReferenceRoleV1 {
     VoiceSelected,
     QuestTranscriptLine,
     DraftScriptModule,
+    NpcGreetingLine,
     ScriptOwner,
 }
 
@@ -390,9 +392,20 @@ pub fn build_revision3_content_index_v1(
                     None,
                     &value.script_module,
                 )?;
+                for binding in &value.greetings {
+                    push_reference(
+                        project,
+                        &mut references,
+                        &mut reference_count,
+                        Revision3ContentReferenceRoleV1::NpcGreetingLine,
+                        None,
+                        &binding.line,
+                    )?;
+                }
                 Revision3ContentEntitySummaryV1::NpcDraft {
                     unique_name: value.input.unique_name.clone(),
                     module_namespace: value.input.module_namespace.clone(),
+                    greeting_count: value.greetings.len() as u64,
                     parent_character_definition: value
                         .input
                         .parent_character_definition
@@ -890,6 +903,7 @@ mod tests {
                 npc_module_id,
                 EntityKind::ScriptModule,
             ),
+            greetings: Vec::new(),
         };
         let npc_module = npc.regenerate_script_module(npc_owner.clone()).unwrap();
         project.entities.insert(

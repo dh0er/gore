@@ -154,6 +154,25 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 | Build and release | Studio can build/deploy represented legacy domains. The compatibility Scripts workspace now consumes a bounded structured compiler report and an app-scoped read-only install-safety state: Compile and Deploy stay disabled while the game runs, inspection is uncertain, or compiler/deploy recovery evidence exists; a fresh native Recheck is required to clear the dominant recovery banner. Offline Build remains available because it does not mutate the installation, and Undeploy remains reachable so the native recovery path can decide safely. Managed Quest/NPC compile, diagnostics, build, and deploy flows are still not integrated. Project-wide semantic build roots, dependencies/rebase, immutable releases, and CI are also missing. | The bundle engine can build/reopen/inspect represented components. `gore-as` exposes `InstallRestoreDisposition` independently from compile outcome and captured diagnostics, while the additive FFI route reports typed coordinates/severity, explicit normal-generator fallback, exact restoration, and pre-existing recovery without parsing formatted error text. Native code creates only a uniquely owned, marker-bound compile child, holds one shared install-mutation guard across deployment-aware pristine selection and compiler use, rechecks the shipping process immediately before the first live-content or recovery write, and retains a durable blocker when cleanup cannot be proved. Compile, deploy, manager apply, and undeploy share that guard; the read-only probe also projects persistent `gore-mod` recovery. | The process recheck narrows but cannot eliminate a launch race because the game does not honor the toolkit lock. Typed restore/install state is a compatibility safety integration, not managed Quest/NPC compiler support, future-signature compatibility, or gameplay proof; unsupported diagnostics hooks still use the normal compiler fallback. End state adds deterministic profiles, semantic plans/conflicts, compatibility, rollback, provenance, closed-world release validation, and guided recovery/isolated-test workflows. |
 | Collaboration and extension | No semantic collaboration workflow is integrated. | Canonical V2 primitives are groundwork, not merge/sync implementation. | Planned after the single-author managed-project/transaction contract; core authoring must not require a cloud account. |
 
+NPC Dialog & Voice addendum (2026-07-17): this supersedes the NPC table row's
+older statement that NPC dialog is wholly unmodeled. An exact-current managed
+NPC now has a productive **Dialog & Voice** greeting editor. It presents an
+ordered friendly transcript with language/text/Voice coverage, supports
+attach/reorder/detach, creates a DialogLine plus localization and optional empty
+Voice slot atomically at one position, and hands one exact line/language to the
+existing Localization & Voice workspace. Technical identities remain hidden in
+the normal UI, existing profile/source/removal paths preserve the metadata, and
+compact 360-pixel/200%-text layouts remain scrollable. The optional
+`NpcDraft.greetings` field is same-project, unique, ordered, capped at 256, and
+omitted when empty. Its pure replace/create-and-insert transaction advances
+only the project and NPC while preserving the generated ScriptModule bytes and
+revision; prepare-only FFI and managed fixed-head CAS have no game/install/save
+parameter. This is authoring metadata only: no AngelScript topic, condition,
+choice/effect, Quest relationship, lowering, build, deploy, runtime, or
+playability authority is granted. Nonempty R3 snapshots require a Studio/Core
+version that understands this additive field; older closed-schema builds may
+reject them rather than silently discard it.
+
 Story status addendum (2026-07-16): the managed-R3 **Story** destination is now
 a direct workspace rather than a card page that sends authors to Content. It
 loads the exact-current project index, projects only NPC and Quest Drafts, and

@@ -644,6 +644,7 @@ fn add_valid_npc(project: &mut ProjectRevision3, runtime_id: &str, module_namesp
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        greetings: Vec::new(),
     };
     let module = draft.regenerate_script_module(owner.clone()).unwrap();
     project.entities.insert(

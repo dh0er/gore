@@ -309,8 +309,11 @@ pub enum Revision3QuestFreeBasisError {
     ResidualQuestState { entity: EntityId },
 }
 
-/// Losslessly project a closed Quest-free revision-3 project into the revision-2 collision-source
-/// model. Quest or residual Quest-owned generator state is rejected rather than interpreted.
+/// Project a closed Quest-free revision-3 project into the revision-2 collision-source model
+/// without changing any generation-bearing value. Quest or residual Quest-owned generator state
+/// is rejected rather than interpreted. Revision-3-only authoring metadata such as NPC greeting
+/// bindings is intentionally absent from the collision-source projection and must be restored by
+/// callers that round-trip the project envelope.
 ///
 /// This conversion performs no migration, artifact access, or authority grant. Callers that need
 /// immutable-basis proof must separately reopen and verify the pinned snapshot.
@@ -336,7 +339,14 @@ pub fn project_revision3_quest_free_basis_to_revision2(
             EntityPayload::DialogLine(value) => Revision2EntityPayload::DialogLine(value.clone()),
             EntityPayload::VoiceSlot(value) => Revision2EntityPayload::VoiceSlot(value.clone()),
             EntityPayload::VoiceTake(value) => Revision2EntityPayload::VoiceTake(value.clone()),
-            EntityPayload::NpcDraft(value) => Revision2EntityPayload::NpcDraft(value.clone()),
+            EntityPayload::NpcDraft(value) => {
+                Revision2EntityPayload::NpcDraft(crate::Revision2NpcDraft {
+                    generator_id: value.generator_id.clone(),
+                    generator_version: value.generator_version,
+                    input: value.input.clone(),
+                    script_module: value.script_module.clone(),
+                })
+            }
             EntityPayload::ScriptModule(value) => {
                 Revision2EntityPayload::ScriptModule(value.clone())
             }

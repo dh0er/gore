@@ -26,6 +26,7 @@ part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_dialog_voice_slot_removal.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_npc_greeting.dart';
 part '../project/revision3_npc_profile_edit.dart';
 part '../project/revision3_npc_source_inspection.dart';
 part '../project/revision3_quest_context.dart';
@@ -1330,6 +1331,42 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3QuestTranscriptPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one project-only ordered NPC greeting edit. Native code returns
+  /// an unpublished, build-blocked candidate; the managed Dart session owns
+  /// the only fixed-head publication authority.
+  Future<AuthoringRevision3NpcGreetingPreparation>
+  authoringStorePrepareRevision3NpcGreetingV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcGreetingRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_npc_greeting_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'npc_greeting_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3NpcGreetingPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

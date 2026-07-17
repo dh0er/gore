@@ -29,6 +29,7 @@ mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
 mod story_transaction_revision3_dialog_voice_slot_removal;
 mod story_transaction_revision3_npc;
+mod story_transaction_revision3_npc_greeting;
 mod story_transaction_revision3_npc_profile;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
@@ -111,10 +112,11 @@ pub use model_revision2::{
 pub use model_revision3::{
     Entity as Revision3Entity, EntityKind as Revision3EntityKind,
     EntityPayload as Revision3EntityPayload, NpcDraft as Revision3NpcDraft,
-    NpcDraftInput as Revision3NpcDraftInput, OriginRef as Revision3OriginRef, ProjectRevision3,
-    ProjectRevision3JsonError, ProjectRevision3ValidationError, QuestCollisionArtifactRef,
-    QuestDraft as Revision3QuestDraft, QuestDraftInput as Revision3QuestDraftInput,
-    QuestGiverInput as Revision3QuestGiverInput, QuestParentInput as Revision3QuestParentInput,
+    NpcDraftInput as Revision3NpcDraftInput, NpcGreetingBindingV1 as Revision3NpcGreetingBindingV1,
+    OriginRef as Revision3OriginRef, ProjectRevision3, ProjectRevision3JsonError,
+    ProjectRevision3ValidationError, QuestCollisionArtifactRef, QuestDraft as Revision3QuestDraft,
+    QuestDraftInput as Revision3QuestDraftInput, QuestGiverInput as Revision3QuestGiverInput,
+    QuestParentInput as Revision3QuestParentInput,
     QuestTranscriptBindingV1 as Revision3QuestTranscriptBindingV1, QuestTransitionConditionAtomV1,
     QuestTransitionConditionGroupV1, QuestTransitionEdgeV1, QuestTransitionEffectKindV1,
     QuestTransitionEffectV1, QuestTransitionNodeV1, QuestTransitionPlanV1,
@@ -123,13 +125,14 @@ pub use model_revision3::{
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_QUEST_TRANSITION_EFFECTS_V1,
     MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1, MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1,
     MAX_REVISION3_ASSETS, MAX_REVISION3_BASE_SNAPSHOT_BYTES, MAX_REVISION3_ENTITIES,
-    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
-    MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
-    QUEST_COLLISION_ARTIFACT_FORMAT, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION,
-    QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_NPC_GREETING_BINDINGS_V1,
+    MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1, MAX_REVISION3_REFERENCED_ASSET_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_FORMAT,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+    QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION, QUEST_COLLISION_CATALOG_LAYER,
+    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
@@ -265,6 +268,16 @@ pub use story_transaction_revision3_npc::{
     Revision3NpcStoryIdentityKindV1, MAX_REVISION3_NPC_CATALOG_ID_BYTES_V1,
     MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
     REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
+};
+pub use story_transaction_revision3_npc_greeting::{
+    apply_revision3_npc_greeting_edit_transaction_v1, Revision3NpcGreetingBuildStatusV1,
+    Revision3NpcGreetingCreatedLineV1, Revision3NpcGreetingEditConflictV1,
+    Revision3NpcGreetingEditErrorV1, Revision3NpcGreetingEditEvaluationV1,
+    Revision3NpcGreetingEditOutcomeV1, Revision3NpcGreetingEditRejectionV1,
+    Revision3NpcGreetingEditRequestJsonErrorV1, Revision3NpcGreetingEditRequestV1,
+    Revision3NpcGreetingIntentV1, Revision3NpcGreetingModeV1,
+    Revision3NpcGreetingPublicationStatusV1, Revision3NpcGreetingRuntimeStatusV1,
+    Revision3NpcGreetingTopicAuthorityV1, MAX_REVISION3_NPC_GREETING_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_npc_profile::{
     apply_revision3_npc_profile_edit_transaction_v1, Revision3NpcProfileCatalogContextV1,

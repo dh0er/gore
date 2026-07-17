@@ -1073,6 +1073,7 @@ mod tests {
                 module_id,
                 Revision3EntityKind::ScriptModule,
             ),
+            greetings: Vec::new(),
         };
         let module = draft
             .regenerate_script_module(owner.clone())

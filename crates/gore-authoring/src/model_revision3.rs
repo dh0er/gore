@@ -23,10 +23,10 @@ use crate::{
 };
 
 pub use crate::model_revision2::{
-    DialogLine, EntityKind, LocalizationEntry, NpcDraft, NpcDraftInput, NpcParentClassInput,
-    OggCodec, OggMetadata, OriginRef, QuestGiverInput, QuestParentInput, ScriptAuthoringStatus,
-    ScriptModule, ScriptModuleStatus, ScriptRuntimeStatus, TypedRef, VoiceMemberProof,
-    VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
+    DialogLine, EntityKind, LocalizationEntry, NpcDraftInput, NpcParentClassInput, OggCodec,
+    OggMetadata, OriginRef, QuestGiverInput, QuestParentInput, ScriptAuthoringStatus, ScriptModule,
+    ScriptModuleStatus, ScriptRuntimeStatus, TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot,
+    VoiceTake, VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
 };
 
 pub const QUEST_COLLISION_ARTIFACT_FORMAT: &str = "quest_collision_capability";
@@ -51,6 +51,8 @@ pub const MAX_REVISION3_ASSETS: usize = 100_000;
 pub const MAX_REVISION3_REFERENCED_ASSET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 /// Maximum ordered project-local dialog-line bindings retained by one Quest draft.
 pub const MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1: usize = 256;
+/// Maximum ordered project-local dialog-line greeting bindings retained by one NPC draft.
+pub const MAX_REVISION3_NPC_GREETING_BINDINGS_V1: usize = 256;
 /// Maximum history-free Store manifest projection for one revision-3 project.
 pub const MAX_REVISION3_BASE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum final revision-3 Store snapshot, including its bounded retained-history envelope.
@@ -293,6 +295,65 @@ pub struct QuestTranscriptBindingV1 {
     pub objective_slot: Option<u16>,
 }
 
+/// One ordered, authoring-only dialog-line greeting attached to an NPC draft.
+///
+/// The relationship is project metadata only. It grants no dialog topic, speaker, selection,
+/// build, publication, or runtime authority and deliberately remains outside [`NpcDraftInput`]
+/// so deterministic NPC source and its input fingerprint stay byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NpcGreetingBindingV1 {
+    pub line: TypedRef,
+}
+
+/// Revision-3 NPC authoring intent plus ordered authoring-only greeting metadata.
+///
+/// The first four fields retain the exact revision-2 wire shape. Empty `greetings` are omitted so
+/// every pre-greeting canonical revision-3 project remains byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NpcDraft {
+    pub generator_id: String,
+    pub generator_version: u32,
+    pub input: NpcDraftInput,
+    pub script_module: TypedRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub greetings: Vec<NpcGreetingBindingV1>,
+}
+
+impl NpcDraft {
+    fn revision2_generation_core(&self) -> crate::model_revision2::NpcDraft {
+        crate::model_revision2::NpcDraft {
+            generator_id: self.generator_id.clone(),
+            generator_version: self.generator_version,
+            input: self.input.clone(),
+            script_module: self.script_module.clone(),
+        }
+    }
+
+    /// Rebuild the exact owned module from durable generation intent only.
+    ///
+    /// Greeting metadata is intentionally excluded from generation.
+    pub fn regenerate_script_module(
+        &self,
+        owner: TypedRef,
+    ) -> Result<ScriptModule, crate::model_revision2::StoryRegenerationError> {
+        self.revision2_generation_core()
+            .regenerate_script_module(owner)
+    }
+
+    pub(crate) fn regenerate_script_module_with_identity(
+        &self,
+        owner: TypedRef,
+    ) -> Result<
+        (ScriptModule, crate::model_revision2::GeneratedStoryIdentity),
+        crate::model_revision2::StoryRegenerationError,
+    > {
+        self.revision2_generation_core()
+            .regenerate_script_module_with_identity(owner)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuestDraft {
@@ -511,6 +572,8 @@ pub enum ProjectRevision3ValidationError {
     MissingQuestScriptModule { quest: EntityId },
     #[error("revision-3 NPC {npc} has invalid closed generator state: {reason}")]
     InvalidNpcDraft { npc: EntityId, reason: String },
+    #[error("revision-3 NPC {npc} has invalid authoring greetings: {reason}")]
+    InvalidNpcGreetings { npc: EntityId, reason: String },
     #[error("revision-3 NPC {npc} has an invalid local ScriptModule reference")]
     InvalidNpcScriptReference { npc: EntityId },
     #[error("revision-3 NPC {npc} ScriptModule target is missing or has the wrong kind")]

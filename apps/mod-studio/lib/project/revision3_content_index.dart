@@ -344,6 +344,7 @@ final class Revision3ContentIndex {
       }
       _validateDialogLineProjectionFacts(entity);
       _validateVoiceSlotProjectionFacts(entity);
+      _validateNpcProjectionFacts(entity);
       _validateQuestProjectionFacts(entity);
     }
 
@@ -736,6 +737,8 @@ final class Revision3ContentNpcDraftSummary {
     required this.parentCharacterDefinition,
     required this.parentAiAgentConfig,
     required this.parentSpawnDefinition,
+    required this.greetingCount,
+    required this.hasGreetingProjection,
   });
 
   final String uniqueName;
@@ -743,6 +746,8 @@ final class Revision3ContentNpcDraftSummary {
   final String parentCharacterDefinition;
   final String parentAiAgentConfig;
   final String parentSpawnDefinition;
+  final int greetingCount;
+  final bool hasGreetingProjection;
 }
 
 final class Revision3ContentSummary {
@@ -906,12 +911,14 @@ final class Revision3ContentSummary {
             '${status.name} · ${codec.name} · ${channels}ch · $sampleRate Hz';
         terms.addAll([status.name, codec.name]);
       case Revision3ContentEntityKind.npcDraft:
-        _requireKeys(data, const [
+        final hasGreetingCount = data.containsKey('greeting_count');
+        _requireKeys(data, <String>[
           'unique_name',
           'module_namespace',
           'parent_character_definition',
           'parent_ai_agent_config',
           'parent_spawn_definition',
+          if (hasGreetingCount) 'greeting_count',
         ], '$context data');
         primary = _string(data['unique_name'], '$context unique_name');
         final namespace = _string(
@@ -935,12 +942,20 @@ final class Revision3ContentSummary {
           parentAiAgentConfig,
           parentSpawnDefinition,
         ];
+        final greetingCount = hasGreetingCount
+            ? _integer(data['greeting_count'], '$context greeting_count')
+            : 0;
+        if (greetingCount > 256) {
+          throw FormatException('$context greeting list exceeds 256 lines');
+        }
         npcDraft = Revision3ContentNpcDraftSummary(
           uniqueName: primary,
           moduleNamespace: namespace,
           parentCharacterDefinition: parentCharacterDefinition,
           parentAiAgentConfig: parentAiAgentConfig,
           parentSpawnDefinition: parentSpawnDefinition,
+          greetingCount: greetingCount,
+          hasGreetingProjection: hasGreetingCount,
         );
         secondary = namespace;
         terms.addAll([namespace, ...parents]);
@@ -1089,6 +1104,79 @@ final class Revision3ContentSummary {
       npcDraft: npcDraft,
       questDraft: questDraft,
     );
+  }
+}
+
+void _validateNpcProjectionFacts(Revision3ContentEntity entity) {
+  if (entity.kind != Revision3ContentEntityKind.npcDraft) return;
+  final facts = entity.summary.npcDraft;
+  if (facts == null) {
+    throw FormatException('content NPC ${entity.id} has no structured summary');
+  }
+  if (!facts.hasGreetingProjection) {
+    if (entity.references.any(
+      (reference) => reference.role == 'npc_greeting_line',
+    )) {
+      throw FormatException(
+        'content NPC ${entity.id} has greeting references without projected greeting facts',
+      );
+    }
+    return;
+  }
+  final modules = <Revision3ContentReference>[];
+  final greetings = <Revision3ContentReference>[];
+  final owner = entity.origin.generatedOwner;
+  var ownerReferences = 0;
+  for (final reference in entity.references) {
+    switch (reference.role) {
+      case 'origin_owner':
+        ownerReferences++;
+        if (owner == null ||
+            reference.qualifier != null ||
+            reference.target != owner) {
+          throw FormatException(
+            'content NPC ${entity.id} has a malformed origin owner',
+          );
+        }
+      case 'draft_script_module':
+        modules.add(reference);
+      case 'npc_greeting_line':
+        greetings.add(reference);
+      default:
+        throw FormatException(
+          'content NPC ${entity.id} has a role from another entity kind',
+        );
+    }
+  }
+  if (ownerReferences != (owner == null ? 0 : 1) || modules.length != 1) {
+    throw FormatException(
+      'content NPC ${entity.id} has an invalid owner or module count',
+    );
+  }
+  final module = modules.single;
+  if (module.qualifier != null ||
+      module.target.expectedKind != Revision3ContentEntityKind.scriptModule) {
+    throw FormatException(
+      'content NPC ${entity.id} has a malformed generated module reference',
+    );
+  }
+  if (greetings.length != facts.greetingCount) {
+    throw FormatException(
+      'content NPC ${entity.id} greeting count disagrees with its references',
+    );
+  }
+  final lineTargets = <String>{};
+  for (final reference in greetings) {
+    if (reference.qualifier != null ||
+        reference.target.expectedKind !=
+            Revision3ContentEntityKind.dialogLine ||
+        !lineTargets.add(
+          '${reference.target.projectId}\u0000${reference.target.entityId}',
+        )) {
+      throw FormatException(
+        'content NPC ${entity.id} has a malformed or duplicate greeting line',
+      );
+    }
   }
 }
 
@@ -1391,6 +1479,7 @@ final class Revision3ContentReference {
         'dialog_voice_slot',
         'voice_candidate',
         'voice_selected',
+        'npc_greeting_line',
         'quest_transcript_line',
         'draft_script_module',
         'script_owner',

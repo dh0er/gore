@@ -18,6 +18,7 @@ import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_npc_authoring.dart';
+import 'revision3_npc_greeting_authoring.dart';
 import 'revision3_npc_profile_edit_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
@@ -406,6 +407,26 @@ const _revision3QuestTranscriptCorrectableCodes = <String>{
   'AUTHORING_REVISION3_QUEST_TRANSCRIPT_TARGET_CONFLICT',
 };
 
+const _revision3NpcGreetingCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_NPC_GREETING_BINDING_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_DIALOG_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_INDEX_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_NO_CHANGES',
+  'AUTHORING_REVISION3_NPC_GREETING_NPC_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_INVALID',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_INVALID',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_NPC_GREETING_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REVISION_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_STORE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_TARGET_CONFLICT',
+};
+
 final class ManagedRevision3ProjectCreationException
     extends CurrentProjectCoordinatorException {
   const ManagedRevision3ProjectCreationException(super.message);
@@ -710,6 +731,23 @@ abstract interface class ManagedRevision3QuestTranscriptLease {
   });
 }
 
+/// Optional project-only NPC greeting mutation capability. It remains
+/// separate so unrelated lease fakes do not gain dialog-creation authority.
+abstract interface class ManagedRevision3NpcGreetingLease {
+  bool get supportsNpcGreeting;
+
+  void markRequiresReopenAfterNpcGreetingUncertainty();
+
+  Future<Revision3NpcGreetingPublication>
+  prepareAndPublishNpcGreetingReplaceV1({
+    required Revision3NpcGreetingReplaceTechnicalPlan plan,
+  });
+
+  Future<Revision3NpcGreetingPublication> prepareAndPublishNpcGreetingCreateV1({
+    required Revision3NpcGreetingCreateTechnicalPlan plan,
+  });
+}
+
 /// Optional exact-current capability for changing one retained VoiceTake's
 /// author-managed review status. Keeping it separate avoids widening unrelated
 /// current-project lease fakes with mutation authority.
@@ -981,6 +1019,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3NpcProfileEditLease,
         ManagedRevision3QuestTranscriptLease,
+        ManagedRevision3NpcGreetingLease,
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3VoiceTakeMediaQaLease,
         ManagedRevision3VoiceTakePreviewLease,
@@ -1078,6 +1117,9 @@ final class _ManagedRevision3SessionLease
   bool get supportsQuestTranscript => _session.supportsQuestTranscript;
 
   @override
+  bool get supportsNpcGreeting => _session.supportsNpcGreeting;
+
+  @override
   void markRequiresReopenAfterStoryDraftRemovalUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
@@ -1107,6 +1149,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterQuestTranscriptUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterNpcGreetingUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1306,6 +1352,38 @@ final class _ManagedRevision3SessionLease
     moduleRevision: checkpoint.moduleRevision,
     mode: checkpoint.mode,
     transcriptCount: checkpoint.transcriptCount,
+    createdLineId: checkpoint.createdLineId,
+    createdLocalizationId: checkpoint.createdLocalizationId,
+    createdVoiceSlotId: checkpoint.createdVoiceSlotId,
+    localizationAction: checkpoint.localizationAction,
+  );
+
+  @override
+  Future<Revision3NpcGreetingPublication>
+  prepareAndPublishNpcGreetingReplaceV1({
+    required Revision3NpcGreetingReplaceTechnicalPlan plan,
+  }) async => _npcGreetingPublication(
+    await _session.prepareAndPublishNpcGreetingReplaceV1(plan: plan),
+  );
+
+  @override
+  Future<Revision3NpcGreetingPublication> prepareAndPublishNpcGreetingCreateV1({
+    required Revision3NpcGreetingCreateTechnicalPlan plan,
+  }) async => _npcGreetingPublication(
+    await _session.prepareAndPublishNpcGreetingCreateV1(plan: plan),
+  );
+
+  Revision3NpcGreetingPublication _npcGreetingPublication(
+    ManagedRevision3NpcGreetingCheckpoint checkpoint,
+  ) => Revision3NpcGreetingPublication(
+    projectId: checkpoint.projectId,
+    projectRevision: checkpoint.projectRevision,
+    npcId: checkpoint.npcId,
+    npcRevision: checkpoint.npcRevision,
+    moduleId: checkpoint.moduleId,
+    moduleRevision: checkpoint.moduleRevision,
+    mode: checkpoint.mode,
+    greetingCount: checkpoint.greetingCount,
     createdLineId: checkpoint.createdLineId,
     createdLocalizationId: checkpoint.createdLocalizationId,
     createdVoiceSlotId: checkpoint.createdVoiceSlotId,
@@ -3508,6 +3586,156 @@ final class CurrentProjectCoordinator
       editor.markRequiresReopenAfterQuestTranscriptUncertainty();
       Error.throwWithStackTrace(
         const Revision3QuestTranscriptRequiresReopenException(),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  Future<Revision3NpcGreetingPublication> replaceCurrentRevision3NpcGreeting({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3NpcGreetingReplaceTechnicalPlan plan,
+  }) => _publishCurrentRevision3NpcGreeting(
+    expectedRoot: expectedRoot,
+    expectedProjectId: expectedProjectId,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedHead: expectedHead,
+    expectedNpcId: plan.npcId,
+    expectedNpcRevision: plan.expectedNpcRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedMode: AuthoringRevision3NpcGreetingMode.replace,
+    expectedGreetingCount: plan.bindings.length,
+    expectedLine: null,
+    publish: (editor) =>
+        editor.prepareAndPublishNpcGreetingReplaceV1(plan: plan),
+  );
+
+  Future<Revision3NpcGreetingPublication>
+  createCurrentRevision3NpcGreetingLine({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3NpcGreetingCreateTechnicalPlan plan,
+  }) => _publishCurrentRevision3NpcGreeting(
+    expectedRoot: expectedRoot,
+    expectedProjectId: expectedProjectId,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedHead: expectedHead,
+    expectedNpcId: plan.npcId,
+    expectedNpcRevision: plan.expectedNpcRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedMode: AuthoringRevision3NpcGreetingMode.createAndInsert,
+    expectedGreetingCount: plan.expectedGreetingCount + 1,
+    expectedLine: plan.line,
+    publish: (editor) =>
+        editor.prepareAndPublishNpcGreetingCreateV1(plan: plan),
+  );
+
+  Future<Revision3NpcGreetingPublication> _publishCurrentRevision3NpcGreeting({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String expectedNpcId,
+    required int expectedNpcRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringRevision3NpcGreetingMode expectedMode,
+    required int expectedGreetingCount,
+    required Revision3DialogLineEntryTechnicalPlan? expectedLine,
+    required Future<Revision3NpcGreetingPublication> Function(
+      ManagedRevision3NpcGreetingLease editor,
+    )
+    publish,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'NPC greeting editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3NpcGreetingRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3NpcGreetingStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3NpcGreetingLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit NPC greetings safely',
+      );
+    }
+    final editor = lease as ManagedRevision3NpcGreetingLease;
+    if (!editor.supportsNpcGreeting) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit NPC greetings safely',
+      );
+    }
+    try {
+      final publication = await publish(editor);
+      final expectedAction = expectedLine == null
+          ? null
+          : (expectedLine.localization
+                    is AuthoringRevision3DialogLocalizationCreateIntentV1
+                ? AuthoringRevision3DialogLocalizationAction.created
+                : AuthoringRevision3DialogLocalizationAction.reusedExact);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          lease.head.canonicalJson == expectedHead.canonicalJson ||
+          publication.npcId != expectedNpcId ||
+          publication.npcRevision != expectedNpcRevision + 1 ||
+          publication.moduleId != expectedModuleId ||
+          publication.moduleRevision != expectedModuleRevision ||
+          publication.mode != expectedMode ||
+          publication.greetingCount != expectedGreetingCount ||
+          publication.createdLineId != expectedLine?.lineId ||
+          publication.createdLocalizationId !=
+              expectedLine?.localization.localizationId ||
+          publication.createdVoiceSlotId != expectedLine?.voiceSlot?.slotId ||
+          publication.localizationAction != expectedAction) {
+        editor.markRequiresReopenAfterNpcGreetingUncertainty();
+        throw const Revision3NpcGreetingRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3NpcGreetingRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          editor.markRequiresReopenAfterNpcGreetingUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3NpcGreetingRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if ((error is ModFfiException &&
+              _revision3NpcGreetingCorrectableCodes.contains(error.code)) ||
+          error is FormatException ||
+          error is Revision3NpcGreetingStaleCheckpointException) {
+        Error.throwWithStackTrace(
+          const Revision3NpcGreetingStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      editor.markRequiresReopenAfterNpcGreetingUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3NpcGreetingRequiresReopenException(),
         stackTrace,
       );
     } finally {

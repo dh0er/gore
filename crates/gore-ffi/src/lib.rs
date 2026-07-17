@@ -239,6 +239,7 @@ mod authoring_story_catalog;
 mod authoring_story_compiler_revision3;
 mod authoring_story_draft_remove_revision3;
 mod authoring_story_inventory;
+mod authoring_story_npc_greeting_revision3;
 mod authoring_story_npc_inspection_revision3;
 mod authoring_story_npc_profile_revision3;
 mod authoring_story_npc_revision3;
@@ -329,6 +330,7 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_history_revision3::RESTORE_COMMAND,
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
+    authoring_story_npc_greeting_revision3::COMMAND,
     authoring_story_npc_profile_revision3::COMMAND,
     "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
@@ -683,6 +685,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_npc_draft_v1" => {
             Some(authoring_story_npc_revision3::prepare_revision3_npc_draft_v1_raw)
         }
+        authoring_story_npc_greeting_revision3::COMMAND => Some(
+            authoring_story_npc_greeting_revision3::prepare_revision3_npc_greeting_v1_raw,
+        ),
         authoring_story_npc_profile_revision3::COMMAND => Some(
             authoring_story_npc_profile_revision3::prepare_revision3_npc_profile_edit_v1_raw,
         ),
@@ -1820,6 +1825,7 @@ mod tests {
                     "authoring_store_prepare_revision3_history_restore_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
+                    "authoring_store_prepare_revision3_npc_greeting_v1",
                     "authoring_store_prepare_revision3_npc_profile_edit_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
@@ -1960,6 +1966,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_npc_draft_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_npc_greeting_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_npc_profile_edit_v1"));

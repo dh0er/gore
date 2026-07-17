@@ -98,6 +98,52 @@ void main() {
     },
   );
 
+  test('profile edits preserve existing NPC greeting bindings exactly', () {
+    final basis = _basis(withGreetings: true);
+    final request = _request(
+      basis,
+      displayName: basis.displayName,
+      currentId: _asghanId,
+      nextId: _viperId,
+      currentTriple: basis.asghanTriple,
+      nextTriple: basis.viperTriple,
+      archetypeChanged: true,
+    );
+    final intact = _candidate(
+      basis,
+      displayName: request.displayName,
+      input: basis.viperInput,
+      regenerateModule: true,
+    );
+
+    final prepared = AuthoringRevision3NpcProfileEditPreparation.fromJson(
+      _response(request, intact),
+      currentProjectJson: basis.projectJson,
+      request: request,
+    );
+    expect(prepared.archetypeChanged, isTrue);
+    expect(
+      _npcData(intact.projectJson)['greetings'],
+      _npcData(basis.projectJson)['greetings'],
+    );
+
+    final dropped = _candidate(
+      basis,
+      displayName: request.displayName,
+      input: basis.viperInput,
+      regenerateModule: true,
+      dropGreetings: true,
+    );
+    expect(
+      () => AuthoringRevision3NpcProfileEditPreparation.fromJson(
+        _response(request, dropped),
+        currentProjectJson: basis.projectJson,
+        request: request,
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('wrapper sends the exact bounded NPC profile request', () async {
     final basis = _basis();
     final request = _request(
@@ -272,7 +318,7 @@ typedef _Basis = ({
 
 typedef _Candidate = ({String projectJson, AuthoringWorkingHead head});
 
-_Basis _basis({int moduleRevision = 0}) {
+_Basis _basis({int moduleRevision = 0, bool withGreetings = false}) {
   final empty = _emptyProjectJson();
   final emptyHead = revision3NpcFixtureHead(empty);
   final asghanRequest = _draftRequest(
@@ -287,10 +333,27 @@ _Basis _basis({int moduleRevision = 0}) {
   );
   var projectJson = created.candidateProjectJson;
   var head = created.candidateHead;
-  if (moduleRevision != 0) {
+  if (moduleRevision != 0 || withGreetings) {
     final project = _map(jsonDecode(projectJson));
-    final module = _map(_map(project['entities'])[_moduleId]);
-    module['revision'] = moduleRevision;
+    final entities = _map(project['entities']);
+    if (moduleRevision != 0) {
+      final module = _map(entities[_moduleId]);
+      module['revision'] = moduleRevision;
+    }
+    if (withGreetings) {
+      final npc = _map(entities[_npcId]);
+      final payload = _map(npc['payload']);
+      final data = _map(payload['data']);
+      data['greetings'] = <Object?>[
+        <String, Object?>{
+          'line': <String, Object?>{
+            'project_id': _projectId,
+            'entity_id': '00000000000000000000000000000091',
+            'expected_kind': 'dialog_line',
+          },
+        },
+      ];
+    }
     projectJson = jsonEncode(project);
     head = revision3NpcFixtureHead(projectJson);
   }
@@ -379,6 +442,7 @@ _Candidate _candidate(
   required Map<String, Object?> input,
   required bool regenerateModule,
   bool mutateModule = false,
+  bool dropGreetings = false,
 }) {
   final project = (jsonDecode(basis.projectJson) as Map)
       .cast<String, Object?>();
@@ -388,6 +452,11 @@ _Candidate _candidate(
   final npc = _cloneMap(entities[_npcId]);
   npc['display_name'] = displayName;
   npc['revision'] = 1;
+  if (dropGreetings) {
+    final payload = _map(npc['payload']);
+    final data = _map(payload['data']);
+    data.remove('greetings');
+  }
   if (regenerateModule) {
     final payload = _map(npc['payload']);
     final data = _map(payload['data']);
@@ -477,6 +546,11 @@ AuthoringRevision3NpcProfileParentExpectation _parent(
 Map<String, Object?> _npcInput(String projectJson) {
   final npc = _entity(projectJson, _npcId);
   return _map(_map(_map(npc['payload'])['data'])['input']);
+}
+
+Map<String, Object?> _npcData(String projectJson) {
+  final npc = _entity(projectJson, _npcId);
+  return _map(_map(npc['payload'])['data']);
 }
 
 Map<String, Object?> _entity(String projectJson, String id) =>

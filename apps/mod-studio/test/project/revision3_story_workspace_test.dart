@@ -719,6 +719,59 @@ void main() {
   );
 
   testWidgets(
+    'NPC Dialog & Voice hosts the exact greeting UI and retains its line selection',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      final selectedByBuild = <String?>[];
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        npcDialogVoiceBuilder:
+            ({
+              required index,
+              required npc,
+              required selectedLineId,
+              required onSelectedLineChanged,
+            }) {
+              selectedByBuild.add(selectedLineId);
+              return Column(
+                key: const Key('test-npc-dialog-voice'),
+                children: [
+                  Text('NPC greeting selected:${selectedLineId ?? 'none'}'),
+                  FilledButton(
+                    key: const Key('test-select-npc-greeting-line'),
+                    onPressed: () => onSelectedLineChanged('greeting-a'),
+                    child: const Text('Select NPC greeting'),
+                  ),
+                ],
+              );
+            },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_npcId')),
+      );
+      await tester.pump();
+      final dialogTab = find.byKey(
+        Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+      );
+      await tester.ensureVisible(dialogTab);
+      await tester.tap(dialogTab);
+      await tester.pump();
+
+      expect(find.byKey(const Key('test-npc-dialog-voice')), findsOneWidget);
+      expect(find.text('NPC greeting selected:none'), findsOneWidget);
+      expect(find.text('Not modeled yet'), findsNothing);
+      await tester.tap(find.byKey(const Key('test-select-npc-greeting-line')));
+      await tester.pump();
+      expect(selectedByBuild.last, 'greeting-a');
+      expect(find.text('NPC greeting selected:greeting-a'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Quest journey is the default overview and opens an exact transcript row',
     (tester) async {
       await _setSurfaceSize(tester, const Size(1200, 800));
@@ -2022,6 +2075,7 @@ Future<void> _pumpWorkspace(
   String? createQuestDraftDisabledReason,
   Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
+  Revision3StoryNpcDialogVoiceBuilder? npcDialogVoiceBuilder,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -2050,6 +2104,7 @@ Future<void> _pumpWorkspace(
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
         questJourneyBuilder: questJourneyBuilder,
         questTranscriptBuilder: questTranscriptBuilder,
+        npcDialogVoiceBuilder: npcDialogVoiceBuilder,
       ),
     ),
   ),
@@ -2082,6 +2137,7 @@ Revision3StoryWorkspace _workspace({
   String? createQuestDraftDisabledReason,
   Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
+  Revision3StoryNpcDialogVoiceBuilder? npcDialogVoiceBuilder,
 }) => Revision3StoryWorkspace(
   projectRoot: root,
   projectId: projectId,
@@ -2115,6 +2171,7 @@ Revision3StoryWorkspace _workspace({
   editNpcProfileDisabledReason: editNpcProfileDisabledReason,
   questJourneyBuilder: questJourneyBuilder,
   questTranscriptBuilder: questTranscriptBuilder,
+  npcDialogVoiceBuilder: npcDialogVoiceBuilder,
 );
 
 Revision3ContentIndex _fixture({

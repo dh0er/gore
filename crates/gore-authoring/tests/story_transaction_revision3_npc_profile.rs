@@ -3,16 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     apply_revision3_npc_profile_edit_transaction_v1, AssetMeta, AssetStoreIndex, ContentSeal,
     EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
-    Revision2LocalizationEntry, Revision2NpcDraft, Revision2NpcDraftInput,
+    Revision2DialogLine, Revision2LocalizationEntry, Revision2NpcDraftInput,
     Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3NpcCatalogSelectionV1, Revision3NpcProfileCatalogContextV1,
-    Revision3NpcProfileEditBuildStatusV1, Revision3NpcProfileEditCatalogAuthorityV1,
-    Revision3NpcProfileEditCollisionAuthorityV1, Revision3NpcProfileEditConflictV1,
-    Revision3NpcProfileEditErrorV1, Revision3NpcProfileEditEvaluationV1,
-    Revision3NpcProfileEditOutcomeV1, Revision3NpcProfileEditPublicationStatusV1,
-    Revision3NpcProfileEditRequestJsonErrorV1, Revision3NpcProfileEditRequestV1,
-    Revision3NpcProfileEditRuntimeStatusV1, Revision3OriginRef, Revision3TypedRef,
-    SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
+    Revision3NpcCatalogSelectionV1, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
+    Revision3NpcProfileCatalogContextV1, Revision3NpcProfileEditBuildStatusV1,
+    Revision3NpcProfileEditCatalogAuthorityV1, Revision3NpcProfileEditCollisionAuthorityV1,
+    Revision3NpcProfileEditConflictV1, Revision3NpcProfileEditErrorV1,
+    Revision3NpcProfileEditEvaluationV1, Revision3NpcProfileEditOutcomeV1,
+    Revision3NpcProfileEditPublicationStatusV1, Revision3NpcProfileEditRequestJsonErrorV1,
+    Revision3NpcProfileEditRequestV1, Revision3NpcProfileEditRuntimeStatusV1, Revision3OriginRef,
+    Revision3TypedRef, SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
     LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
     MAX_REVISION3_NPC_PROFILE_EDIT_REQUEST_JSON_BYTES_V1,
 };
@@ -169,7 +169,7 @@ fn project() -> ProjectRevision3 {
             "USpawnAIAgentDefinition_OM_GRD_Asghan_263",
         ),
     };
-    let npc = Revision2NpcDraft {
+    let npc = Revision3NpcDraft {
         generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
         generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
         input: Revision2NpcDraftInput {
@@ -185,6 +185,7 @@ fn project() -> ProjectRevision3 {
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        greetings: Vec::new(),
     };
     let module = npc
         .regenerate_script_module(Revision3TypedRef::new(
@@ -509,6 +510,90 @@ fn equivalent_parent_triples_are_noop_or_name_only_even_under_a_different_catalo
     assert_eq!(
         outcome.project.entities[&id(0x62)],
         project.entities[&id(0x62)]
+    );
+}
+
+#[test]
+fn profile_name_and_archetype_edits_preserve_ordered_npc_greetings_and_shared_lines() {
+    let mut project = project();
+    let localization_id = id(0x80);
+    let line_id = id(0x81);
+    project.entities.insert(
+        localization_id,
+        Revision3Entity {
+            id: localization_id,
+            display_name: "Greeting localization".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_PROFILE_GREETING_LOC".to_owned(),
+            },
+            revision: 2,
+            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                loc_id: "GORE_PROFILE_GREETING".to_owned(),
+                texts: BTreeMap::new(),
+            }),
+        },
+    );
+    project.entities.insert(
+        line_id,
+        Revision3Entity {
+            id: line_id,
+            display_name: "Greeting line".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_PROFILE_GREETING_LINE".to_owned(),
+            },
+            revision: 3,
+            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                localization: Revision3TypedRef::new(
+                    project.project_id,
+                    localization_id,
+                    Revision3EntityKind::LocalizationEntry,
+                ),
+                speaker_hint: Some("Asghan".to_owned()),
+                voice_slots: BTreeMap::new(),
+            }),
+        },
+    );
+    let greeting = Revision3NpcGreetingBindingV1 {
+        line: Revision3TypedRef::new(project.project_id, line_id, Revision3EntityKind::DialogLine),
+    };
+    let Revision3EntityPayload::NpcDraft(npc) =
+        &mut project.entities.get_mut(&id(0x61)).unwrap().payload
+    else {
+        unreachable!()
+    };
+    npc.greetings = vec![greeting.clone()];
+    project.validate_closed_model().unwrap();
+    let basis_line = project.entities[&line_id].clone();
+    let basis_localization = project.entities[&localization_id].clone();
+
+    let name_request = request(
+        &project,
+        &head(0x71),
+        "Greeting castle guard",
+        CURRENT_CATALOG_ID,
+    );
+    let named = applied(evaluate(&project, &name_request, name_context(&project)).unwrap());
+    let Revision3EntityPayload::NpcDraft(named_npc) = &named.project.entities[&id(0x61)].payload
+    else {
+        unreachable!()
+    };
+    assert_eq!(named_npc.greetings, vec![greeting.clone()]);
+    assert_eq!(named.project.entities[&line_id], basis_line);
+    assert_eq!(named.project.entities[&localization_id], basis_localization);
+
+    let archetype_request = request(&project, &head(0x71), "Gate guard", DESIRED_CATALOG_ID);
+    let archetyped =
+        applied(evaluate(&project, &archetype_request, archetype_context(&project)).unwrap());
+    let Revision3EntityPayload::NpcDraft(archetyped_npc) =
+        &archetyped.project.entities[&id(0x61)].payload
+    else {
+        unreachable!()
+    };
+    assert_eq!(archetyped_npc.greetings, vec![greeting]);
+    assert_eq!(archetyped.project.entities[&line_id], basis_line);
+    assert_eq!(
+        archetyped.project.entities[&localization_id],
+        basis_localization
     );
 }
 

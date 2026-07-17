@@ -26,6 +26,13 @@ typedef Revision3StoryQuestTranscriptBuilder =
       required String? selectedLineId,
       required ValueChanged<String?> onSelectedLineChanged,
     });
+typedef Revision3StoryNpcDialogVoiceBuilder =
+    Widget Function({
+      required Revision3ContentIndex index,
+      required Revision3ContentEntity npc,
+      required String? selectedLineId,
+      required ValueChanged<String?> onSelectedLineChanged,
+    });
 typedef Revision3StoryQuestJourneyBuilder =
     Widget Function({
       required Revision3ContentIndex index,
@@ -460,6 +467,7 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     this.removeDraftDisabledReason,
     this.questJourneyBuilder,
     this.questTranscriptBuilder,
+    this.npcDialogVoiceBuilder,
     super.key,
   }) : assert(projectRoot != ''),
        assert(projectId != ''),
@@ -513,6 +521,10 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   /// Builds the exact-current Quest transcript UI without granting this
   /// workspace native publication or navigation authority.
   final Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder;
+
+  /// Builds the exact-current NPC greeting/Voice UI without granting this
+  /// workspace native publication, build, deployment, or runtime authority.
+  final Revision3StoryNpcDialogVoiceBuilder? npcDialogVoiceBuilder;
 
   @override
   State<Revision3StoryWorkspace> createState() =>
@@ -1432,6 +1444,25 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
           ? widget.questTranscriptBuilder!(
               index: index,
               quest: entity,
+              selectedLineId: _selectedTranscriptLines[entity.id],
+              onSelectedLineChanged: (lineId) {
+                if (!_isExactCurrentIndex(index)) return;
+                updatePresentation(() {
+                  if (lineId == null || lineId.isEmpty) {
+                    _selectedTranscriptLines.remove(entity.id);
+                  } else {
+                    _selectedTranscriptLines[entity.id] = lineId;
+                  }
+                });
+              },
+            )
+          : null,
+      npcDialogVoice:
+          entity.kind == Revision3ContentEntityKind.npcDraft &&
+              widget.npcDialogVoiceBuilder != null
+          ? widget.npcDialogVoiceBuilder!(
+              index: index,
+              npc: entity,
               selectedLineId: _selectedTranscriptLines[entity.id],
               onSelectedLineChanged: (lineId) {
                 if (!_isExactCurrentIndex(index)) return;

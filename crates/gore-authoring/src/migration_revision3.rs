@@ -141,7 +141,13 @@ fn migrate_entity(source: &revision2::Entity) -> revision3::Entity {
             revision3::EntityPayload::VoiceTake(value.clone())
         }
         revision2::EntityPayload::NpcDraft(value) => {
-            revision3::EntityPayload::NpcDraft(value.clone())
+            revision3::EntityPayload::NpcDraft(revision3::NpcDraft {
+                generator_id: value.generator_id.clone(),
+                generator_version: value.generator_version,
+                input: value.input.clone(),
+                script_module: value.script_module.clone(),
+                greetings: Vec::new(),
+            })
         }
         revision2::EntityPayload::ScriptModule(value) => {
             revision3::EntityPayload::ScriptModule(value.clone())

@@ -1137,6 +1137,7 @@ impl Revision3NpcSourceInspectionPlanV1 {
             generator_version: self.npc.generator_version,
             input: self.npc.input.clone(),
             script_module: self.npc.script_module.clone(),
+            greetings: Vec::new(),
         };
         let expected = reconstructed
             .regenerate_script_module(self.npc.reference.clone())

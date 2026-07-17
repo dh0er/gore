@@ -269,6 +269,7 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
     required this.actions,
     this.questJourney,
     this.questTranscript,
+    this.npcDialogVoice,
     this.copy = const Revision3StoryEntityWorkbenchCopy.english(),
     super.key,
   }) : assert(
@@ -297,8 +298,14 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
   ///
   /// The workbench deliberately does not manufacture transcript authority.
   /// When no exact-current editor is supplied, the previous unavailable state
-  /// remains visible. NPC dialog authoring stays unavailable in either case.
+  /// remains visible.
   final Widget? questTranscript;
+
+  /// Friendly NPC-only greeting and Voice editor supplied by the owning
+  /// workspace. The workbench grants no publication or runtime authority when
+  /// it hosts this widget; an absent editor keeps the bounded unavailable
+  /// state visible.
+  final Widget? npcDialogVoice;
   final Revision3StoryEntityWorkbenchCopy copy;
 
   static Revision3StoryWorkbenchSection defaultSectionFor(
@@ -624,6 +631,9 @@ class _Revision3StoryEntityWorkbenchState
           if (entity.kind == Revision3ContentEntityKind.questDraft &&
               widget.questTranscript != null)
             widget.questTranscript!
+          else if (entity.kind == Revision3ContentEntityKind.npcDraft &&
+              widget.npcDialogVoice != null)
+            widget.npcDialogVoice!
           else
             _UnavailableCapability(
               title: widget.copy.dialogVoiceTab,

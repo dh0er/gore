@@ -12,6 +12,7 @@ import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
+import 'revision3_npc_greeting_authoring.dart';
 import 'revision3_project_history.dart';
 import 'revision3_quest_transcript_authoring.dart';
 import 'revision3_voice_take_preview_authoring.dart';
@@ -313,6 +314,42 @@ final class ManagedRevision3QuestTranscriptCheckpoint {
   final int moduleRevision;
   final AuthoringRevision3QuestTranscriptMode mode;
   final int transcriptCount;
+  final String? createdLineId;
+  final String? createdLocalizationId;
+  final String? createdVoiceSlotId;
+  final AuthoringRevision3DialogLocalizationAction? localizationAction;
+}
+
+/// One exact NPC greeting list returned only after native preparation, full
+/// candidate reopen, guarded fixed-head CAS and a full published reopen.
+final class ManagedRevision3NpcGreetingCheckpoint {
+  const ManagedRevision3NpcGreetingCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.npcId,
+    required this.npcRevision,
+    required this.moduleId,
+    required this.moduleRevision,
+    required this.mode,
+    required this.greetingCount,
+    required this.createdLineId,
+    required this.createdLocalizationId,
+    required this.createdVoiceSlotId,
+    required this.localizationAction,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String npcId;
+  final int npcRevision;
+  final String moduleId;
+  final int moduleRevision;
+  final AuthoringRevision3NpcGreetingMode mode;
+  final int greetingCount;
   final String? createdLineId;
   final String? createdLocalizationId;
   final String? createdVoiceSlotId;
@@ -1191,6 +1228,16 @@ abstract interface class ManagedRevision3QuestTranscriptStore {
   });
 }
 
+/// Optional authority for preparing one project-only NPC greeting candidate.
+/// Alternate checkpoint stores and unrelated fakes must opt in explicitly.
+abstract interface class ManagedRevision3NpcGreetingStore {
+  Future<AuthoringRevision3NpcGreetingPreparation> prepareNpcGreetingV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcGreetingRequestV1 request,
+  });
+}
+
 /// Narrow capability for preparing the exact removal of one Story Draft and
 /// its uniquely-owned generated ScriptModule. Keeping it separate avoids
 /// granting deletion authority to checkpoint-only alternate stores and fakes.
@@ -1272,6 +1319,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3ProjectHistoryStore,
         ManagedRevision3VoiceBatchStore,
         ManagedRevision3QuestTranscriptStore,
+        ManagedRevision3NpcGreetingStore,
         ManagedRevision3StoryDraftRemovalStore,
         ManagedRevision3VoiceTakeMediaQaStore,
         ManagedRevision3VoiceTakePreviewStore,
@@ -1367,6 +1415,17 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3QuestTranscriptRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3QuestTranscriptV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3NpcGreetingPreparation> prepareNpcGreetingV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcGreetingRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3NpcGreetingV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -2187,6 +2246,7 @@ class ManagedRevision3AuthoringProjectSession {
   bool get supportsVoiceBatch => _store is ManagedRevision3VoiceBatchStore;
   bool get supportsQuestTranscript =>
       _store is ManagedRevision3QuestTranscriptStore;
+  bool get supportsNpcGreeting => _store is ManagedRevision3NpcGreetingStore;
   bool get supportsDialogVoiceSlotRemoval =>
       _store is ManagedRevision3DialogVoiceSlotRemovalStore;
   bool get supportsNpcProfileEdit =>
@@ -2800,6 +2860,180 @@ class ManagedRevision3AuthoringProjectSession {
             moduleRevision: prepared.moduleRevision,
             mode: prepared.mode,
             transcriptCount: prepared.transcriptCount,
+            createdLineId: prepared.createdLineId,
+            createdLocalizationId: prepared.createdLocalizationId,
+            createdVoiceSlotId: prepared.createdVoiceSlotId,
+            localizationAction: prepared.localizationAction,
+          ),
+        );
+      },
+    );
+  }
+
+  Future<ManagedRevision3NpcGreetingCheckpoint>
+  prepareAndPublishNpcGreetingReplaceV1({
+    required Revision3NpcGreetingReplaceTechnicalPlan plan,
+  }) => _prepareAndPublishNpcGreetingV1(
+    operation: 'prepareAndPublishNpcGreetingReplaceV1',
+    npcId: plan.npcId,
+    expectedNpcRevision: plan.expectedNpcRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedGreetingCount: null,
+    intentForBasis: (basis) =>
+        AuthoringRevision3NpcGreetingReplaceIntentV1(bindings: plan.bindings),
+  );
+
+  Future<ManagedRevision3NpcGreetingCheckpoint>
+  prepareAndPublishNpcGreetingCreateV1({
+    required Revision3NpcGreetingCreateTechnicalPlan plan,
+  }) => _prepareAndPublishNpcGreetingV1(
+    operation: 'prepareAndPublishNpcGreetingCreateV1',
+    npcId: plan.npcId,
+    expectedNpcRevision: plan.expectedNpcRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedGreetingCount: plan.expectedGreetingCount,
+    intentForBasis: (basis) {
+      final line = plan.line;
+      return AuthoringRevision3NpcGreetingCreateAndInsertIntentV1(
+        index: plan.index,
+        line: AuthoringRevision3DialogLineEntryRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          lineId: line.lineId,
+          lineDisplayName: line.lineDisplayName,
+          lineAuthoredIdentity: line.lineAuthoredIdentity,
+          speakerHint: line.speakerHint,
+          localization: line.localization,
+          voiceSlot: line.voiceSlot,
+        ),
+      );
+    },
+  );
+
+  Future<ManagedRevision3NpcGreetingCheckpoint>
+  _prepareAndPublishNpcGreetingV1({
+    required String operation,
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required int? expectedGreetingCount,
+    required AuthoringRevision3NpcGreetingIntentV1 Function(
+      _ManagedOpenedCheckpoint basis,
+    )
+    intentForBasis,
+  }) {
+    final store = _store;
+    if (store is! ManagedRevision3NpcGreetingStore) {
+      return Future<ManagedRevision3NpcGreetingCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no NPC greeting capability',
+        ),
+      );
+    }
+    final greetingStore = store as ManagedRevision3NpcGreetingStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3NpcGreetingCheckpoint
+    >(
+      operation: operation,
+      handlePrepareError: _core._throwRevision3NpcGreetingPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 NPC greeting edit has no exact project identity',
+          );
+        }
+        final intent = intentForBasis(basis);
+        final request = AuthoringRevision3NpcGreetingRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          npcId: npcId,
+          expectedNpcRevision: expectedNpcRevision,
+          intent: intent,
+        );
+        if (request.moduleId != expectedModuleId ||
+            request.expectedModuleRevision != expectedModuleRevision ||
+            (expectedGreetingCount != null &&
+                request.expectedGreetingCount != expectedGreetingCount)) {
+          throw const FormatException(
+            'revision-3 NPC greeting edit does not bind the selected NPC checkpoint',
+          );
+        }
+        final prepared = await greetingStore.prepareNpcGreetingV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        final expectedCreatedLine =
+            intent is AuthoringRevision3NpcGreetingCreateAndInsertIntentV1
+            ? intent.line.lineId
+            : null;
+        final expectedCreatedLocalization =
+            intent is AuthoringRevision3NpcGreetingCreateAndInsertIntentV1
+            ? intent.line.localization.localizationId
+            : null;
+        final expectedCreatedVoice =
+            intent is AuthoringRevision3NpcGreetingCreateAndInsertIntentV1
+            ? intent.line.voiceSlot?.slotId
+            : null;
+        final expectedAction =
+            intent is AuthoringRevision3NpcGreetingCreateAndInsertIntentV1
+            ? (intent.line.localization
+                      is AuthoringRevision3DialogLocalizationCreateIntentV1
+                  ? AuthoringRevision3DialogLocalizationAction.created
+                  : AuthoringRevision3DialogLocalizationAction.reusedExact)
+            : null;
+        final expectedCount = switch (intent) {
+          AuthoringRevision3NpcGreetingReplaceIntentV1(:final bindings) =>
+            bindings.length,
+          AuthoringRevision3NpcGreetingCreateAndInsertIntentV1() =>
+            request.expectedGreetingCount + 1,
+        };
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.npcId != request.npcId ||
+            prepared.npcRevision != request.expectedNpcRevision + 1 ||
+            prepared.moduleId != request.moduleId ||
+            prepared.moduleRevision != request.expectedModuleRevision ||
+            prepared.mode != intent.mode ||
+            prepared.greetingCount != expectedCount ||
+            prepared.createdLineId != expectedCreatedLine ||
+            prepared.createdLocalizationId != expectedCreatedLocalization ||
+            prepared.createdVoiceSlotId != expectedCreatedVoice ||
+            prepared.localizationAction != expectedAction ||
+            prepared.buildStatus !=
+                AuthoringRevision3DialogBuildStatus.blocked ||
+            prepared.runtimeStatus !=
+                AuthoringRevision3DialogRuntimeStatus.runtimeUnqualified ||
+            prepared.topicAuthority !=
+                AuthoringRevision3DialogTopicAuthority.notGranted ||
+            prepared.publicationStatus !=
+                AuthoringRevision3DialogPublicationStatus.notSupported) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 NPC greeting preparation disagrees with its exact session basis or intent',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3NpcGreetingCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3NpcGreetingCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            npcId: prepared.npcId,
+            npcRevision: prepared.npcRevision,
+            moduleId: prepared.moduleId,
+            moduleRevision: prepared.moduleRevision,
+            mode: prepared.mode,
+            greetingCount: prepared.greetingCount,
             createdLineId: prepared.createdLineId,
             createdLocalizationId: prepared.createdLocalizationId,
             createdVoiceSlotId: prepared.createdVoiceSlotId,
@@ -6098,6 +6332,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3NpcGreetingPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_NPC_GREETING_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3NpcGreetingPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 NPC greeting preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3QuestContextPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -7799,6 +8069,26 @@ bool _revision3QuestTranscriptPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_TRANSCRIPT_SIGNED_WIRE_LIMIT',
   'AUTHORING_REVISION3_QUEST_TRANSCRIPT_STORE_LIMIT',
   'AUTHORING_REVISION3_QUEST_TRANSCRIPT_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3NpcGreetingPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_NPC_GREETING_BINDING_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_DIALOG_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_INDEX_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_NO_CHANGES',
+  'AUTHORING_REVISION3_NPC_GREETING_NPC_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_INVALID',
+  'AUTHORING_REVISION3_NPC_GREETING_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_INVALID',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_NPC_GREETING_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_REVISION_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_STORE_LIMIT',
+  'AUTHORING_REVISION3_NPC_GREETING_TARGET_CONFLICT',
 }.contains(code);
 
 bool _revision3QuestContextPrepareErrorIsRetryable(String code) => const {
