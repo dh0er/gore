@@ -35,6 +35,7 @@ import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_transcript_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_localization_voice_workspace.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
@@ -58,6 +59,9 @@ import '../dataasset/dataasset_test_fixtures.dart';
 
 const _homeQuestTranscriptQuestId = '77777777777777777777777777777777';
 const _homeQuestTranscriptModuleId = '88888888888888888888888888888888';
+const _homeQuestOpeningRecipeQuestId = '67676767676767676767676767676767';
+const _homeQuestOpeningRecipeModuleId = '68686868686868686868686868686868';
+const _homeQuestOpeningRecipeTechnicalId = 'GORE_QUEST_OPENING_RECIPE';
 
 void main() {
   test(
@@ -2604,6 +2608,410 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'guided Quest opening recipe inserts line zero and opens exact Dialog Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_quest_opening_recipe_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '19191919191919191919191919191919';
+      const openingRevision = 7;
+      const openingLineName = 'Asghan opening warning';
+      const openingLineText = 'Halt! Bevor du gehst, hoer mir zu.';
+      final contentRevisions = <int>[];
+      Revision3QuestTranscriptCreateTechnicalPlan? transcriptPlan;
+      final managed = _FakeQuestTranscriptManagedLease(
+        root: Directory(r'C:\mods\quest-opening-recipe'),
+        projectId: projectId,
+        projectRevision: openingRevision,
+        head: _head(openingRevision),
+        contentIndexBuilder: (lease) {
+          contentRevisions.add(lease.projectRevision);
+          return _questOpeningRecipeContentIndex(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            openingRevision: openingRevision,
+            createPlan: transcriptPlan,
+          );
+        },
+        onQuestPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.title, 'Warn Asghan');
+          expect(input.parentCatalogId, 'parent-one');
+          expect(input.giverCatalogId, 'giver-asghan');
+          lease.projectRevision = openingRevision + 1;
+          lease.head = _head(openingRevision + 1);
+          return Revision3QuestDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            questId: _homeQuestOpeningRecipeQuestId,
+            scriptModuleId: _homeQuestOpeningRecipeModuleId,
+          );
+        },
+        onQuestTranscriptCreate: (lease, plan) {
+          expect(lease.projectRevision, openingRevision + 1);
+          expect(plan.questId, _homeQuestOpeningRecipeQuestId);
+          expect(plan.expectedQuestRevision, 4);
+          expect(plan.expectedModuleId, _homeQuestOpeningRecipeModuleId);
+          expect(plan.expectedModuleRevision, 5);
+          expect(plan.expectedTranscriptCount, 0);
+          expect(plan.index, 0);
+          expect(plan.objectiveSlot, isNull);
+          expect(plan.line.lineDisplayName, openingLineName);
+          expect(plan.line.speakerHint, 'Asghan');
+          expect(plan.line.locale, 'de');
+          final localization =
+              plan.line.localization
+                  as AuthoringRevision3DialogLocalizationCreateIntentV1;
+          expect(localization.texts, <String, String>{'de': openingLineText});
+          transcriptPlan = plan;
+          lease.projectRevision = openingRevision + 2;
+          lease.head = _head(openingRevision + 2);
+          return Revision3QuestTranscriptPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            questId: plan.questId,
+            questRevision: plan.expectedQuestRevision + 1,
+            moduleId: plan.expectedModuleId,
+            moduleRevision: plan.expectedModuleRevision,
+            mode: AuthoringRevision3QuestTranscriptMode.createAndInsert,
+            transcriptCount: plan.expectedTranscriptCount + 1,
+            createdLineId: plan.line.lineId,
+            createdLocalizationId: localization.localizationId,
+            createdVoiceSlotId: plan.line.voiceSlot?.slotId,
+            localizationAction:
+                AuthoringRevision3DialogLocalizationAction.created,
+          );
+        },
+        onDialogLocalizationRead:
+            (lease, localizationId, localizationRevision, locId) {
+              final plan = transcriptPlan;
+              if (plan == null) {
+                throw StateError('opening-line plan has not been published');
+              }
+              final localization =
+                  plan.line.localization
+                      as AuthoringRevision3DialogLocalizationCreateIntentV1;
+              expect(localizationId, localization.localizationId);
+              expect(localizationRevision, 0);
+              expect(locId, localization.locId);
+              return _questOpeningRecipeLocalizationReadResult(
+                lease: lease,
+                line: plan.line,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadQuestCatalog: (_) async => _questCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final recipeAction = find.byKey(
+        const Key('managed-create-quest-opening-recipe'),
+      );
+      expect(recipeAction, findsOneWidget);
+      final l10n = AppLocalizations.of(tester.element(recipeAction));
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-quest-opening-recipe'),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('managed-quest-opening-recipe-intro')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedQuestOpeningRecipeIntroduction),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('managed-quest-opening-recipe-start')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-title')),
+        'Warn Asghan',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-description')),
+        'Give Asghan an opening warning before the route continues.',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-objective')),
+        'Listen to Asghan',
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedQuestOpeningLineIntroduction),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-name')),
+        openingLineName,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-speaker')),
+        'Asghan',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-locale')),
+        'de',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-text')),
+        openingLineText,
+      );
+      final submit = find.byKey(const Key('revision3-dialog-line-submit'));
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-dialog-line-success')),
+        findsOneWidget,
+      );
+      expect(managed.questPublishCalls, 1);
+      expect(managed.questTranscriptCreateCalls, 1);
+      expect(managed.dialogLinePublishCalls, 0);
+      expect(transcriptPlan, isNotNull);
+
+      await tester.tap(find.byKey(const Key('revision3-dialog-line-done')));
+      await tester.pumpAndSettle();
+
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, openingRevision + 2);
+      expect(
+        state.head.canonicalJson,
+        _head(openingRevision + 2).canonicalJson,
+      );
+      expect(contentRevisions.first, openingRevision);
+      expect(contentRevisions, contains(openingRevision + 1));
+      expect(contentRevisions, contains(openingRevision + 2));
+      expect(
+        find.text(l10n.managedQuestOpeningRecipeComplete(openingRevision + 2)),
+        findsOneWidget,
+      );
+
+      final selectedQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-'
+          '$_homeQuestOpeningRecipeQuestId',
+        ),
+      );
+      expect(selectedQuest, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedQuest).selected, isTrue);
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$_homeQuestOpeningRecipeQuestId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-row-0')),
+        findsOneWidget,
+      );
+      expect(find.text(openingLineName), findsWidgets);
+      expect(find.text(openingLineText), findsOneWidget);
+
+      final plan = transcriptPlan!;
+      final localization =
+          plan.line.localization
+              as AuthoringRevision3DialogLocalizationCreateIntentV1;
+      for (final technicalId in <String>[
+        _homeQuestOpeningRecipeQuestId,
+        _homeQuestOpeningRecipeModuleId,
+        _homeQuestOpeningRecipeTechnicalId,
+        plan.line.lineId,
+        plan.line.lineAuthoredIdentity,
+        localization.localizationId,
+        localization.locId,
+        if (plan.line.voiceSlot case final slot?) slot.slotId,
+      ]) {
+        expect(find.text(technicalId), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'guided Quest opening recipe cancel keeps exact Quest-only checkpoint',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_quest_opening_recipe_cancel_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '20202020202020202020202020202020';
+      const openingRevision = 7;
+      final contentRevisions = <int>[];
+      final managed = _FakeQuestTranscriptManagedLease(
+        root: Directory(r'C:\mods\quest-opening-recipe-cancel'),
+        projectId: projectId,
+        projectRevision: openingRevision,
+        head: _head(openingRevision),
+        contentIndexBuilder: (lease) {
+          contentRevisions.add(lease.projectRevision);
+          return _questOpeningRecipeContentIndex(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            openingRevision: openingRevision,
+          );
+        },
+        onQuestPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.title, 'Keep this Quest');
+          lease.projectRevision = openingRevision + 1;
+          lease.head = _head(openingRevision + 1);
+          return Revision3QuestDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            questId: _homeQuestOpeningRecipeQuestId,
+            scriptModuleId: _homeQuestOpeningRecipeModuleId,
+          );
+        },
+        onQuestTranscriptCreate: (_, _) => throw TestFailure(
+          'cancelling the opening-line dialog must not publish a transcript',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadQuestCatalog: (_) async => _questCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final recipeAction = find.byKey(
+        const Key('managed-create-quest-opening-recipe'),
+      );
+      final l10n = AppLocalizations.of(tester.element(recipeAction));
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-quest-opening-recipe'),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('managed-quest-opening-recipe-intro')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('managed-quest-opening-recipe-start')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-title')),
+        'Keep this Quest',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-description')),
+        'The Quest must remain after cancelling only its opening line.',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-objective')),
+        'Keep the exact Quest checkpoint',
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-dialog-line-cancel')));
+      await tester.pumpAndSettle();
+
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, openingRevision + 1);
+      expect(
+        state.head.canonicalJson,
+        _head(openingRevision + 1).canonicalJson,
+      );
+      expect(managed.questPublishCalls, 1);
+      expect(managed.questTranscriptCreateCalls, 0);
+      expect(managed.dialogLinePublishCalls, 0);
+      expect(contentRevisions.first, openingRevision);
+      expect(contentRevisions, contains(openingRevision + 1));
+      expect(contentRevisions, isNot(contains(openingRevision + 2)));
+      expect(
+        find.text(l10n.managedQuestOpeningRecipePartial(openingRevision + 1)),
+        findsOneWidget,
+      );
+
+      final selectedQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-'
+          '$_homeQuestOpeningRecipeQuestId',
+        ),
+      );
+      expect(selectedQuest, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedQuest).selected, isTrue);
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$_homeQuestOpeningRecipeQuestId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-row-0')),
+        findsNothing,
+      );
+      for (final technicalId in const <String>[
+        _homeQuestOpeningRecipeQuestId,
+        _homeQuestOpeningRecipeModuleId,
+        _homeQuestOpeningRecipeTechnicalId,
+      ]) {
+        expect(find.text(technicalId), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -6791,6 +7199,11 @@ typedef _ProjectExportCallback =
       _FakeExportManagedLease lease,
       String output,
     );
+typedef _QuestTranscriptCreateCallback =
+    FutureOr<Revision3QuestTranscriptPublication> Function(
+      _FakeQuestTranscriptManagedLease lease,
+      Revision3QuestTranscriptCreateTechnicalPlan plan,
+    );
 
 class _FakeManagedLease
     implements
@@ -7451,6 +7864,48 @@ class _FakeManagedLease
   }
 }
 
+final class _FakeQuestTranscriptManagedLease extends _FakeManagedLease
+    implements ManagedRevision3QuestTranscriptLease {
+  _FakeQuestTranscriptManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required this.onQuestTranscriptCreate,
+    super.onQuestPublish,
+    super.onDialogLocalizationRead,
+    super.contentIndexBuilder,
+  });
+
+  final _QuestTranscriptCreateCallback onQuestTranscriptCreate;
+  int questTranscriptCreateCalls = 0;
+
+  @override
+  bool get supportsQuestTranscript => true;
+
+  @override
+  void markRequiresReopenAfterQuestTranscriptUncertainty() {
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptCreateV1({
+    required Revision3QuestTranscriptCreateTechnicalPlan plan,
+  }) async {
+    questTranscriptCreateCalls++;
+    return onQuestTranscriptCreate(this, plan);
+  }
+
+  @override
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptReplaceV1({
+    required Revision3QuestTranscriptReplaceTechnicalPlan plan,
+  }) => throw StateError(
+    'opening-recipe fake does not support transcript replacement',
+  );
+}
+
 final class _FakeHistoryManagedLease extends _FakeManagedLease
     implements ManagedRevision3ProjectHistoryLease {
   _FakeHistoryManagedLease({
@@ -7845,6 +8300,226 @@ Revision3ContentIndex _contentIndex({
   'assets': <Object?>[],
 });
 
+Revision3ContentIndex _questOpeningRecipeContentIndex({
+  required String projectId,
+  required int projectRevision,
+  required int openingRevision,
+  Revision3QuestTranscriptCreateTechnicalPlan? createPlan,
+}) {
+  if (projectRevision == openingRevision) {
+    return _contentIndex(projectId: projectId, revision: projectRevision);
+  }
+  final questOnlyRevision = openingRevision + 1;
+  final completedRevision = openingRevision + 2;
+  if (projectRevision != questOnlyRevision &&
+      projectRevision != completedRevision) {
+    throw StateError(
+      'unexpected Quest-opening fixture revision $projectRevision',
+    );
+  }
+  final completed = projectRevision == completedRevision;
+  if (completed && createPlan == null) {
+    throw StateError('N+2 Quest-opening fixture requires the published plan');
+  }
+  final line = completed ? createPlan!.line : null;
+  AuthoringRevision3DialogLocalizationCreateIntentV1? localization;
+  if (line != null) {
+    final intent = line.localization;
+    if (intent is! AuthoringRevision3DialogLocalizationCreateIntentV1) {
+      throw StateError('Quest-opening fixture requires created localization');
+    }
+    localization = intent;
+  }
+  final slot = line?.voiceSlot;
+  final questRevision = completed ? createPlan!.expectedQuestRevision + 1 : 4;
+  final moduleRevision = completed ? createPlan!.expectedModuleRevision : 5;
+  final entities =
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'id': _homeQuestOpeningRecipeQuestId,
+          'kind': 'quest_draft',
+          'display_name': 'Warn Asghan',
+          'revision': questRevision,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': _homeQuestOpeningRecipeTechnicalId,
+          },
+          'summary': <String, Object?>{
+            'kind': 'quest_draft',
+            'data': <String, Object?>{
+              'technical_id': _homeQuestOpeningRecipeTechnicalId,
+              'title': 'Warn Asghan',
+              'objective_title': 'Listen to Asghan',
+              'objective_slots': <Object?>[1],
+              'transcript_count': completed ? 1 : 0,
+              'module_namespace': 'PROJECT.QUESTS.WARNASGHAN',
+              'parent_runtime_class': 'B_Quest_FindHomer_C',
+              'giver_runtime_unique_name': 'ASGHAN',
+            },
+          },
+          'references': <Object?>[
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'draft_script_module',
+              entityId: _homeQuestOpeningRecipeModuleId,
+              expectedKind: 'script_module',
+            ),
+            if (line != null)
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'quest_transcript_line',
+                qualifier: createPlan!.objectiveSlot?.toString(),
+                entityId: line.lineId,
+                expectedKind: 'dialog_line',
+              ),
+          ],
+          'asset_references': <Object?>[],
+        },
+        <String, Object?>{
+          'id': _homeQuestOpeningRecipeModuleId,
+          'kind': 'script_module',
+          'display_name': 'Warn Asghan Script',
+          'revision': moduleRevision,
+          'origin': <String, Object?>{
+            'type': 'generated',
+            'generator_id': 'gore-authoring.draft-quest-skeleton',
+            'generator_version': 4,
+            'owner': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _homeQuestOpeningRecipeQuestId,
+              'expected_kind': 'quest_draft',
+            },
+          },
+          'summary': <String, Object?>{
+            'kind': 'script_module',
+            'data': <String, Object?>{
+              'generator_id': 'gore-authoring.draft-quest-skeleton',
+              'generator_version': 4,
+              'module_namespace': 'PROJECT.QUESTS.WARNASGHAN',
+              'module_relative_path': 'PROJECT/QUESTS/WARNASGHAN.as',
+              'status': <String, Object?>{
+                'authoring': 'offline_draft',
+                'runtime': 'runtime_unqualified',
+              },
+            },
+          },
+          'references': <Object?>[
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'origin_owner',
+              entityId: _homeQuestOpeningRecipeQuestId,
+              expectedKind: 'quest_draft',
+            ),
+          ],
+          'asset_references': <Object?>[],
+        },
+        if (localization != null)
+          <String, Object?>{
+            'id': localization.localizationId,
+            'kind': 'localization_entry',
+            'display_name': localization.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': localization.locId,
+            },
+            'summary': <String, Object?>{
+              'kind': 'localization_entry',
+              'data': <String, Object?>{
+                'loc_id': localization.locId,
+                'locales': <Object?>[...localization.texts.keys],
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+        if (line != null)
+          <String, Object?>{
+            'id': line.lineId,
+            'kind': 'dialog_line',
+            'display_name': line.lineDisplayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': line.lineAuthoredIdentity,
+            },
+            'summary': <String, Object?>{
+              'kind': 'dialog_line',
+              'data': <String, Object?>{
+                'speaker_hint': line.speakerHint,
+                'voice_slot_locales': <Object?>[if (slot != null) slot.locale],
+              },
+            },
+            'references': <Object?>[
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'dialog_localization',
+                entityId: localization!.localizationId,
+                expectedKind: 'localization_entry',
+              ),
+              if (slot != null)
+                _dialogLineEntityReference(
+                  projectId: projectId,
+                  role: 'dialog_voice_slot',
+                  qualifier: slot.locale,
+                  entityId: slot.slotId,
+                  expectedKind: 'voice_slot',
+                ),
+            ],
+            'asset_references': <Object?>[],
+          },
+        if (slot != null)
+          <String, Object?>{
+            'id': slot.slotId,
+            'kind': 'voice_slot',
+            'display_name': slot.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': 'GORE_VOICE_${slot.slotId.toUpperCase()}',
+            },
+            'summary': <String, Object?>{
+              'kind': 'voice_slot',
+              'data': <String, Object?>{
+                'locale': slot.locale,
+                'target_resolution': 'unresolved',
+                'candidate_count': 0,
+                'has_selected_take': false,
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+      ]..sort(
+        (left, right) =>
+            (left['id']! as String).compareTo(right['id']! as String),
+      );
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'project_name': 'Home Quest opening recipe project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 1,
+        'sha256': List<String>.filled(64, '5').join(),
+      },
+    },
+    'authoring_locales': <Object?>['de', 'en'],
+    'entity_counts': <String, Object?>{
+      if (localization != null) 'localization_entry': 1,
+      if (line != null) 'dialog_line': 1,
+      if (slot != null) 'voice_slot': 1,
+      'quest_draft': 1,
+      'script_module': 1,
+    },
+    'entities': entities,
+    'assets': <Object?>[],
+  });
+}
+
 Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
   required int revision,
   int localizationRevision = 0,
@@ -8000,6 +8675,50 @@ AuthoringRevision3DialogLocalizationReadResult _dialogLocalizationReadResult({
           'preview': '   ',
           'truncated': false,
           'has_nonempty_text': false,
+        },
+      ],
+      'content_authority': 'read_only_exact_current_localization',
+      'build_status': 'not_evaluated',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_applicable',
+    },
+    request: request,
+  );
+}
+
+AuthoringRevision3DialogLocalizationReadResult
+_questOpeningRecipeLocalizationReadResult({
+  required _FakeManagedLease lease,
+  required Revision3DialogLineEntryTechnicalPlan line,
+}) {
+  final localization =
+      line.localization as AuthoringRevision3DialogLocalizationCreateIntentV1;
+  final text = localization.texts[line.locale];
+  if (text == null) {
+    throw StateError('opening-line localization has no selected locale');
+  }
+  final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+    expectedHead: lease.head,
+    localizationId: localization.localizationId,
+    expectedLocalizationRevision: 0,
+    expectedLocId: localization.locId,
+  );
+  return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'read_only',
+      'head_json': lease.head.canonicalJson,
+      'project_id': lease.projectId,
+      'project_revision': lease.projectRevision,
+      'localization_id': localization.localizationId,
+      'localization_revision': 0,
+      'loc_id': localization.locId,
+      'locales': <Object?>[
+        <String, Object?>{
+          'locale': line.locale,
+          'preview': text,
+          'truncated': false,
+          'has_nonempty_text': true,
         },
       ],
       'content_authority': 'read_only_exact_current_localization',

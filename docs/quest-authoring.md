@@ -284,6 +284,30 @@ qualification. The generator's plain-text subset is validated in the form, and
 the UI continues to show `blocked` and `runtime_unqualified` without compile,
 deploy, game-install, or save-file claims.
 
+### Guided Quest + opening line Draft V1
+
+Home also offers a recommended **Quest + opening line** recipe for authors who
+want to continue writing immediately instead of finding the new Quest again.
+The introduction states the two publication checkpoints before anything is
+created. The existing Quest wizard first publishes Quest and ScriptModule from
+revision N to N+1. Studio then rebinds to that exact root, project ID, revision,
+and canonical head before opening the existing dialog-line form. Saving that
+form publishes DialogLine, LocalizationEntry, and an optional empty VoiceSlot
+and inserts the line at transcript position zero from N+1 to N+2.
+
+The two steps are deliberately not presented as one atomic transaction. If the
+author cancels the line form, or a safe line publication does not occur, the
+Quest remains at N+1 and Studio opens that exact Quest in **Story -> Dialog &
+Voice**. A completed result is likewise reopened and selected at N+2. Both
+handoffs validate exact publication identities and revision/head progression;
+the recipe is single-flight and turns uncertain publication into a required
+project reopen rather than guessing.
+
+This convenience flow creates an ordered Draft transcript entry, not a playable
+conversation. It creates no topic or choice, Quest-start link, NPC binding,
+selection effect, build/deploy authority, runtime proof, game-install write, or
+save-file write.
+
 ### Managed revision-3 Studio transaction boundary
 
 `ManagedRevision3AuthoringProjectSession` builds the native request from its own

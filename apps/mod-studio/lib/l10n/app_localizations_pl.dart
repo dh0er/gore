@@ -1234,6 +1234,55 @@ class AppLocalizationsPl extends AppLocalizations {
       'Utwórz szkic zadania offline z celami i zweryfikowanymi tożsamościami nadrzędnymi.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Zadanie + pierwsza kwestia';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Zalecane: utwórz wersję roboczą zadania, a następnie napisz i wstaw pierwszą zlokalizowaną kwestię. Ten proces korzysta z dwóch punktów kontrolnych projektu i nie tworzy grywalnego dialogu.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Ten prowadzony proces najpierw zapisuje zadanie, a następnie otwiera jego pierwszą kwestię dialogową. Jeśli przerwiesz po kroku 1, zadanie pozostanie zapisane. Proces nie tworzy grywalnego dialogu ani nie zmienia gry lub zapisów.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Rozpocznij prowadzone zadanie';
+
+  @override
+  String get managedQuestOpeningLineTitle =>
+      'Krok 2 z 2: pierwsza kwestia dialogowa';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Napisz pierwszą zlokalizowaną kwestię tego zadania. Zapisanie utworzy kwestię i jej tekst, a następnie wstawi ją na początku transkrypcji zadania.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Zadanie zapisano w rewizji projektu $projectRevision. Przygotowywanie pierwszej kwestii...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Zadanie zapisano w rewizji projektu $projectRevision; nie dodano pierwszej kwestii. Kontynuuj w sekcji Fabuła > Dialogi i głosy.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'Nie udało się rozpocząć prowadzonego zadania. Nie opublikowano żadnych zmian projektu.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'Prowadzony proces został zatrzymany, ponieważ zmienił się dokładny bieżący stan projektu. Żaden kolejny krok nie zostanie uruchomiony automatycznie; sprawdź Fabułę i kontynuuj ręcznie.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'Prowadzony proces nie mógł być bezpiecznie kontynuowany. Otwórz ponownie ten projekt i sprawdź Fabułę przed ponowną próbą lub ręcznym kontynuowaniem.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Zadanie i pierwszą kwestię zapisano w rewizji projektu $projectRevision. Tylko wersja robocza: nie utworzono grywalnego dialogu ani nie zmieniono gry lub zapisów.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Dodaj kwestię dialogową';
 
   @override

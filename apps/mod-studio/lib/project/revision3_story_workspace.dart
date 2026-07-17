@@ -271,15 +271,17 @@ final class Revision3StoryWorkspaceCopy {
 /// Exact pending navigation for a newly-created Story draft.
 ///
 /// The expected project revision is mandatory so a delayed request can never
-/// select a coincidentally matching entity from a later checkpoint. Requests
-/// only attach while the matching workspace is mounted; a newer request
-/// supersedes an older one. Call [dispose] when the owning project surface is
-/// permanently released.
+/// select a coincidentally matching entity from a later checkpoint. Callers
+/// with an exact publication receipt may additionally bind the canonical head,
+/// closing same-revision head drift. Requests only attach while the matching
+/// workspace is mounted; a newer request supersedes an older one. Call
+/// [dispose] when the owning project surface is permanently released.
 final class Revision3StoryWorkspaceController {
   Object? _attachment;
   Future<bool> Function(
     String entityId,
     int projectRevision,
+    String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
   )?
   _selectEntityAtRevision;
@@ -289,6 +291,7 @@ final class Revision3StoryWorkspaceController {
   Future<bool> selectEntityAtRevision({
     required String entityId,
     required int projectRevision,
+    String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
   }) {
     final select = _selectEntityAtRevision;
@@ -298,7 +301,7 @@ final class Revision3StoryWorkspaceController {
         projectRevision < 1) {
       return Future<bool>.value(false);
     }
-    return select(entityId, projectRevision, section);
+    return select(entityId, projectRevision, projectHeadCanonicalJson, section);
   }
 
   void dispose() {
@@ -315,6 +318,7 @@ final class Revision3StoryWorkspaceController {
     Future<bool> Function(
       String entityId,
       int projectRevision,
+      String? projectHeadCanonicalJson,
       Revision3StoryWorkbenchSection? section,
     )
     selectEntityAtRevision,
@@ -375,11 +379,13 @@ final class _PendingStorySelection {
   _PendingStorySelection({
     required this.entityId,
     required this.projectRevision,
+    required this.projectHeadCanonicalJson,
     required this.section,
   });
 
   final String entityId;
   final int projectRevision;
+  final String? projectHeadCanonicalJson;
   final Revision3StoryWorkbenchSection? section;
   final Completer<bool> result = Completer<bool>();
 }
@@ -537,7 +543,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       _usesDetailsSheet = false;
     } else {
       final pending = _pendingSelection;
-      if (pending != null && widget.projectRevision > pending.projectRevision) {
+      if (pending != null &&
+          (widget.projectRevision > pending.projectRevision ||
+              (pending.projectHeadCanonicalJson != null &&
+                  widget.projectHeadCanonicalJson !=
+                      pending.projectHeadCanonicalJson))) {
         _completePendingSelection(false);
       }
     }
@@ -622,9 +632,15 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
   Future<bool> _selectEntityAtRevision(
     String entityId,
     int projectRevision,
+    String? projectHeadCanonicalJson,
     Revision3StoryWorkbenchSection? section,
   ) {
-    if (!mounted || entityId.isEmpty || projectRevision < 1) {
+    if (!mounted ||
+        entityId.isEmpty ||
+        projectRevision < 1 ||
+        (projectRevision == widget.projectRevision &&
+            projectHeadCanonicalJson != null &&
+            projectHeadCanonicalJson != widget.projectHeadCanonicalJson)) {
       return Future<bool>.value(false);
     }
     final index = _index;
@@ -640,6 +656,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     final pending = _PendingStorySelection(
       entityId: entityId,
       projectRevision: projectRevision,
+      projectHeadCanonicalJson: projectHeadCanonicalJson,
       section: section,
     );
     _pendingSelection = pending;
@@ -651,6 +668,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     if (pending == null) return;
     if (index.projectRevision < pending.projectRevision) return;
     if (index.projectRevision > pending.projectRevision) {
+      _completePendingSelection(false);
+      return;
+    }
+    if (pending.projectHeadCanonicalJson != null &&
+        pending.projectHeadCanonicalJson != widget.projectHeadCanonicalJson) {
       _completePendingSelection(false);
       return;
     }

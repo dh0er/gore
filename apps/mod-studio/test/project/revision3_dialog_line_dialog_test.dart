@@ -881,6 +881,42 @@ void main() {
     expect(chip('en').selected, isTrue);
   });
 
+  for (final dismissMethod in <String>['close button', 'system back']) {
+    testWidgets('post-publication $dismissMethod returns the saved result', (
+      tester,
+    ) async {
+      await _setSurface(tester, width: 1100);
+      Revision3DialogLineEntryDialogResult? result;
+      await _openDialog(
+        tester,
+        service: _successfulService(),
+        allowOpenVoiceNext: false,
+        onResult: (value) => result = value,
+      );
+      await _fillCreate(tester);
+      await _submit(tester);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-success')),
+        findsOneWidget,
+      );
+
+      if (dismissMethod == 'close button') {
+        await tester.tap(find.byKey(const Key('revision3-dialog-line-close')));
+      } else {
+        await tester.binding.handlePopRoute();
+      }
+      await tester.pumpAndSettle();
+
+      expect(result, isNotNull);
+      expect(result?.publication.projectRevision, 8);
+      expect(result?.openVoiceNext, isFalse);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsNothing,
+      );
+    });
+  }
+
   testWidgets('uses fullscreen below 700 pixels and a modal on wide screens', (
     tester,
   ) async {

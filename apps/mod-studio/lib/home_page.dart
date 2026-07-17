@@ -56,6 +56,7 @@ import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_context_authoring.dart';
 import 'project/revision3_quest_context_dialog.dart';
+import 'project/revision3_quest_opening_recipe.dart';
 import 'project/revision3_quest_outline_authoring.dart';
 import 'project/revision3_quest_outline_dialog.dart';
 import 'project/revision3_quest_source_inspection_dialog.dart';
@@ -1101,6 +1102,12 @@ class _HomePageState extends ConsumerState<HomePage>
       body: switch (currentProject) {
         ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
           project: currentProject,
+          readCurrentManagedProject: () {
+            final latest = ref.read(currentProjectCoordinatorProvider);
+            return latest is ManagedRevision3CurrentProjectState
+                ? latest
+                : null;
+          },
           gameRoot: gameRoot,
           recoveryBusy: _projectActionBusy,
           managedWorkspaceDirty: _managedWorkspaceDirty,
@@ -2073,6 +2080,7 @@ class _HomePageState extends ConsumerState<HomePage>
 class _ManagedRevision3ProjectView extends StatefulWidget {
   const _ManagedRevision3ProjectView({
     required this.project,
+    required this.readCurrentManagedProject,
     required this.gameRoot,
     required this.recoveryBusy,
     required this.managedWorkspaceDirty,
@@ -2144,6 +2152,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   });
 
   final ManagedRevision3CurrentProjectState project;
+  final ManagedRevision3CurrentProjectState? Function()
+  readCurrentManagedProject;
   final String? gameRoot;
   final bool recoveryBusy;
   final bool managedWorkspaceDirty;
@@ -2235,8 +2245,13 @@ class _ManagedRevision3ProjectViewState
   bool _recoveryStarting = false;
   bool _recoveryTerminal = false;
   String? _recoveryError;
+  final Revision3QuestOpeningRecipe _questOpeningRecipe =
+      Revision3QuestOpeningRecipe();
+  bool _questOpeningRecipeUiBusy = false;
 
   ManagedRevision3CurrentProjectState get project => widget.project;
+  ManagedRevision3CurrentProjectState? get currentManagedProject =>
+      widget.readCurrentManagedProject();
   String? get gameRoot => widget.gameRoot;
   Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
   Revision3ContentIndexLoader get loadContentIndex => widget.loadContentIndex;
@@ -3638,6 +3653,24 @@ class _ManagedRevision3ProjectViewState
           onPressed: requiresGame(_openNpcWizard),
         ),
         Revision3ProjectDashboardAction(
+          id: 'create-quest-opening-recipe',
+          controlKey: const Key('managed-create-quest-opening-recipe'),
+          icon: Icons.auto_stories_outlined,
+          title: l10n.managedQuestOpeningRecipeTitle,
+          description: l10n.managedQuestOpeningRecipeDescription,
+          disabledReason: !gameConfigured
+              ? l10n.managedDashboardMissingGameDescription
+              : project.requiresReopen
+              ? l10n.managedLocalizationReopen
+              : null,
+          onPressed:
+              gameConfigured &&
+                  !project.requiresReopen &&
+                  !_questOpeningRecipeUiBusy
+              ? () => unawaited(_openQuestOpeningRecipe(context))
+              : null,
+        ),
+        Revision3ProjectDashboardAction(
           id: 'create-quest-draft',
           controlKey: const Key('managed-create-quest-draft'),
           icon: Icons.assignment_add,
@@ -4161,6 +4194,394 @@ class _ManagedRevision3ProjectViewState
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _openQuestOpeningRecipe(BuildContext context) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null ||
+        project.requiresReopen ||
+        _questOpeningRecipeUiBusy ||
+        _questOpeningRecipe.isRunning) {
+      return;
+    }
+    final l10n = AppLocalizations.of(context);
+    final openingCheckpoint = project;
+    final selectionOrigin = _storySelectionOrigin;
+    setState(() => _questOpeningRecipeUiBusy = true);
+    try {
+      final confirmed =
+          await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              key: const Key('managed-quest-opening-recipe-intro'),
+              scrollable: true,
+              title: Text(l10n.managedQuestOpeningRecipeTitle),
+              content: Text(l10n.managedQuestOpeningRecipeIntroduction),
+              actions: [
+                TextButton(
+                  key: const Key('managed-quest-opening-recipe-cancel'),
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: Text(l10n.cancel),
+                ),
+                FilledButton.icon(
+                  key: const Key('managed-quest-opening-recipe-start'),
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  icon: const Icon(Icons.arrow_forward),
+                  label: Text(l10n.managedQuestOpeningRecipeStart),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!mounted || !context.mounted || !confirmed) return;
+
+      final outcome = await _questOpeningRecipe.run(
+        openingCheckpoint: openingCheckpoint,
+        readCurrentCheckpoint: () async => currentManagedProject,
+        createQuest: ({required expectedCheckpoint}) async {
+          _requireQuestOpeningCheckpoint(expectedCheckpoint);
+          final publication = await showDialog<Revision3QuestDraftPublication>(
+            context: context,
+            builder: (dialogContext) => Revision3QuestWizardDialog(
+              gameRoot: configuredGameRoot,
+              loadCatalog: loadQuestCatalog,
+              publish: publishQuestDraft,
+            ),
+          );
+          if (!mounted || !context.mounted || publication == null) return null;
+          await WidgetsBinding.instance.endOfFrame;
+          final checkpoint = currentManagedProject;
+          if (checkpoint == null) {
+            throw const Revision3QuestDraftStaleCheckpointException();
+          }
+          return Revision3QuestOpeningRecipeQuestStep(
+            publication: publication,
+            checkpoint: checkpoint,
+          );
+        },
+        createOpeningLine: ({required handoff}) =>
+            _createQuestOpeningLine(context, l10n, handoff),
+      );
+      if (!mounted || !context.mounted) return;
+      await _handleQuestOpeningOutcome(context, l10n, selectionOrigin, outcome);
+    } finally {
+      if (mounted) setState(() => _questOpeningRecipeUiBusy = false);
+    }
+  }
+
+  Future<Revision3QuestOpeningRecipeLineStep?> _createQuestOpeningLine(
+    BuildContext context,
+    AppLocalizations l10n,
+    Revision3QuestOpeningRecipeHandoff handoff,
+  ) async {
+    final checkpoint = handoff.questCheckpoint;
+    _requireQuestOpeningCheckpoint(checkpoint);
+    final messenger = ScaffoldMessenger.of(context)
+      ..removeCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.managedQuestOpeningRecipePreparing(checkpoint.projectRevision),
+          ),
+        ),
+      );
+    final index = await _loadQuestOpeningContent(checkpoint);
+    final quest = index.entityById(handoff.questPublication.questId);
+    if (quest == null ||
+        quest.kind != Revision3ContentEntityKind.questDraft ||
+        !quest.references.any(
+          (reference) =>
+              reference.role == 'draft_script_module' &&
+              reference.resolution ==
+                  Revision3ContentReferenceResolution.resolved &&
+              reference.target.projectId == checkpoint.projectId &&
+              reference.target.entityId ==
+                  handoff.questPublication.scriptModuleId &&
+              reference.target.expectedKind ==
+                  Revision3ContentEntityKind.scriptModule,
+        )) {
+      throw const Revision3QuestTranscriptStaleCheckpointException();
+    }
+
+    Future<AuthoringRevision3DialogLocalizationReadResult> readExact({
+      required String expectedProjectId,
+      required int expectedProjectRevision,
+      required AuthoringWorkingHead expectedHead,
+      required String localizationId,
+      required int expectedLocalizationRevision,
+      required String expectedLocId,
+    }) async {
+      if (expectedProjectId != checkpoint.projectId ||
+          expectedProjectRevision != checkpoint.projectRevision ||
+          expectedHead.canonicalJson != checkpoint.head.canonicalJson) {
+        throw const Revision3QuestTranscriptStaleCheckpointException();
+      }
+      _requireQuestOpeningCheckpoint(checkpoint);
+      try {
+        final loaded = await readDialogLocalization(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          localizationId: localizationId,
+          expectedLocalizationRevision: expectedLocalizationRevision,
+          expectedLocId: expectedLocId,
+        );
+        _requireQuestOpeningCheckpoint(checkpoint);
+        return loaded;
+      } on Revision3DialogLineEntryRequiresReopenException {
+        throw const Revision3QuestTranscriptRequiresReopenException();
+      } on Revision3DialogLineEntryStaleCheckpointException {
+        throw const Revision3QuestTranscriptStaleCheckpointException();
+      }
+    }
+
+    Revision3QuestTranscriptPublication? transcriptPublication;
+    final transcriptService = Revision3QuestTranscriptAuthoringService(
+      expectedHead: checkpoint.head,
+      loadContentIndex: () => _loadQuestOpeningContent(checkpoint),
+      readExactLocalization: readExact,
+      publishReplace:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedHead,
+            required plan,
+          }) {
+            _requireQuestOpeningCheckpoint(checkpoint);
+            return publishQuestTranscriptReplace(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              expectedHead: expectedHead,
+              plan: plan,
+            );
+          },
+      publishCreate:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedHead,
+            required plan,
+          }) async {
+            _requireQuestOpeningCheckpoint(checkpoint);
+            final publication = await publishQuestTranscriptCreate(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              expectedHead: expectedHead,
+              plan: plan,
+            );
+            transcriptPublication = publication;
+            return publication;
+          },
+    );
+    final projection = await transcriptService.load(
+      questId: quest.id,
+      expectedQuestRevision: quest.revision,
+    );
+    if (!mounted || !context.mounted) return null;
+    messenger.removeCurrentSnackBar();
+    final result = await showDialog<Revision3DialogLineEntryDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Revision3DialogLineEntryDialog(
+        service: Revision3DialogLineEntryAuthoringService(
+          loadContentIndex: () => _loadQuestOpeningContent(checkpoint),
+          readExactLocalization:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required localizationId,
+                required expectedLocalizationRevision,
+                required expectedLocId,
+              }) => readExact(
+                expectedProjectId: expectedProjectId,
+                expectedProjectRevision: expectedProjectRevision,
+                expectedHead: checkpoint.head,
+                localizationId: localizationId,
+                expectedLocalizationRevision: expectedLocalizationRevision,
+                expectedLocId: expectedLocId,
+              ),
+          publishTechnicalPlan: transcriptService.createAndInsertPublisher(
+            projection: projection,
+            index: 0,
+            objectiveSlot: null,
+          ),
+        ),
+        copy: _dialogLineEntryCopy(l10n).copyWith(
+          title: l10n.managedQuestOpeningLineTitle,
+          introduction: l10n.managedQuestOpeningLineIntroduction,
+        ),
+        allowOpenVoiceNext: false,
+      ),
+    );
+    if (!mounted || !context.mounted || result == null) return null;
+    final publication = transcriptPublication;
+    if (publication == null ||
+        result.publication.projectId != publication.projectId ||
+        result.publication.projectRevision != publication.projectRevision ||
+        result.publication.lineId != publication.createdLineId ||
+        result.publication.localizationId !=
+            publication.createdLocalizationId ||
+        result.publication.voiceSlotId != publication.createdVoiceSlotId) {
+      throw const Revision3QuestTranscriptRequiresReopenException();
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    final current = currentManagedProject;
+    if (current == null) {
+      throw const Revision3QuestTranscriptStaleCheckpointException();
+    }
+    return Revision3QuestOpeningRecipeLineStep(
+      publication: publication,
+      checkpoint: current,
+    );
+  }
+
+  Future<Revision3ContentIndex> _loadQuestOpeningContent(
+    ManagedRevision3CurrentProjectState checkpoint,
+  ) async {
+    _requireQuestOpeningCheckpoint(checkpoint);
+    final index = await loadContentIndex();
+    _requireQuestOpeningCheckpoint(checkpoint);
+    if (index.projectId != checkpoint.projectId ||
+        index.projectRevision != checkpoint.projectRevision) {
+      throw const Revision3QuestTranscriptStaleCheckpointException();
+    }
+    return index;
+  }
+
+  void _requireQuestOpeningCheckpoint(
+    ManagedRevision3CurrentProjectState expected,
+  ) {
+    final current = currentManagedProject;
+    if (current != null &&
+        current.root.path == expected.root.path &&
+        current.projectId == expected.projectId &&
+        current.requiresReopen) {
+      throw const Revision3QuestTranscriptRequiresReopenException();
+    }
+    if (current == null ||
+        current.root.path != expected.root.path ||
+        current.projectId != expected.projectId ||
+        current.projectRevision != expected.projectRevision ||
+        current.head.canonicalJson != expected.head.canonicalJson) {
+      throw const Revision3QuestTranscriptStaleCheckpointException();
+    }
+  }
+
+  Future<void> _handleQuestOpeningOutcome(
+    BuildContext context,
+    AppLocalizations l10n,
+    _ManagedStorySelectionOrigin selectionOrigin,
+    Revision3QuestOpeningRecipeOutcome outcome,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context)..removeCurrentSnackBar();
+    switch (outcome) {
+      case Revision3QuestOpeningRecipeNoChangeOutcome(:final reason):
+        if (reason == Revision3QuestOpeningRecipeNoChangeReason.failed) {
+          messenger.showSnackBar(
+            SnackBar(content: Text(l10n.managedQuestOpeningRecipeFailed)),
+          );
+        }
+      case Revision3QuestOpeningRecipeQuestOnlyOutcome(:final questStep):
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.managedQuestOpeningRecipePartial(
+                questStep.checkpoint.projectRevision,
+              ),
+            ),
+          ),
+        );
+        await _openQuestOpeningStory(
+          context,
+          selectionOrigin,
+          questId: questStep.publication.questId,
+          checkpoint: questStep.checkpoint,
+        );
+      case Revision3QuestOpeningRecipeCompletedOutcome(
+        :final questStep,
+        :final lineStep,
+      ):
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.managedQuestOpeningRecipeComplete(
+                lineStep.checkpoint.projectRevision,
+              ),
+            ),
+          ),
+        );
+        await _openQuestOpeningStory(
+          context,
+          selectionOrigin,
+          questId: questStep.publication.questId,
+          checkpoint: lineStep.checkpoint,
+        );
+      case Revision3QuestOpeningRecipeLockedOutcome():
+        messenger.showSnackBar(
+          SnackBar(content: Text(l10n.managedQuestOpeningRecipeStopped)),
+        );
+        _openCurrentStoryIfPossible(context, selectionOrigin);
+      case Revision3QuestOpeningRecipeRequiresReopenOutcome():
+        messenger.showSnackBar(
+          SnackBar(content: Text(l10n.managedQuestOpeningRecipeRequiresReopen)),
+        );
+    }
+  }
+
+  Future<void> _openQuestOpeningStory(
+    BuildContext context,
+    _ManagedStorySelectionOrigin origin, {
+    required String questId,
+    required ManagedRevision3CurrentProjectState checkpoint,
+  }) async {
+    if (!_isCurrentStorySelectionOrigin(origin) ||
+        !_isCurrentQuestOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.story,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted ||
+        !context.mounted ||
+        !_isCurrentStorySelectionOrigin(origin) ||
+        !_isCurrentQuestOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+    _selectPublishedStoryEntity(
+      origin,
+      entityId: questId,
+      projectRevision: checkpoint.projectRevision,
+      projectHeadCanonicalJson: checkpoint.head.canonicalJson,
+      section: Revision3StoryWorkbenchSection.dialogVoice,
+    );
+  }
+
+  bool _isCurrentQuestOpeningCheckpoint(
+    ManagedRevision3CurrentProjectState expected,
+  ) {
+    final current = currentManagedProject;
+    return current != null &&
+        !current.requiresReopen &&
+        current.root.path == expected.root.path &&
+        current.projectId == expected.projectId &&
+        current.projectRevision == expected.projectRevision &&
+        current.head.canonicalJson == expected.head.canonicalJson;
+  }
+
+  void _openCurrentStoryIfPossible(
+    BuildContext context,
+    _ManagedStorySelectionOrigin origin,
+  ) {
+    if (!_isCurrentStorySelectionOrigin(origin)) return;
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.story,
+      ),
+    );
+  }
+
   Future<void> _openQuestWizard(
     BuildContext context, {
     String? initialParentCatalogId,
@@ -4453,6 +4874,8 @@ class _ManagedRevision3ProjectViewState
     _ManagedStorySelectionOrigin origin, {
     required String entityId,
     required int projectRevision,
+    String? projectHeadCanonicalJson,
+    Revision3StoryWorkbenchSection? section,
   }) {
     final messenger = ScaffoldMessenger.of(context);
     final staleMessage = AppLocalizations.of(
@@ -4463,6 +4886,8 @@ class _ManagedRevision3ProjectViewState
           .selectEntityAtRevision(
             entityId: entityId,
             projectRevision: projectRevision,
+            projectHeadCanonicalJson: projectHeadCanonicalJson,
+            section: section,
           )
           .then((selected) {
             if (selected || !_isCurrentStorySelectionOrigin(origin)) return;

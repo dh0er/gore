@@ -1236,6 +1236,54 @@ class AppLocalizationsPt extends AppLocalizations {
       'Crie um rascunho de missão offline com objetivos e identidades principais verificadas.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Missão + primeira fala';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Recomendado: crie um rascunho de missão e depois escreva e insira a primeira fala localizada. Este fluxo usa dois pontos de controlo do projeto e não cria um diálogo jogável.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Este fluxo guiado guarda primeiro a missão e depois abre a sua primeira fala. Se parar após o passo 1, a missão continuará guardada. Não cria um diálogo jogável nem altera o jogo ou os ficheiros guardados.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Iniciar missão guiada';
+
+  @override
+  String get managedQuestOpeningLineTitle => 'Passo 2 de 2: primeira fala';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Escreva a primeira fala localizada desta missão. Ao guardar, são criados a fala e o respetivo texto, que são depois inseridos no início da transcrição da missão.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Missão guardada na revisão $projectRevision do projeto. A preparar a primeira fala…';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Missão guardada na revisão $projectRevision do projeto; não foi adicionada uma primeira fala. Continue em História > Diálogo e voz.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'Não foi possível iniciar a missão guiada. Não foi publicada nenhuma alteração do projeto.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'O fluxo guiado parou porque o estado atual exato do projeto mudou. Não será executado automaticamente mais nenhum passo; verifique História e continue manualmente.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'O fluxo guiado não pôde continuar em segurança. Volte a abrir este projeto e verifique História antes de tentar novamente ou continuar manualmente.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Missão e primeira fala guardadas na revisão $projectRevision do projeto. Apenas rascunho: não foi criado nenhum diálogo jogável e não foram alterados o jogo ou os ficheiros guardados.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Adicionar linha de diálogo';
 
   @override

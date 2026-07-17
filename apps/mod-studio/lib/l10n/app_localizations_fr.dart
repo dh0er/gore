@@ -1239,6 +1239,55 @@ class AppLocalizationsFr extends AppLocalizations {
       'Créez un brouillon de quête hors ligne avec des objectifs et des identités parentes vérifiées.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Quête + première réplique';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Recommandé : créez un brouillon de quête, puis rédigez et insérez sa première réplique localisée. Ce flux utilise deux points de contrôle du projet et ne crée aucun dialogue jouable.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Ce flux guidé enregistre d’abord la quête, puis ouvre sa première réplique. Si vous vous arrêtez après l’étape 1, la quête reste enregistrée. Il ne crée aucun dialogue jouable et ne modifie ni le jeu ni les sauvegardes.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Démarrer la quête guidée';
+
+  @override
+  String get managedQuestOpeningLineTitle =>
+      'Étape 2 sur 2 : première réplique';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Rédigez la première réplique localisée de cette quête. L’enregistrement crée la réplique et son texte, puis l’insère au début de la transcription de la quête.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Quête enregistrée dans la révision $projectRevision du projet. Préparation de la première réplique…';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Quête enregistrée dans la révision $projectRevision du projet ; aucune première réplique n’a été ajoutée. Continuez dans Scénario > Dialogues et voix.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'La quête guidée n’a pas pu démarrer. Aucune modification du projet n’a été publiée.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'Le flux guidé s’est arrêté, car l’état actuel exact du projet a changé. Aucune autre étape ne sera exécutée automatiquement ; vérifiez Scénario et continuez manuellement.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'Le flux guidé n’a pas pu continuer en toute sécurité. Rouvrez ce projet et vérifiez Scénario avant de réessayer ou de continuer manuellement.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Quête et première réplique enregistrées dans la révision $projectRevision du projet. Brouillon uniquement : aucun dialogue jouable n’a été créé, et ni le jeu ni les sauvegardes n’ont été modifiés.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Ajouter une ligne de dialogue';
 
   @override

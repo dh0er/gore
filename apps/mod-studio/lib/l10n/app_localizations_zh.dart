@@ -1212,6 +1212,53 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedActionNewQuestDescription => '创建带有目标和已验证父级标识的离线任务草稿。';
 
   @override
+  String get managedQuestOpeningRecipeTitle => '任务 + 首句对话';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      '推荐：创建任务草稿，然后编写并插入首条本地化对话。此流程使用两个项目检查点，且不会创建可在游戏中使用的对话。';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      '此引导流程会先保存任务，再打开其首句对话。如果在第 1 步后停止，任务仍会保留。此流程不会创建可在游戏中使用的对话，也不会更改游戏或存档文件。';
+
+  @override
+  String get managedQuestOpeningRecipeStart => '开始引导式任务创建';
+
+  @override
+  String get managedQuestOpeningLineTitle => '第 2 步（共 2 步）：首句对话';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      '编写此任务的首条本地化对话。保存时会创建对话行及其文本，并将其插入任务对话稿的开头。';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return '任务已保存到项目修订版 $projectRevision。正在准备首句对话...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return '任务已保存到项目修订版 $projectRevision；未添加首句对话。请前往“剧情 > 对话与语音”继续。';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed => '无法启动引导式任务流程。未发布任何项目更改。';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      '由于当前项目的精确状态已发生变化，引导流程已停止。后续步骤不会自动运行；请检查“剧情”并手动继续。';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      '引导流程无法安全继续。请重新打开此项目并检查“剧情”，然后再重试或手动继续。';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return '任务和首句对话已保存到项目修订版 $projectRevision。仅为草稿：未创建可在游戏中使用的对话，也未更改游戏或存档文件。';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => '添加对话行';
 
   @override

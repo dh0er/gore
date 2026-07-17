@@ -1240,6 +1240,56 @@ class AppLocalizationsEs extends AppLocalizations {
       'Crea un borrador de misión sin conexión con objetivos e identidades superiores verificadas.';
 
   @override
+  String get managedQuestOpeningRecipeTitle =>
+      'Misión + primera línea de diálogo';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Recomendado: crea un borrador de misión y, después, escribe e inserta su primera línea localizada. Este proceso usa dos puntos de control del proyecto y no crea una conversación jugable.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Este flujo guiado guarda primero la misión y luego abre su primera línea de diálogo. Si te detienes después del paso 1, la misión seguirá guardada. No crea una conversación jugable ni modifica el juego ni las partidas guardadas.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Iniciar misión guiada';
+
+  @override
+  String get managedQuestOpeningLineTitle =>
+      'Paso 2 de 2: Primera línea de diálogo';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Escribe la primera línea localizada de esta misión. Al guardar, se crean la línea y su texto, y se insertan al principio de la transcripción de la misión.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Misión guardada en la revisión $projectRevision del proyecto. Preparando la primera línea...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Misión guardada en la revisión $projectRevision del proyecto; no se añadió ninguna primera línea. Continúa en Historia > Diálogo y voz.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'No se pudo iniciar la misión guiada. No se publicó ningún cambio en el proyecto.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'El flujo guiado se detuvo porque cambió el estado actual exacto del proyecto. No se ejecutará ningún paso adicional automáticamente; revisa Historia y continúa manualmente.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'El flujo guiado no pudo continuar de forma segura. Vuelve a abrir este proyecto y revisa Historia antes de reintentarlo o continuar manualmente.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Misión y primera línea guardadas en la revisión $projectRevision del proyecto. Solo borrador: no se creó ninguna conversación jugable ni se modificaron el juego ni las partidas guardadas.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Añadir línea de diálogo';
 
   @override

@@ -1230,6 +1230,54 @@ class AppLocalizationsEn extends AppLocalizations {
       'Create an offline Quest draft with objectives and verified parent identities.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Quest + opening line';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Recommended: create a Quest draft, then write and insert its first localized line. This uses two project checkpoints and does not create a playable conversation.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'This guided flow first saves the Quest, then opens its first dialog line. If you stop after step 1, the Quest stays saved. It does not create a playable conversation or change the game or save files.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Start guided Quest';
+
+  @override
+  String get managedQuestOpeningLineTitle => 'Step 2 of 2: Opening dialog line';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Write the first localized line for this Quest. Saving creates the line and its text, then inserts it at the start of the Quest transcript.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Quest saved in project revision $projectRevision. Preparing the opening line...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Quest saved in project revision $projectRevision; no opening line was added. Continue in Story > Dialog & Voice.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'The guided Quest could not start. No project changes were published.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'The guided flow stopped because the exact current project changed. No further step will run automatically; inspect Story and continue manually.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Quest and opening line saved in project revision $projectRevision. Draft only: no playable conversation, game, or save files were changed.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Add dialog line';
 
   @override

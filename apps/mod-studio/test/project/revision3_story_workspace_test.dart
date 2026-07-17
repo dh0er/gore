@@ -1126,6 +1126,7 @@ void main() {
     final selected = controller.selectEntityAtRevision(
       entityId: _questId,
       projectRevision: 8,
+      projectHeadCanonicalJson: 'head-8',
       section: Revision3StoryWorkbenchSection.logic,
     );
     bool? resolved;
@@ -1169,12 +1170,22 @@ void main() {
       await controller.selectEntityAtRevision(
         entityId: _moduleId,
         projectRevision: 8,
+        projectHeadCanonicalJson: 'head-8',
+      ),
+      isFalse,
+    );
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _questId,
+        projectRevision: 8,
+        projectHeadCanonicalJson: 'different-head-at-revision-8',
       ),
       isFalse,
     );
     final unresolved = controller.selectEntityAtRevision(
       entityId: _npcId,
       projectRevision: 9,
+      projectHeadCanonicalJson: 'head-9',
     );
     controller.dispose();
     expect(await unresolved, isFalse);

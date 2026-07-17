@@ -2174,6 +2174,78 @@ abstract class AppLocalizations {
   /// **'Create an offline Quest draft with objectives and verified parent identities.'**
   String get managedActionNewQuestDescription;
 
+  /// No description provided for @managedQuestOpeningRecipeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest + opening line'**
+  String get managedQuestOpeningRecipeTitle;
+
+  /// No description provided for @managedQuestOpeningRecipeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended: create a Quest draft, then write and insert its first localized line. This uses two project checkpoints and does not create a playable conversation.'**
+  String get managedQuestOpeningRecipeDescription;
+
+  /// No description provided for @managedQuestOpeningRecipeIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'This guided flow first saves the Quest, then opens its first dialog line. If you stop after step 1, the Quest stays saved. It does not create a playable conversation or change the game or save files.'**
+  String get managedQuestOpeningRecipeIntroduction;
+
+  /// No description provided for @managedQuestOpeningRecipeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start guided Quest'**
+  String get managedQuestOpeningRecipeStart;
+
+  /// No description provided for @managedQuestOpeningLineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Step 2 of 2: Opening dialog line'**
+  String get managedQuestOpeningLineTitle;
+
+  /// No description provided for @managedQuestOpeningLineIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write the first localized line for this Quest. Saving creates the line and its text, then inserts it at the start of the Quest transcript.'**
+  String get managedQuestOpeningLineIntroduction;
+
+  /// No description provided for @managedQuestOpeningRecipePreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest saved in project revision {projectRevision}. Preparing the opening line...'**
+  String managedQuestOpeningRecipePreparing(int projectRevision);
+
+  /// No description provided for @managedQuestOpeningRecipePartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest saved in project revision {projectRevision}; no opening line was added. Continue in Story > Dialog & Voice.'**
+  String managedQuestOpeningRecipePartial(int projectRevision);
+
+  /// No description provided for @managedQuestOpeningRecipeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided Quest could not start. No project changes were published.'**
+  String get managedQuestOpeningRecipeFailed;
+
+  /// No description provided for @managedQuestOpeningRecipeStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow stopped because the exact current project changed. No further step will run automatically; inspect Story and continue manually.'**
+  String get managedQuestOpeningRecipeStopped;
+
+  /// No description provided for @managedQuestOpeningRecipeRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.'**
+  String get managedQuestOpeningRecipeRequiresReopen;
+
+  /// No description provided for @managedQuestOpeningRecipeComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest and opening line saved in project revision {projectRevision}. Draft only: no playable conversation, game, or save files were changed.'**
+  String managedQuestOpeningRecipeComplete(int projectRevision);
+
   /// No description provided for @managedActionNewDialogLineTitle.
   ///
   /// In en, this message translates to:

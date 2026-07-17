@@ -66,6 +66,41 @@ final class Revision3DialogLineEntryDialogCopy {
   final String Function(int projectRevision) saved;
   final String done;
   final String addRecording;
+
+  Revision3DialogLineEntryDialogCopy copyWith({
+    String? title,
+    String? introduction,
+    String? projectOnlyBoundary,
+  }) => Revision3DialogLineEntryDialogCopy(
+    title: title ?? this.title,
+    introduction: introduction ?? this.introduction,
+    projectOnlyBoundary: projectOnlyBoundary ?? this.projectOnlyBoundary,
+    createMode: createMode,
+    reuseMode: reuseMode,
+    lineNameLabel: lineNameLabel,
+    lineNameHint: lineNameHint,
+    speakerLabel: speakerLabel,
+    speakerHint: speakerHint,
+    localeLabel: localeLabel,
+    textLabel: textLabel,
+    reuseSearchLabel: reuseSearchLabel,
+    noReusableText: noReusableText,
+    createVoiceSlotLabel: createVoiceSlotLabel,
+    createVoiceSlotHelp: createVoiceSlotHelp,
+    cancel: cancel,
+    save: save,
+    saving: saving,
+    loading: loading,
+    loadFailed: loadFailed,
+    retry: retry,
+    stale: stale,
+    requiresReopen: requiresReopen,
+    invalidInput: invalidInput,
+    saveFailed: saveFailed,
+    saved: saved,
+    done: done,
+    addRecording: addRecording,
+  );
 }
 
 final class Revision3DialogLineEntryDialogResult {
@@ -415,17 +450,30 @@ class _Revision3DialogLineEntryDialogState
     );
   }
 
+  void _close() {
+    if (_publishing) return;
+    if (_publication != null) {
+      _finish(false);
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     final narrow = MediaQuery.sizeOf(context).width < 700;
-    final frame = PopScope(
-      canPop: !_publishing,
+    final frame = PopScope<Revision3DialogLineEntryDialogResult?>(
+      canPop: !_publishing && _publication == null,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && !_publishing && _publication != null) _finish(false);
+      },
       child: _DialogLineFrame(
         title: widget.copy.title,
         content: _publication == null
             ? _buildEditor(context)
             : _buildSuccess(context),
         actions: _buildActions(),
+        onClose: _publishing ? null : _close,
       ),
     );
     if (narrow) {
@@ -821,11 +869,13 @@ class _DialogLineFrame extends StatelessWidget {
     required this.title,
     required this.content,
     required this.actions,
+    required this.onClose,
   });
 
   final String title;
   final Widget content;
   final List<Widget> actions;
+  final VoidCallback? onClose;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -837,15 +887,7 @@ class _DialogLineFrame extends StatelessWidget {
           IconButton(
             key: const Key('revision3-dialog-line-close'),
             tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
-            onPressed:
-                actions.any((action) {
-                  if (action case TextButton(:final onPressed)) {
-                    return onPressed == null;
-                  }
-                  return false;
-                })
-                ? null
-                : () => Navigator.of(context).pop(),
+            onPressed: onClose,
             icon: const Icon(Icons.close),
           ),
           const SizedBox(width: 8),

@@ -1219,6 +1219,54 @@ class AppLocalizationsJa extends AppLocalizations {
       '目標と検証済みの親IDを含むオフラインのクエスト下書きを作成します。';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'クエスト＋冒頭の会話行';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      '推奨：クエストの下書きを作成し、最初のローカライズ済み会話行を記述して挿入します。このフローではプロジェクトのチェックポイントを2つ使用しますが、プレイ可能な会話は作成されません。';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'このガイドフローでは、まずクエストを保存し、次にその最初の会話行を開きます。手順1の後で中止しても、クエストは保存されたままです。プレイ可能な会話は作成されず、ゲームやセーブファイルも変更されません。';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'ガイド付きクエストを開始';
+
+  @override
+  String get managedQuestOpeningLineTitle => '手順2/2：冒頭の会話行';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'このクエストの最初のローカライズ済み会話行を記述します。保存すると行とそのテキストが作成され、クエストのトランスクリプトの先頭に挿入されます。';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'クエストをプロジェクトリビジョン $projectRevision に保存しました。冒頭の会話行を準備しています...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'クエストをプロジェクトリビジョン $projectRevision に保存しましたが、冒頭の会話行は追加されていません。ストーリー > 会話と音声 から続行してください。';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'ガイド付きクエストを開始できませんでした。プロジェクトの変更は公開されていません。';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      '正確な現在のプロジェクト状態が変化したため、ガイドフローを停止しました。これ以降の手順は自動実行されません。ストーリーを確認し、手動で続行してください。';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'ガイドフローを安全に続行できませんでした。このプロジェクトを開き直し、ストーリーを確認してから、再試行または手動で続行してください。';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'クエストと冒頭の会話行をプロジェクトリビジョン $projectRevision に保存しました。下書きのみ：プレイ可能な会話は作成されず、ゲームやセーブファイルも変更されていません。';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'ダイアログ行を追加';
 
   @override

@@ -1237,6 +1237,56 @@ class AppLocalizationsRu extends AppLocalizations {
       'Создать автономный черновик задания с целями и проверенными родительскими идентификаторами.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Задание + первая реплика';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Рекомендуется: создайте черновик задания, затем напишите и вставьте первую локализованную реплику. Этот процесс использует две контрольные точки проекта и не создаёт доступный в игре диалог.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Этот пошаговый процесс сначала сохраняет задание, а затем открывает его первую реплику. Если остановиться после шага 1, задание останется сохранённым. Процесс не создаёт доступный в игре диалог и не изменяет игру или файлы сохранений.';
+
+  @override
+  String get managedQuestOpeningRecipeStart =>
+      'Начать пошаговое создание задания';
+
+  @override
+  String get managedQuestOpeningLineTitle =>
+      'Шаг 2 из 2: первая реплика диалога';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Напишите первую локализованную реплику этого задания. При сохранении будут созданы реплика и её текст, а затем реплика будет вставлена в начало расшифровки задания.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Задание сохранено в ревизии проекта $projectRevision. Подготовка первой реплики...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Задание сохранено в ревизии проекта $projectRevision; первая реплика не добавлена. Продолжите в разделе «Сюжет > Диалоги и озвучка».';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'Не удалось начать пошаговое создание задания. Изменения проекта не были опубликованы.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'Пошаговый процесс остановлен, потому что точное текущее состояние проекта изменилось. Дальнейшие шаги не будут выполнены автоматически; проверьте раздел «Сюжет» и продолжите вручную.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'Не удалось безопасно продолжить пошаговый процесс. Снова откройте этот проект и проверьте раздел «Сюжет», прежде чем повторить попытку или продолжить вручную.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Задание и первая реплика сохранены в ревизии проекта $projectRevision. Только черновик: доступный в игре диалог не создан, игра и файлы сохранений не изменены.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Добавить реплику диалога';
 
   @override

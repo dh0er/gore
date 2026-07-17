@@ -1255,6 +1255,55 @@ class AppLocalizationsDe extends AppLocalizations {
       'Erstelle einen Offline-Quest-Entwurf mit Zielen und verifizierten übergeordneten Identitäten.';
 
   @override
+  String get managedQuestOpeningRecipeTitle => 'Quest + erste Dialogzeile';
+
+  @override
+  String get managedQuestOpeningRecipeDescription =>
+      'Empfohlen: Erstelle einen Quest-Entwurf und schreibe danach direkt die erste lokalisierte Dialogzeile. Das nutzt zwei Projektstände und erzeugt noch keinen spielbaren Dialog.';
+
+  @override
+  String get managedQuestOpeningRecipeIntroduction =>
+      'Dieser geführte Ablauf speichert zuerst die Quest und öffnet danach ihre erste Dialogzeile. Wenn du nach Schritt 1 aufhörst, bleibt die Quest gespeichert. Es entsteht noch kein spielbarer Dialog; Spiel und Spielstände werden nicht verändert.';
+
+  @override
+  String get managedQuestOpeningRecipeStart => 'Geführte Quest starten';
+
+  @override
+  String get managedQuestOpeningLineTitle =>
+      'Schritt 2 von 2: Erste Dialogzeile';
+
+  @override
+  String get managedQuestOpeningLineIntroduction =>
+      'Schreibe die erste lokalisierte Zeile dieser Quest. Beim Speichern werden Zeile und Text erstellt und am Anfang des Quest-Transkripts eingefügt.';
+
+  @override
+  String managedQuestOpeningRecipePreparing(int projectRevision) {
+    return 'Quest in Projektrevision $projectRevision gespeichert. Die erste Dialogzeile wird vorbereitet ...';
+  }
+
+  @override
+  String managedQuestOpeningRecipePartial(int projectRevision) {
+    return 'Quest in Projektrevision $projectRevision gespeichert; es wurde keine erste Dialogzeile hinzugefügt. Fahre unter Story > Dialog & Sprachausgabe fort.';
+  }
+
+  @override
+  String get managedQuestOpeningRecipeFailed =>
+      'Die geführte Quest konnte nicht gestartet werden. Es wurden keine Projektänderungen veröffentlicht.';
+
+  @override
+  String get managedQuestOpeningRecipeStopped =>
+      'Der geführte Ablauf wurde angehalten, weil sich der exakte aktuelle Projektstand geändert hat. Es wird kein weiterer Schritt automatisch ausgeführt; prüfe Story und fahre manuell fort.';
+
+  @override
+  String get managedQuestOpeningRecipeRequiresReopen =>
+      'Der geführte Ablauf konnte nicht sicher fortgesetzt werden. Öffne dieses Projekt erneut und prüfe Story, bevor du es erneut versuchst oder manuell fortfährst.';
+
+  @override
+  String managedQuestOpeningRecipeComplete(int projectRevision) {
+    return 'Quest und erste Dialogzeile in Projektrevision $projectRevision gespeichert. Nur Entwurf: Kein spielbarer Dialog; Spiel und Spielstände wurden nicht verändert.';
+  }
+
+  @override
   String get managedActionNewDialogLineTitle => 'Dialogzeile hinzufügen';
 
   @override
