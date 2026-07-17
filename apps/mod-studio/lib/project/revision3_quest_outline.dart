@@ -392,11 +392,13 @@ _questOutlineRequireBasisPair(
   );
   final quest = _questOutlineEntity(entities, questId, 'quest_draft');
   final questData = quest.data;
-  _authoringExactFields(questData, const {
+  final hasTranscript = questData.containsKey('transcript');
+  _authoringExactFields(questData, <String>{
     'generator_id',
     'generator_version',
     'input',
     'script_module',
+    if (hasTranscript) 'transcript',
   }, 'revision-3 Quest outline Quest data');
   if (questData['generator_id'] != _authoringRevision3QuestGeneratorId) {
     throw const FormatException(

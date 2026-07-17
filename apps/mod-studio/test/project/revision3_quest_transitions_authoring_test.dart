@@ -50,6 +50,16 @@ void main() {
     );
   });
 
+  test('transition seed accepts optional Quest transcript metadata', () {
+    final fixture = Revision3QuestOutlineFixture(includeTranscript: true);
+
+    final seed = _seed(fixture);
+
+    expect(seed.questId, revision3QuestOutlineQuestId);
+    expect(seed.questRevision, fixture.questRevision);
+    expect(seed.moduleId, revision3QuestOutlineModuleId);
+  });
+
   test(
     'sequential template keeps slots stable across presentation reorder',
     () {

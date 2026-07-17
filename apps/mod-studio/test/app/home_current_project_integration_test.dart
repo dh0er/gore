@@ -56,6 +56,9 @@ import '../support/revision3_voice_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
+const _homeQuestTranscriptQuestId = '77777777777777777777777777777777';
+const _homeQuestTranscriptModuleId = '88888888888888888888888888888888';
+
 void main() {
   test(
     'Voice folder success receipt is silent after a project switch',
@@ -1781,6 +1784,122 @@ void main() {
         find.byKey(const Key('revision3-story-workspace')),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'direct Story Quest transcript hands the exact line to Localization and Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const locId = 'GRD_263_ASGHAN_OPEN_INFO_06_02';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-quest-transcript'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _questTranscriptHomeIndex(revision: lease.projectRevision),
+        onDialogLocalizationRead:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationReadResult(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                nonemptyPreview: 'Homer ist noch nicht zurueck.',
+              );
+            },
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance question',
+                speaker: 'Asghan',
+                voiceSlotLocales: const <String>{'de'},
+                germanText: 'Homer ist noch nicht zurueck.',
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-entity-$_homeQuestTranscriptQuestId',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final dialogVoiceTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$_homeQuestTranscriptQuestId',
+        ),
+      );
+      await tester.ensureVisible(dialogVoiceTab);
+      await tester.tap(dialogVoiceTab);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('Homer ist noch nicht zurueck.'), findsOneWidget);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+      final openTextVoice = find.byKey(
+        const Key('revision3-quest-transcript-open-text-voice'),
+      );
+      final outerTranscriptScroll = find
+          .ancestor(of: openTextVoice, matching: find.byType(Scrollable))
+          .last;
+      await tester.scrollUntilVisible(
+        openTextVoice,
+        240,
+        scrollable: outerTranscriptScroll,
+      );
+      await tester.ensureVisible(openTextVoice);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(openTextVoice).onPressed, isNotNull);
+
+      await tester.tap(openTextVoice);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+      expect(managed.dialogLocalizationEditSeedCalls, greaterThanOrEqualTo(1));
+      final germanText = find.byKey(
+        const Key('revision3-localization-text-de'),
+      );
+      expect(germanText, findsOneWidget);
+      expect(
+        tester.widget<TextField>(germanText).controller?.text,
+        'Homer ist noch nicht zurueck.',
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -8313,7 +8432,11 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
     },
   },
   'authoring_locales': <Object?>[],
-  'entity_counts': <String, Object?>{'npc_draft': 1, 'quest_draft': 1},
+  'entity_counts': <String, Object?>{
+    'npc_draft': 1,
+    'quest_draft': 1,
+    'script_module': 1,
+  },
   'entities': <Object?>[
     <String, Object?>{
       'id': revision3NpcInspectionNpcId,
@@ -8354,17 +8477,185 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
           'technical_id': 'GORE_FIND_HOMER',
           'title': 'Find Homer',
           'objective_title': 'Ask Asghan about Homer',
+          'objective_slots': <Object?>[1],
+          'transcript_count': 0,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'parent_runtime_class': 'B_Quest_FindHomer_C',
           'giver_runtime_unique_name': 'ASGHAN',
         },
       },
-      'references': <Object?>[],
+      'references': <Object?>[
+        <String, Object?>{
+          'role': 'draft_script_module',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': projectId,
+            'entity_id': revision3QuestOutlineModuleId,
+            'expected_kind': 'script_module',
+          },
+          'resolution': 'resolved',
+        },
+      ],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': revision3QuestOutlineModuleId,
+      'kind': 'script_module',
+      'display_name': 'Find Homer Script',
+      'revision': 5,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': <String, Object?>{
+          'project_id': projectId,
+          'entity_id': revision3QuestOutlineQuestId,
+          'expected_kind': 'quest_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        <String, Object?>{
+          'role': 'origin_owner',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': projectId,
+            'entity_id': revision3QuestOutlineQuestId,
+            'expected_kind': 'quest_draft',
+          },
+          'resolution': 'resolved',
+        },
+      ],
       'asset_references': <Object?>[],
     },
   ],
   'assets': <Object?>[],
 });
+
+Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
+  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+  final counts = (json['entity_counts']! as Map).cast<String, Object?>();
+  counts['quest_draft'] = 1;
+  counts['script_module'] = 1;
+  final entities = (json['entities']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  final localization = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLocalizationId,
+  );
+  final localizationSummary = (localization['summary']! as Map)
+      .cast<String, Object?>();
+  final localizationData = (localizationSummary['data']! as Map)
+      .cast<String, Object?>();
+  localizationData['locales'] = <Object?>['de', 'en'];
+  entities.addAll(<Map<String, Object?>>[
+    <String, Object?>{
+      'id': _homeQuestTranscriptQuestId,
+      'kind': 'quest_draft',
+      'display_name': 'Find Homer',
+      'revision': 4,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_FIND_HOMER',
+      },
+      'summary': <String, Object?>{
+        'kind': 'quest_draft',
+        'data': <String, Object?>{
+          'technical_id': 'GORE_FIND_HOMER',
+          'title': 'Find Homer',
+          'objective_title': 'Ask Asghan about Homer',
+          'objective_slots': <Object?>[1],
+          'transcript_count': 1,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
+          'giver_runtime_unique_name': 'OM_GRD_Asghan_263',
+        },
+      },
+      'references': <Object?>[
+        _homeContentReference(
+          role: 'draft_script_module',
+          targetId: _homeQuestTranscriptModuleId,
+          expectedKind: 'script_module',
+        ),
+        _homeContentReference(
+          role: 'quest_transcript_line',
+          qualifier: '1',
+          targetId: revision3VoiceContentLineId,
+          expectedKind: 'dialog_line',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': _homeQuestTranscriptModuleId,
+      'kind': 'script_module',
+      'display_name': 'Find Homer Script',
+      'revision': 5,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': <String, Object?>{
+          'project_id': revision3VoiceContentProjectId,
+          'entity_id': _homeQuestTranscriptQuestId,
+          'expected_kind': 'quest_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        _homeContentReference(
+          role: 'origin_owner',
+          targetId: _homeQuestTranscriptQuestId,
+          expectedKind: 'quest_draft',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+  ]);
+  entities.sort(
+    (left, right) => (left['id']! as String).compareTo(right['id']! as String),
+  );
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Map<String, Object?> _homeContentReference({
+  required String role,
+  String? qualifier,
+  required String targetId,
+  required String expectedKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': qualifier,
+  'target': <String, Object?>{
+    'project_id': revision3VoiceContentProjectId,
+    'entity_id': targetId,
+    'expected_kind': expectedKind,
+  },
+  'resolution': 'resolved',
+};
 
 Revision3ContentIndex _voiceSelectionIndex({
   required int revision,

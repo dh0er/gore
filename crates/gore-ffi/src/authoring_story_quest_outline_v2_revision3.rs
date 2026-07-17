@@ -995,6 +995,7 @@ mod tests {
                 module_id,
                 Revision3EntityKind::ScriptModule,
             ),
+            transcript: Vec::new(),
         };
         let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
         let owner = Revision3TypedRef::new(

@@ -129,6 +129,35 @@ void main() {
     ]);
   });
 
+  test('outline edit preserves optional Quest transcript metadata', () async {
+    final fixture = Revision3QuestOutlineFixture(includeTranscript: true);
+    final prepared =
+        await ModFfi(
+          FakeGoreCoreFfiService(
+            responses: {
+              'authoring_store_prepare_revision3_quest_outline_edit_v1': fixture
+                  .response(),
+            },
+          ),
+        ).authoringStorePrepareRevision3QuestOutlineEditV1(
+          root: _root,
+          currentProjectJson: fixture.projectJson,
+          request: fixture.request(),
+        );
+
+    final basis = jsonDecode(fixture.projectJson) as Map<String, Object?>;
+    final candidate = jsonDecode(prepared.projectJson) as Map<String, Object?>;
+    Map<String, Object?> questData(Map<String, Object?> project) {
+      final entities = (project['entities']! as Map).cast<String, Object?>();
+      final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+          .cast<String, Object?>();
+      final payload = (quest['payload']! as Map).cast<String, Object?>();
+      return (payload['data']! as Map).cast<String, Object?>();
+    }
+
+    expect(questData(candidate)['transcript'], questData(basis)['transcript']);
+  });
+
   test(
     'FFI rejects an unrelated candidate delta as malformed native data',
     () async {

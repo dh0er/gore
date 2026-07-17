@@ -131,6 +131,7 @@ fn add_quest(
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let collision = QuestCollisionCatalogInput {
         generation: quest.input.collision_catalog.generation.clone(),

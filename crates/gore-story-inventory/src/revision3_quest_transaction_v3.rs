@@ -455,6 +455,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
             collision_catalog: artifact_reference,
         },
         script_module: module_ref,
+        transcript: Vec::new(),
     };
     let runtime_id = quest.input.technical_id.clone();
     let collision_input = capability.into_quest_collision_input();

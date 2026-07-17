@@ -2282,6 +2282,7 @@ mod tests {
                 module_id,
                 Revision3EntityKind::ScriptModule,
             ),
+            transcript: Vec::new(),
         };
         let source = "// persisted exact-export Quest module\n".to_owned();
         let owner = Revision3TypedRef::new(

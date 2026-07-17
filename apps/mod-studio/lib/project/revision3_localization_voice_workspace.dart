@@ -18,6 +18,91 @@ typedef Revision3LocalizationPublished =
 typedef Revision3LocalizationVoiceCatalogLoader =
     Future<Revision3VoiceCatalog> Function();
 
+/// Opaque, exact-current handoff into one project-text / dialog-line / locale.
+///
+/// The stable key and line identity are orchestration authority only. They are
+/// never rendered by this workspace. Callers must bind the request to the
+/// exact checkpoint that produced their friendly transcript projection.
+@immutable
+final class Revision3LocalizationVoiceTarget {
+  const Revision3LocalizationVoiceTarget({
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectCheckpointIdentity,
+    required this.localizationStableKey,
+    required this.lineId,
+    required this.locale,
+  }) : assert(projectId != ''),
+       assert(projectRevision >= 1),
+       assert(localizationStableKey != ''),
+       assert(lineId != ''),
+       assert(locale != '');
+
+  final String projectId;
+  final int projectRevision;
+  final Object projectCheckpointIdentity;
+  final String localizationStableKey;
+  final String lineId;
+  final String locale;
+}
+
+/// Lifecycle-safe controller for exact Story-to-Localization handoffs.
+///
+/// One controller attaches to at most one workspace. A newer request
+/// supersedes an older request, project switches cancel pending work, and a
+/// request resolves `true` only after the exact choice, line backlink, and
+/// locale have all been re-read from the matching project checkpoint.
+final class Revision3LocalizationVoiceWorkspaceController {
+  Object? _attachment;
+  Future<bool> Function(Revision3LocalizationVoiceTarget target)? _openTarget;
+  VoidCallback? _cancelPendingTarget;
+  bool _disposed = false;
+
+  Future<bool> openExactTarget(Revision3LocalizationVoiceTarget target) {
+    final open = _openTarget;
+    if (_disposed || open == null) return Future<bool>.value(false);
+    return open(target);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _cancelPendingTarget?.call();
+    _attachment = null;
+    _openTarget = null;
+    _cancelPendingTarget = null;
+  }
+
+  bool _attach(
+    Object attachment,
+    Future<bool> Function(Revision3LocalizationVoiceTarget target) openTarget,
+    VoidCallback cancelPendingTarget,
+  ) {
+    if (_disposed ||
+        (_attachment != null && !identical(_attachment, attachment))) {
+      return false;
+    }
+    _attachment = attachment;
+    _openTarget = openTarget;
+    _cancelPendingTarget = cancelPendingTarget;
+    return true;
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _openTarget = null;
+    _cancelPendingTarget = null;
+  }
+}
+
+final class _PendingLocalizationVoiceTarget {
+  _PendingLocalizationVoiceTarget(this.target);
+
+  final Revision3LocalizationVoiceTarget target;
+  final Completer<bool> result = Completer<bool>();
+}
+
 enum _UnsavedExternalActionDecision {
   keepEditing,
   discardAndContinue,
@@ -246,6 +331,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     required this.projectCheckpointIdentity,
     required this.service,
     required this.copy,
+    this.controller,
     this.loadVoiceCatalog,
     this.voiceProductionCopy = Revision3VoiceProductionCardCopy.english,
     this.onCreateDialogLine,
@@ -273,6 +359,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Object projectCheckpointIdentity;
   final Revision3DialogLocalizationEditAuthoringService service;
   final Revision3LocalizationVoiceWorkspaceCopy copy;
+  final Revision3LocalizationVoiceWorkspaceController? controller;
   final Revision3LocalizationVoiceCatalogLoader? loadVoiceCatalog;
   final Revision3VoiceProductionCardCopy voiceProductionCopy;
   final Revision3LocalizationVoiceAction? onCreateDialogLine;
@@ -321,11 +408,15 @@ class _Revision3LocalizationVoiceWorkspaceState
   int _externalActionEpoch = 0;
   Future<void>? _catalogReloadFuture;
   Future<void>? _voiceCatalogReloadFuture;
+  _PendingLocalizationVoiceTarget? _pendingTarget;
+  bool _resolvingPendingTarget = false;
+  int _targetEpoch = 0;
 
   @override
   void initState() {
     super.initState();
     _search.addListener(_searchChanged);
+    _attachController(widget.controller);
     unawaited(_reloadCatalog());
   }
 
@@ -334,7 +425,13 @@ class _Revision3LocalizationVoiceWorkspaceState
     covariant Revision3LocalizationVoiceWorkspace oldWidget,
   ) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller?._detach(this);
+      _cancelPendingTarget();
+      _attachController(widget.controller);
+    }
     if (oldWidget.projectId != widget.projectId) {
+      _cancelPendingTarget();
       _saveEpoch++;
       _saving = false;
       _invalidateExternalAction();
@@ -351,6 +448,15 @@ class _Revision3LocalizationVoiceWorkspaceState
     } else if (oldWidget.projectRevision != widget.projectRevision ||
         oldWidget.projectCheckpointIdentity !=
             widget.projectCheckpointIdentity) {
+      final pending = _pendingTarget?.target;
+      if (pending != null &&
+          (pending.projectId != widget.projectId ||
+              pending.projectRevision < widget.projectRevision ||
+              (pending.projectRevision == widget.projectRevision &&
+                  pending.projectCheckpointIdentity !=
+                      widget.projectCheckpointIdentity))) {
+        _completePendingTarget(false);
+      }
       _invalidateVoiceCatalog();
       if (_saving) {
         // Keep the submitted draft frozen until the pending publication tells
@@ -377,6 +483,8 @@ class _Revision3LocalizationVoiceWorkspaceState
     _seedEpoch++;
     _saveEpoch++;
     _invalidateExternalAction();
+    _cancelPendingTarget();
+    widget.controller?._detach(this);
     _search
       ..removeListener(_searchChanged)
       ..dispose();
@@ -387,6 +495,123 @@ class _Revision3LocalizationVoiceWorkspaceState
   }
 
   void _searchChanged() => setState(() {});
+
+  void _attachController(
+    Revision3LocalizationVoiceWorkspaceController? controller,
+  ) {
+    controller?._attach(this, _requestExactTarget, _cancelPendingTarget);
+  }
+
+  Future<bool> _requestExactTarget(Revision3LocalizationVoiceTarget target) {
+    if (!mounted ||
+        target.projectId != widget.projectId ||
+        target.projectRevision < widget.projectRevision ||
+        (target.projectRevision == widget.projectRevision &&
+            target.projectCheckpointIdentity !=
+                widget.projectCheckpointIdentity)) {
+      return Future<bool>.value(false);
+    }
+    _completePendingTarget(false);
+    final pending = _PendingLocalizationVoiceTarget(target);
+    _pendingTarget = pending;
+    unawaited(_resolvePendingTarget());
+    return pending.result.future;
+  }
+
+  Future<void> _resolvePendingTarget() async {
+    if (_resolvingPendingTarget) return;
+    final pending = _pendingTarget;
+    if (pending == null) return;
+    final target = pending.target;
+    if (target.projectId != widget.projectId ||
+        target.projectRevision < widget.projectRevision) {
+      _completePendingTarget(false);
+      return;
+    }
+    if (target.projectRevision != widget.projectRevision ||
+        target.projectCheckpointIdentity != widget.projectCheckpointIdentity ||
+        _loadingCatalog ||
+        _catalog == null) {
+      return;
+    }
+
+    final catalog = _catalog!;
+    if (catalog.projectId != target.projectId ||
+        catalog.projectRevision != target.projectRevision ||
+        catalog.choiceByStableKey(target.localizationStableKey) == null) {
+      _completePendingTarget(false);
+      return;
+    }
+
+    final epoch = ++_targetEpoch;
+    _resolvingPendingTarget = true;
+    try {
+      if (_dirty && !await _confirmDiscard()) {
+        if (mounted && identical(_pendingTarget, pending)) {
+          _completePendingTarget(false);
+        }
+        return;
+      }
+      if (!mounted ||
+          epoch != _targetEpoch ||
+          !identical(_pendingTarget, pending) ||
+          target.projectId != widget.projectId ||
+          target.projectRevision != widget.projectRevision ||
+          target.projectCheckpointIdentity !=
+              widget.projectCheckpointIdentity) {
+        return;
+      }
+
+      setState(() {
+        _selectedKey = target.localizationStableKey;
+        _showEditorOnCompact = true;
+      });
+      await _loadSeed(catalog, target.localizationStableKey);
+      if (!mounted ||
+          epoch != _targetEpoch ||
+          !identical(_pendingTarget, pending) ||
+          target.projectId != widget.projectId ||
+          target.projectRevision != widget.projectRevision ||
+          target.projectCheckpointIdentity !=
+              widget.projectCheckpointIdentity) {
+        return;
+      }
+      final seed = _seed;
+      final exactLine = seed?.lineBacklinks
+          .where((line) => line.lineId == target.lineId)
+          .firstOrNull;
+      final hasLocale = seed?.locales.any(
+        (locale) => locale.locale == target.locale,
+      );
+      if (seed == null ||
+          seed.choice.stableKey != target.localizationStableKey ||
+          exactLine == null ||
+          hasLocale != true) {
+        _completePendingTarget(false);
+        return;
+      }
+      setState(() {
+        _voiceLineId = target.lineId;
+        _voiceLocale = target.locale;
+        _showEditorOnCompact = true;
+      });
+      _completePendingTarget(true);
+    } finally {
+      if (epoch == _targetEpoch) _resolvingPendingTarget = false;
+    }
+  }
+
+  void _completePendingTarget(bool resolved) {
+    final pending = _pendingTarget;
+    _pendingTarget = null;
+    _targetEpoch++;
+    _resolvingPendingTarget = false;
+    if (pending != null && !pending.result.isCompleted) {
+      pending.result.complete(resolved);
+    }
+  }
+
+  void _cancelPendingTarget() => _completePendingTarget(false);
 
   bool get _runningExternalAction => _runningExternalActionOwner != null;
 
@@ -471,12 +696,21 @@ class _Revision3LocalizationVoiceWorkspaceState
       } else {
         await _loadSeed(catalog, selectedKey);
       }
+      await _resolvePendingTarget();
     } catch (error) {
       if (!mounted || epoch != _catalogEpoch) return;
       setState(() {
         _catalogError = error;
         _loadingCatalog = false;
       });
+      final pending = _pendingTarget?.target;
+      if (pending != null &&
+          pending.projectId == widget.projectId &&
+          pending.projectRevision == widget.projectRevision &&
+          pending.projectCheckpointIdentity ==
+              widget.projectCheckpointIdentity) {
+        _completePendingTarget(false);
+      }
     }
   }
 

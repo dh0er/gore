@@ -9,9 +9,10 @@ use crate::model_revision3::{
     EntityPayload, OriginRef, ProjectRevision3, ProjectRevision3ValidationError,
     ScriptModuleStatus, VoiceTargetResolution, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
     MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
-    MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1, MAX_REVISION3_REFERENCED_ASSET_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use crate::story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
@@ -497,6 +498,7 @@ impl ProjectRevision3 {
             )
             .map_err(|_| invalid("Quest transition plan is not closed and bounded"))?;
         }
+        self.validate_quest_transcript(quest_id, quest)?;
         if quest.input.quest_id != quest_id {
             return Err(invalid("quest input id does not match its entity id"));
         }
@@ -615,6 +617,75 @@ impl ProjectRevision3 {
                 && authored_runtime_id == &quest.input.technical_id
         ) {
             return Err(invalid("Quest origin does not match its technical id"));
+        }
+        Ok(())
+    }
+
+    fn validate_quest_transcript(
+        &self,
+        quest_id: crate::EntityId,
+        quest: &crate::model_revision3::QuestDraft,
+    ) -> Result<(), ProjectRevision3ValidationError> {
+        let invalid = |reason: String| ProjectRevision3ValidationError::InvalidQuestTranscript {
+            quest: quest_id,
+            reason,
+        };
+        if quest.transcript.len() > MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1 {
+            return Err(invalid(format!(
+                "binding count {} exceeds {}",
+                quest.transcript.len(),
+                MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1
+            )));
+        }
+        let active_slots = quest.input.transition_plan.as_deref().map(|plan| {
+            plan.objective_slots
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        });
+        let mut line_ids = BTreeSet::new();
+        for (index, binding) in quest.transcript.iter().enumerate() {
+            if binding.line.project_id != self.project_id {
+                return Err(invalid(format!(
+                    "binding {index} references another project"
+                )));
+            }
+            if binding.line.expected_kind != EntityKind::DialogLine {
+                return Err(invalid(format!(
+                    "binding {index} does not expect a DialogLine"
+                )));
+            }
+            if !line_ids.insert(binding.line.id) {
+                return Err(invalid(format!(
+                    "binding {index} duplicates DialogLine {}",
+                    binding.line.id
+                )));
+            }
+            let Some(line) = self.entities.get(&binding.line.id) else {
+                return Err(invalid(format!(
+                    "binding {index} references missing DialogLine {}",
+                    binding.line.id
+                )));
+            };
+            if !matches!(line.payload, EntityPayload::DialogLine(_)) {
+                return Err(invalid(format!(
+                    "binding {index} target {} is not a DialogLine",
+                    binding.line.id
+                )));
+            }
+            match (active_slots.as_ref(), binding.objective_slot) {
+                (None, Some(slot)) => {
+                    return Err(invalid(format!(
+                        "legacy Quest binding {index} cannot target objective slot {slot}"
+                    )));
+                }
+                (Some(active), Some(slot)) if !active.contains(&slot) => {
+                    return Err(invalid(format!(
+                        "binding {index} targets inactive objective slot {slot}"
+                    )));
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

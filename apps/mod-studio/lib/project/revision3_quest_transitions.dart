@@ -1689,11 +1689,13 @@ _questTransitionsRequireBasis(
     'revision-3 Quest transitions basis entities',
   );
   final quest = _questOutlineEntity(entities, questId, 'quest_draft');
-  _authoringExactFields(quest.data, const {
+  final hasTranscript = quest.data.containsKey('transcript');
+  _authoringExactFields(quest.data, <String>{
     'generator_id',
     'generator_version',
     'input',
     'script_module',
+    if (hasTranscript) 'transcript',
   }, 'revision-3 Quest transitions Quest data');
   if (quest.data['generator_id'] != _authoringRevision3QuestGeneratorId) {
     throw const FormatException(

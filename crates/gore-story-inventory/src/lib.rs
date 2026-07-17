@@ -832,21 +832,22 @@ mod tests {
         revision3_quest_transition_plan_basis_v1, AssetMeta, AssetStoreIndex, AssetVerification,
         ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
         GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef,
-        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision3Entity, Revision3EntityKind,
-        Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
-        Revision3QuestTransitionPlanEditEvaluationV1, Revision3QuestTransitionPlanEditRequestV1,
-        Revision3TypedRef, Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore,
-        WorkingStoreError, WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID,
-        LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_PROJECT_JSON_BYTES,
-        MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER,
-        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision2DialogLine,
+        Revision2LocalizationEntry, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+        Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+        Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditEvaluationV1,
+        Revision3QuestTransitionPlanEditRequestV1, Revision3TypedRef,
+        Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
+        WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+        MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+        QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
+        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+        REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
     };
     use gore_story_catalog::{known_generation_v1, known_generation_v2};
     use sha2::Sha256;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1847,6 +1848,7 @@ mod tests {
                 module_id,
                 Revision3EntityKind::ScriptModule,
             ),
+            transcript: Vec::new(),
         };
         let collision_input =
             VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
@@ -1907,6 +1909,60 @@ mod tests {
             panic!("expected S3 Quest Draft")
         };
         quest
+    }
+
+    fn attach_s3_transcript(
+        project: &mut gore_authoring::ProjectRevision3,
+        quest_id: AuthoringEntityId,
+    ) -> Vec<Revision3QuestTranscriptBindingV1> {
+        let localization_id = authoring_entity_id(0x73);
+        let line_id = authoring_entity_id(0x74);
+        project.entities.insert(
+            localization_id,
+            Revision3Entity {
+                id: localization_id,
+                display_name: "Context-preserved transcript text".to_owned(),
+                origin: Revision3OriginRef::New {
+                    authored_runtime_id: "GORE_CONTEXT_TRANSCRIPT_LOC_ENTITY".to_owned(),
+                },
+                revision: 2,
+                payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                    loc_id: "GORE_CONTEXT_TRANSCRIPT_TEXT".to_owned(),
+                    texts: BTreeMap::new(),
+                }),
+            },
+        );
+        project.entities.insert(
+            line_id,
+            Revision3Entity {
+                id: line_id,
+                display_name: "Context-preserved transcript line".to_owned(),
+                origin: Revision3OriginRef::New {
+                    authored_runtime_id: "GORE_CONTEXT_TRANSCRIPT_LINE".to_owned(),
+                },
+                revision: 4,
+                payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                    localization: Revision3TypedRef::new(
+                        project.project_id,
+                        localization_id,
+                        Revision3EntityKind::LocalizationEntry,
+                    ),
+                    speaker_hint: Some("Asghan".to_owned()),
+                    voice_slots: BTreeMap::new(),
+                }),
+            },
+        );
+        let transcript = vec![Revision3QuestTranscriptBindingV1 {
+            line: Revision3TypedRef::new(
+                project.project_id,
+                line_id,
+                Revision3EntityKind::DialogLine,
+            ),
+            objective_slot: None,
+        }];
+        s3_quest_mut(project, quest_id).transcript = transcript.clone();
+        project.validate_closed_model().unwrap();
+        transcript
     }
 
     fn publish_revision3_head(
@@ -2527,6 +2583,7 @@ mod tests {
                 module_id,
                 Revision3EntityKind::ScriptModule,
             ),
+            transcript: Vec::new(),
         };
         let collision_input = QuestCollisionCatalogInput {
             generation: quest.input.collision_catalog.generation.clone(),
@@ -4440,7 +4497,8 @@ mod tests {
 
     #[test]
     fn revision3_context_edit_description_parent_giver_and_all_have_an_exact_closed_delta() {
-        let fixture = s3_fixture("context-edit-delta");
+        let mut fixture = s3_fixture("context-edit-delta");
+        let transcript = attach_s3_transcript(&mut fixture.project, fixture.quest_id);
         let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
         let before = &fixture.project;
         let Revision3EntityPayload::QuestDraft(basis_quest) =
@@ -4560,6 +4618,12 @@ mod tests {
             all_outcome.publication_status(),
             Revision3QuestContextEditPublicationStatusV1::NotSupported
         );
+        let Revision3EntityPayload::QuestDraft(edited_quest) =
+            &all_outcome.project().entities[&fixture.quest_id].payload
+        else {
+            panic!("context-edited Quest kind")
+        };
+        assert_eq!(edited_quest.transcript, transcript);
         assert_eq!(
             gore_authoring::ProjectRevision3::from_json(all_outcome.canonical_project_json())
                 .unwrap(),

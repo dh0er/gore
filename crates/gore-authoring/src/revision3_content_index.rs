@@ -140,6 +140,9 @@ pub enum Revision3ContentEntitySummaryV1 {
         objective_title: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         additional_objective_titles: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        objective_slots: Vec<u16>,
+        transcript_count: u64,
         module_namespace: String,
         parent_runtime_class: String,
         giver_runtime_unique_name: String,
@@ -169,6 +172,7 @@ pub enum Revision3ContentReferenceRoleV1 {
     DialogVoiceSlot,
     VoiceCandidate,
     VoiceSelected,
+    QuestTranscriptLine,
     DraftScriptModule,
     ScriptOwner,
 }
@@ -415,6 +419,16 @@ pub fn build_revision3_content_index_v1(
                     None,
                     &value.script_module,
                 )?;
+                for binding in &value.transcript {
+                    push_reference(
+                        project,
+                        &mut references,
+                        &mut reference_count,
+                        Revision3ContentReferenceRoleV1::QuestTranscriptLine,
+                        binding.objective_slot.map(|slot| slot.to_string()),
+                        &binding.line,
+                    )?;
+                }
                 let expected_media_type = quest_collision_artifact_media_for_layer(
                     &value.input.collision_catalog.catalog_layer,
                 )
@@ -432,6 +446,13 @@ pub fn build_revision3_content_index_v1(
                     title: value.input.title.clone(),
                     objective_title: value.input.objective_title.clone(),
                     additional_objective_titles: value.input.additional_objective_titles.clone(),
+                    objective_slots: value
+                        .input
+                        .transition_plan
+                        .as_deref()
+                        .map(|plan| plan.objective_order.clone())
+                        .unwrap_or_default(),
+                    transcript_count: value.transcript.len() as u64,
                     module_namespace: value.input.module_namespace.clone(),
                     parent_runtime_class: value.input.parent_quest.runtime_class.clone(),
                     giver_runtime_unique_name: value.input.giver.runtime_unique_name.clone(),
@@ -993,6 +1014,7 @@ mod tests {
                         module_id,
                         EntityKind::ScriptModule,
                     ),
+                    transcript: Vec::new(),
                 }),
             },
         );

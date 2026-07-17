@@ -122,6 +122,7 @@ fn quest_project() -> ProjectRevision3 {
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let source = "// resolver-bound revision-3 Quest source\n".to_owned();
     let module = Revision3ScriptModule {

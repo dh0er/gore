@@ -221,6 +221,7 @@ fn project_with_valid_quest() -> ProjectRevision3 {
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let collision = QuestCollisionCatalogInput {
         generation: project.target.clone(),

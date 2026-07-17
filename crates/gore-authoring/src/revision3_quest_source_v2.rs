@@ -1024,7 +1024,8 @@ impl Write for BoundedBytesWriter {
 mod tests {
     use super::*;
     use crate::model_revision3::{
-        Entity as Revision3Entity, QuestCollisionArtifactRef, QuestDraftInput,
+        DialogLine, Entity as Revision3Entity, LocalizationEntry, QuestCollisionArtifactRef,
+        QuestDraftInput, QuestTranscriptBindingV1,
     };
     use crate::{
         AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, QuestTransitionPlanV1, SchemaRevisionV3,
@@ -1096,6 +1097,7 @@ mod tests {
                 },
             },
             script_module: TypedRef::new(project_id, module_id, EntityKind::ScriptModule),
+            transcript: Vec::new(),
         };
         let collision = QuestCollisionCatalogInput {
             generation: quest.input.collision_catalog.generation.clone(),
@@ -1298,6 +1300,9 @@ mod tests {
     #[test]
     fn semantic_v4_quest_remains_an_exact_collision_source() {
         let (mut project, head) = exact_project();
+        let project_id = project.project_id;
+        let localization_id = id(12);
+        let line_id = id(13);
         let quest = {
             let EntityPayload::QuestDraft(quest) =
                 &mut project.entities.get_mut(&id(10)).unwrap().payload
@@ -1308,8 +1313,47 @@ mod tests {
             quest.input.transition_plan = Some(Box::new(
                 QuestTransitionPlanV1::legacy_seed(1).expect("one-objective seed"),
             ));
+            quest.transcript = vec![QuestTranscriptBindingV1 {
+                line: TypedRef::new(project_id, line_id, EntityKind::DialogLine),
+                objective_slot: Some(1),
+            }];
             quest.clone()
         };
+        project.entities.insert(
+            localization_id,
+            Revision3Entity {
+                id: localization_id,
+                display_name: "Source-inspection transcript text".into(),
+                origin: OriginRef::New {
+                    authored_runtime_id: "GORE_SOURCE_TRANSCRIPT_LOC_ENTITY".into(),
+                },
+                revision: 2,
+                payload: EntityPayload::LocalizationEntry(LocalizationEntry {
+                    loc_id: "GORE_SOURCE_TRANSCRIPT_TEXT".into(),
+                    texts: BTreeMap::new(),
+                }),
+            },
+        );
+        project.entities.insert(
+            line_id,
+            Revision3Entity {
+                id: line_id,
+                display_name: "Source-inspection transcript line".into(),
+                origin: OriginRef::New {
+                    authored_runtime_id: "GORE_SOURCE_TRANSCRIPT_LINE".into(),
+                },
+                revision: 4,
+                payload: EntityPayload::DialogLine(DialogLine {
+                    localization: TypedRef::new(
+                        project_id,
+                        localization_id,
+                        EntityKind::LocalizationEntry,
+                    ),
+                    speaker_hint: Some("Asghan".into()),
+                    voice_slots: BTreeMap::new(),
+                }),
+            },
+        );
         let collision = QuestCollisionCatalogInput {
             generation: quest.input.collision_catalog.generation.clone(),
             source_seal: quest.input.collision_catalog.source_seal.clone(),
@@ -1333,6 +1377,10 @@ mod tests {
             .expect("semantic Quest remains a reconstructable exact source");
         assert_eq!(prepared.prior_quest_count(), 1);
         assert_eq!(prepared.prior_quests()[&id(10)].module_id(), id(11));
+        assert_eq!(
+            project.entities[&id(10)].payload,
+            EntityPayload::QuestDraft(quest)
+        );
     }
 
     #[test]

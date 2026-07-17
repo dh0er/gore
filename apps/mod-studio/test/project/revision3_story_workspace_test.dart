@@ -12,6 +12,8 @@ const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
 const _blockerId = '55555555555555555555555555555555';
+const _transcriptLocalizationId = '66666666666666666666666666666666';
+const _transcriptLineId = '77777777777777777777777777777777';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _artifactSha =
@@ -500,6 +502,116 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'Quest Dialog & Voice hosts the exact transcript UI and retains its line selection',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      var revision = 7;
+      var index = _fixture();
+      late StateSetter rebuild;
+      final selectedByBuild = <String?>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Scaffold(
+                body: _workspace(
+                  revision: revision,
+                  head: 'head-$revision',
+                  load: () async => index,
+                  questTranscriptBuilder:
+                      ({
+                        required index,
+                        required quest,
+                        required selectedLineId,
+                        required onSelectedLineChanged,
+                      }) {
+                        selectedByBuild.add(selectedLineId);
+                        return Column(
+                          key: const Key('test-quest-transcript'),
+                          children: [
+                            const Text('Friendly Quest transcript'),
+                            FilledButton(
+                              key: const Key('test-select-transcript-line'),
+                              onPressed: () => onSelectedLineChanged('line-a'),
+                              child: const Text('Select first line'),
+                            ),
+                          ],
+                        );
+                      },
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+      );
+      await tester.pump();
+      final dialogTab = find.byKey(
+        Key('revision3-story-workbench-tab-dialogVoice-$_questId'),
+      );
+      await tester.ensureVisible(dialogTab);
+      await tester.tap(dialogTab);
+      await tester.pump();
+
+      expect(find.byKey(const Key('test-quest-transcript')), findsOneWidget);
+      expect(find.text('Friendly Quest transcript'), findsOneWidget);
+      expect(find.text('Not modeled yet'), findsNothing);
+      await tester.tap(find.byKey(const Key('test-select-transcript-line')));
+      await tester.pump();
+      expect(selectedByBuild.last, 'line-a');
+
+      rebuild(() {
+        revision = 8;
+        index = _fixture(revision: 8);
+      });
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<ChoiceChip>(dialogTab).selected, isTrue);
+      expect(find.byKey(const Key('test-quest-transcript')), findsOneWidget);
+      expect(selectedByBuild.last, 'line-a');
+    },
+  );
+
+  testWidgets('NPC Dialog & Voice remains unavailable with a Quest builder', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(),
+      questTranscriptBuilder:
+          ({
+            required index,
+            required quest,
+            required selectedLineId,
+            required onSelectedLineChanged,
+          }) => const Text('Friendly Quest transcript'),
+    );
+    await tester.pumpAndSettle();
+
+    final dialogTab = find.byKey(
+      Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+    );
+    await tester.ensureVisible(dialogTab);
+    await tester.tap(dialogTab);
+    await tester.pump();
+
+    expect(find.text('Friendly Quest transcript'), findsNothing);
+    expect(
+      find.text(
+        'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.',
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('project switch resets search, filter, selection, and tabs', (
     tester,
@@ -1105,16 +1217,18 @@ void main() {
     expect(foreign.canRemove, isTrue);
     expect(foreign.blockers, isEmpty);
 
-    final outboundIndex = _fixture(includeOutboundBlocker: true);
-    final outbound = Revision3StoryDraftRemovalPreflight.fromIndex(
-      index: outboundIndex,
-      draft: outboundIndex.entityById(_questId)!,
+    final transcriptIndex = _fixture(includeTranscriptLine: true);
+    final transcript = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: transcriptIndex,
+      draft: transcriptIndex.entityById(_questId)!,
     );
-    expect(outbound.hasExactPair, isTrue);
-    expect(outbound.canRemove, isFalse);
-    expect(outbound.blockers, hasLength(1));
-    expect(outbound.blockers.single.source.id, _questId);
-    expect(outbound.blockers.single.reference.role, 'script_owner');
+    expect(transcript.canRemove, isTrue);
+    expect(transcript.blockers, isEmpty);
+    expect(
+      transcriptIndex.entityById(_transcriptLineId)?.kind,
+      Revision3ContentEntityKind.dialogLine,
+      reason: 'removal only drops the Quest edge, never its target line',
+    );
   });
 
   testWidgets(
@@ -1525,6 +1639,7 @@ Future<void> _pumpWorkspace(
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
+  Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -1549,6 +1664,7 @@ Future<void> _pumpWorkspace(
         copy: copy,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
+        questTranscriptBuilder: questTranscriptBuilder,
       ),
     ),
   ),
@@ -1577,6 +1693,7 @@ Revision3StoryWorkspace _workspace({
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
+  Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
 }) => Revision3StoryWorkspace(
   projectRoot: root,
   projectId: projectId,
@@ -1604,6 +1721,7 @@ Revision3StoryWorkspace _workspace({
   removeDraft: removeDraft,
   removeDraftDisabledReason: removeDraftDisabledReason,
   editNpcProfileDisabledReason: editNpcProfileDisabledReason,
+  questTranscriptBuilder: questTranscriptBuilder,
 );
 
 Revision3ContentIndex _fixture({
@@ -1616,7 +1734,7 @@ Revision3ContentIndex _fixture({
   String? blockerProjectId,
   String blockerExpectedKind = 'quest_draft',
   String blockerResolution = 'resolved',
-  bool includeOutboundBlocker = false,
+  bool includeTranscriptLine = false,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': projectId,
@@ -1629,6 +1747,8 @@ Revision3ContentIndex _fixture({
   },
   'authoring_locales': <Object?>['de', 'en'],
   'entity_counts': <String, Object?>{
+    if (includeTranscriptLine) 'localization_entry': 1,
+    if (includeTranscriptLine) 'dialog_line': 1,
     if (includeNpc) 'npc_draft': 1,
     if (includeQuest) 'quest_draft': 1,
     if (includeQuest) 'script_module': includeBlocker ? 2 : 1,
@@ -1673,6 +1793,7 @@ Revision3ContentIndex _fixture({
             'technical_id': 'GORE_FIND_HOMER',
             'title': 'Find Homer',
             'objective_title': 'Ask Asghan about Homer',
+            if (includeTranscriptLine) 'transcript_count': 1,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'parent_runtime_class': 'B_Quest_FindHomer_C',
             'giver_runtime_unique_name': 'ASGHAN',
@@ -1689,14 +1810,14 @@ Revision3ContentIndex _fixture({
             },
             'resolution': 'resolved',
           },
-          if (includeOutboundBlocker)
+          if (includeTranscriptLine)
             <String, Object?>{
-              'role': 'script_owner',
+              'role': 'quest_transcript_line',
               'qualifier': null,
               'target': <String, Object?>{
                 'project_id': projectId,
-                'entity_id': _npcId,
-                'expected_kind': 'npc_draft',
+                'entity_id': _transcriptLineId,
+                'expected_kind': 'dialog_line',
               },
               'resolution': 'resolved',
             },
@@ -1799,6 +1920,57 @@ Revision3ContentIndex _fixture({
               'expected_kind': blockerExpectedKind,
             },
             'resolution': blockerResolution,
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeTranscriptLine)
+      <String, Object?>{
+        'id': _transcriptLocalizationId,
+        'kind': 'localization_entry',
+        'display_name': 'Asghan greeting',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_ASGHAN_GREETING',
+        },
+        'summary': <String, Object?>{
+          'kind': 'localization_entry',
+          'data': <String, Object?>{
+            'loc_id': 'GORE_ASGHAN_GREETING',
+            'locales': <Object?>['de', 'en'],
+          },
+        },
+        'references': <Object?>[],
+        'asset_references': <Object?>[],
+      },
+    if (includeTranscriptLine)
+      <String, Object?>{
+        'id': _transcriptLineId,
+        'kind': 'dialog_line',
+        'display_name': 'Asghan greeting line',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_ASGHAN_GREETING_LINE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'dialog_line',
+          'data': <String, Object?>{
+            'speaker_hint': 'Asghan',
+            'voice_slot_locales': <Object?>[],
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'dialog_localization',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _transcriptLocalizationId,
+              'expected_kind': 'localization_entry',
+            },
+            'resolution': 'resolved',
           },
         ],
         'asset_references': <Object?>[],

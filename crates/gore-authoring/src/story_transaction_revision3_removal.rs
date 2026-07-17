@@ -605,6 +605,18 @@ fn validate_isolated_removal_closure(
                     require_exact_ownership_edge(reference)?;
                     script_owner_edges = script_owner_edges.saturating_add(1);
                 }
+                (
+                    source,
+                    Revision3ContentReferenceRoleV1::QuestTranscriptLine,
+                    _,
+                    EntityKind::DialogLine,
+                ) if source == request.draft_id
+                    && request.draft_kind == Revision3StoryDraftRemovalKindV1::QuestDraft =>
+                {
+                    // Transcript bindings are authoring-only outgoing edges. Removing their Quest
+                    // drops the edges but deliberately leaves shared DialogLine/localization/voice
+                    // entities untouched.
+                }
                 _ if reference.target.entity_id == request.draft_id => {
                     return Err(ClosureBlocker::DraftReferenced {
                         source_entity: source.id,
@@ -743,9 +755,9 @@ mod tests {
 
     use super::*;
     use crate::model_revision3::{
-        Entity, LocalizationEntry, NpcDraft, NpcDraftInput, NpcParentClassInput,
+        DialogLine, Entity, LocalizationEntry, NpcDraft, NpcDraftInput, NpcParentClassInput,
         QuestCollisionArtifactRef, QuestDraft, QuestDraftInput, QuestGiverInput, QuestParentInput,
-        SchemaRevisionV3,
+        QuestTranscriptBindingV1, SchemaRevisionV3, TypedRef,
     };
     use crate::{
         AssetMeta, AssetStoreIndex, ContentSeal, FormatV2, ProjectMeta, Sha256Digest,
@@ -968,6 +980,7 @@ mod tests {
                 module_id,
                 EntityKind::ScriptModule,
             ),
+            transcript: Vec::new(),
         };
         let module =
             regenerate_revision3_quest_module_v2(&draft, empty_collision_input(&draft)).unwrap();
@@ -1097,6 +1110,76 @@ mod tests {
                 Revision3StoryDraftRemovalPublicationStatusV1::NotSupported
             );
         }
+    }
+
+    #[test]
+    fn quest_removal_drops_outgoing_transcript_edges_without_deleting_shared_content() {
+        let mut fixture = quest_fixture();
+        let localization_id = entity_id(0x81);
+        let line_id = entity_id(0x82);
+        fixture.project.entities.insert(
+            localization_id,
+            Entity {
+                id: localization_id,
+                display_name: "Shared Quest text".to_owned(),
+                origin: new_origin("GORE_SHARED_QUEST_TEXT"),
+                revision: 4,
+                payload: EntityPayload::LocalizationEntry(LocalizationEntry {
+                    loc_id: "GORE_SHARED_QUEST_TEXT_LOC".to_owned(),
+                    texts: BTreeMap::new(),
+                }),
+            },
+        );
+        fixture.project.entities.insert(
+            line_id,
+            Entity {
+                id: line_id,
+                display_name: "Shared Quest line".to_owned(),
+                origin: new_origin("GORE_SHARED_QUEST_LINE"),
+                revision: 6,
+                payload: EntityPayload::DialogLine(DialogLine {
+                    localization: TypedRef::new(
+                        fixture.project.project_id,
+                        localization_id,
+                        EntityKind::LocalizationEntry,
+                    ),
+                    speaker_hint: Some("Asghan".to_owned()),
+                    voice_slots: BTreeMap::new(),
+                }),
+            },
+        );
+        let EntityPayload::QuestDraft(quest) = &mut fixture
+            .project
+            .entities
+            .get_mut(&fixture.draft_id)
+            .unwrap()
+            .payload
+        else {
+            panic!("fixture Quest kind")
+        };
+        quest.transcript.push(QuestTranscriptBindingV1 {
+            line: TypedRef::new(fixture.project.project_id, line_id, EntityKind::DialogLine),
+            objective_slot: None,
+        });
+        fixture.project.validate_closed_model().unwrap();
+        let basis = fixture.project.clone();
+
+        let Revision3StoryDraftRemovalEvaluationV1::Applied(outcome) =
+            evaluate(&fixture, &basis, &request(&fixture)).unwrap()
+        else {
+            panic!("Quest transcript outgoing edge blocked pair removal")
+        };
+
+        assert!(!outcome.project.entities.contains_key(&fixture.draft_id));
+        assert!(!outcome.project.entities.contains_key(&fixture.module_id));
+        assert_eq!(
+            outcome.project.entities.get(&line_id),
+            basis.entities.get(&line_id)
+        );
+        assert_eq!(
+            outcome.project.entities.get(&localization_id),
+            basis.entities.get(&localization_id)
+        );
     }
 
     #[test]

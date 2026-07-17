@@ -32,6 +32,7 @@ part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
 part '../project/revision3_quest_outline_v2.dart';
 part '../project/revision3_quest_source_inspection.dart';
+part '../project/revision3_quest_transcript.dart';
 part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_project_export.dart';
 part '../project/revision3_project_history_wire.dart';
@@ -1291,6 +1292,42 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3QuestOutlineEditPreparationV2.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one project-only ordered Quest transcript edit. The native
+  /// boundary returns an unpublished, build-blocked candidate; fixed-head CAS
+  /// publication remains exclusively owned by the managed Dart session.
+  Future<AuthoringRevision3QuestTranscriptPreparation>
+  authoringStorePrepareRevision3QuestTranscriptV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTranscriptRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_quest_transcript_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'quest_transcript_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3QuestTranscriptPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

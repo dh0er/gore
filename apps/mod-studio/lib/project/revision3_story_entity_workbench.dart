@@ -262,6 +262,7 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
     required this.selectedSection,
     required this.onSectionChanged,
     required this.actions,
+    this.questTranscript,
     this.copy = const Revision3StoryEntityWorkbenchCopy.english(),
     super.key,
   }) : assert(
@@ -277,6 +278,13 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
   final Revision3StoryWorkbenchSection selectedSection;
   final ValueChanged<Revision3StoryWorkbenchSection> onSectionChanged;
   final Revision3StoryEntityWorkbenchActions actions;
+
+  /// Friendly Quest-only transcript editor supplied by the owning workspace.
+  ///
+  /// The workbench deliberately does not manufacture transcript authority.
+  /// When no exact-current editor is supplied, the previous unavailable state
+  /// remains visible. NPC dialog authoring stays unavailable in either case.
+  final Widget? questTranscript;
   final Revision3StoryEntityWorkbenchCopy copy;
 
   static Revision3StoryWorkbenchSection defaultSectionFor(
@@ -541,13 +549,17 @@ class _Revision3StoryEntityWorkbenchState
           ),
         ],
         Revision3StoryWorkbenchSection.dialogVoice => <Widget>[
-          _UnavailableCapability(
-            title: widget.copy.dialogVoiceTab,
-            description: entity.kind == Revision3ContentEntityKind.questDraft
-                ? widget.copy.questDialogVoiceUnavailable
-                : widget.copy.npcDialogVoiceUnavailable,
-            fallback: widget.copy.capabilityUnavailable,
-          ),
+          if (entity.kind == Revision3ContentEntityKind.questDraft &&
+              widget.questTranscript != null)
+            widget.questTranscript!
+          else
+            _UnavailableCapability(
+              title: widget.copy.dialogVoiceTab,
+              description: entity.kind == Revision3ContentEntityKind.questDraft
+                  ? widget.copy.questDialogVoiceUnavailable
+                  : widget.copy.npcDialogVoiceUnavailable,
+              fallback: widget.copy.capabilityUnavailable,
+            ),
         ],
         Revision3StoryWorkbenchSection.references => _references(context),
         Revision3StoryWorkbenchSection.problemsChecks => _problems(context),

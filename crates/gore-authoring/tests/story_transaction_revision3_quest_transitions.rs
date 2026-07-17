@@ -7,11 +7,12 @@ use gore_authoring::{
     ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
     QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
     QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
-    QuestTransitionStateTestV1, Revision2LocalizationEntry, Revision3Entity, Revision3EntityKind,
-    Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
-    Revision3QuestGiverInput, Revision3QuestParentInput,
-    Revision3QuestTransitionPlanEditBuildStatusV1, Revision3QuestTransitionPlanEditConflictV1,
-    Revision3QuestTransitionPlanEditErrorV1, Revision3QuestTransitionPlanEditEvaluationV1,
+    QuestTransitionStateTestV1, Revision2DialogLine, Revision2LocalizationEntry, Revision3Entity,
+    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
+    Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
+    Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditBuildStatusV1,
+    Revision3QuestTransitionPlanEditConflictV1, Revision3QuestTransitionPlanEditErrorV1,
+    Revision3QuestTransitionPlanEditEvaluationV1,
     Revision3QuestTransitionPlanEditPublicationStatusV1,
     Revision3QuestTransitionPlanEditRequestJsonErrorV1, Revision3QuestTransitionPlanEditRequestV1,
     Revision3QuestTransitionPlanEditRuntimeStatusV1, Revision3ScriptModule, Revision3TypedRef,
@@ -121,6 +122,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
     let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
@@ -296,13 +298,69 @@ fn automatic_root_start(plan: &mut QuestTransitionPlanV1) {
     });
 }
 
+fn attach_transcript(
+    project: &mut ProjectRevision3,
+    objective_slot: Option<u16>,
+) -> Vec<Revision3QuestTranscriptBindingV1> {
+    let localization_id = id(0x70);
+    let line_id = id(0x71);
+    project.entities.insert(
+        localization_id,
+        Revision3Entity {
+            id: localization_id,
+            display_name: "Transition-preserved transcript text".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_TRANSITION_TRANSCRIPT_LOC_ENTITY".to_owned(),
+            },
+            revision: 2,
+            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                loc_id: "GORE_TRANSITION_TRANSCRIPT_TEXT".to_owned(),
+                texts: BTreeMap::new(),
+            }),
+        },
+    );
+    project.entities.insert(
+        line_id,
+        Revision3Entity {
+            id: line_id,
+            display_name: "Transition-preserved transcript line".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_TRANSITION_TRANSCRIPT_LINE".to_owned(),
+            },
+            revision: 4,
+            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                localization: Revision3TypedRef::new(
+                    project.project_id,
+                    localization_id,
+                    Revision3EntityKind::LocalizationEntry,
+                ),
+                speaker_hint: Some("Asghan".to_owned()),
+                voice_slots: BTreeMap::new(),
+            }),
+        },
+    );
+    let transcript = vec![Revision3QuestTranscriptBindingV1 {
+        line: Revision3TypedRef::new(project.project_id, line_id, Revision3EntityKind::DialogLine),
+        objective_slot,
+    }];
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&id(0x21)).unwrap().payload
+    else {
+        panic!("fixture Quest kind")
+    };
+    quest.transcript = transcript.clone();
+    project.validate_closed_model().unwrap();
+    transcript
+}
+
 #[test]
 fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_three_revisions() {
     for objective_titles in [
         vec!["Win the trial"],
         vec!["Enter the arena", "Defeat the guard", "Report to Asghan"],
     ] {
-        let (project, basis_head) = project_with_quest(&objective_titles);
+        let (mut project, basis_head) = project_with_quest(&objective_titles);
+        let transcript = attach_transcript(&mut project, None);
         let before = project.clone();
         let old_quest = quest(&before).clone();
         let old_module_entity = before.entities[&id(0x22)].clone();
@@ -337,6 +395,7 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
         assert_eq!(outcome.project.authoring_locales, before.authoring_locales);
         assert_eq!(outcome.project.asset_store, before.asset_store);
         assert_eq!(outcome.project.entities.len(), before.entities.len());
+        assert_eq!(quest(&outcome.project).transcript, transcript);
         assert_eq!(
             outcome.project.entities[&id(0x30)],
             before.entities[&id(0x30)]

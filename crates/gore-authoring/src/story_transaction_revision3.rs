@@ -407,6 +407,7 @@ pub fn apply_revision3_quest_draft_transaction_v2(
             collision_catalog: request.intent.collision_catalog,
         },
         script_module: module_ref,
+        transcript: Vec::new(),
     };
     let runtime_id = quest.input.technical_id.clone();
     let (module, generated_identity) =

@@ -159,6 +159,7 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let source = "// unrelated V4 Quest source; intentionally opaque to NPC inspection\n";
     let module = Revision3ScriptModule {

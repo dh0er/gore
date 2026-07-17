@@ -19,6 +19,13 @@ typedef Revision3StoryWorkspaceRemoveDraftAction =
       required Revision3ContentEntity draft,
       required Revision3ContentEntity scriptModule,
     });
+typedef Revision3StoryQuestTranscriptBuilder =
+    Widget Function({
+      required Revision3ContentIndex index,
+      required Revision3ContentEntity quest,
+      required String? selectedLineId,
+      required ValueChanged<String?> onSelectedLineChanged,
+    });
 
 @immutable
 final class Revision3StoryDraftRemovalBlocker {
@@ -138,8 +145,20 @@ final class Revision3StoryDraftRemovalPreflight {
       for (final reference in source.references) {
         final sourceIsRemoved = pairIds.contains(source.id);
         final targetIsRemoved = pairIds.contains(reference.target.entityId);
+        final ownedTranscriptLineDisappearsWithQuest =
+            draft.kind == Revision3ContentEntityKind.questDraft &&
+            source.id == draft.id &&
+            reference.role == 'quest_transcript_line' &&
+            reference.target.projectId == index.projectId &&
+            reference.target.expectedKind ==
+                Revision3ContentEntityKind.dialogLine &&
+            reference.resolution ==
+                Revision3ContentReferenceResolution.resolved &&
+            index.entityById(reference.target.entityId)?.kind ==
+                Revision3ContentEntityKind.dialogLine;
         if (reference.target.projectId != index.projectId ||
             (!sourceIsRemoved && !targetIsRemoved) ||
+            ownedTranscriptLineDisappearsWithQuest ||
             allowedEdges.contains(reference)) {
           continue;
         }
@@ -399,6 +418,7 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     this.inspectNpcSourceDisabledReason,
     this.removeDraft,
     this.removeDraftDisabledReason,
+    this.questTranscriptBuilder,
     super.key,
   }) : assert(projectRoot != ''),
        assert(projectId != ''),
@@ -443,6 +463,10 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   final Revision3StoryWorkspaceRemoveDraftAction? removeDraft;
   final String? removeDraftDisabledReason;
 
+  /// Builds the exact-current Quest transcript UI without granting this
+  /// workspace native publication or navigation authority.
+  final Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder;
+
   @override
   State<Revision3StoryWorkspace> createState() =>
       _Revision3StoryWorkspaceState();
@@ -462,6 +486,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
   _StoryFilter _filter = _StoryFilter.all;
   String? _selectedEntityId;
   final Map<String, Revision3StoryWorkbenchSection> _sections = {};
+  final Map<String, String> _selectedTranscriptLines = {};
   _PendingStorySelection? _pendingSelection;
   bool _usesDetailsSheet = false;
   bool _openingDetailsSheet = false;
@@ -508,6 +533,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       _filter = _StoryFilter.all;
       _selectedEntityId = null;
       _sections.clear();
+      _selectedTranscriptLines.clear();
       _usesDetailsSheet = false;
     } else {
       final pending = _pendingSelection;
@@ -573,6 +599,9 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
             ? selected
             : story.firstOrNull?.id;
         _sections.removeWhere(
+          (entityId, _) => !story.any((entity) => entity.id == entityId),
+        );
+        _selectedTranscriptLines.removeWhere(
           (entityId, _) => !story.any((entity) => entity.id == entityId),
         );
       });
@@ -1233,6 +1262,25 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         removeDraftDisabledReason: removeDisabledReason,
         removingDraft: _removingDraft,
       ),
+      questTranscript:
+          entity.kind == Revision3ContentEntityKind.questDraft &&
+              widget.questTranscriptBuilder != null
+          ? widget.questTranscriptBuilder!(
+              index: index,
+              quest: entity,
+              selectedLineId: _selectedTranscriptLines[entity.id],
+              onSelectedLineChanged: (lineId) {
+                if (!_isExactCurrentIndex(index)) return;
+                setState(() {
+                  if (lineId == null || lineId.isEmpty) {
+                    _selectedTranscriptLines.remove(entity.id);
+                  } else {
+                    _selectedTranscriptLines[entity.id] = lineId;
+                  }
+                });
+              },
+            )
+          : null,
       copy: widget.copy.workbench,
     );
   }

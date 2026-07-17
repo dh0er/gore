@@ -22,6 +22,7 @@ import 'revision3_npc_profile_edit_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
+import 'revision3_quest_transcript_authoring.dart';
 import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_project_history.dart';
@@ -369,6 +370,24 @@ const _revision3NpcProfileEditCorrectableCodes = <String>{
   'AUTHORING_REVISION3_NPC_PROFILE_UNSUPPORTED_GENERATION',
 };
 
+const _revision3QuestTranscriptCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_BINDING_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_DIALOG_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_INDEX_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_NO_CHANGES',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_QUEST_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REVISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_STORE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_TARGET_CONFLICT',
+};
+
 final class ManagedRevision3ProjectCreationException
     extends CurrentProjectCoordinatorException {
   const ManagedRevision3ProjectCreationException(super.message);
@@ -655,6 +674,24 @@ abstract interface class ManagedRevision3NpcProfileEditLease {
   });
 }
 
+/// Optional project-only Quest transcript mutation capability. It remains
+/// separate so unrelated lease fakes do not gain dialog-creation authority.
+abstract interface class ManagedRevision3QuestTranscriptLease {
+  bool get supportsQuestTranscript;
+
+  void markRequiresReopenAfterQuestTranscriptUncertainty();
+
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptReplaceV1({
+    required Revision3QuestTranscriptReplaceTechnicalPlan plan,
+  });
+
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptCreateV1({
+    required Revision3QuestTranscriptCreateTechnicalPlan plan,
+  });
+}
+
 /// Optional exact-current capability for changing one retained VoiceTake's
 /// author-managed review status. Keeping it separate avoids widening unrelated
 /// current-project lease fakes with mutation authority.
@@ -901,6 +938,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3NpcProfileEditLease,
+        ManagedRevision3QuestTranscriptLease,
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3VoiceBatchLease,
         ManagedRevision3VoiceTakeRemovalLease,
@@ -987,6 +1025,9 @@ final class _ManagedRevision3SessionLease
   bool get supportsNpcProfileEdit => _session.supportsNpcProfileEdit;
 
   @override
+  bool get supportsQuestTranscript => _session.supportsQuestTranscript;
+
+  @override
   void markRequiresReopenAfterStoryDraftRemovalUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
@@ -1004,6 +1045,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterNpcProfileEditUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterQuestTranscriptUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1175,6 +1220,39 @@ final class _ManagedRevision3SessionLease
       moduleRevision: checkpoint.moduleRevision,
     );
   }
+
+  @override
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptReplaceV1({
+    required Revision3QuestTranscriptReplaceTechnicalPlan plan,
+  }) async => _questTranscriptPublication(
+    await _session.prepareAndPublishQuestTranscriptReplaceV1(plan: plan),
+  );
+
+  @override
+  Future<Revision3QuestTranscriptPublication>
+  prepareAndPublishQuestTranscriptCreateV1({
+    required Revision3QuestTranscriptCreateTechnicalPlan plan,
+  }) async => _questTranscriptPublication(
+    await _session.prepareAndPublishQuestTranscriptCreateV1(plan: plan),
+  );
+
+  Revision3QuestTranscriptPublication _questTranscriptPublication(
+    ManagedRevision3QuestTranscriptCheckpoint checkpoint,
+  ) => Revision3QuestTranscriptPublication(
+    projectId: checkpoint.projectId,
+    projectRevision: checkpoint.projectRevision,
+    questId: checkpoint.questId,
+    questRevision: checkpoint.questRevision,
+    moduleId: checkpoint.moduleId,
+    moduleRevision: checkpoint.moduleRevision,
+    mode: checkpoint.mode,
+    transcriptCount: checkpoint.transcriptCount,
+    createdLineId: checkpoint.createdLineId,
+    createdLocalizationId: checkpoint.createdLocalizationId,
+    createdVoiceSlotId: checkpoint.createdVoiceSlotId,
+    localizationAction: checkpoint.localizationAction,
+  );
 
   @override
   Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
@@ -3212,6 +3290,158 @@ final class CurrentProjectCoordinator
         );
       }
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  Future<Revision3QuestTranscriptPublication>
+  replaceCurrentRevision3QuestTranscript({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3QuestTranscriptReplaceTechnicalPlan plan,
+  }) => _publishCurrentRevision3QuestTranscript(
+    expectedRoot: expectedRoot,
+    expectedProjectId: expectedProjectId,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedHead: expectedHead,
+    expectedQuestId: plan.questId,
+    expectedQuestRevision: plan.expectedQuestRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedMode: AuthoringRevision3QuestTranscriptMode.replace,
+    expectedTranscriptCount: plan.bindings.length,
+    expectedLine: null,
+    publish: (editor) =>
+        editor.prepareAndPublishQuestTranscriptReplaceV1(plan: plan),
+  );
+
+  Future<Revision3QuestTranscriptPublication>
+  createCurrentRevision3QuestTranscriptLine({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3QuestTranscriptCreateTechnicalPlan plan,
+  }) => _publishCurrentRevision3QuestTranscript(
+    expectedRoot: expectedRoot,
+    expectedProjectId: expectedProjectId,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedHead: expectedHead,
+    expectedQuestId: plan.questId,
+    expectedQuestRevision: plan.expectedQuestRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    expectedMode: AuthoringRevision3QuestTranscriptMode.createAndInsert,
+    expectedTranscriptCount: plan.expectedTranscriptCount + 1,
+    expectedLine: plan.line,
+    publish: (editor) =>
+        editor.prepareAndPublishQuestTranscriptCreateV1(plan: plan),
+  );
+
+  Future<Revision3QuestTranscriptPublication>
+  _publishCurrentRevision3QuestTranscript({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String expectedQuestId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringRevision3QuestTranscriptMode expectedMode,
+    required int expectedTranscriptCount,
+    required Revision3DialogLineEntryTechnicalPlan? expectedLine,
+    required Future<Revision3QuestTranscriptPublication> Function(
+      ManagedRevision3QuestTranscriptLease editor,
+    )
+    publish,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest transcript editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestTranscriptRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestTranscriptStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3QuestTranscriptLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit Quest transcripts safely',
+      );
+    }
+    final editor = lease as ManagedRevision3QuestTranscriptLease;
+    if (!editor.supportsQuestTranscript) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit Quest transcripts safely',
+      );
+    }
+    try {
+      final publication = await publish(editor);
+      final expectedAction = expectedLine == null
+          ? null
+          : (expectedLine.localization
+                    is AuthoringRevision3DialogLocalizationCreateIntentV1
+                ? AuthoringRevision3DialogLocalizationAction.created
+                : AuthoringRevision3DialogLocalizationAction.reusedExact);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          lease.head.canonicalJson == expectedHead.canonicalJson ||
+          publication.questId != expectedQuestId ||
+          publication.questRevision != expectedQuestRevision + 1 ||
+          publication.moduleId != expectedModuleId ||
+          publication.moduleRevision != expectedModuleRevision ||
+          publication.mode != expectedMode ||
+          publication.transcriptCount != expectedTranscriptCount ||
+          publication.createdLineId != expectedLine?.lineId ||
+          publication.createdLocalizationId !=
+              expectedLine?.localization.localizationId ||
+          publication.createdVoiceSlotId != expectedLine?.voiceSlot?.slotId ||
+          publication.localizationAction != expectedAction) {
+        editor.markRequiresReopenAfterQuestTranscriptUncertainty();
+        throw const Revision3QuestTranscriptRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3QuestTranscriptRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          editor.markRequiresReopenAfterQuestTranscriptUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestTranscriptRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if ((error is ModFfiException &&
+              _revision3QuestTranscriptCorrectableCodes.contains(error.code)) ||
+          error is FormatException ||
+          error is Revision3QuestTranscriptStaleCheckpointException) {
+        Error.throwWithStackTrace(
+          const Revision3QuestTranscriptStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      editor.markRequiresReopenAfterQuestTranscriptUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3QuestTranscriptRequiresReopenException(),
+        stackTrace,
+      );
     } finally {
       _refreshCurrentIfUnchanged(current);
     }

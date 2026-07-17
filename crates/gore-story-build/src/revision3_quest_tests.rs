@@ -110,6 +110,7 @@ fn quest(project: ProjectId) -> Revision3QuestDraft {
             entity_id(11),
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     }
 }
 

@@ -182,6 +182,7 @@ fn quest_project(
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let source = "// persisted revision-3 Quest module\n".to_owned();
     let owner = Revision3TypedRef::new(

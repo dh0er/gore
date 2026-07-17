@@ -3702,6 +3702,180 @@ void main() {
     expect(find.text(_copy.voiceActionFailedMessage), findsOneWidget);
     expect(tester.widget<OutlinedButton>(addVoice).onPressed, isNotNull);
   });
+
+  testWidgets(
+    'exact controller handoff selects only the bound text line and locale',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        duplicateLine: true,
+        rejectPrimaryVoiceLine: true,
+        secondDisplayName: 'Viper greeting',
+      );
+      final service = _serviceForIndex(
+        index,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: const <String, String>{
+                'de': 'Willkommen im Lager.',
+                'en': 'Welcome to the camp.',
+              },
+              voiceSlots: const <String>{'en'},
+              backlinks: <Map<String, Object?>>[
+                <String, Object?>{
+                  'line_id': _secondLineId,
+                  'line_revision': 1,
+                  'display_name': 'Camp greeting',
+                  'speaker_hint': 'Viper',
+                  'voice_slot_locales': <String>['en'],
+                },
+              ],
+            ),
+      );
+      final catalog = await service.loadCatalog();
+      final choice = catalog.choices.singleWhere(
+        (choice) => choice.displayLabel == 'Viper greeting',
+      );
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+
+      final opened = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationStableKey: choice.stableKey,
+          lineId: _secondLineId,
+          locale: 'en',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(await opened, isTrue);
+      expect(_textField(tester, 'en').controller!.text, 'Welcome to the camp.');
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(
+                ValueKey('revision3-localization-voice-line-$_secondLineId'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                const ValueKey('revision3-localization-voice-locale-en'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
+    'controller rejects wrong targets and newest exact request wins',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final service = _serviceForIndex(index);
+      final stableKey = (await service.loadCatalog()).choices.single.stableKey;
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+
+      expect(
+        await controller.openExactTarget(
+          Revision3LocalizationVoiceTarget(
+            projectId: _projectId,
+            projectRevision: 6,
+            projectCheckpointIdentity: 'head-6',
+            localizationStableKey: stableKey,
+            lineId: _lineId,
+            locale: 'en',
+          ),
+        ),
+        isFalse,
+      );
+      final futureCheckpoint = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget(
+          projectId: _projectId,
+          projectRevision: 8,
+          projectCheckpointIdentity: 'head-8',
+          localizationStableKey: stableKey,
+          lineId: _lineId,
+          locale: 'en',
+        ),
+      );
+      final wrongLine = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationStableKey: stableKey,
+          lineId: _secondLineId,
+          locale: 'en',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await futureCheckpoint, isFalse);
+      expect(await wrongLine, isFalse);
+
+      final wrongHead = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'wrong-head',
+          localizationStableKey: stableKey,
+          lineId: _lineId,
+          locale: 'en',
+        ),
+      );
+      final exact = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationStableKey: stableKey,
+          lineId: _lineId,
+          locale: 'de',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await wrongHead, isFalse);
+      expect(await exact, isTrue);
+    },
+  );
 }
 
 final class _PendingVoiceReloadFixture {
@@ -3984,6 +4158,7 @@ Future<void> _pumpWorkspace(
   Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor,
   Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor,
   Revision3LocalizationVoiceCatalogLoader? loadVoiceCatalog,
+  Revision3LocalizationVoiceWorkspaceController? controller,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -3995,6 +4170,7 @@ Future<void> _pumpWorkspace(
               projectCheckpointIdentity ?? projectRevision,
           service: service,
           copy: _copy,
+          controller: controller,
           loadVoiceCatalog: loadVoiceCatalog,
           onPublished: onPublished,
           onDirtyChanged: onDirtyChanged,

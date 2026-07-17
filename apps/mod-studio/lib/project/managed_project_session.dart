@@ -13,6 +13,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_project_history.dart';
+import 'revision3_quest_transcript_authoring.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
 
@@ -279,6 +280,42 @@ final class ManagedRevision3QuestOutlineEditCheckpoint {
   final String moduleId;
   final int questRevision;
   final int moduleRevision;
+}
+
+/// One exact Quest transcript returned only after native preparation, full
+/// candidate reopen, guarded fixed-head CAS and a full published reopen.
+final class ManagedRevision3QuestTranscriptCheckpoint {
+  const ManagedRevision3QuestTranscriptCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.questId,
+    required this.questRevision,
+    required this.moduleId,
+    required this.moduleRevision,
+    required this.mode,
+    required this.transcriptCount,
+    required this.createdLineId,
+    required this.createdLocalizationId,
+    required this.createdVoiceSlotId,
+    required this.localizationAction,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String questId;
+  final int questRevision;
+  final String moduleId;
+  final int moduleRevision;
+  final AuthoringRevision3QuestTranscriptMode mode;
+  final int transcriptCount;
+  final String? createdLineId;
+  final String? createdLocalizationId;
+  final String? createdVoiceSlotId;
+  final AuthoringRevision3DialogLocalizationAction? localizationAction;
 }
 
 /// One existing Quest transition plan returned only after exact native
@@ -1142,6 +1179,17 @@ abstract interface class ManagedRevision3VoiceBatchStore {
   });
 }
 
+/// Optional authority for preparing one project-only Quest transcript
+/// candidate. Alternate checkpoint stores and unrelated fakes must opt in.
+abstract interface class ManagedRevision3QuestTranscriptStore {
+  Future<AuthoringRevision3QuestTranscriptPreparation>
+  prepareQuestTranscriptV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTranscriptRequestV1 request,
+  });
+}
+
 /// Narrow capability for preparing the exact removal of one Story Draft and
 /// its uniquely-owned generated ScriptModule. Keeping it separate avoids
 /// granting deletion authority to checkpoint-only alternate stores and fakes.
@@ -1195,6 +1243,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3ExactSnapshotExportStore,
         ManagedRevision3ProjectHistoryStore,
         ManagedRevision3VoiceBatchStore,
+        ManagedRevision3QuestTranscriptStore,
         ManagedRevision3StoryDraftRemovalStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
@@ -1276,6 +1325,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3QuestOutlineEditRequestV2 request,
   }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV2(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3QuestTranscriptPreparation>
+  prepareQuestTranscriptV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTranscriptRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3QuestTranscriptV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -2056,6 +2117,8 @@ class ManagedRevision3AuthoringProjectSession {
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
   bool get supportsVoiceBatch => _store is ManagedRevision3VoiceBatchStore;
+  bool get supportsQuestTranscript =>
+      _store is ManagedRevision3QuestTranscriptStore;
   bool get supportsDialogVoiceSlotRemoval =>
       _store is ManagedRevision3DialogVoiceSlotRemovalStore;
   bool get supportsNpcProfileEdit =>
@@ -2514,6 +2577,170 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  Future<ManagedRevision3QuestTranscriptCheckpoint>
+  prepareAndPublishQuestTranscriptReplaceV1({
+    required Revision3QuestTranscriptReplaceTechnicalPlan plan,
+  }) => _prepareAndPublishQuestTranscriptV1(
+    operation: 'prepareAndPublishQuestTranscriptReplaceV1',
+    questId: plan.questId,
+    expectedQuestRevision: plan.expectedQuestRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    intentForBasis: (basis) => AuthoringRevision3QuestTranscriptReplaceIntentV1(
+      bindings: plan.bindings,
+    ),
+  );
+
+  Future<ManagedRevision3QuestTranscriptCheckpoint>
+  prepareAndPublishQuestTranscriptCreateV1({
+    required Revision3QuestTranscriptCreateTechnicalPlan plan,
+  }) => _prepareAndPublishQuestTranscriptV1(
+    operation: 'prepareAndPublishQuestTranscriptCreateV1',
+    questId: plan.questId,
+    expectedQuestRevision: plan.expectedQuestRevision,
+    expectedModuleId: plan.expectedModuleId,
+    expectedModuleRevision: plan.expectedModuleRevision,
+    intentForBasis: (basis) {
+      final line = plan.line;
+      return AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1(
+        index: plan.index,
+        objectiveSlot: plan.objectiveSlot,
+        line: AuthoringRevision3DialogLineEntryRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          lineId: line.lineId,
+          lineDisplayName: line.lineDisplayName,
+          lineAuthoredIdentity: line.lineAuthoredIdentity,
+          speakerHint: line.speakerHint,
+          localization: line.localization,
+          voiceSlot: line.voiceSlot,
+        ),
+      );
+    },
+  );
+
+  Future<ManagedRevision3QuestTranscriptCheckpoint>
+  _prepareAndPublishQuestTranscriptV1({
+    required String operation,
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringRevision3QuestTranscriptIntentV1 Function(
+      _ManagedOpenedCheckpoint basis,
+    )
+    intentForBasis,
+  }) {
+    final store = _store;
+    if (store is! ManagedRevision3QuestTranscriptStore) {
+      return Future<ManagedRevision3QuestTranscriptCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Quest transcript capability',
+        ),
+      );
+    }
+    final transcriptStore = store as ManagedRevision3QuestTranscriptStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3QuestTranscriptCheckpoint
+    >(
+      operation: operation,
+      handlePrepareError: _core._throwRevision3QuestTranscriptPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Quest transcript edit has no exact project identity',
+          );
+        }
+        final intent = intentForBasis(basis);
+        final request = AuthoringRevision3QuestTranscriptRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          questId: questId,
+          expectedQuestRevision: expectedQuestRevision,
+          intent: intent,
+        );
+        if (request.moduleId != expectedModuleId ||
+            request.expectedModuleRevision != expectedModuleRevision) {
+          throw const FormatException(
+            'revision-3 Quest transcript edit does not bind the selected Quest module',
+          );
+        }
+        final prepared = await transcriptStore.prepareQuestTranscriptV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        final expectedCreatedLine =
+            intent is AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
+            ? intent.line.lineId
+            : null;
+        final expectedCreatedLocalization =
+            intent is AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
+            ? intent.line.localization.localizationId
+            : null;
+        final expectedCreatedVoice =
+            intent is AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
+            ? intent.line.voiceSlot?.slotId
+            : null;
+        final expectedAction =
+            intent is AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
+            ? (intent.line.localization
+                      is AuthoringRevision3DialogLocalizationCreateIntentV1
+                  ? AuthoringRevision3DialogLocalizationAction.created
+                  : AuthoringRevision3DialogLocalizationAction.reusedExact)
+            : null;
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.questId != request.questId ||
+            prepared.questRevision != request.expectedQuestRevision + 1 ||
+            prepared.moduleId != request.moduleId ||
+            prepared.moduleRevision != request.expectedModuleRevision ||
+            prepared.mode != intent.mode ||
+            prepared.createdLineId != expectedCreatedLine ||
+            prepared.createdLocalizationId != expectedCreatedLocalization ||
+            prepared.createdVoiceSlotId != expectedCreatedVoice ||
+            prepared.localizationAction != expectedAction ||
+            prepared.buildStatus !=
+                AuthoringRevision3DialogBuildStatus.blocked ||
+            prepared.runtimeStatus !=
+                AuthoringRevision3DialogRuntimeStatus.runtimeUnqualified ||
+            prepared.topicAuthority !=
+                AuthoringRevision3DialogTopicAuthority.notGranted ||
+            prepared.publicationStatus !=
+                AuthoringRevision3DialogPublicationStatus.notSupported) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Quest transcript preparation disagrees with its exact session basis or intent',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3QuestTranscriptCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3QuestTranscriptCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            questId: prepared.questId,
+            questRevision: prepared.questRevision,
+            moduleId: prepared.moduleId,
+            moduleRevision: prepared.moduleRevision,
+            mode: prepared.mode,
+            transcriptCount: prepared.transcriptCount,
+            createdLineId: prepared.createdLineId,
+            createdLocalizationId: prepared.createdLocalizationId,
+            createdVoiceSlotId: prepared.createdVoiceSlotId,
+            localizationAction: prepared.localizationAction,
+          ),
+        );
+      },
+    );
+  }
 
   /// Edit one exact-current Quest transition plan without consulting a game
   /// installation. The effective legacy/V4 seed and its seal are derived from
@@ -5557,6 +5784,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3QuestTranscriptPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_TRANSCRIPT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3QuestTranscriptPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest transcript preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3QuestContextPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -7155,6 +7418,24 @@ bool _revision3QuestTransitionsPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_TRANSITIONS_STORE_LIMIT',
   'AUTHORING_REVISION3_QUEST_TRANSITIONS_TARGET_CONFLICT',
   'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
+}.contains(code);
+
+bool _revision3QuestTranscriptPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_BINDING_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_DIALOG_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_INDEX_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_NO_CHANGES',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_QUEST_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_REVISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_STORE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSCRIPT_TARGET_CONFLICT',
 }.contains(code);
 
 bool _revision3QuestContextPrepareErrorIsRetryable(String code) => const {

@@ -49,6 +49,8 @@ pub const MAX_REVISION3_ENTITY_JSON_BYTES: usize = 1024 * 1024;
 pub const MAX_REVISION3_ENTITIES: usize = 100_000;
 pub const MAX_REVISION3_ASSETS: usize = 100_000;
 pub const MAX_REVISION3_REFERENCED_ASSET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+/// Maximum ordered project-local dialog-line bindings retained by one Quest draft.
+pub const MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1: usize = 256;
 /// Maximum history-free Store manifest projection for one revision-3 project.
 pub const MAX_REVISION3_BASE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum final revision-3 Store snapshot, including its bounded retained-history envelope.
@@ -277,6 +279,20 @@ pub struct QuestDraftInput {
     pub collision_catalog: QuestCollisionArtifactRef,
 }
 
+/// One ordered, authoring-only dialog-line placement in a Quest transcript.
+///
+/// `objective_slot` is a stable semantic-objective ordinal for generator-v4 Quests. It is absent
+/// for the Quest root/unassigned transcript and for every legacy generator-v2/v3 Quest. This
+/// relationship is project metadata only: it grants no topic, selection-effect, build, or runtime
+/// authority and deliberately remains outside [`QuestDraftInput`] so Quest source and its input
+/// fingerprint are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTranscriptBindingV1 {
+    pub line: TypedRef,
+    pub objective_slot: Option<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuestDraft {
@@ -284,6 +300,8 @@ pub struct QuestDraft {
     pub generator_version: u32,
     pub input: QuestDraftInput,
     pub script_module: TypedRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transcript: Vec<QuestTranscriptBindingV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -472,6 +490,8 @@ pub enum ProjectRevision3ValidationError {
     },
     #[error("revision-3 Quest {quest} has invalid artifact reference: {reason}")]
     InvalidQuestArtifactRef { quest: EntityId, reason: String },
+    #[error("revision-3 Quest {quest} has an invalid authoring transcript: {reason}")]
+    InvalidQuestTranscript { quest: EntityId, reason: String },
     #[error("revision-3 Quest {quest} collision artifact {artifact} is absent from asset_store")]
     MissingQuestArtifact {
         quest: EntityId,

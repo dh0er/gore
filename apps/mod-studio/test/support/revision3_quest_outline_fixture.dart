@@ -26,6 +26,7 @@ final class Revision3QuestOutlineFixture {
     this.moduleRevision = 5,
     this.displayName = 'Find Homer',
     this.title = 'Find Homer',
+    this.includeTranscript = false,
     this.objectiveTitles = const <String>[
       'Ask Asghan about Homer',
       'Inspect the old gate',
@@ -38,6 +39,7 @@ final class Revision3QuestOutlineFixture {
   final int moduleRevision;
   final String displayName;
   final String title;
+  final bool includeTranscript;
   final List<String> objectiveTitles;
 
   String get projectJson => jsonEncode(projectObject());
@@ -471,6 +473,17 @@ final class Revision3QuestOutlineFixture {
           'id': revision3QuestOutlineModuleId,
           'expected_kind': 'script_module',
         },
+        if (includeTranscript)
+          'transcript': <Object?>[
+            <String, Object?>{
+              'line': <String, Object?>{
+                'project_id': revision3QuestOutlineProjectId,
+                'id': '44444444444444444444444444444444',
+                'expected_kind': 'dialog_line',
+              },
+              'objective_slot': null,
+            },
+          ],
       },
     },
   };

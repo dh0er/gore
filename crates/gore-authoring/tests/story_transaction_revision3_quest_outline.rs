@@ -4,16 +4,17 @@ use gore_authoring::{
     apply_revision3_quest_outline_edit_transaction_v1, regenerate_revision3_quest_module_v2,
     AssetMeta, AssetStoreIndex, ContentSeal, DraftQuestField, DraftQuestSkeletonError, EntityId,
     FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
-    QuestCollisionArtifactRef, QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision3Entity,
-    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV1,
+    QuestCollisionArtifactRef, QuestCollisionCatalogInput, QuestTransitionPlanV1,
+    Revision2DialogLine, Revision2LocalizationEntry, Revision3Entity, Revision3EntityKind,
+    Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+    Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV1,
     Revision3QuestOutlineEditConflictV1, Revision3QuestOutlineEditErrorV1,
     Revision3QuestOutlineEditEvaluationV1, Revision3QuestOutlineEditRequestJsonErrorV1,
     Revision3QuestOutlineEditRequestV1, Revision3QuestOutlineEditRuntimeStatusV1,
-    Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
-    Sha256Digest, WorkingHead, WorkingStoreFormat, MAX_DRAFT_QUEST_OBJECTIVES,
-    MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES, MAX_DRAFT_QUEST_TITLE_BYTES, MAX_PROJECT_JSON_BYTES,
-    MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V1,
+    Revision3QuestParentInput, Revision3QuestTranscriptBindingV1, Revision3ScriptModule,
+    Revision3TypedRef, SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
+    MAX_DRAFT_QUEST_OBJECTIVES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES, MAX_DRAFT_QUEST_TITLE_BYTES,
+    MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V1,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
@@ -119,6 +120,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
             module_id,
             Revision3EntityKind::ScriptModule,
         ),
+        transcript: Vec::new(),
     };
     let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
     let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
@@ -208,6 +210,61 @@ fn request(
     }
 }
 
+fn attach_transcript(
+    project: &mut ProjectRevision3,
+    objective_slot: Option<u16>,
+) -> Vec<Revision3QuestTranscriptBindingV1> {
+    let localization_id = id(0x70);
+    let line_id = id(0x71);
+    project.entities.insert(
+        localization_id,
+        Revision3Entity {
+            id: localization_id,
+            display_name: "Outline-preserved transcript text".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_OUTLINE_TRANSCRIPT_LOC_ENTITY".to_owned(),
+            },
+            revision: 2,
+            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                loc_id: "GORE_OUTLINE_TRANSCRIPT_TEXT".to_owned(),
+                texts: BTreeMap::new(),
+            }),
+        },
+    );
+    project.entities.insert(
+        line_id,
+        Revision3Entity {
+            id: line_id,
+            display_name: "Outline-preserved transcript line".to_owned(),
+            origin: Revision3OriginRef::New {
+                authored_runtime_id: "GORE_OUTLINE_TRANSCRIPT_LINE".to_owned(),
+            },
+            revision: 4,
+            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                localization: Revision3TypedRef::new(
+                    project.project_id,
+                    localization_id,
+                    Revision3EntityKind::LocalizationEntry,
+                ),
+                speaker_hint: Some("Asghan".to_owned()),
+                voice_slots: BTreeMap::new(),
+            }),
+        },
+    );
+    let transcript = vec![Revision3QuestTranscriptBindingV1 {
+        line: Revision3TypedRef::new(project.project_id, line_id, Revision3EntityKind::DialogLine),
+        objective_slot,
+    }];
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&id(0x21)).unwrap().payload
+    else {
+        panic!("fixture Quest kind")
+    };
+    quest.transcript = transcript.clone();
+    project.validate_closed_model().unwrap();
+    transcript
+}
+
 fn evaluate(
     project: &ProjectRevision3,
     basis_head: &WorkingHead,
@@ -233,7 +290,8 @@ fn rejected(
 
 #[test]
 fn exact_edit_changes_only_outline_module_and_three_revisions() {
-    let (project, basis_head) = project_with_quest(&["Win the trial"]);
+    let (mut project, basis_head) = project_with_quest(&["Win the trial"]);
+    let transcript = attach_transcript(&mut project, None);
     let request = request(&project, &basis_head);
     let before = project.clone();
     let outcome = match evaluate(&project, &basis_head, &request).unwrap() {
@@ -248,6 +306,12 @@ fn exact_edit_changes_only_outline_module_and_three_revisions() {
     assert_eq!(outcome.script_module_id, id(0x22));
     assert_eq!(outcome.quest_revision, 4);
     assert_eq!(outcome.script_module_revision, 6);
+    let Revision3EntityPayload::QuestDraft(edited_quest) =
+        &outcome.project.entities[&id(0x21)].payload
+    else {
+        panic!("edited Quest kind")
+    };
+    assert_eq!(edited_quest.transcript, transcript);
     assert_eq!(
         outcome.build_status,
         Revision3QuestOutlineEditBuildStatusV1::Blocked

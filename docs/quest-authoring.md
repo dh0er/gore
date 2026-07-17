@@ -304,8 +304,9 @@ fully reopens the published result. The result remains `blocked`,
 
 ### Mod Studio Story Workbench V1
 
-Selecting an exact-current managed `QuestDraft` in **Content → This mod** now
-opens one responsive workbench. Entity areas at least 900 logical pixels wide
+Selecting an exact-current managed `QuestDraft` in the direct **Story**
+workspace, or from **Content → This mod**, opens one responsive workbench.
+Entity areas at least 900 logical pixels wide
 and 430 logical pixels high keep the entity list and detail side by side;
 falling below either bound opens the same tabbed detail in a scrollable
 78%-height sheet. The Quest tabs are **Overview**, **Story**, **Logic**,
@@ -316,8 +317,13 @@ The workbench does not introduce a parallel editor model. **Overview** invokes
 the existing atomic **Edit name & objectives** operation, **Story** invokes
 **Edit description & connections**, **Logic** invokes **Edit states &
 transitions**, and **Problems & Checks** can open the existing exact-current
-source/compiler inspection. **Dialog & Voice** remains visibly unavailable
-because the current Quest Draft schema does not model those relationships.
+source/compiler inspection. For a Quest, **Dialog & Voice** now hosts the
+bounded ordered transcript described below: it projects exact same-project
+DialogLines, previews their text and Voice coverage, edits only their order and
+stable objective grouping, can atomically create and insert one new line, and
+can hand one exact line/locale to **Localization & Voice**. NPC **Dialog &
+Voice** remains visibly unavailable because no typed NPC/dialog relationship
+exists yet.
 References shows only outgoing entity/asset links and derived incoming links in
 the exact current index. Its unresolved count is reference status, not a
 project-wide validator or evidence of build/runtime readiness.
@@ -326,8 +332,9 @@ The workbench keeps **Draft only**, **Build blocked**, and **Runtime not
 verified** separate. Entity/tab selection survives an exact revision refresh of
 the same project only while the selected Quest still exists; a project switch
 clears it, and a removed Quest cannot retain stale tab state. This UI adds no
-new mutation beyond the reused atomic callbacks and grants no game/save, build,
-deploy, runtime, or publication authority.
+game/save, build, deploy, runtime, topic, selection-effect, or general graph
+authority; transcript publication still uses the serialized exact-head managed
+session.
 
 ### Managed revision-3 Quest Draft removal V1
 
@@ -585,6 +592,72 @@ without publication; any uncertain publication poisons the session and requires
 a reopen. Neither native preparation nor managed publication writes the game
 installation or a save file.
 
+### Managed revision-3 Quest transcript and Voice V1
+
+An existing managed Quest can now own an ordered, authoring-only transcript.
+The optional `transcript` array lives on `QuestDraft`, outside
+`QuestDraftInput`. Each entry is one exact same-project `DialogLine` reference
+plus an optional stable objective slot. Legacy generator-version-2/3 Quests
+permit only ungrouped entries; semantic version-4 Quests may group a line under
+one currently active stable slot. A line may appear at most once in one Quest,
+the list is capped at 256 entries, and the empty field is omitted. Consequently
+adding or editing a transcript does not change the Quest input fingerprint,
+generated AngelScript, owned ScriptModule, transition plan, or canonical JSON
+of an older project whose transcript remains empty.
+
+The exact-current content index projects transcript references in authored
+order with role `quest_transcript_line`. Its optional decimal qualifier is the
+stable objective slot, never a presentation index. The Quest summary pairs
+objective titles with `objective_slots` in current presentation order and
+reports `transcript_count`. This lets the Studio show speaker, friendly line
+label, authored locales, and Voice coverage without displaying entity IDs,
+LocIDs, hashes, or archive paths. Full text is fetched lazily for the selected
+row through the existing exact localization reader; opening Story's selected
+line in **Localization & Voice** re-resolves the same opaque localization key,
+DialogLine backlink, locale, project revision, and head-bound lifecycle token.
+
+The pure `apply_revision3_quest_transcript_edit_transaction_v1` has two closed
+intents:
+
+- `replace` submits the complete reviewed ordered binding list for attach,
+  detach, reorder, and objective grouping. An unchanged list is rejected as a
+  no-op.
+- `create_and_insert` embeds the existing exact DialogLine insertion request,
+  creates its localization and optional empty Voice slot, and inserts the new
+  line at one reviewed position in the same project revision.
+
+Both intents bind the exact head, project ID/revision/target, Quest ID, and
+Quest revision. The Quest revision advances once; its ScriptModule revision and
+bytes remain unchanged. The compound create path also advances the overall
+project only once, even though it creates multiple related entities. Detaching
+a line never deletes it, so one DialogLine may be shared by multiple Quests.
+Removing a Quest drops its outgoing transcript bindings and owned generated
+module while preserving shared DialogLine, localization, VoiceSlot, and
+VoiceTake content; unrelated incoming references still block removal.
+
+The strict prepare-only FFI command is
+`authoring_store_prepare_revision3_quest_transcript_v1`. Its payload contains
+exactly `current_project_json`, `quest_transcript_request_json`, and `root`.
+There is no `game_root`, compiler, build, deploy, save, topic-registration, or
+runtime authority. Native code opens the exact Store checkpoint, executes the
+filesystem-free transaction, prepares and fully reopens the immutable
+candidate, and returns it only as `prepared_unpublished`, `blocked`,
+`runtime_unqualified`, `not_granted`, and `not_supported`. The managed session
+alone may publish through its single serialized fixed-head compare-and-swap,
+repair journal, and full published reopen; uncertain publication poisons the
+session and requires reopening instead of retrying.
+
+The responsive Story workbench exposes this as **Dialog & Voice** only for a
+selected Quest. Authors can review the ordered transcript, preview localized
+text and Voice coverage, attach existing lines, reorder or detach them, group
+semantic-Quest lines by objective, create a line atomically, and jump directly
+to its exact text/Voice workspace. NPCs keep the tab honestly unavailable
+until a separate typed NPC/dialog relationship exists. Transcript mutations
+are disabled while the localization workspace has unsaved text or the managed
+project requires reopening. This slice still does not create a runtime dialog
+topic, selection effect, Quest transition, journal entry, reward, package,
+deployment, or gameplay proof.
+
 ### V4 source lowering and compiler/cache evidence
 
 The V4 renderer emits only reviewed Quest lifecycle constructs. External flags
@@ -707,15 +780,16 @@ remain unqualified.
 
 ## Mod Studio boundary
 
-Mod Studio now presents the bounded outline, context, logic, and inspection
-actions as atomic projections of the selected Quest's Story Workbench. It also
-provides the Draft wizard, count-preserving legacy outline edit, stable-slot-
+Mod Studio now presents the bounded outline, context, logic, transcript, and
+inspection actions as atomic projections of the selected Quest's Story
+Workbench. It also provides the Draft wizard, count-preserving legacy outline
+edit, stable-slot-
 aware V4 outline edit, catalog-bound context edit, V4 behavior table, and read-
-only generated-source inspection described above. A synchronized
-transcript/general graph, journal/reward/item authoring, arbitrary source,
-complete diagnostics, build lowering, deployment, and runtime test workflow are
-not part of this slice. The deterministic generator itself does not invoke the
-compiler or compose a cache.
+only generated-source inspection described above. A synchronized general
+Quest/dialog graph beyond the bounded ordered transcript, journal/reward/item
+authoring, arbitrary source, complete diagnostics, build lowering, deployment,
+and runtime test workflow are not part of this slice. The deterministic
+generator itself does not invoke the compiler or compose a cache.
 
 The native compiler now has a bounded structured-report API that
 retains diagnostics-capture disposition and file/line/column/severity/message

@@ -344,6 +344,7 @@ final class Revision3ContentIndex {
       }
       _validateDialogLineProjectionFacts(entity);
       _validateVoiceSlotProjectionFacts(entity);
+      _validateQuestProjectionFacts(entity);
     }
 
     return Revision3ContentIndex._(
@@ -690,14 +691,19 @@ final class Revision3ContentQuestDraftSummary {
     required this.technicalId,
     required this.title,
     required List<String> objectiveTitles,
+    required List<int> objectiveSlots,
+    required this.transcriptCount,
     required this.moduleNamespace,
     required this.parentRuntimeClass,
     required this.giverRuntimeUniqueName,
-  }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles);
+  }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles),
+       objectiveSlots = List<int>.unmodifiable(objectiveSlots);
 
   final String technicalId;
   final String title;
   final List<String> objectiveTitles;
+  final List<int> objectiveSlots;
+  final int transcriptCount;
   final String moduleNamespace;
   final String parentRuntimeClass;
   final String giverRuntimeUniqueName;
@@ -916,11 +922,15 @@ final class Revision3ContentSummary {
         final hasAdditionalObjectives = data.containsKey(
           'additional_objective_titles',
         );
+        final hasObjectiveSlots = data.containsKey('objective_slots');
+        final hasTranscriptCount = data.containsKey('transcript_count');
         _requireKeys(data, <String>[
           'technical_id',
           'title',
           'objective_title',
           if (hasAdditionalObjectives) 'additional_objective_titles',
+          if (hasObjectiveSlots) 'objective_slots',
+          if (hasTranscriptCount) 'transcript_count',
           'module_namespace',
           'parent_runtime_class',
           'giver_runtime_unique_name',
@@ -959,6 +969,29 @@ final class Revision3ContentSummary {
             );
           }
         }
+        final objectiveSlots = hasObjectiveSlots
+            ? _integerList(
+                data['objective_slots'],
+                '$context objective_slots',
+                maxItems: 8,
+                min: 1,
+                max: 0xffff,
+              )
+            : const <int>[];
+        if (hasObjectiveSlots &&
+            (objectiveSlots.isEmpty ||
+                objectiveSlots.length != 1 + additionalObjectives.length ||
+                objectiveSlots.toSet().length != objectiveSlots.length)) {
+          throw FormatException(
+            '$context has invalid semantic objective slots',
+          );
+        }
+        final transcriptCount = hasTranscriptCount
+            ? _integer(data['transcript_count'], '$context transcript_count')
+            : 0;
+        if (transcriptCount > 256) {
+          throw FormatException('$context transcript exceeds 256 lines');
+        }
         final namespace = _string(
           data['module_namespace'],
           '$context module_namespace',
@@ -975,6 +1008,8 @@ final class Revision3ContentSummary {
           technicalId: primary,
           title: title,
           objectiveTitles: <String>[objective, ...additionalObjectives],
+          objectiveSlots: objectiveSlots,
+          transcriptCount: transcriptCount,
           moduleNamespace: namespace,
           parentRuntimeClass: parent,
           giverRuntimeUniqueName: giver,
@@ -1187,6 +1222,78 @@ void _validateVoiceSlotProjectionFacts(Revision3ContentEntity entity) {
   }
 }
 
+void _validateQuestProjectionFacts(Revision3ContentEntity entity) {
+  if (entity.kind != Revision3ContentEntityKind.questDraft) return;
+  final facts = entity.summary.questDraft;
+  if (facts == null) {
+    throw FormatException(
+      'content Quest ${entity.id} has no structured summary',
+    );
+  }
+  final modules = <Revision3ContentReference>[];
+  final transcript = <Revision3ContentReference>[];
+  final owner = entity.origin.generatedOwner;
+  var ownerReferences = 0;
+  for (final reference in entity.references) {
+    switch (reference.role) {
+      case 'origin_owner':
+        ownerReferences++;
+        if (owner == null ||
+            reference.qualifier != null ||
+            reference.target != owner) {
+          throw FormatException(
+            'content Quest ${entity.id} has a malformed origin owner',
+          );
+        }
+      case 'draft_script_module':
+        modules.add(reference);
+      case 'quest_transcript_line':
+        transcript.add(reference);
+      default:
+        throw FormatException(
+          'content Quest ${entity.id} has a role from another entity kind',
+        );
+    }
+  }
+  if (ownerReferences != (owner == null ? 0 : 1) || modules.length != 1) {
+    throw FormatException(
+      'content Quest ${entity.id} has an invalid owner or module count',
+    );
+  }
+  final module = modules.single;
+  if (module.qualifier != null ||
+      module.target.expectedKind != Revision3ContentEntityKind.scriptModule) {
+    throw FormatException(
+      'content Quest ${entity.id} has a malformed generated module reference',
+    );
+  }
+  if (transcript.length != facts.transcriptCount) {
+    throw FormatException(
+      'content Quest ${entity.id} transcript count disagrees with its references',
+    );
+  }
+  final activeSlots = facts.objectiveSlots.toSet();
+  final lineTargets = <String>{};
+  final canonicalSlot = RegExp(r'^[1-9][0-9]*$');
+  for (final reference in transcript) {
+    final qualifier = reference.qualifier;
+    final slot = qualifier == null || !canonicalSlot.hasMatch(qualifier)
+        ? null
+        : int.tryParse(qualifier);
+    if ((qualifier != null &&
+            (slot == null || slot > 0xffff || !activeSlots.contains(slot))) ||
+        reference.target.expectedKind !=
+            Revision3ContentEntityKind.dialogLine ||
+        !lineTargets.add(
+          '${reference.target.projectId}\u0000${reference.target.entityId}',
+        )) {
+      throw FormatException(
+        'content Quest ${entity.id} has a malformed or duplicate transcript line',
+      );
+    }
+  }
+}
+
 final class Revision3ContentReferenceTarget {
   const Revision3ContentReferenceTarget._({
     required this.projectId,
@@ -1258,6 +1365,7 @@ final class Revision3ContentReference {
         'dialog_voice_slot',
         'voice_candidate',
         'voice_selected',
+        'quest_transcript_line',
         'draft_script_module',
         'script_owner',
       }, '$context role'),
@@ -1572,6 +1680,22 @@ List<String> _stringList(
       (index, item) =>
           _string(item, '$context item $index', maxBytes: maxStringBytes),
     )
+    .toList(growable: false);
+
+List<int> _integerList(
+  Object? value,
+  String context, {
+  required int maxItems,
+  required int min,
+  required int max,
+}) => _list(value, context, maxItems: maxItems)
+    .mapIndexed((index, item) {
+      final parsed = _integer(item, '$context item $index');
+      if (parsed < min || parsed > max) {
+        throw FormatException('$context item $index is outside its domain');
+      }
+      return parsed;
+    })
     .toList(growable: false);
 
 void _requireSortedUnique(List<String> values, String context) {
