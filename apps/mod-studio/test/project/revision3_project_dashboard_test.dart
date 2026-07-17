@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_project_dashboard.dart';
@@ -39,8 +40,7 @@ const _copy = Revision3ProjectDashboardCopy(
   referenceIntegrityDescription: 'This count covers exact project references.',
   missingGameTitle: 'Game installation not configured',
   missingGameDescription: 'Configure it for game-bound read-only evidence.',
-  createHeading: 'Create content',
-  toolsHeading: 'Voice and project tools',
+  continueHeading: 'Continue working',
   loadingSemanticsLabel: 'Loading exact project overview',
   loadErrorSemanticsLabel: 'Project overview unavailable',
   loadErrorTitle: 'Overview could not be opened',
@@ -86,105 +86,261 @@ void main() {
     );
   });
 
-  testWidgets('routes enabled actions and keeps unavailable actions visible', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1000, 900));
-    var createCalls = 0;
-    var toolCalls = 0;
-    var gatedToolCalls = 0;
-    var settingsCalls = 0;
-    final enabledCreate = Revision3ProjectDashboardAction(
-      id: 'create-npc-draft',
-      icon: Icons.person_add_alt_1_outlined,
-      title: 'Create NPC draft',
-      description: 'Create a bounded NPC draft.',
-      onPressed: () => createCalls++,
-    );
-    const disabledCreate = Revision3ProjectDashboardAction(
-      id: 'create-dialog',
-      icon: Icons.add_comment_outlined,
-      title: 'Create dialog',
-      description: 'Dialog creation is not available.',
-      onPressed: null,
-    );
-    final tool = Revision3ProjectDashboardAction(
-      id: 'manage-voice-takes',
-      icon: Icons.library_music_outlined,
-      title: 'Manage Voice takes',
-      description: 'Manage exact project candidates.',
-      onPressed: () => toolCalls++,
-    );
-    final gatedTool = Revision3ProjectDashboardAction(
-      id: 'add-voice-take',
-      icon: Icons.record_voice_over_outlined,
-      title: 'Add Voice take',
-      description: 'Import a recording.',
-      disabledReason: 'Add a dialog line before importing a recording.',
-      enabledFor: (_) => false,
-      onPressed: () => gatedToolCalls++,
-    );
-    final settings = Revision3ProjectDashboardAction(
-      id: 'open-settings',
-      icon: Icons.settings_outlined,
-      title: 'Open settings',
-      description: 'Configure the game installation.',
-      onPressed: () => settingsCalls++,
-    );
+  testWidgets(
+    'routes full-width tasks with exact copy, semantics, and visible gates',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 900));
+      var storyCalls = 0;
+      var contentCalls = 0;
+      var gatedCalls = 0;
+      var settingsCalls = 0;
+      final story = Revision3ProjectDashboardAction(
+        id: 'story',
+        icon: Icons.menu_book_outlined,
+        title: 'Open Story',
+        description: 'Create or continue Story content.',
+        titleBuilder: (index) =>
+            'Continue ${_storyDraftCount(index)} Story drafts',
+        descriptionBuilder: (index) =>
+            '${_entityCountForTest(index, Revision3ContentEntityKind.questDraft)} quests and '
+            '${_entityCountForTest(index, Revision3ContentEntityKind.npcDraft)} characters are ready to edit.',
+        onPressed: () => storyCalls++,
+      );
+      const disabledContent = Revision3ProjectDashboardAction(
+        id: 'content',
+        icon: Icons.account_tree_outlined,
+        title: 'Browse content',
+        description: 'Browse all known project content.',
+        onPressed: null,
+      );
+      final content = Revision3ProjectDashboardAction(
+        id: 'localization-voice',
+        icon: Icons.record_voice_over_outlined,
+        title: 'Dialog and Voice',
+        description: 'Continue project text and recordings.',
+        controlKey: const Key('custom-localization-task'),
+        onPressed: () => contentCalls++,
+      );
+      final gated = Revision3ProjectDashboardAction(
+        id: 'build-release',
+        icon: Icons.inventory_2_outlined,
+        title: 'Build output',
+        description: 'Review qualified output.',
+        disabledReason:
+            'No general project build is qualified for this checkpoint.',
+        enabledFor: (_) => false,
+        onPressed: () => gatedCalls++,
+      );
+      final settings = Revision3ProjectDashboardAction(
+        id: 'open-settings',
+        icon: Icons.settings_outlined,
+        title: 'Open settings',
+        description: 'Configure the game installation.',
+        onPressed: () => settingsCalls++,
+      );
 
-    await _pumpDashboard(
-      tester,
-      load: () async => _fixture(),
-      gameConfigured: false,
-      createActions: [enabledCreate, disabledCreate],
-      toolActions: [tool, gatedTool],
-      settingsAction: settings,
-    );
-    await tester.pumpAndSettle();
+      await _pumpDashboard(
+        tester,
+        load: () async => _fixture(),
+        gameConfigured: false,
+        tasks: [story, disabledContent, content, gated],
+        settingsAction: settings,
+      );
+      await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('revision3-project-dashboard-missing-game')),
-      findsOneWidget,
-    );
-    final enabled = find.byKey(
-      const Key('revision3-project-dashboard-action-create-npc-draft'),
-    );
-    await tester.ensureVisible(enabled);
-    await tester.tap(enabled);
-    expect(createCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-project-dashboard-missing-game')),
+        findsOneWidget,
+      );
+      expect(find.text(_copy.continueHeading), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-project-dashboard-tasks')),
+        findsOneWidget,
+      );
+      expect(find.text('Continue 2 Story drafts'), findsOneWidget);
+      expect(
+        find.text('1 quests and 1 characters are ready to edit.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .getTopLeft(
+              find.byKey(const Key('revision3-project-dashboard-tasks')),
+            )
+            .dy,
+        lessThan(
+          tester
+              .getTopLeft(
+                find.byKey(const Key('revision3-project-dashboard-counts')),
+              )
+              .dy,
+        ),
+      );
 
-    final disabled = find.byKey(
-      const Key('revision3-project-dashboard-action-create-dialog'),
-    );
-    expect(tester.widget<InkWell>(disabled).onTap, isNull);
-    expect(find.text('Create dialog'), findsOneWidget);
+      final storyFinder = find.byKey(
+        const Key('revision3-project-dashboard-task-story'),
+      );
+      await tester.scrollUntilVisible(
+        storyFinder,
+        240,
+        scrollable: find.descendant(
+          of: find.byKey(const Key('revision3-project-dashboard-scroll')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSemantics(storyFinder),
+        matchesSemantics(
+          label: 'Continue 2 Story drafts',
+          hint: '1 quests and 1 characters are ready to edit.',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+        ),
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(storyCalls, 1);
 
-    final toolFinder = find.byKey(
-      const Key('revision3-project-dashboard-action-manage-voice-takes'),
-    );
-    await tester.ensureVisible(toolFinder);
-    await tester.tap(toolFinder);
-    expect(toolCalls, 1);
+      final disabled = find.byKey(
+        const Key('revision3-project-dashboard-task-content'),
+      );
+      expect(tester.widget<ListTile>(disabled).onTap, isNull);
+      expect(find.text('Browse content'), findsOneWidget);
 
-    final gatedToolFinder = find.byKey(
-      const Key('revision3-project-dashboard-action-add-voice-take'),
-    );
-    await tester.ensureVisible(gatedToolFinder);
-    expect(tester.widget<InkWell>(gatedToolFinder).onTap, isNull);
-    expect(
-      find.text('Add a dialog line before importing a recording.'),
-      findsOneWidget,
-    );
-    await tester.tap(gatedToolFinder);
-    expect(gatedToolCalls, 0);
+      final custom = find.byKey(const Key('custom-localization-task'));
+      await tester.ensureVisible(custom);
+      await tester.tap(custom);
+      expect(contentCalls, 1);
 
-    final settingsFinder = find.byKey(
-      const Key('revision3-project-dashboard-settings-action'),
-    );
-    await tester.ensureVisible(settingsFinder);
-    await tester.tap(settingsFinder);
-    expect(settingsCalls, 1);
-  });
+      final gatedFinder = find.byKey(
+        const Key('revision3-project-dashboard-task-build-release'),
+      );
+      await tester.ensureVisible(gatedFinder);
+      expect(tester.widget<ListTile>(gatedFinder).onTap, isNull);
+      expect(
+        find.text('No general project build is qualified for this checkpoint.'),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSemantics(gatedFinder),
+        matchesSemantics(
+          label: 'Build output',
+          hint: 'No general project build is qualified for this checkpoint.',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+        ),
+      );
+      await tester.tap(gatedFinder);
+      expect(gatedCalls, 0);
+
+      final settingsFinder = find.byKey(
+        const Key('revision3-project-dashboard-settings-action'),
+      );
+      await tester.ensureVisible(settingsFinder);
+      await tester.tap(settingsFinder);
+      expect(settingsCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'exact-index builders switch empty Story and problem copy after reload',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(900, 760));
+      var revision = 7;
+      var includeStoryDrafts = false;
+      late StateSetter rebuild;
+      final story = Revision3ProjectDashboardAction(
+        id: 'story',
+        icon: Icons.menu_book_outlined,
+        title: 'Story fallback',
+        description: 'Story fallback description.',
+        titleBuilder: (index) {
+          final count = _storyDraftCount(index);
+          return count == 0 ? 'Start Story' : 'Continue $count Story drafts';
+        },
+        descriptionBuilder: (index) => _storyDraftCount(index) == 0
+            ? 'Create your first character or quest.'
+            : 'Return to the exact current Story workspace.',
+        onPressed: () {},
+      );
+      final problems = Revision3ProjectDashboardAction(
+        id: 'problems',
+        icon: Icons.rule_folder_outlined,
+        title: 'Problems fallback',
+        description: 'Problems fallback description.',
+        titleBuilder: (index) => index.problemCount == 0
+            ? 'No reference problems'
+            : 'Review ${index.problemCount} reference problem',
+        descriptionBuilder: (index) => index.problemCount == 0
+            ? 'This exact project index has no unresolved references.'
+            : 'Open the exact blockers for this checkpoint.',
+        onPressed: () {},
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              final requestedRevision = revision;
+              final requestedStory = includeStoryDrafts;
+              return Scaffold(
+                body: Revision3ProjectDashboard(
+                  projectId: revision3VoiceContentProjectId,
+                  projectRevision: requestedRevision,
+                  load: () async => _fixture(
+                    revision: requestedRevision,
+                    includeStoryDrafts: requestedStory,
+                  ),
+                  gameConfigured: true,
+                  copy: _copy,
+                  tasks: [story, problems],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Start Story'), findsOneWidget);
+      expect(
+        find.text('Create your first character or quest.'),
+        findsOneWidget,
+      );
+      expect(find.text('No reference problems'), findsOneWidget);
+      expect(
+        find.text('This exact project index has no unresolved references.'),
+        findsOneWidget,
+      );
+      expect(find.text('Story fallback'), findsNothing);
+      expect(find.text('Problems fallback'), findsNothing);
+
+      rebuild(() {
+        revision = 8;
+        includeStoryDrafts = true;
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.text('Start Story'), findsNothing);
+      expect(find.text('Continue 2 Story drafts'), findsOneWidget);
+      expect(
+        find.text('Return to the exact current Story workspace.'),
+        findsOneWidget,
+      );
+      expect(find.text('Review 1 reference problem'), findsOneWidget);
+      expect(
+        find.text('Open the exact blockers for this checkpoint.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('sanitizes a mismatched index and retries exact content', (
     tester,
@@ -250,8 +406,7 @@ void main() {
                 load: () => calls++ == 0 ? first.future : second.future,
                 gameConfigured: true,
                 copy: _copy,
-                createActions: const [],
-                toolActions: const [],
+                tasks: const [],
               ),
             );
           },
@@ -279,24 +434,26 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('uses one-column cards without overflow at narrow width', (
+  testWidgets('uses full-width task rows without overflow at 360x640', (
     tester,
   ) async {
-    await _setSurfaceSize(tester, const Size(320, 640));
-    const create = Revision3ProjectDashboardAction(
-      id: 'create-quest-draft',
+    await _setSurfaceSize(tester, const Size(360, 640));
+    const story = Revision3ProjectDashboardAction(
+      id: 'story',
       icon: Icons.assignment_add,
-      title: 'Create a bounded Quest draft',
+      title: 'Create a character or continue an existing Quest journey',
       description:
-          'This deliberately long localized action description must wrap safely.',
+          'This deliberately long localized task description must wrap safely without becoming a separate card.',
       onPressed: null,
     );
-    const tool = Revision3ProjectDashboardAction(
-      id: 'build-voice-bundle',
+    const build = Revision3ProjectDashboardAction(
+      id: 'build-release',
       icon: Icons.inventory_2_outlined,
-      title: 'Build a separate offline Voice bundle',
+      title: 'Review the currently qualified build and release output',
       description:
           'This is not a general project build, deployment, or runtime proof.',
+      disabledReason:
+          'Finish the required validation before creating qualified output.',
       onPressed: null,
     );
 
@@ -304,8 +461,7 @@ void main() {
       tester,
       load: () async => _fixture(),
       gameConfigured: false,
-      createActions: const [create],
-      toolActions: const [tool],
+      tasks: const [story, build],
       settingsAction: const Revision3ProjectDashboardAction(
         id: 'open-settings',
         icon: Icons.settings_outlined,
@@ -320,9 +476,31 @@ void main() {
     final scroll = find.byKey(const Key('revision3-project-dashboard-scroll'));
     await tester.drag(scroll, const Offset(0, -1800));
     await tester.pumpAndSettle();
+    final taskList = find.byKey(const Key('revision3-project-dashboard-tasks'));
+    final storyRow = find.byKey(
+      const Key('revision3-project-dashboard-task-story'),
+    );
+    final buildRow = find.byKey(
+      const Key('revision3-project-dashboard-task-build-release'),
+    );
+    expect(taskList, findsOneWidget);
+    expect(storyRow, findsOneWidget);
+    expect(buildRow, findsOneWidget);
     expect(
-      find.byKey(
-        const Key('revision3-project-dashboard-action-build-voice-bundle'),
+      (tester.getSize(storyRow).width - tester.getSize(taskList).width).abs(),
+      lessThan(0.01),
+    );
+    expect(
+      (tester.getSize(buildRow).width - tester.getSize(taskList).width).abs(),
+      lessThan(0.01),
+    );
+    expect(
+      find.ancestor(of: storyRow, matching: find.byType(Card)),
+      findsNothing,
+    );
+    expect(
+      find.text(
+        'Finish the required validation before creating qualified output.',
       ),
       findsOneWidget,
     );
@@ -334,8 +512,7 @@ Future<void> _pumpDashboard(
   WidgetTester tester, {
   required Revision3ProjectDashboardLoader load,
   bool gameConfigured = true,
-  List<Revision3ProjectDashboardAction> createActions = const [],
-  List<Revision3ProjectDashboardAction> toolActions = const [],
+  List<Revision3ProjectDashboardAction> tasks = const [],
   Revision3ProjectDashboardAction? settingsAction,
 }) => tester.pumpWidget(
   MaterialApp(
@@ -346,8 +523,7 @@ Future<void> _pumpDashboard(
         load: load,
         gameConfigured: gameConfigured,
         copy: _copy,
-        createActions: createActions,
-        toolActions: toolActions,
+        tasks: tasks,
         settingsAction: settingsAction,
       ),
     ),
@@ -368,9 +544,19 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
   addTearDown(() => tester.binding.setSurfaceSize(null));
 }
 
+int _entityCountForTest(
+  Revision3ContentIndex index,
+  Revision3ContentEntityKind kind,
+) => index.entities.where((entity) => entity.kind == kind).length;
+
+int _storyDraftCount(Revision3ContentIndex index) =>
+    _entityCountForTest(index, Revision3ContentEntityKind.npcDraft) +
+    _entityCountForTest(index, Revision3ContentEntityKind.questDraft);
+
 Revision3ContentIndex _fixture({
   int revision = 7,
   String projectName = 'Dashboard fixture',
+  bool includeStoryDrafts = true,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
@@ -381,11 +567,17 @@ Revision3ContentIndex _fixture({
   json['project_author'] = 'Dashboard author';
 
   final counts = json['entity_counts']! as Map<String, Object?>;
-  counts['npc_draft'] = 1;
-  counts['quest_draft'] = 1;
+  if (includeStoryDrafts) {
+    counts['npc_draft'] = 1;
+    counts['quest_draft'] = 1;
+  } else {
+    counts.remove('npc_draft');
+    counts.remove('quest_draft');
+  }
 
-  final entities = List<Object?>.from(json['entities']! as List<Object?>)
-    ..addAll(<Object?>[
+  final entities = List<Object?>.from(json['entities']! as List<Object?>);
+  if (includeStoryDrafts) {
+    entities.addAll(<Object?>[
       <String, Object?>{
         'id': _npcId,
         'kind': 'npc_draft',
@@ -443,11 +635,12 @@ Revision3ContentIndex _fixture({
         ],
         'asset_references': <Object?>[],
       },
-    ])
-    ..sort(
-      (left, right) => ((left! as Map<String, Object?>)['id']! as String)
-          .compareTo((right! as Map<String, Object?>)['id']! as String),
-    );
+    ]);
+  }
+  entities.sort(
+    (left, right) => ((left! as Map<String, Object?>)['id']! as String)
+        .compareTo((right! as Map<String, Object?>)['id']! as String),
+  );
   json['entities'] = entities;
   json['assets'] = <Object?>[
     <String, Object?>{

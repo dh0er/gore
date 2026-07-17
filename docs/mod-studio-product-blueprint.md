@@ -74,6 +74,15 @@ progressive disclosure inside a small number of productive surfaces over more
 navigation, cards, and modal launchers. Technical IDs, evidence, and diagnostics
 remain available through details or Expert mode without dominating normal work.
 
+The implemented managed-project Home follows that rule: it is one compact
+five-task router for **Story**, **Dialog & Voice**, **Problems**, **Content**,
+and **Build & Release**. It does not duplicate low-level create/import/build
+dialogs. NPC and Quest creation—including the recommended Quest plus opening
+line—belongs to Story; dialog and Voice work belongs to Localization & Voice;
+DataAssets belong to Content; export remains in the Project menu. Normal chrome
+uses “Mod Studio project” rather than schema-revision terminology. The nine
+stable shell destinations remain intact and Legacy remains the usability floor.
+
 World and level authoring has two gates. First, the existing project, content,
 Story, dialog/localization/Voice, DataAsset, validation, build/release, and
 recovery workflows must be genuinely usable end to end. Second, once that core

@@ -203,6 +203,10 @@ final class Revision3StoryWorkspaceCopy {
     required this.createQuestLabel,
     required this.creatingNpcLabel,
     required this.creatingQuestLabel,
+    required this.createQuestOpeningLabel,
+    required this.creatingQuestOpeningLabel,
+    required this.createAdvancedLabel,
+    required this.createQuestAdvancedLabel,
     required this.noStoryDrafts,
     required this.noMatchingStoryDrafts,
     required this.selectDraftLabel,
@@ -244,6 +248,10 @@ final class Revision3StoryWorkspaceCopy {
   final String createQuestLabel;
   final String creatingNpcLabel;
   final String creatingQuestLabel;
+  final String createQuestOpeningLabel;
+  final String creatingQuestOpeningLabel;
+  final String createAdvancedLabel;
+  final String createQuestAdvancedLabel;
   final String noStoryDrafts;
   final String noMatchingStoryDrafts;
   final String selectDraftLabel;
@@ -362,6 +370,10 @@ final class Revision3StoryWorkspaceController {
 
 enum _StoryFilter { all, npc, quest }
 
+enum _StoryCreateKind { npc, questOpening, questDraft }
+
+enum _StoryCreateAdvancedAction { questDraft }
+
 @immutable
 final class _StoryCheckpoint {
   const _StoryCheckpoint({
@@ -427,8 +439,10 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     required this.onOpenExternalAsset,
     this.controller,
     this.createNpcDraft,
+    this.createQuestOpening,
     this.createQuestDraft,
     this.createNpcDraftDisabledReason,
+    this.createQuestOpeningDisabledReason,
     this.createQuestDraftDisabledReason,
     this.editQuestOutline,
     this.editNpcProfile,
@@ -472,8 +486,10 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   final ValueChanged<String> onOpenExternalAsset;
   final Revision3StoryWorkspaceController? controller;
   final Revision3StoryWorkspaceCreateAction? createNpcDraft;
+  final Revision3StoryWorkspaceCreateAction? createQuestOpening;
   final Revision3StoryWorkspaceCreateAction? createQuestDraft;
   final String? createNpcDraftDisabledReason;
+  final String? createQuestOpeningDisabledReason;
   final String? createQuestDraftDisabledReason;
   final Revision3StoryWorkspaceEntityAction? editQuestOutline;
   final Revision3StoryWorkspaceEntityAction? editNpcProfile;
@@ -509,6 +525,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
   Object? _loadError;
   bool _loading = false;
   bool _creatingNpc = false;
+  bool _creatingQuestOpening = false;
   bool _creatingQuest = false;
   bool _removingDraft = false;
   bool _removalConfirmationOpen = false;
@@ -522,6 +539,12 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
   bool _usesDetailsSheet = false;
   bool _openingDetailsSheet = false;
   Route<void>? _detailsSheetRoute;
+
+  bool get _createActionBusy =>
+      _creatingNpc || _creatingQuestOpening || _creatingQuest;
+
+  bool get _storyActionBusy =>
+      _createActionBusy || _removingDraft || _removalConfirmationOpen;
 
   _StoryCheckpoint get _checkpoint => _StoryCheckpoint(
     projectRoot: widget.projectRoot,
@@ -792,14 +815,17 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
 
   Future<void> _runCreate(
     Revision3StoryWorkspaceCreateAction action, {
-    required bool npc,
+    required _StoryCreateKind kind,
   }) async {
-    if (_creatingNpc || _creatingQuest) return;
+    if (_storyActionBusy) return;
     setState(() {
-      if (npc) {
-        _creatingNpc = true;
-      } else {
-        _creatingQuest = true;
+      switch (kind) {
+        case _StoryCreateKind.npc:
+          _creatingNpc = true;
+        case _StoryCreateKind.questOpening:
+          _creatingQuestOpening = true;
+        case _StoryCreateKind.questDraft:
+          _creatingQuest = true;
       }
     });
     try {
@@ -813,10 +839,13 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     } finally {
       if (mounted) {
         setState(() {
-          if (npc) {
-            _creatingNpc = false;
-          } else {
-            _creatingQuest = false;
+          switch (kind) {
+            case _StoryCreateKind.npc:
+              _creatingNpc = false;
+            case _StoryCreateKind.questOpening:
+              _creatingQuestOpening = false;
+            case _StoryCreateKind.questDraft:
+              _creatingQuest = false;
           }
         });
       }
@@ -833,8 +862,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         module == null ||
         !preflight.canRemove ||
         !_isExactCurrentIndex(index) ||
-        _creatingNpc ||
-        _creatingQuest ||
+        _createActionBusy ||
         _removingDraft ||
         _removalConfirmationOpen) {
       return;
@@ -1089,26 +1117,45 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       final scrollTightChrome =
           constraints.hasBoundedHeight && constraints.maxHeight < 520;
       final index = _index;
-      final storyActionBusy =
-          _creatingNpc ||
-          _creatingQuest ||
-          _removingDraft ||
-          _removalConfirmationOpen;
+      final storyActionBusy = _storyActionBusy;
+      final showQuestOpening =
+          widget.createQuestOpening != null ||
+          widget.createQuestOpeningDisabledReason != null;
+      final createQuestOpening =
+          widget.createQuestOpening == null || storyActionBusy
+          ? null
+          : () => _runCreate(
+              widget.createQuestOpening!,
+              kind: _StoryCreateKind.questOpening,
+            );
       final header = _StoryHeader(
         copy: widget.copy,
         index: index,
         loading: _loading,
         dense: denseChrome,
+        actionsBusy: storyActionBusy,
         creatingNpc: _creatingNpc,
+        creatingQuestOpening: _creatingQuestOpening,
         creatingQuest: _creatingQuest,
+        showQuestOpening: showQuestOpening,
         createNpc: widget.createNpcDraft == null || storyActionBusy
             ? null
-            : () => _runCreate(widget.createNpcDraft!, npc: true),
+            : () => _runCreate(
+                widget.createNpcDraft!,
+                kind: _StoryCreateKind.npc,
+              ),
+        createQuestOpening: createQuestOpening,
         createQuest: widget.createQuestDraft == null || storyActionBusy
             ? null
-            : () => _runCreate(widget.createQuestDraft!, npc: false),
+            : () => _runCreate(
+                widget.createQuestDraft!,
+                kind: _StoryCreateKind.questDraft,
+              ),
         createNpcDisabledReason: widget.createNpcDraft == null
             ? widget.createNpcDraftDisabledReason
+            : null,
+        createQuestOpeningDisabledReason: widget.createQuestOpening == null
+            ? widget.createQuestOpeningDisabledReason
             : null,
         createQuestDisabledReason: widget.createQuestDraft == null
             ? widget.createQuestDraftDisabledReason
@@ -1140,7 +1187,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
                 ),
               ),
             )
-          : _buildLoaded(index);
+          : _buildLoaded(
+              index,
+              showQuestOpening: showQuestOpening,
+              createQuestOpening: createQuestOpening,
+            );
 
       if (!scrollTightChrome) {
         return Column(
@@ -1180,7 +1231,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     },
   );
 
-  Widget _buildLoaded(Revision3ContentIndex index) {
+  Widget _buildLoaded(
+    Revision3ContentIndex index, {
+    required bool showQuestOpening,
+    required VoidCallback? createQuestOpening,
+  }) {
     final allStory = _storyEntities(index);
     final foldedQuery = _search.text.trim().toLowerCase();
     final visible = allStory
@@ -1205,6 +1260,25 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       emptyLabel: allStory.isEmpty
           ? widget.copy.noStoryDrafts
           : widget.copy.noMatchingStoryDrafts,
+      emptyAction: allStory.isEmpty && showQuestOpening
+          ? _StoryQuestOpeningButton(
+              buttonKey: const Key(
+                'revision3-story-workspace-empty-create-quest-opening',
+              ),
+              copy: widget.copy,
+              dense: true,
+              creating: _creatingQuestOpening,
+              onPressed: createQuestOpening,
+              disabledReason: widget.createQuestOpening == null
+                  ? widget.createQuestOpeningDisabledReason
+                  : null,
+            )
+          : null,
+      emptyActionDisabledReason: allStory.isEmpty && showQuestOpening
+          ? widget.createQuestOpening == null
+                ? widget.createQuestOpeningDisabledReason
+                : null
+          : null,
       onSelected: (entity) {
         _selectEntity(index, entity);
         if (_usesDetailsSheet) unawaited(_showDetailsSheet(index, entity));
@@ -1236,11 +1310,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       index: index,
       draft: entity,
     );
-    final removeBusy =
-        _creatingNpc ||
-        _creatingQuest ||
-        _removingDraft ||
-        _removalConfirmationOpen;
+    final removeBusy = _storyActionBusy;
     final removeDisabledReason = removeBusy
         ? widget.copy.removeDraftBusy
         : widget.removeDraft == null
@@ -1502,11 +1572,16 @@ class _StoryHeader extends StatelessWidget {
     required this.index,
     required this.loading,
     required this.dense,
+    required this.actionsBusy,
     required this.creatingNpc,
+    required this.creatingQuestOpening,
     required this.creatingQuest,
+    required this.showQuestOpening,
     required this.createNpc,
+    required this.createQuestOpening,
     required this.createQuest,
     required this.createNpcDisabledReason,
+    required this.createQuestOpeningDisabledReason,
     required this.createQuestDisabledReason,
   });
 
@@ -1514,17 +1589,56 @@ class _StoryHeader extends StatelessWidget {
   final Revision3ContentIndex? index;
   final bool loading;
   final bool dense;
+  final bool actionsBusy;
   final bool creatingNpc;
+  final bool creatingQuestOpening;
   final bool creatingQuest;
+  final bool showQuestOpening;
   final VoidCallback? createNpc;
+  final VoidCallback? createQuestOpening;
   final VoidCallback? createQuest;
   final String? createNpcDisabledReason;
+  final String? createQuestOpeningDisabledReason;
   final String? createQuestDisabledReason;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final storyCount = index == null ? 0 : _storyEntities(index!).length;
+    final disabledReasons = <Widget>[];
+    final seenDisabledReasons = <String>{};
+    void addDisabledReason(String? reason, Key key) {
+      if (reason == null || !seenDisabledReasons.add(reason)) return;
+      disabledReasons.add(
+        Tooltip(
+          message: dense ? reason : '',
+          child: Text(
+            reason,
+            key: key,
+            style: Theme.of(context).textTheme.bodySmall,
+            maxLines: dense ? 2 : null,
+            overflow: dense ? TextOverflow.ellipsis : null,
+          ),
+        ),
+      );
+    }
+
+    if (showQuestOpening) {
+      addDisabledReason(
+        createQuestOpeningDisabledReason,
+        const Key(
+          'revision3-story-workspace-create-quest-opening-disabled-reason',
+        ),
+      );
+    }
+    addDisabledReason(
+      createNpcDisabledReason,
+      const Key('revision3-story-workspace-create-npc-disabled-reason'),
+    );
+    addDisabledReason(
+      createQuestDisabledReason,
+      const Key('revision3-story-workspace-create-quest-disabled-reason'),
+    );
     return Material(
       color: scheme.surfaceContainerLowest,
       child: Padding(
@@ -1577,10 +1691,24 @@ class _StoryHeader extends StatelessWidget {
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
+                    if (showQuestOpening)
+                      _StoryQuestOpeningButton(
+                        buttonKey: const Key(
+                          'revision3-story-workspace-create-quest-opening',
+                        ),
+                        copy: copy,
+                        dense: dense,
+                        creating: creatingQuestOpening,
+                        onPressed: createQuestOpening,
+                        disabledReason: createQuestOpeningDisabledReason,
+                      ),
                     Tooltip(
-                      message: createNpcDisabledReason ?? '',
-                      child: FilledButton.icon(
+                      message:
+                          createNpcDisabledReason ??
+                          (dense ? copy.createNpcLabel : ''),
+                      child: FilledButton.tonalIcon(
                         key: const Key('revision3-story-workspace-create-npc'),
                         onPressed: createNpc,
                         style: dense
@@ -1606,35 +1734,42 @@ class _StoryHeader extends StatelessWidget {
                         ),
                       ),
                     ),
-                    Tooltip(
-                      message: createQuestDisabledReason ?? '',
-                      child: OutlinedButton.icon(
-                        key: const Key(
-                          'revision3-story-workspace-create-quest',
-                        ),
-                        onPressed: createQuest,
-                        style: dense
-                            ? OutlinedButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                maximumSize: const Size(280, 44),
-                              )
-                            : null,
-                        icon: creatingQuest
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.playlist_add_outlined),
-                        label: Text(
-                          creatingQuest
-                              ? copy.creatingQuestLabel
-                              : copy.createQuestLabel,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
+                    PopupMenuButton<_StoryCreateAdvancedAction>(
+                      key: const Key(
+                        'revision3-story-workspace-create-advanced',
                       ),
+                      enabled: !actionsBusy,
+                      tooltip: creatingQuest
+                          ? copy.creatingQuestLabel
+                          : copy.createAdvancedLabel,
+                      icon: creatingQuest
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.more_horiz),
+                      onSelected: (_) => createQuest?.call(),
+                      itemBuilder: (context) => [
+                        PopupMenuItem<_StoryCreateAdvancedAction>(
+                          key: const Key(
+                            'revision3-story-workspace-create-quest',
+                          ),
+                          value: _StoryCreateAdvancedAction.questDraft,
+                          enabled: createQuest != null,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(copy.createQuestAdvancedLabel),
+                              if (createQuestDisabledReason != null)
+                                Text(
+                                  createQuestDisabledReason!,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1674,42 +1809,61 @@ class _StoryHeader extends StatelessWidget {
                 ],
               ),
             ),
-            if (createNpcDisabledReason != null ||
-                createQuestDisabledReason != null) ...[
+            if (disabledReasons.isNotEmpty) ...[
               SizedBox(height: dense ? 4 : 6),
-              if (createNpcDisabledReason != null)
-                Tooltip(
-                  message: dense ? createNpcDisabledReason! : '',
-                  child: Text(
-                    createNpcDisabledReason!,
-                    key: const Key(
-                      'revision3-story-workspace-create-npc-disabled-reason',
-                    ),
-                    style: Theme.of(context).textTheme.bodySmall,
-                    maxLines: dense ? 2 : null,
-                    overflow: dense ? TextOverflow.ellipsis : null,
-                  ),
-                ),
-              if (createQuestDisabledReason != null &&
-                  createQuestDisabledReason != createNpcDisabledReason)
-                Tooltip(
-                  message: dense ? createQuestDisabledReason! : '',
-                  child: Text(
-                    createQuestDisabledReason!,
-                    key: const Key(
-                      'revision3-story-workspace-create-quest-disabled-reason',
-                    ),
-                    style: Theme.of(context).textTheme.bodySmall,
-                    maxLines: dense ? 2 : null,
-                    overflow: dense ? TextOverflow.ellipsis : null,
-                  ),
-                ),
+              ...disabledReasons,
             ],
           ],
         ),
       ),
     );
   }
+}
+
+class _StoryQuestOpeningButton extends StatelessWidget {
+  const _StoryQuestOpeningButton({
+    required this.buttonKey,
+    required this.copy,
+    required this.dense,
+    required this.creating,
+    required this.onPressed,
+    required this.disabledReason,
+  });
+
+  final Key buttonKey;
+  final Revision3StoryWorkspaceCopy copy;
+  final bool dense;
+  final bool creating;
+  final VoidCallback? onPressed;
+  final String? disabledReason;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: disabledReason ?? (dense ? copy.createQuestOpeningLabel : ''),
+    child: FilledButton.icon(
+      key: buttonKey,
+      onPressed: onPressed,
+      style: dense
+          ? FilledButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              maximumSize: const Size(300, 44),
+            )
+          : null,
+      icon: creating
+          ? const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.forum_outlined),
+      label: Text(
+        creating
+            ? copy.creatingQuestOpeningLabel
+            : copy.createQuestOpeningLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    ),
+  );
 }
 
 class _StorySearchAndFilters extends StatelessWidget {
@@ -1794,6 +1948,8 @@ class _StoryEntityList extends StatelessWidget {
     required this.entities,
     required this.selectedId,
     required this.emptyLabel,
+    required this.emptyAction,
+    required this.emptyActionDisabledReason,
     required this.onSelected,
   });
 
@@ -1801,6 +1957,8 @@ class _StoryEntityList extends StatelessWidget {
   final List<Revision3ContentEntity> entities;
   final String? selectedId;
   final String emptyLabel;
+  final Widget? emptyAction;
+  final String? emptyActionDisabledReason;
   final ValueChanged<Revision3ContentEntity> onSelected;
 
   @override
@@ -1809,6 +1967,8 @@ class _StoryEntityList extends StatelessWidget {
       return _StoryEmptyDetails(
         key: const Key('revision3-story-workspace-empty'),
         label: emptyLabel,
+        action: emptyAction,
+        actionDisabledReason: emptyActionDisabledReason,
       );
     }
     return ListView.builder(
@@ -1890,15 +2050,39 @@ class _StoryLoadError extends StatelessWidget {
 }
 
 class _StoryEmptyDetails extends StatelessWidget {
-  const _StoryEmptyDetails({required this.label, super.key});
+  const _StoryEmptyDetails({
+    required this.label,
+    this.action,
+    this.actionDisabledReason,
+    super.key,
+  });
 
   final String label;
+  final Widget? action;
+  final String? actionDisabledReason;
 
   @override
   Widget build(BuildContext context) => Center(
-    child: Padding(
+    child: SingleChildScrollView(
       padding: const EdgeInsets.all(20),
-      child: Text(label, textAlign: TextAlign.center),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, textAlign: TextAlign.center),
+          if (action != null) ...[const SizedBox(height: 14), action!],
+          if (actionDisabledReason != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              actionDisabledReason!,
+              key: const Key(
+                'revision3-story-workspace-empty-create-quest-opening-disabled-reason',
+              ),
+              style: Theme.of(context).textTheme.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ],
+      ),
     ),
   );
 }

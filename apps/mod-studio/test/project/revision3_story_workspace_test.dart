@@ -33,6 +33,10 @@ final _copy = Revision3StoryWorkspaceCopy(
   createQuestLabel: 'Create Quest',
   creatingNpcLabel: 'Creating NPC',
   creatingQuestLabel: 'Creating Quest',
+  createQuestOpeningLabel: 'Create Quest + opening line',
+  creatingQuestOpeningLabel: 'Creating Quest + opening line',
+  createAdvancedLabel: 'Advanced creation options',
+  createQuestAdvancedLabel: 'Create Quest draft only (advanced)',
   noStoryDrafts: 'No Story drafts yet',
   noMatchingStoryDrafts: 'No matching Story drafts',
   selectDraftLabel: 'Select an NPC or Quest',
@@ -77,6 +81,13 @@ final _longGermanCopy = Revision3StoryWorkspaceCopy(
   createQuestLabel: 'Neuen Quest-Entwurf erstellen',
   creatingNpcLabel: 'Nichtspielercharakter wird erstellt',
   creatingQuestLabel: 'Quest-Entwurf wird erstellt',
+  createQuestOpeningLabel:
+      'Neue Quest mit einer ersten Dialogzeile als empfohlenen Einstieg erstellen',
+  creatingQuestOpeningLabel:
+      'Quest und erste Dialogzeile werden gemeinsam erstellt',
+  createAdvancedLabel: 'Erweiterte Erstellungsoptionen anzeigen',
+  createQuestAdvancedLabel:
+      'Nur einen Quest-Entwurf erstellen (erweiterte Option)',
   noStoryDrafts: 'Noch keine Story-Entwürfe vorhanden',
   noMatchingStoryDrafts: 'Keine passenden Story-Entwürfe gefunden',
   selectDraftLabel: 'NPC oder Quest-Entwurf auswählen',
@@ -322,73 +333,199 @@ void main() {
     },
   );
 
-  testWidgets('enabled create callbacks remain direct and visible', (
+  testWidgets('recommended opening is direct and pure Quest stays advanced', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1000, 700));
     var npcCalls = 0;
+    var openingCalls = 0;
     var questCalls = 0;
     await _pumpWorkspace(
       tester,
       load: () async => _fixture(),
       createNpcDraft: () async => npcCalls++,
+      createQuestOpening: () async => openingCalls++,
       createQuestDraft: () async => questCalls++,
     );
     await tester.pumpAndSettle();
 
+    final opening = find.byKey(
+      const Key('revision3-story-workspace-create-quest-opening'),
+    );
+    expect(tester.widget<FilledButton>(opening).onPressed, isNotNull);
+    expect(find.text('Create Quest + opening line'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-story-workspace-create-quest')),
+      findsNothing,
+      reason: 'the pure draft is not a competing header action',
+    );
+    await tester.tap(opening);
     await tester.tap(
       find.byKey(const Key('revision3-story-workspace-create-npc')),
     );
+    await tester.pumpAndSettle();
+    await _openAdvancedCreateMenu(tester);
+    expect(find.text('Create Quest draft only (advanced)'), findsOneWidget);
     await tester.tap(
       find.byKey(const Key('revision3-story-workspace-create-quest')),
     );
     await tester.pumpAndSettle();
 
+    expect(openingCalls, 1);
     expect(npcCalls, 1);
     expect(questCalls, 1);
     expect(find.text('NPC creation is not configured.'), findsNothing);
     expect(find.text('Quest creation is not configured.'), findsNothing);
   });
 
-  testWidgets('NPC and Quest creation are mutually exclusive while pending', (
+  testWidgets('all three create actions are mutually single-flight', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1000, 700));
-    final pendingNpc = Completer<void>();
-    var npcCalls = 0;
+    for (final initiator in const <String>['npc', 'opening', 'quest']) {
+      await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      final pending = Completer<void>();
+      final calls = <String, int>{'npc': 0, 'opening': 0, 'quest': 0};
+      Revision3StoryWorkspaceCreateAction actionFor(String kind) => () {
+        calls[kind] = calls[kind]! + 1;
+        return kind == initiator ? pending.future : Future<void>.value();
+      };
+
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        createNpcDraft: actionFor('npc'),
+        createQuestOpening: actionFor('opening'),
+        createQuestDraft: actionFor('quest'),
+      );
+      await tester.pumpAndSettle();
+
+      final npc = find.byKey(const Key('revision3-story-workspace-create-npc'));
+      final opening = find.byKey(
+        const Key('revision3-story-workspace-create-quest-opening'),
+      );
+      final advanced = find.byKey(
+        const Key('revision3-story-workspace-create-advanced'),
+      );
+      switch (initiator) {
+        case 'npc':
+          await tester.tap(npc);
+        case 'opening':
+          await tester.tap(opening);
+        case 'quest':
+          await _openAdvancedCreateMenu(tester);
+          await tester.tap(
+            find.byKey(const Key('revision3-story-workspace-create-quest')),
+          );
+      }
+      await tester.pump();
+
+      expect(calls[initiator], 1);
+      expect(tester.widget<FilledButton>(opening).onPressed, isNull);
+      expect(tester.widget<FilledButton>(npc).onPressed, isNull);
+      expect(
+        tester.widget<PopupMenuButton<dynamic>>(advanced).enabled,
+        isFalse,
+      );
+      await tester.tap(npc);
+      await tester.tap(opening);
+      await tester.tap(advanced);
+      await tester.pump();
+      expect(
+        calls.values.fold<int>(0, (sum, count) => sum + count),
+        1,
+        reason: '$initiator must prevent every second authoring dialog',
+      );
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(opening).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(npc).onPressed, isNotNull);
+      expect(tester.widget<PopupMenuButton<dynamic>>(advanced).enabled, isTrue);
+    }
+  });
+
+  testWidgets('empty Story recommends Quest plus opening line', (tester) async {
+    await _setSurfaceSize(tester, const Size(1000, 700));
+    var openingCalls = 0;
     var questCalls = 0;
     await _pumpWorkspace(
       tester,
-      load: () async => _fixture(),
-      createNpcDraft: () {
-        npcCalls++;
-        return pendingNpc.future;
-      },
+      load: () async => _fixture(includeNpc: false, includeQuest: false),
+      createNpcDraft: () async {},
+      createQuestOpening: () async => openingCalls++,
       createQuestDraft: () async => questCalls++,
     );
     await tester.pumpAndSettle();
 
-    final npc = find.byKey(const Key('revision3-story-workspace-create-npc'));
-    final quest = find.byKey(
-      const Key('revision3-story-workspace-create-quest'),
+    expect(
+      find.byKey(const Key('revision3-story-workspace-empty')),
+      findsOneWidget,
     );
-    await tester.tap(npc);
-    await tester.pump();
-
-    expect(npcCalls, 1);
-    expect(tester.widget<FilledButton>(npc).onPressed, isNull);
-    expect(tester.widget<OutlinedButton>(quest).onPressed, isNull);
-    await tester.tap(quest);
-    await tester.pump();
-    expect(questCalls, 0, reason: 'a second authoring dialog must not stack');
-
-    pendingNpc.complete();
+    final emptyOpening = find.byKey(
+      const Key('revision3-story-workspace-empty-create-quest-opening'),
+    );
+    expect(emptyOpening, findsOneWidget);
+    expect(tester.widget<FilledButton>(emptyOpening).onPressed, isNotNull);
+    await tester.tap(emptyOpening);
     await tester.pumpAndSettle();
-    expect(tester.widget<FilledButton>(npc).onPressed, isNotNull);
-    expect(tester.widget<OutlinedButton>(quest).onPressed, isNotNull);
-    await tester.tap(quest);
-    await tester.pumpAndSettle();
-    expect(questCalls, 1);
+
+    expect(openingCalls, 1);
+    expect(questCalls, 0, reason: 'the empty-state CTA is not the bare draft');
+  });
+
+  testWidgets('recommended and advanced Quest gates stay explicit', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 700));
+    for (final reason in const <String>[
+      'Configure the game before creating Story content.',
+      'Reopen this managed project before creating Story content.',
+    ]) {
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(includeNpc: false, includeQuest: false),
+        createNpcDraftDisabledReason: reason,
+        createQuestOpeningDisabledReason: reason,
+        createQuestDraftDisabledReason: reason,
+      );
+      await tester.pumpAndSettle();
+
+      final headerOpening = find.byKey(
+        const Key('revision3-story-workspace-create-quest-opening'),
+      );
+      final emptyOpening = find.byKey(
+        const Key('revision3-story-workspace-empty-create-quest-opening'),
+      );
+      expect(tester.widget<FilledButton>(headerOpening).onPressed, isNull);
+      expect(tester.widget<FilledButton>(emptyOpening).onPressed, isNull);
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-create-quest-opening-disabled-reason',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-empty-create-quest-opening-disabled-reason',
+          ),
+        ),
+        findsOneWidget,
+      );
+
+      await _openAdvancedCreateMenu(tester);
+      final advancedQuest = tester.widget<PopupMenuItem<Object?>>(
+        find.byKey(const Key('revision3-story-workspace-create-quest')),
+      );
+      expect(advancedQuest.enabled, isFalse);
+      expect(find.text(reason), findsWidgets);
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    }
   });
 
   testWidgets('create failures use their dedicated localized formatter', (
@@ -398,13 +535,14 @@ void main() {
     await _pumpWorkspace(
       tester,
       load: () async => _fixture(),
-      createNpcDraft: () async => throw StateError('authoring unavailable'),
+      createNpcDraft: () async {},
+      createQuestOpening: () async => throw StateError('authoring unavailable'),
       createQuestDraft: () async {},
     );
     await tester.pumpAndSettle();
 
     await tester.tap(
-      find.byKey(const Key('revision3-story-workspace-create-npc')),
+      find.byKey(const Key('revision3-story-workspace-create-quest-opening')),
     );
     await tester.pump();
 
@@ -825,12 +963,26 @@ void main() {
   ) async {
     for (final size in const <Size>[Size(360, 760), Size(640, 420)]) {
       await tester.binding.setSurfaceSize(size);
-      await _pumpWorkspace(tester, load: () async => _fixture());
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        createNpcDraft: () async {},
+        createQuestOpening: () async {},
+        createQuestDraft: () async {},
+      );
       await tester.pumpAndSettle();
 
       expect(
         find.byKey(const Key('revision3-story-workspace-wide')),
         findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-workspace-create-quest-opening')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-workspace-create-advanced')),
+        findsOneWidget,
       );
       final quest = find.byKey(
         Key('revision3-story-workspace-entity-$_questId'),
@@ -875,6 +1027,7 @@ void main() {
         load: () async => _fixture(),
         copy: _longGermanCopy,
         createNpcDraftDisabledReason: disabledReason,
+        createQuestOpeningDisabledReason: disabledReason,
         createQuestDraftDisabledReason: disabledReason,
       );
       await tester.pumpAndSettle();
@@ -892,20 +1045,22 @@ void main() {
       );
       expect(
         find.byKey(
-          const Key('revision3-story-workspace-create-npc-disabled-reason'),
+          const Key(
+            'revision3-story-workspace-create-quest-opening-disabled-reason',
+          ),
         ),
         findsOneWidget,
       );
       expect(
         find.byKey(
-          const Key('revision3-story-workspace-create-quest-disabled-reason'),
+          const Key('revision3-story-workspace-create-npc-disabled-reason'),
         ),
         findsNothing,
         reason: 'one identical visible setup reason is sufficient',
       );
       expect(
         find
-            .byKey(const Key('revision3-story-workspace-create-npc'))
+            .byKey(const Key('revision3-story-workspace-create-quest-opening'))
             .hitTestable(),
         findsOneWidget,
       );
@@ -1824,12 +1979,27 @@ Future<void> _openQuestRemovalMenu(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _openAdvancedCreateMenu(WidgetTester tester) async {
+  final menu = find.byKey(
+    const Key('revision3-story-workspace-create-advanced'),
+  );
+  expect(menu, findsOneWidget);
+  await tester.ensureVisible(menu);
+  await tester.tap(menu);
+  await tester.pumpAndSettle();
+  expect(
+    find.byKey(const Key('revision3-story-workspace-create-quest')),
+    findsOneWidget,
+  );
+}
+
 Future<void> _pumpWorkspace(
   WidgetTester tester, {
   required Revision3StoryWorkspaceLoader load,
   int revision = 7,
   Revision3StoryWorkspaceController? controller,
   Revision3StoryWorkspaceCreateAction? createNpcDraft,
+  Revision3StoryWorkspaceCreateAction? createQuestOpening,
   Revision3StoryWorkspaceCreateAction? createQuestDraft,
   ValueChanged<String>? onOpenExternalEntity,
   ValueChanged<String>? onOpenExternalAsset,
@@ -1844,6 +2014,7 @@ Future<void> _pumpWorkspace(
   String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
+  String? createQuestOpeningDisabledReason,
   String? createQuestDraftDisabledReason,
   Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
@@ -1856,6 +2027,7 @@ Future<void> _pumpWorkspace(
         load: load,
         controller: controller,
         createNpcDraft: createNpcDraft,
+        createQuestOpening: createQuestOpening,
         createQuestDraft: createQuestDraft,
         onOpenExternalEntity: onOpenExternalEntity,
         onOpenExternalAsset: onOpenExternalAsset,
@@ -1870,6 +2042,7 @@ Future<void> _pumpWorkspace(
         editNpcProfileDisabledReason: editNpcProfileDisabledReason,
         copy: copy,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
+        createQuestOpeningDisabledReason: createQuestOpeningDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
         questJourneyBuilder: questJourneyBuilder,
         questTranscriptBuilder: questTranscriptBuilder,
@@ -1886,6 +2059,7 @@ Revision3StoryWorkspace _workspace({
   required Revision3StoryWorkspaceLoader load,
   Revision3StoryWorkspaceController? controller,
   Revision3StoryWorkspaceCreateAction? createNpcDraft,
+  Revision3StoryWorkspaceCreateAction? createQuestOpening,
   Revision3StoryWorkspaceCreateAction? createQuestDraft,
   ValueChanged<String>? onOpenExternalEntity,
   ValueChanged<String>? onOpenExternalAsset,
@@ -1900,6 +2074,7 @@ Revision3StoryWorkspace _workspace({
   String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
+  String? createQuestOpeningDisabledReason,
   String? createQuestDraftDisabledReason,
   Revision3StoryQuestJourneyBuilder? questJourneyBuilder,
   Revision3StoryQuestTranscriptBuilder? questTranscriptBuilder,
@@ -1912,9 +2087,13 @@ Revision3StoryWorkspace _workspace({
   copy: copy ?? _copy,
   controller: controller,
   createNpcDraft: createNpcDraft,
+  createQuestOpening: createQuestOpening,
   createQuestDraft: createQuestDraft,
   createNpcDraftDisabledReason: createNpcDraft == null
       ? createNpcDraftDisabledReason ?? 'NPC creation is not configured.'
+      : null,
+  createQuestOpeningDisabledReason: createQuestOpening == null
+      ? createQuestOpeningDisabledReason
       : null,
   createQuestDraftDisabledReason: createQuestDraft == null
       ? createQuestDraftDisabledReason ?? 'Quest creation is not configured.'

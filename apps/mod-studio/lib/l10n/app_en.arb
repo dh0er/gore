@@ -190,9 +190,9 @@
   },
   "managerDeployActive": "A mod-manager loadout is active. Undeploy it in gore-manager first.",
   "projectOpenLegacy": "Open legacy project…",
-  "projectOpenManagedRevision3": "Open managed revision-3 project…",
+  "projectOpenManagedRevision3": "Open Mod Studio project…",
   "projectVerifyCurrentHead": "Verify current head",
-  "projectManagedRevision3Title": "Managed revision-3 project",
+  "projectManagedRevision3Title": "Mod Studio project",
   "projectClose": "Close project",
   "projectCloseFailed": "Project could not be closed: {error}",
   "@projectCloseFailed": {
@@ -207,15 +207,8 @@
   "projectHeadSha256": "Head SHA-256",
   "projectSnapshotBytes": "Snapshot bytes",
   "projectNoCurrent": "No current project",
-  "projectManagedRevision3Opened": "Opened managed revision-3 project {projectId}",
-  "@projectManagedRevision3Opened": {
-    "placeholders": {
-      "projectId": {
-        "type": "String"
-      }
-    }
-  },
-  "projectManagedRevision3OpenFailed": "Managed revision-3 project open failed: {error}",
+  "projectManagedRevision3Opened": "Mod Studio project opened.",
+  "projectManagedRevision3OpenFailed": "Mod Studio project could not be opened: {error}",
   "@projectManagedRevision3OpenFailed": {
     "placeholders": {
       "error": {
@@ -223,15 +216,8 @@
       }
     }
   },
-  "projectManagedRevision3Verified": "Verified revision-3 head {headSha256}",
-  "@projectManagedRevision3Verified": {
-    "placeholders": {
-      "headSha256": {
-        "type": "String"
-      }
-    }
-  },
-  "projectManagedRevision3VerifyFailed": "Revision-3 head verification failed: {error}",
+  "projectManagedRevision3Verified": "Project checkpoint verified.",
+  "projectManagedRevision3VerifyFailed": "Project checkpoint could not be verified: {error}",
   "@projectManagedRevision3VerifyFailed": {
     "placeholders": {
       "error": {
@@ -410,6 +396,12 @@
   "managedStoryWorkspaceSearchHint": "Search NPC and Quest names, objectives, speakers, or IDs",
   "managedStoryWorkspaceCreatingNpc": "Creating NPC draft…",
   "managedStoryWorkspaceCreatingQuest": "Creating Quest draft…",
+  "managedStoryWorkspaceCreateQuestOpening": "Create Quest + opening line",
+  "managedStoryWorkspaceCreatingQuestOpening": "Creating Quest + opening line…",
+  "managedStoryWorkspaceCreateAdvanced": "Advanced creation options",
+  "managedStoryWorkspaceCreateQuestAdvanced": "Create Quest draft only (advanced)",
+  "managedStoryWorkspaceMutationRequiresReopen": "Reopen this project before changing Story content.",
+  "managedStoryWorkspaceMutationDirtyBlocked": "Save or discard the open localization edits before changing Story content.",
   "managedStoryWorkspaceEmpty": "No NPC or Quest drafts yet",
   "managedStoryWorkspaceNoMatches": "No NPC or Quest drafts match this search",
   "managedStoryWorkspaceSelectDraft": "Select an NPC or Quest draft to continue",
@@ -583,6 +575,20 @@
   "managedDashboardMissingGameDescription": "Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.",
   "managedDashboardCreateHeading": "Create",
   "managedDashboardToolsHeading": "Project tools",
+  "managedDashboardContinueHeading": "Continue working",
+  "managedHomeStoryEmptyTitle": "Create a character or Quest",
+  "managedHomeStoryContinueTitle": "Continue Story",
+  "managedHomeStoryDescription": "Create and develop NPC and Quest drafts in the complete Story workspace.",
+  "managedHomeDialogVoiceTitle": "Dialog & Voice",
+  "managedHomeDialogVoiceDescription": "Write project text, create dialog lines, and manage Voice takes in one place.",
+  "managedHomeProblemsTitle": "Review problems",
+  "managedHomeProblemsDescription": "Review exact project issues and verification without claiming a runtime test.",
+  "managedHomeContentTitle": "Browse content",
+  "managedHomeContentDescription": "Find project, base-game, installed, and verified DataAsset content.",
+  "managedHomeBuildTitle": "Create output",
+  "managedHomeBuildDescription": "Open the honest build view. Voice bundles are available; a complete playable mod is still blocked.",
+  "managedContentOpenInStory": "Open in Story",
+  "managedContentOpenInStoryDescription": "Continue this Quest or NPC in the complete Story workspace.",
   "managedDashboardLoading": "Loading project overview",
   "managedDashboardLoadError": "Project overview unavailable",
   "managedDashboardLoadErrorDescription": "The verified project overview could not be loaded. Project content was not changed.",

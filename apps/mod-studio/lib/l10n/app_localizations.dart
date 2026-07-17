@@ -785,7 +785,7 @@ abstract class AppLocalizations {
   /// No description provided for @projectOpenManagedRevision3.
   ///
   /// In en, this message translates to:
-  /// **'Open managed revision-3 project…'**
+  /// **'Open Mod Studio project…'**
   String get projectOpenManagedRevision3;
 
   /// No description provided for @projectVerifyCurrentHead.
@@ -797,7 +797,7 @@ abstract class AppLocalizations {
   /// No description provided for @projectManagedRevision3Title.
   ///
   /// In en, this message translates to:
-  /// **'Managed revision-3 project'**
+  /// **'Mod Studio project'**
   String get projectManagedRevision3Title;
 
   /// No description provided for @projectClose.
@@ -857,25 +857,25 @@ abstract class AppLocalizations {
   /// No description provided for @projectManagedRevision3Opened.
   ///
   /// In en, this message translates to:
-  /// **'Opened managed revision-3 project {projectId}'**
-  String projectManagedRevision3Opened(String projectId);
+  /// **'Mod Studio project opened.'**
+  String get projectManagedRevision3Opened;
 
   /// No description provided for @projectManagedRevision3OpenFailed.
   ///
   /// In en, this message translates to:
-  /// **'Managed revision-3 project open failed: {error}'**
+  /// **'Mod Studio project could not be opened: {error}'**
   String projectManagedRevision3OpenFailed(String error);
 
   /// No description provided for @projectManagedRevision3Verified.
   ///
   /// In en, this message translates to:
-  /// **'Verified revision-3 head {headSha256}'**
-  String projectManagedRevision3Verified(String headSha256);
+  /// **'Project checkpoint verified.'**
+  String get projectManagedRevision3Verified;
 
   /// No description provided for @projectManagedRevision3VerifyFailed.
   ///
   /// In en, this message translates to:
-  /// **'Revision-3 head verification failed: {error}'**
+  /// **'Project checkpoint could not be verified: {error}'**
   String projectManagedRevision3VerifyFailed(String error);
 
   /// No description provided for @projectManagedRevision3RequiresReopen.
@@ -1339,6 +1339,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Creating Quest draft…'**
   String get managedStoryWorkspaceCreatingQuest;
+
+  /// No description provided for @managedStoryWorkspaceCreateQuestOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Quest + opening line'**
+  String get managedStoryWorkspaceCreateQuestOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreatingQuestOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Quest + opening line…'**
+  String get managedStoryWorkspaceCreatingQuestOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreateAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced creation options'**
+  String get managedStoryWorkspaceCreateAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceCreateQuestAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Quest draft only (advanced)'**
+  String get managedStoryWorkspaceCreateQuestAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceMutationRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this project before changing Story content.'**
+  String get managedStoryWorkspaceMutationRequiresReopen;
+
+  /// No description provided for @managedStoryWorkspaceMutationDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before changing Story content.'**
+  String get managedStoryWorkspaceMutationDirtyBlocked;
 
   /// No description provided for @managedStoryWorkspaceEmpty.
   ///
@@ -2125,6 +2161,90 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Project tools'**
   String get managedDashboardToolsHeading;
+
+  /// No description provided for @managedDashboardContinueHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue working'**
+  String get managedDashboardContinueHeading;
+
+  /// No description provided for @managedHomeStoryEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a character or Quest'**
+  String get managedHomeStoryEmptyTitle;
+
+  /// No description provided for @managedHomeStoryContinueTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue Story'**
+  String get managedHomeStoryContinueTitle;
+
+  /// No description provided for @managedHomeStoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create and develop NPC and Quest drafts in the complete Story workspace.'**
+  String get managedHomeStoryDescription;
+
+  /// No description provided for @managedHomeDialogVoiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog & Voice'**
+  String get managedHomeDialogVoiceTitle;
+
+  /// No description provided for @managedHomeDialogVoiceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write project text, create dialog lines, and manage Voice takes in one place.'**
+  String get managedHomeDialogVoiceDescription;
+
+  /// No description provided for @managedHomeProblemsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review problems'**
+  String get managedHomeProblemsTitle;
+
+  /// No description provided for @managedHomeProblemsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review exact project issues and verification without claiming a runtime test.'**
+  String get managedHomeProblemsDescription;
+
+  /// No description provided for @managedHomeContentTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse content'**
+  String get managedHomeContentTitle;
+
+  /// No description provided for @managedHomeContentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Find project, base-game, installed, and verified DataAsset content.'**
+  String get managedHomeContentDescription;
+
+  /// No description provided for @managedHomeBuildTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create output'**
+  String get managedHomeBuildTitle;
+
+  /// No description provided for @managedHomeBuildDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open the honest build view. Voice bundles are available; a complete playable mod is still blocked.'**
+  String get managedHomeBuildDescription;
+
+  /// No description provided for @managedContentOpenInStory.
+  ///
+  /// In en, this message translates to:
+  /// **'Open in Story'**
+  String get managedContentOpenInStory;
+
+  /// No description provided for @managedContentOpenInStoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue this Quest or NPC in the complete Story workspace.'**
+  String get managedContentOpenInStoryDescription;
 
   /// No description provided for @managedDashboardLoading.
   ///

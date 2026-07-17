@@ -417,8 +417,9 @@ proof. It does not widen that evidence to adjacent use cases.
 | Templates/clone/batch/CSV | **First Empty/NPC Draft/Quest Draft starters integrated; reusable templates and batch tools missing** | New-project creation now offers **Empty**, **NPC Draft**, and **Quest Draft** before metadata entry. Every choice first creates and adopts the same canonical empty revision-0 project through absent-head CAS; an NPC or Quest choice then opens the existing guided exact-head wizard and may publish a separate revision 1. Cancel before publication leaves the exact empty project. If publication outcome cannot be verified, Studio requires reopening instead of claiming that the project stayed empty. Copy states this two-stage boundary before creation and never calls it one atomic template transaction. Multi-domain/playable-slice templates still require a native compound prepare/publication transaction. Dependency-aware templates, clone modes, transactional bulk editing, and CSV round trip remain missing. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
 
-The managed project core also exposes **Export project copy** from the Project
-menu and Home's first project-tool action. It serializes the exact current R3
+The managed project core exposes **Export project copy** from the Project menu.
+Home deliberately does not duplicate this project-level action. Export
+serializes the exact current R3
 head, its recursive historical Quest-basis closure, and the current snapshot's
 bounded direct History closure into a deterministic, strictly reopened,
 no-clobber `.goremod`. History embedded in retained checkpoints is deliberately
@@ -434,6 +435,18 @@ keep the original managed directory. See
 ## 4. Complete authoring surfaces
 
 ### 4.1 Project dashboard
+
+The implemented managed-project Home is a compact task router, not a second
+editor or a collection of modal launch cards. It has exactly five continuations:
+**Story**, **Dialog & Voice**, **Problems**, **Content**, and **Build & Release**.
+Each opens the canonical workspace that owns the job. Story owns NPC creation,
+the recommended **Quest + opening line** flow, and the advanced Quest-only
+Draft. Localization & Voice owns project text, dialog-line, and Voice actions;
+Validate owns Problems; Content owns discovery and DataAsset work; Build &
+Release owns output actions. Export stays in the Project menu. Normal chrome
+calls this a **Mod Studio project** and keeps schema/head vocabulary in technical
+details. The nine stable shell destinations and the useful Legacy UI remain
+unchanged.
 
 Creating a project is a guided, resumable onboarding flow:
 
@@ -611,7 +624,7 @@ reordered, grouped
 by stable V4 objective slot, detached without deletion, previewed lazily, or
 created and inserted atomically; one exact row/language can open in
 Localization & Voice. Transcript mutations remain gated while localization
-text is dirty or the managed checkpoint is busy/stale. Home also exposes a
+text is dirty or the managed checkpoint is busy/stale. Story exposes a
 recommended two-checkpoint **Quest + opening line** recipe: the existing Quest
 transaction publishes N+1, Studio rebinds to that exact checkpoint, and the
 existing transcript transaction may publish the first line at N+2. Cancelling
@@ -640,7 +653,8 @@ while this consolidation is incremental.
 
 ### 4.6 Voice at the line
 
-The first bounded managed-R3 transaction/import slice is now connected to Home.
+The first bounded managed-R3 transaction/import slice is now connected to the
+canonical **Localization & Voice** workspace.
 It searches exact-current `DialogLine` content by speaker, line name, or
 localization identity, limits each visible result set to 50, and requires an
 explicit line choice. It can import a validated Ogg into the managed AssetStore,

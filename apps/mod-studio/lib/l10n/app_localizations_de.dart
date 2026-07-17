@@ -372,14 +372,13 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectOpenLegacy => 'Legacy-Projekt öffnen…';
 
   @override
-  String get projectOpenManagedRevision3 =>
-      'Verwaltetes Revision-3-Projekt öffnen…';
+  String get projectOpenManagedRevision3 => 'Mod-Studio-Projekt öffnen…';
 
   @override
   String get projectVerifyCurrentHead => 'Aktuellen Head verifizieren';
 
   @override
-  String get projectManagedRevision3Title => 'Verwaltetes Revision-3-Projekt';
+  String get projectManagedRevision3Title => 'Mod-Studio-Projekt';
 
   @override
   String get projectClose => 'Projekt schließen';
@@ -412,23 +411,20 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectNoCurrent => 'Kein aktuelles Projekt';
 
   @override
-  String projectManagedRevision3Opened(String projectId) {
-    return 'Verwaltetes Revision-3-Projekt $projectId geöffnet';
-  }
+  String get projectManagedRevision3Opened => 'Mod-Studio-Projekt geöffnet.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Verwaltetes Revision-3-Projekt konnte nicht geöffnet werden: $error';
+    return 'Mod-Studio-Projekt konnte nicht geöffnet werden: $error';
   }
 
   @override
-  String projectManagedRevision3Verified(String headSha256) {
-    return 'Revision-3-Head $headSha256 verifiziert';
-  }
+  String get projectManagedRevision3Verified =>
+      'Projekt-Checkpoint verifiziert.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Verifizierung des Revision-3-Heads fehlgeschlagen: $error';
+    return 'Projekt-Checkpoint konnte nicht verifiziert werden: $error';
   }
 
   @override
@@ -723,6 +719,30 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedStoryWorkspaceCreatingQuest =>
       'Quest-Entwurf wird erstellt…';
+
+  @override
+  String get managedStoryWorkspaceCreateQuestOpening =>
+      'Quest + erste Dialogzeile erstellen';
+
+  @override
+  String get managedStoryWorkspaceCreatingQuestOpening =>
+      'Quest + erste Dialogzeile wird erstellt…';
+
+  @override
+  String get managedStoryWorkspaceCreateAdvanced =>
+      'Erweiterte Erstelloptionen';
+
+  @override
+  String get managedStoryWorkspaceCreateQuestAdvanced =>
+      'Nur Quest-Entwurf erstellen (erweitert)';
+
+  @override
+  String get managedStoryWorkspaceMutationRequiresReopen =>
+      'Öffne dieses Projekt erneut, bevor du Story-Inhalte änderst.';
+
+  @override
+  String get managedStoryWorkspaceMutationDirtyBlocked =>
+      'Speichere oder verwirf die offenen Lokalisierungsänderungen, bevor du Story-Inhalte änderst.';
 
   @override
   String get managedStoryWorkspaceEmpty =>
@@ -1226,6 +1246,54 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedDashboardToolsHeading => 'Projektwerkzeuge';
+
+  @override
+  String get managedDashboardContinueHeading => 'Weiterarbeiten';
+
+  @override
+  String get managedHomeStoryEmptyTitle => 'Figur oder Quest erstellen';
+
+  @override
+  String get managedHomeStoryContinueTitle => 'Story weiterführen';
+
+  @override
+  String get managedHomeStoryDescription =>
+      'Erstelle und entwickle NPC- und Quest-Entwürfe im vollständigen Story-Arbeitsbereich.';
+
+  @override
+  String get managedHomeDialogVoiceTitle => 'Dialog & Vertonung';
+
+  @override
+  String get managedHomeDialogVoiceDescription =>
+      'Schreibe Projekttexte und Dialogzeilen und verwalte Sprachaufnahmen an einem Ort.';
+
+  @override
+  String get managedHomeProblemsTitle => 'Probleme prüfen';
+
+  @override
+  String get managedHomeProblemsDescription =>
+      'Prüfe exakte Projektprobleme und Verifikation, ohne einen Laufzeittest zu behaupten.';
+
+  @override
+  String get managedHomeContentTitle => 'Inhalte durchsuchen';
+
+  @override
+  String get managedHomeContentDescription =>
+      'Finde Projekt-, Basisspiel-, installierte und verifizierte DataAsset-Inhalte.';
+
+  @override
+  String get managedHomeBuildTitle => 'Ausgabe erstellen';
+
+  @override
+  String get managedHomeBuildDescription =>
+      'Öffne die ehrliche Build-Ansicht. Voice-Bundles sind verfügbar; eine vollständige spielbare Mod ist noch blockiert.';
+
+  @override
+  String get managedContentOpenInStory => 'In Story öffnen';
+
+  @override
+  String get managedContentOpenInStoryDescription =>
+      'Bearbeite diese Quest oder diesen NPC im vollständigen Story-Arbeitsbereich weiter.';
 
   @override
   String get managedDashboardLoading => 'Projektübersicht wird geladen';

@@ -415,12 +415,8 @@ class _HomePageState extends ConsumerState<HomePage>
             _snack(l10n.projectManagedRevision3VerifyBlocked);
             return;
           }
-          final verified =
-              await coordinator.saveCurrent()
-                  as ManagedRevision3CurrentProjectState;
-          _snack(
-            l10n.projectManagedRevision3Verified(verified.head.snapshotSha256),
-          );
+          await coordinator.saveCurrent();
+          _snack(l10n.projectManagedRevision3Verified);
         case NoCurrentProjectState():
           _snack('There is no current project to save.');
       }
@@ -791,12 +787,12 @@ class _HomePageState extends ConsumerState<HomePage>
       if (path == null || !mounted) return;
       final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
       final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
-      final opened = await coordinator.openManagedRevision3(Directory(path));
+      await coordinator.openManagedRevision3(Directory(path));
       if (!_showTransitionCleanupWarningIfAdded(
         coordinator,
         cleanupFailuresBefore,
       )) {
-        _snack(l10n.projectManagedRevision3Opened(opened.projectId));
+        _snack(l10n.projectManagedRevision3Opened);
       }
     } catch (e) {
       _snack(l10n.projectManagedRevision3OpenFailed('$e'));
@@ -1115,15 +1111,6 @@ class _HomePageState extends ConsumerState<HomePage>
           gameRoot: gameRoot,
           recoveryBusy: _projectActionBusy,
           managedWorkspaceDirty: _managedWorkspaceDirty,
-          exportProjectCopy:
-              !_projectActionBusy &&
-                  !currentProject.requiresReopen &&
-                  !_managedWorkspaceDirty
-              ? () => unawaited(_exportManagedRevision3Project(currentProject))
-              : null,
-          exportProjectCopyDisabledReason: _managedWorkspaceDirty
-              ? l10n.projectExportActionDirtyBlocked
-              : null,
           recoverProject: () => _recoverManagedRevision3Project(currentProject),
           onDialogLocalizationDirtyChanged: _managedWorkspaceDirtyListener,
           verifyCurrentHead: _saveProject,
@@ -1160,6 +1147,21 @@ class _HomePageState extends ConsumerState<HomePage>
                   required draft,
                   required scriptModule,
                 }) async {
+                  final liveProject = ref.read(
+                    currentProjectCoordinatorProvider,
+                  );
+                  if (_projectActionBusy ||
+                      _managedWorkspaceDirty ||
+                      liveProject is! ManagedRevision3CurrentProjectState ||
+                      liveProject.requiresReopen ||
+                      liveProject.root.path != currentProject.root.path ||
+                      liveProject.projectId != currentProject.projectId ||
+                      liveProject.projectRevision !=
+                          currentProject.projectRevision ||
+                      liveProject.head.canonicalJson !=
+                          currentProject.head.canonicalJson) {
+                    throw const Revision3StoryDraftRemovalStaleCheckpointException();
+                  }
                   final draftKind = switch (draft.kind) {
                     Revision3ContentEntityKind.npcDraft =>
                       AuthoringStoryDraftKind.npcDraft,
@@ -2110,8 +2112,6 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.gameRoot,
     required this.recoveryBusy,
     required this.managedWorkspaceDirty,
-    required this.exportProjectCopy,
-    required this.exportProjectCopyDisabledReason,
     required this.recoverProject,
     required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
@@ -2184,8 +2184,6 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final String? gameRoot;
   final bool recoveryBusy;
   final bool managedWorkspaceDirty;
-  final VoidCallback? exportProjectCopy;
-  final String? exportProjectCopyDisabledReason;
   final ManagedRevision3RecoveryAction recoverProject;
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
@@ -2950,15 +2948,25 @@ class _ManagedRevision3ProjectViewState
               projectRevision: project.projectRevision,
               projectHeadCanonicalJson: project.head.canonicalJson,
               load: loadContentIndex,
-              editQuestOutline: (index, quest) =>
-                  _openQuestOutlineEditor(context, index, quest),
-              editQuestContext: gameRoot == null
+              editQuestOutline: _storyMutationsEnabled
+                  ? (index, quest) =>
+                        _openQuestOutlineEditor(context, index, quest)
+                  : null,
+              editQuestOutlineDisabledReason: _storyMutationDisabledReason(
+                l10n,
+              ),
+              editQuestContext: gameRoot == null || !_storyMutationsEnabled
                   ? null
                   : (index, quest) =>
                         _openQuestContextEditor(context, index, quest),
-              editQuestTransitions: (index, quest) =>
-                  _openQuestTransitionsEditor(context, index, quest),
-              editNpcProfile: gameRoot == null
+              editQuestTransitions: _storyMutationsEnabled
+                  ? (index, quest) =>
+                        _openQuestTransitionsEditor(context, index, quest)
+                  : null,
+              editQuestTransitionsDisabledReason: _storyMutationDisabledReason(
+                l10n,
+              ),
+              editNpcProfile: gameRoot == null || !_storyMutationsEnabled
                   ? null
                   : (index, npc) => _openNpcProfileEditor(context, index, npc),
               inspectQuestSource: gameRoot == null
@@ -2971,20 +2979,19 @@ class _ManagedRevision3ProjectViewState
                   ? null
                   : (index, entity) =>
                         _openLibraryDraftInStory(context, index, entity),
-              openStoryDraftLabel: l10n.localeName.startsWith('de')
-                  ? 'In Story öffnen'
-                  : 'Open in Story',
-              openStoryDraftDescription: l10n.localeName.startsWith('de')
-                  ? 'Quest- und NPC-Entwürfe werden in Story vollständig und '
-                        'zusammenhängend bearbeitet.'
-                  : 'Continue this Quest or NPC in the complete Story '
-                        'workspace.',
-              editNpcProfileDisabledReason: gameRoot == null
-                  ? l10n.managedDashboardMissingGameDescription
-                  : null,
-              editQuestContextDisabledReason: gameRoot == null
-                  ? l10n.managedDashboardMissingGameDescription
-                  : null,
+              openStoryDraftLabel: l10n.managedContentOpenInStory,
+              openStoryDraftDescription:
+                  l10n.managedContentOpenInStoryDescription,
+              editNpcProfileDisabledReason:
+                  _storyMutationDisabledReason(l10n) ??
+                  (gameRoot == null
+                      ? l10n.managedDashboardMissingGameDescription
+                      : null),
+              editQuestContextDisabledReason:
+                  _storyMutationDisabledReason(l10n) ??
+                  (gameRoot == null
+                      ? l10n.managedDashboardMissingGameDescription
+                      : null),
               inspectQuestSourceDisabledReason: gameRoot == null
                   ? l10n.managedDashboardMissingGameDescription
                   : null,
@@ -3214,6 +3221,11 @@ class _ManagedRevision3ProjectViewState
   Widget _buildStorySection(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
     final gameRequiredReason = l10n.managedDashboardMissingGameDescription;
+    final canMutateStory = _storyMutationsEnabled;
+    final storyMutationDisabledReason = _storyMutationDisabledReason(l10n);
+    final canCreateStory = gameConfigured && canMutateStory;
+    final createStoryDisabledReason =
+        storyMutationDisabledReason ?? gameRequiredReason;
     return Revision3StoryWorkspace(
       projectRoot: project.root.path,
       projectId: project.projectId,
@@ -3222,32 +3234,47 @@ class _ManagedRevision3ProjectViewState
       load: loadContentIndex,
       copy: _storyWorkspaceCopy(l10n),
       controller: _storyWorkspaceController,
-      removeDraft: removeStoryDraft,
-      removeDraftDisabledReason: removeStoryDraftDisabledReason,
-      createNpcDraft: gameConfigured
+      removeDraft: canMutateStory ? removeStoryDraft : null,
+      removeDraftDisabledReason:
+          storyMutationDisabledReason ?? removeStoryDraftDisabledReason,
+      createNpcDraft: canCreateStory
           ? () => _openNpcWizard(context, selectPublishedInStory: true)
           : null,
-      createQuestDraft: gameConfigured
+      createQuestOpening: canCreateStory
+          ? () => _openQuestOpeningRecipe(context)
+          : null,
+      createQuestDraft: canCreateStory
           ? () => _openQuestWizard(context, selectPublishedInStory: true)
           : null,
-      createNpcDraftDisabledReason: gameConfigured ? null : gameRequiredReason,
-      createQuestDraftDisabledReason: gameConfigured
+      createNpcDraftDisabledReason: canCreateStory
           ? null
-          : gameRequiredReason,
-      editQuestOutline: (index, quest) =>
-          _openQuestOutlineEditor(context, index, quest),
-      editQuestContext: gameConfigured
+          : createStoryDisabledReason,
+      createQuestOpeningDisabledReason: canCreateStory
+          ? null
+          : createStoryDisabledReason,
+      createQuestDraftDisabledReason: canCreateStory
+          ? null
+          : createStoryDisabledReason,
+      editQuestOutline: canMutateStory
+          ? (index, quest) => _openQuestOutlineEditor(context, index, quest)
+          : null,
+      editQuestOutlineDisabledReason: storyMutationDisabledReason,
+      editQuestContext: gameConfigured && canMutateStory
           ? (index, quest) => _openQuestContextEditor(context, index, quest)
           : null,
-      editQuestContextDisabledReason: gameConfigured
+      editQuestContextDisabledReason: gameConfigured && canMutateStory
           ? null
-          : gameRequiredReason,
-      editQuestTransitions: (index, quest) =>
-          _openQuestTransitionsEditor(context, index, quest),
-      editNpcProfile: gameConfigured
+          : createStoryDisabledReason,
+      editQuestTransitions: canMutateStory
+          ? (index, quest) => _openQuestTransitionsEditor(context, index, quest)
+          : null,
+      editQuestTransitionsDisabledReason: storyMutationDisabledReason,
+      editNpcProfile: gameConfigured && canMutateStory
           ? (index, npc) => _openNpcProfileEditor(context, index, npc)
           : null,
-      editNpcProfileDisabledReason: gameConfigured ? null : gameRequiredReason,
+      editNpcProfileDisabledReason: gameConfigured && canMutateStory
+          ? null
+          : createStoryDisabledReason,
       inspectQuestSource: gameConfigured
           ? (index, quest) => _openQuestSourceInspection(context, index, quest)
           : null,
@@ -3285,6 +3312,20 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
+  bool get _storyMutationsEnabled =>
+      !project.requiresReopen &&
+      !widget.managedWorkspaceDirty &&
+      !widget.recoveryBusy;
+
+  String? _storyMutationDisabledReason(AppLocalizations l10n) =>
+      project.requiresReopen
+      ? l10n.managedStoryWorkspaceMutationRequiresReopen
+      : widget.managedWorkspaceDirty
+      ? l10n.managedStoryWorkspaceMutationDirtyBlocked
+      : widget.recoveryBusy
+      ? l10n.managedProjectHistoryBusy
+      : null;
+
   Widget _buildQuestJourneyView(
     BuildContext context,
     AppLocalizations l10n, {
@@ -3310,7 +3351,7 @@ class _ManagedRevision3ProjectViewState
     final copy = l10n.localeName.startsWith('de')
         ? const Revision3QuestJourneyPanelCopy.german()
         : const Revision3QuestJourneyPanelCopy.english();
-    final canEdit = !project.requiresReopen;
+    final canEdit = _storyMutationsEnabled;
     return Revision3QuestJourneyView(
       projectId: basisProjectId,
       projectRevision: basisProjectRevision,
@@ -3688,18 +3729,16 @@ class _ManagedRevision3ProjectViewState
 
   Widget _buildDashboard(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
-    Revision3ContentIndex? evaluatedVoiceIndex;
-    var evaluatedVoiceAvailable = false;
-    bool voiceAvailable(Revision3ContentIndex index) {
-      if (!identical(evaluatedVoiceIndex, index)) {
-        evaluatedVoiceIndex = index;
-        evaluatedVoiceAvailable = _hasIntactVoiceLine(index);
-      }
-      return evaluatedVoiceAvailable;
-    }
-
-    VoidCallback? requiresGame(Future<void> Function(BuildContext) action) =>
-        gameConfigured ? () => unawaited(action(context)) : null;
+    bool hasStoryDraft(Revision3ContentIndex index) => index.entities.any(
+      (entity) =>
+          entity.kind == Revision3ContentEntityKind.npcDraft ||
+          entity.kind == Revision3ContentEntityKind.questDraft,
+    );
+    void navigate(Revision3ProjectWorkspaceSection section) =>
+        Revision3ProjectWorkspace.navigate(
+          context,
+          Revision3ProjectWorkspaceLocation(section),
+        );
 
     return Revision3ProjectDashboard(
       projectId: project.projectId,
@@ -3735,158 +3774,59 @@ class _ManagedRevision3ProjectViewState
             l10n.managedDashboardReferenceIntegrityDescription,
         missingGameTitle: l10n.managedDashboardMissingGameTitle,
         missingGameDescription: l10n.managedDashboardMissingGameDescription,
-        createHeading: l10n.managedDashboardCreateHeading,
-        toolsHeading: l10n.managedDashboardToolsHeading,
+        continueHeading: l10n.managedDashboardContinueHeading,
         loadingSemanticsLabel: l10n.managedDashboardLoading,
         loadErrorSemanticsLabel: l10n.managedDashboardLoadError,
         loadErrorTitle: l10n.managedDashboardLoadError,
         loadErrorDescription: l10n.managedDashboardLoadErrorDescription,
         retryLabel: l10n.managedDashboardRetry,
       ),
-      createActions: [
+      tasks: [
         Revision3ProjectDashboardAction(
-          id: 'create-dialog-line',
-          controlKey: const Key('managed-create-dialog-line'),
-          icon: Icons.add_comment_outlined,
-          title: l10n.managedActionNewDialogLineTitle,
-          description: l10n.managedActionNewDialogLineDescription,
-          onPressed: project.requiresReopen
-              ? null
-              : () => unawaited(_openDialogLineEntry(context)),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'create-npc-draft',
-          controlKey: const Key('managed-create-npc-draft'),
-          icon: Icons.person_add_alt_1_outlined,
-          title: l10n.managedActionNewNpcTitle,
-          description: l10n.managedActionNewNpcDescription,
-          onPressed: requiresGame(_openNpcWizard),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'create-quest-opening-recipe',
-          controlKey: const Key('managed-create-quest-opening-recipe'),
+          id: 'story',
+          controlKey: const Key('managed-home-story'),
           icon: Icons.auto_stories_outlined,
-          title: l10n.managedQuestOpeningRecipeTitle,
-          description: l10n.managedQuestOpeningRecipeDescription,
-          disabledReason: !gameConfigured
-              ? l10n.managedDashboardMissingGameDescription
-              : project.requiresReopen
-              ? l10n.managedLocalizationReopen
-              : null,
-          onPressed:
-              gameConfigured &&
-                  !project.requiresReopen &&
-                  !_questOpeningRecipeUiBusy
-              ? () => unawaited(_openQuestOpeningRecipe(context))
-              : null,
+          title: l10n.managedHomeStoryContinueTitle,
+          titleBuilder: (index) => hasStoryDraft(index)
+              ? l10n.managedHomeStoryContinueTitle
+              : l10n.managedHomeStoryEmptyTitle,
+          description: l10n.managedHomeStoryDescription,
+          onPressed: () => navigate(Revision3ProjectWorkspaceSection.story),
         ),
         Revision3ProjectDashboardAction(
-          id: 'create-quest-draft',
-          controlKey: const Key('managed-create-quest-draft'),
-          icon: Icons.assignment_add,
-          title: l10n.managedActionNewQuestTitle,
-          description: l10n.managedActionNewQuestDescription,
-          onPressed: requiresGame(_openQuestWizard),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'add-voice-take',
-          controlKey: const Key('managed-add-voice-take'),
+          id: 'dialog-voice',
+          controlKey: const Key('managed-home-dialog-voice'),
           icon: Icons.record_voice_over_outlined,
-          title: l10n.managedActionAddVoiceTakeTitle,
-          description: l10n.managedActionAddVoiceTakeDescription,
-          disabledReason: gameConfigured
-              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
-              : l10n.managedDashboardMissingGameDescription,
-          enabledFor: voiceAvailable,
-          onPressed: requiresGame(_openVoiceWizard),
+          title: l10n.managedHomeDialogVoiceTitle,
+          description: l10n.managedHomeDialogVoiceDescription,
+          onPressed: () =>
+              navigate(Revision3ProjectWorkspaceSection.localizationVoice),
         ),
         Revision3ProjectDashboardAction(
-          id: 'import-voice-folder',
-          controlKey: const Key('managed-import-voice-folder'),
-          icon: Icons.drive_folder_upload_outlined,
-          title: l10n.managedVoiceFolderImportTitle,
-          description: l10n.managedVoiceFolderImportDescription,
-          disabledReason: !gameConfigured
-              ? l10n.managedDashboardMissingGameDescription
-              : widget.managedWorkspaceDirty
-              ? l10n.managedVoiceFolderImportDirtyBlocked
-              : project.requiresReopen
-              ? l10n.managedLocalizationReopen
-              : null,
-          onPressed:
-              gameConfigured &&
-                  !widget.managedWorkspaceDirty &&
-                  !project.requiresReopen
-              ? () => unawaited(_openVoiceFolderImport(context))
-              : null,
-        ),
-      ],
-      toolActions: [
-        Revision3ProjectDashboardAction(
-          id: 'export-project-copy',
-          controlKey: const Key('managed-export-project-copy'),
-          icon: Icons.archive_outlined,
-          title: l10n.projectExportActionTitle,
-          description: l10n.projectExportActionDescription,
-          disabledReason: widget.exportProjectCopyDisabledReason,
-          onPressed: widget.exportProjectCopy,
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'review-problems',
-          controlKey: const Key('managed-review-problems'),
+          id: 'problems',
+          controlKey: const Key('managed-home-problems'),
           icon: Icons.rule_folder_outlined,
-          title: l10n.managedProblemsTitle,
-          description: l10n.managedProblemsDescription,
-          onPressed: () => Revision3ProjectWorkspace.navigate(
-            context,
-            const Revision3ProjectWorkspaceLocation(
-              Revision3ProjectWorkspaceSection.validateTest,
-            ),
-          ),
+          title: l10n.managedHomeProblemsTitle,
+          description: l10n.managedHomeProblemsDescription,
+          onPressed: () =>
+              navigate(Revision3ProjectWorkspaceSection.validateTest),
         ),
         Revision3ProjectDashboardAction(
-          id: 'manage-voice-takes',
-          controlKey: const Key('managed-manage-voice-takes'),
-          icon: Icons.library_music_outlined,
-          title: l10n.managedActionManageVoiceTakesTitle,
-          description: l10n.managedActionManageVoiceTakesDescription,
-          disabledReason: l10n.managedActionAddVoiceTakeRequiresDialogLine,
-          enabledFor: voiceAvailable,
-          onPressed: () => unawaited(_openVoiceTakeSelection(context)),
+          id: 'content',
+          controlKey: const Key('managed-home-content'),
+          icon: Icons.account_tree_outlined,
+          title: l10n.managedHomeContentTitle,
+          description: l10n.managedHomeContentDescription,
+          onPressed: () => navigate(Revision3ProjectWorkspaceSection.content),
         ),
         Revision3ProjectDashboardAction(
-          id: 'resolve-voice-target',
-          controlKey: const Key('managed-resolve-voice-target'),
-          icon: Icons.link_outlined,
-          title: l10n.managedActionResolveVoiceTargetTitle,
-          description: l10n.managedActionResolveVoiceTargetDescription,
-          disabledReason: gameConfigured
-              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
-              : l10n.managedDashboardMissingGameDescription,
-          enabledFor: voiceAvailable,
-          onPressed: requiresGame(_openVoiceTargetResolver),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'build-voice-bundle',
-          controlKey: const Key('managed-build-voice-bundle'),
+          id: 'build',
+          controlKey: const Key('managed-home-build'),
           icon: Icons.inventory_2_outlined,
-          title: l10n.managedActionBuildVoiceBundleTitle,
-          description: l10n.managedActionBuildVoiceBundleDescription,
-          disabledReason: l10n.managedDashboardMissingGameDescription,
-          onPressed: requiresGame(_openVoiceBuild),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'verified-dataasset-edits',
-          icon: Icons.data_object_outlined,
-          title: l10n.managedActionDataAssetsTitle,
-          description: l10n.managedActionDataAssetsDescription,
-          onPressed: () => Revision3ProjectWorkspace.navigate(
-            context,
-            const Revision3ProjectWorkspaceLocation(
-              Revision3ProjectWorkspaceSection.content,
-              secondary: 'data-assets',
-            ),
-          ),
+          title: l10n.managedHomeBuildTitle,
+          description: l10n.managedHomeBuildDescription,
+          onPressed: () =>
+              navigate(Revision3ProjectWorkspaceSection.buildRelease),
         ),
       ],
       settingsAction: Revision3ProjectDashboardAction(
@@ -4326,7 +4266,7 @@ class _ManagedRevision3ProjectViewState
   Future<void> _openQuestOpeningRecipe(BuildContext context) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null ||
-        project.requiresReopen ||
+        !_storyMutationsEnabled ||
         _questOpeningRecipeUiBusy ||
         _questOpeningRecipe.isRunning) {
       return;
@@ -4721,7 +4661,7 @@ class _ManagedRevision3ProjectViewState
     bool selectPublishedInStory = false,
   }) async {
     final configuredGameRoot = gameRoot;
-    if (configuredGameRoot == null || project.requiresReopen) return;
+    if (configuredGameRoot == null || !_storyMutationsEnabled) return;
     final selectionOrigin = _storySelectionOrigin;
     final publication = await showDialog<Revision3QuestDraftPublication>(
       context: context,
@@ -4757,7 +4697,7 @@ class _ManagedRevision3ProjectViewState
     Revision3ContentIndex index,
     Revision3ContentEntity quest,
   ) async {
-    if (project.requiresReopen) return;
+    if (!_storyMutationsEnabled) return;
     final publication = await showDialog<Revision3QuestOutlineEditPublication>(
       context: context,
       builder: (context) => Revision3QuestOutlineEditDialog(
@@ -4783,7 +4723,7 @@ class _ManagedRevision3ProjectViewState
     Revision3ContentEntity quest,
   ) async {
     final configuredGameRoot = gameRoot;
-    if (configuredGameRoot == null || project.requiresReopen) return;
+    if (configuredGameRoot == null || !_storyMutationsEnabled) return;
     final publication = await showDialog<Revision3QuestContextEditPublication>(
       context: context,
       barrierDismissible: false,
@@ -4813,7 +4753,7 @@ class _ManagedRevision3ProjectViewState
     Revision3ContentIndex index,
     Revision3ContentEntity quest,
   ) async {
-    if (project.requiresReopen) return;
+    if (!_storyMutationsEnabled) return;
     final publication =
         await showDialog<Revision3QuestTransitionsEditPublication>(
           context: context,
@@ -4917,7 +4857,7 @@ class _ManagedRevision3ProjectViewState
     Revision3ContentEntity npc,
   ) async {
     final configuredGameRoot = gameRoot;
-    if (configuredGameRoot == null || project.requiresReopen) return;
+    if (configuredGameRoot == null || !_storyMutationsEnabled) return;
     final l10n = AppLocalizations.of(context);
     final publication = await showDialog<Revision3NpcProfileEditPublication>(
       context: context,
@@ -4971,7 +4911,7 @@ class _ManagedRevision3ProjectViewState
     bool selectPublishedInStory = false,
   }) async {
     final configuredGameRoot = gameRoot;
-    if (configuredGameRoot == null || project.requiresReopen) return;
+    if (configuredGameRoot == null || !_storyMutationsEnabled) return;
     final selectionOrigin = _storySelectionOrigin;
     final publication = await showDialog<Revision3NpcDraftPublication>(
       context: context,
@@ -5301,6 +5241,10 @@ Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>
       createQuestLabel: l10n.managedActionNewQuestTitle,
       creatingNpcLabel: l10n.managedStoryWorkspaceCreatingNpc,
       creatingQuestLabel: l10n.managedStoryWorkspaceCreatingQuest,
+      createQuestOpeningLabel: l10n.managedStoryWorkspaceCreateQuestOpening,
+      creatingQuestOpeningLabel: l10n.managedStoryWorkspaceCreatingQuestOpening,
+      createAdvancedLabel: l10n.managedStoryWorkspaceCreateAdvanced,
+      createQuestAdvancedLabel: l10n.managedStoryWorkspaceCreateQuestAdvanced,
       noStoryDrafts: l10n.managedStoryWorkspaceEmpty,
       noMatchingStoryDrafts: l10n.managedStoryWorkspaceNoMatches,
       selectDraftLabel: l10n.managedStoryWorkspaceSelectDraft,

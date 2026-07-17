@@ -372,13 +372,13 @@ class AppLocalizationsRu extends AppLocalizations {
   String get projectOpenLegacy => 'Open legacy project…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Open managed revision-3 project…';
+  String get projectOpenManagedRevision3 => 'Open Mod Studio project…';
 
   @override
   String get projectVerifyCurrentHead => 'Verify current head';
 
   @override
-  String get projectManagedRevision3Title => 'Managed revision-3 project';
+  String get projectManagedRevision3Title => 'Mod Studio project';
 
   @override
   String get projectClose => 'Close project';
@@ -411,23 +411,19 @@ class AppLocalizationsRu extends AppLocalizations {
   String get projectNoCurrent => 'No current project';
 
   @override
-  String projectManagedRevision3Opened(String projectId) {
-    return 'Opened managed revision-3 project $projectId';
-  }
+  String get projectManagedRevision3Opened => 'Mod Studio project opened.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Managed revision-3 project open failed: $error';
+    return 'Mod Studio project could not be opened: $error';
   }
 
   @override
-  String projectManagedRevision3Verified(String headSha256) {
-    return 'Verified revision-3 head $headSha256';
-  }
+  String get projectManagedRevision3Verified => 'Project checkpoint verified.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Revision-3 head verification failed: $error';
+    return 'Project checkpoint could not be verified: $error';
   }
 
   @override
@@ -715,6 +711,29 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedStoryWorkspaceCreatingQuest => 'Creating Quest draft…';
+
+  @override
+  String get managedStoryWorkspaceCreateQuestOpening =>
+      'Create Quest + opening line';
+
+  @override
+  String get managedStoryWorkspaceCreatingQuestOpening =>
+      'Creating Quest + opening line…';
+
+  @override
+  String get managedStoryWorkspaceCreateAdvanced => 'Advanced creation options';
+
+  @override
+  String get managedStoryWorkspaceCreateQuestAdvanced =>
+      'Create Quest draft only (advanced)';
+
+  @override
+  String get managedStoryWorkspaceMutationRequiresReopen =>
+      'Reopen this project before changing Story content.';
+
+  @override
+  String get managedStoryWorkspaceMutationDirtyBlocked =>
+      'Save or discard the open localization edits before changing Story content.';
 
   @override
   String get managedStoryWorkspaceEmpty => 'No NPC or Quest drafts yet';
@@ -1208,6 +1227,54 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedDashboardToolsHeading => 'Инструменты проекта';
+
+  @override
+  String get managedDashboardContinueHeading => 'Continue working';
+
+  @override
+  String get managedHomeStoryEmptyTitle => 'Create a character or Quest';
+
+  @override
+  String get managedHomeStoryContinueTitle => 'Continue Story';
+
+  @override
+  String get managedHomeStoryDescription =>
+      'Create and develop NPC and Quest drafts in the complete Story workspace.';
+
+  @override
+  String get managedHomeDialogVoiceTitle => 'Dialog & Voice';
+
+  @override
+  String get managedHomeDialogVoiceDescription =>
+      'Write project text, create dialog lines, and manage Voice takes in one place.';
+
+  @override
+  String get managedHomeProblemsTitle => 'Review problems';
+
+  @override
+  String get managedHomeProblemsDescription =>
+      'Review exact project issues and verification without claiming a runtime test.';
+
+  @override
+  String get managedHomeContentTitle => 'Browse content';
+
+  @override
+  String get managedHomeContentDescription =>
+      'Find project, base-game, installed, and verified DataAsset content.';
+
+  @override
+  String get managedHomeBuildTitle => 'Create output';
+
+  @override
+  String get managedHomeBuildDescription =>
+      'Open the honest build view. Voice bundles are available; a complete playable mod is still blocked.';
+
+  @override
+  String get managedContentOpenInStory => 'Open in Story';
+
+  @override
+  String get managedContentOpenInStoryDescription =>
+      'Continue this Quest or NPC in the complete Story workspace.';
 
   @override
   String get managedDashboardLoading => 'Загрузка обзора проекта';

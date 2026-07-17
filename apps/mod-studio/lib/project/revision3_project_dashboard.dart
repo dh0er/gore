@@ -6,6 +6,8 @@ import 'revision3_content_index.dart';
 
 typedef Revision3ProjectDashboardLoader =
     Future<Revision3ContentIndex> Function();
+typedef Revision3ProjectDashboardActionTextBuilder =
+    String Function(Revision3ContentIndex index);
 
 /// All author-facing framework, status, count, semantics, and error copy used
 /// by [Revision3ProjectDashboard]. Project metadata itself comes from the
@@ -36,8 +38,7 @@ final class Revision3ProjectDashboardCopy {
     required this.referenceIntegrityDescription,
     required this.missingGameTitle,
     required this.missingGameDescription,
-    required this.createHeading,
-    required this.toolsHeading,
+    required this.continueHeading,
     required this.loadingSemanticsLabel,
     required this.loadErrorSemanticsLabel,
     required this.loadErrorTitle,
@@ -68,8 +69,7 @@ final class Revision3ProjectDashboardCopy {
   final String referenceIntegrityDescription;
   final String missingGameTitle;
   final String missingGameDescription;
-  final String createHeading;
-  final String toolsHeading;
+  final String continueHeading;
   final String loadingSemanticsLabel;
   final String loadErrorSemanticsLabel;
   final String loadErrorTitle;
@@ -90,6 +90,8 @@ final class Revision3ProjectDashboardAction {
     this.controlKey,
     this.enabledFor,
     this.disabledReason,
+    this.titleBuilder,
+    this.descriptionBuilder,
   }) : assert(id != '');
 
   final String id;
@@ -107,6 +109,15 @@ final class Revision3ProjectDashboardAction {
   /// presenting a button that can only fail in its first dialog.
   final bool Function(Revision3ContentIndex index)? enabledFor;
   final String? disabledReason;
+
+  /// Optional exact-index-aware copy for task-first Home surfaces.
+  ///
+  /// These builders run only after the dashboard has accepted an exact index
+  /// for its requested project and revision. The static copy remains the
+  /// fallback and is also used by contexts such as the missing-game banner,
+  /// where no content-dependent task copy is needed.
+  final Revision3ProjectDashboardActionTextBuilder? titleBuilder;
+  final Revision3ProjectDashboardActionTextBuilder? descriptionBuilder;
 }
 
 /// Content-first overview for one exact managed revision-3 checkpoint.
@@ -121,23 +132,20 @@ final class Revision3ProjectDashboard extends StatefulWidget {
     required this.load,
     required this.gameConfigured,
     required this.copy,
-    required List<Revision3ProjectDashboardAction> createActions,
-    required List<Revision3ProjectDashboardAction> toolActions,
+    required List<Revision3ProjectDashboardAction> tasks,
     this.settingsAction,
     super.key,
-  }) : createActions = List.unmodifiable(createActions),
-       toolActions = List.unmodifiable(toolActions),
+  }) : tasks = List.unmodifiable(tasks),
        assert(projectId != ''),
        assert(projectRevision >= 0),
-       assert(_actionIdsAreUnique(createActions, toolActions, settingsAction));
+       assert(_actionIdsAreUnique(tasks, settingsAction));
 
   final String projectId;
   final int projectRevision;
   final Revision3ProjectDashboardLoader load;
   final bool gameConfigured;
   final Revision3ProjectDashboardCopy copy;
-  final List<Revision3ProjectDashboardAction> createActions;
-  final List<Revision3ProjectDashboardAction> toolActions;
+  final List<Revision3ProjectDashboardAction> tasks;
   final Revision3ProjectDashboardAction? settingsAction;
 
   @override
@@ -256,8 +264,7 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
       index: _index!,
       gameConfigured: widget.gameConfigured,
       copy: widget.copy,
-      createActions: widget.createActions,
-      toolActions: widget.toolActions,
+      tasks: widget.tasks,
       settingsAction: widget.settingsAction,
     );
   }
@@ -268,16 +275,14 @@ class _DashboardContent extends StatelessWidget {
     required this.index,
     required this.gameConfigured,
     required this.copy,
-    required this.createActions,
-    required this.toolActions,
+    required this.tasks,
     required this.settingsAction,
   });
 
   final Revision3ContentIndex index;
   final bool gameConfigured;
   final Revision3ProjectDashboardCopy copy;
-  final List<Revision3ProjectDashboardAction> createActions;
-  final List<Revision3ProjectDashboardAction> toolActions;
+  final List<Revision3ProjectDashboardAction> tasks;
   final Revision3ProjectDashboardAction? settingsAction;
 
   @override
@@ -302,6 +307,12 @@ class _DashboardContent extends StatelessWidget {
               const SizedBox(height: 16),
               _MissingGameBanner(copy: copy, settingsAction: settingsAction),
             ],
+            if (tasks.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              _SectionHeading(copy.continueHeading),
+              const SizedBox(height: 10),
+              _TaskList(index: index, tasks: tasks),
+            ],
             const SizedBox(height: 20),
             _SectionHeading(copy.contentCountsHeading),
             const SizedBox(height: 10),
@@ -310,26 +321,6 @@ class _DashboardContent extends StatelessWidget {
             _SectionHeading(copy.readinessHeading),
             const SizedBox(height: 10),
             _StatusGrid(index: index, copy: copy, availableWidth: contentWidth),
-            if (createActions.isNotEmpty) ...[
-              const SizedBox(height: 24),
-              _SectionHeading(copy.createHeading),
-              const SizedBox(height: 10),
-              _ActionGrid(
-                index: index,
-                actions: createActions,
-                availableWidth: contentWidth,
-              ),
-            ],
-            if (toolActions.isNotEmpty) ...[
-              const SizedBox(height: 24),
-              _SectionHeading(copy.toolsHeading),
-              const SizedBox(height: 10),
-              _ActionGrid(
-                index: index,
-                actions: toolActions,
-                availableWidth: contentWidth,
-              ),
-            ],
           ],
         ),
       );
@@ -722,91 +713,77 @@ class _StatusGrid extends StatelessWidget {
   }
 }
 
-class _ActionGrid extends StatelessWidget {
-  const _ActionGrid({
-    required this.index,
-    required this.actions,
-    required this.availableWidth,
-  });
+class _TaskList extends StatelessWidget {
+  const _TaskList({required this.index, required this.tasks});
 
   final Revision3ContentIndex index;
-  final List<Revision3ProjectDashboardAction> actions;
-  final double availableWidth;
+  final List<Revision3ProjectDashboardAction> tasks;
 
   @override
   Widget build(BuildContext context) {
-    final tileWidth = _responsiveTileWidth(
-      availableWidth,
-      wideColumns: 3,
-      mediumColumns: 2,
-    );
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        for (final action in actions)
-          _DashboardActionTile(index: index, action: action, width: tileWidth),
-      ],
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      key: const Key('revision3-project-dashboard-tasks'),
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var taskIndex = 0; taskIndex < tasks.length; taskIndex++) ...[
+            if (taskIndex > 0) const Divider(height: 1),
+            _DashboardTaskRow(index: index, action: tasks[taskIndex]),
+          ],
+        ],
+      ),
     );
   }
 }
 
-class _DashboardActionTile extends StatelessWidget {
-  const _DashboardActionTile({
-    required this.index,
-    required this.action,
-    required this.width,
-  });
+class _DashboardTaskRow extends StatelessWidget {
+  const _DashboardTaskRow({required this.index, required this.action});
 
   final Revision3ContentIndex index;
   final Revision3ProjectDashboardAction action;
-  final double width;
 
   @override
   Widget build(BuildContext context) {
+    final title = action.titleBuilder?.call(index) ?? action.title;
+    final description =
+        action.descriptionBuilder?.call(index) ?? action.description;
     final contentGateOpen = action.enabledFor?.call(index) ?? true;
     final enabled = action.onPressed != null && contentGateOpen;
     final effectiveDescription = !enabled && action.disabledReason != null
         ? action.disabledReason!
-        : action.description;
-    return SizedBox(
-      width: width,
-      child: Semantics(
-        button: true,
+        : description;
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      container: true,
+      button: true,
+      enabled: enabled,
+      label: title,
+      hint: effectiveDescription,
+      excludeSemantics: true,
+      child: ListTile(
+        key:
+            action.controlKey ??
+            Key('revision3-project-dashboard-task-${action.id}'),
         enabled: enabled,
-        label: action.title,
-        hint: effectiveDescription,
-        child: Opacity(
-          opacity: enabled ? 1 : 0.56,
-          child: Card(
-            margin: EdgeInsets.zero,
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              key:
-                  action.controlKey ??
-                  Key('revision3-project-dashboard-action-${action.id}'),
-              onTap: enabled ? action.onPressed : null,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 132),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(action.icon),
-                      const SizedBox(height: 10),
-                      Text(
-                        action.title,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 5),
-                      Text(effectiveDescription),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
+        onTap: enabled ? action.onPressed : null,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        minVerticalPadding: 12,
+        leading: Icon(action.icon),
+        title: Text(title, style: Theme.of(context).textTheme.titleMedium),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(effectiveDescription),
+        ),
+        trailing: Icon(
+          enabled ? Icons.arrow_forward_outlined : Icons.lock_outline,
+          color: enabled ? scheme.primary : scheme.onSurfaceVariant,
         ),
       ),
     );
@@ -890,14 +867,12 @@ double _responsiveTileWidth(
 }
 
 bool _actionIdsAreUnique(
-  List<Revision3ProjectDashboardAction> createActions,
-  List<Revision3ProjectDashboardAction> toolActions,
+  List<Revision3ProjectDashboardAction> tasks,
   Revision3ProjectDashboardAction? settingsAction,
 ) {
   final ids = <String>{};
   for (final action in <Revision3ProjectDashboardAction>[
-    ...createActions,
-    ...toolActions,
+    ...tasks,
     ?settingsAction,
   ]) {
     if (action.id.isEmpty || !ids.add(action.id)) return false;

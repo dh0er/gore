@@ -34,6 +34,7 @@ import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_journey_view.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transcript_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
@@ -747,7 +748,7 @@ void main() {
   );
 
   testWidgets(
-    'managed project copy is available without a game from menu and first tool card, with one global busy lane',
+    'managed project copy is available from the Project menu with one global busy lane',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final parent = Directory.systemTemp.createTempSync('gore_home_export_');
@@ -785,9 +786,11 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      final card = find.byKey(const Key('managed-export-project-copy'));
-      expect(card, findsOneWidget);
-      expect(tester.widget<InkWell>(card).onTap, isNotNull);
+      expect(
+        find.byKey(const Key('managed-export-project-copy')),
+        findsNothing,
+        reason: 'project export belongs to the Project menu, not Home',
+      );
 
       final menuFinder = find.byKey(const Key('project-menu'));
       List<PopupMenuItem<String>> menuItems() => tester
@@ -815,26 +818,17 @@ void main() {
         Key('project-close'),
       ]);
 
-      await tester.ensureVisible(card);
+      await tester.tap(menuFinder);
       await tester.pumpAndSettle();
-      await tester.tap(card);
+      await tester.tap(
+        find.byKey(const Key('project-export-managed-revision3')),
+      );
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-project-export-dialog')),
         findsOneWidget,
       );
       expect(exportItem().enabled, isFalse);
-      expect(
-        tester
-            .widget<InkWell>(
-              find.byKey(
-                const Key('managed-export-project-copy'),
-                skipOffstage: false,
-              ),
-            )
-            .onTap,
-        isNull,
-      );
 
       await tester.tap(
         find.byKey(const Key('revision3-project-export-choose-parent')),
@@ -954,16 +948,13 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<InkWell>(
-              find.byKey(const Key('managed-import-voice-folder')),
-            )
-            .onTap,
-        isNotNull,
-      );
       await _navigateManagedLocalizationVoice(tester);
       expect(managed.dialogLocalizationEditSeedCalls, 1);
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-import-voice-folder'),
+        enabled: true,
+      );
 
       final textField = find.byKey(const Key('revision3-localization-text-de'));
       expect(textField, findsOneWidget);
@@ -981,39 +972,6 @@ void main() {
             (item) => item.key == const Key('project-export-managed-revision3'),
           );
       expect(exportItem.enabled, isFalse);
-      expect(
-        tester
-            .widget<InkWell>(
-              find.byKey(
-                const Key('managed-export-project-copy'),
-                skipOffstage: false,
-              ),
-            )
-            .onTap,
-        isNull,
-      );
-      expect(
-        find.text(l10n.projectExportActionDirtyBlocked, skipOffstage: false),
-        findsOneWidget,
-      );
-      expect(
-        find.text(
-          l10n.managedVoiceFolderImportDirtyBlocked,
-          skipOffstage: false,
-        ),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<InkWell>(
-              find.byKey(
-                const Key('managed-import-voice-folder'),
-                skipOffstage: false,
-              ),
-            )
-            .onTap,
-        isNull,
-      );
 
       tester
           .widget<PopupMenuButton<String>>(
@@ -1054,6 +1012,187 @@ void main() {
       expect(coordinator.state, isA<NoCurrentProjectState>());
       expect(
         find.byKey(const Key('managed-revision3-project-view')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'dirty localization gates Story creation and every Story mutation surface',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const locId = 'GRD_263_ASGHAN_OPEN_INFO_06_02';
+      const draft = 'Unsaved authority-gate text';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-dirty-authority-gate'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _questTranscriptHomeIndex(revision: lease.projectRevision),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance question',
+                speaker: 'Asghan',
+                voiceSlotLocales: const <String>{'de'},
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: r'C:\Games\G1R\Gothic1Remake.exe',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+
+      final textField = find.byKey(const Key('revision3-localization-text-en'));
+      expect(textField, findsOneWidget);
+      final l10n = AppLocalizations.of(tester.element(textField));
+      final blockedReason = l10n.managedStoryWorkspaceMutationDirtyBlocked;
+      await tester.enterText(textField, draft);
+      await tester.pump();
+      await tester.pump();
+
+      await _navigateManagedStory(tester);
+      final createOpening = find.byKey(
+        const Key('revision3-story-workspace-create-quest-opening'),
+      );
+      final createNpc = find.byKey(
+        const Key('revision3-story-workspace-create-npc'),
+      );
+      expect(tester.widget<FilledButton>(createOpening).onPressed, isNull);
+      expect(tester.widget<FilledButton>(createNpc).onPressed, isNull);
+      final createReason = find.byKey(
+        const Key(
+          'revision3-story-workspace-create-quest-opening-disabled-reason',
+        ),
+      );
+      expect(createReason, findsOneWidget);
+      expect(tester.widget<Text>(createReason).data, blockedReason);
+
+      final advancedCreate = find.byKey(
+        const Key('revision3-story-workspace-create-advanced'),
+      );
+      await tester.tap(advancedCreate);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-quest')),
+            )
+            .enabled,
+        isFalse,
+      );
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pumpAndSettle();
+
+      final selectedQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$_homeQuestTranscriptQuestId',
+        ),
+      );
+      expect(selectedQuest, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedQuest).selected, isTrue);
+      final journeyView = tester.widget<Revision3QuestJourneyView>(
+        find.byType(Revision3QuestJourneyView),
+      );
+      expect(journeyView.onEditNameObjectives, isNull);
+      expect(journeyView.onEditDescriptionConnections, isNull);
+      expect(journeyView.onEditStatesTransitions, isNull);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-quest-journey-edit-states-transitions'),
+        ),
+        findsNothing,
+      );
+
+      final logicTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-logic-$_homeQuestTranscriptQuestId',
+        ),
+      );
+      await tester.ensureVisible(logicTab);
+      await tester.tap(logicTab);
+      await tester.pumpAndSettle();
+      final storyLogicEdit = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-logic-'
+          '$_homeQuestTranscriptQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, storyLogicEdit);
+      expect(
+        _workbenchActionTileWidget(tester, storyLogicEdit).enabled,
+        isFalse,
+      );
+      expect(
+        find.descendant(
+          of: storyLogicEdit,
+          matching: find.text(blockedReason, skipOffstage: false),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      await _navigateManagedContent(tester);
+      await _openStoryWorkbenchEntity(tester, _homeQuestTranscriptQuestId);
+      final contentOverviewEdit = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-overview-'
+          '$_homeQuestTranscriptQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, contentOverviewEdit);
+      expect(
+        _workbenchActionTileWidget(tester, contentOverviewEdit).enabled,
+        isFalse,
+      );
+      expect(
+        find.descendant(
+          of: contentOverviewEdit,
+          matching: find.text(blockedReason, skipOffstage: false),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      expect(managed.npcPublishCalls, 0);
+      expect(managed.questPublishCalls, 0);
+      expect(managed.questOutlinePublishCalls, 0);
+      expect(managed.questContextPublishCalls, 0);
+      expect(managed.questTransitionsPublishCalls, 0);
+      expect(managed.dialogLocalizationEditPublishCalls, 0);
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, 7);
+      expect(current.head.canonicalJson, _head(7).canonicalJson);
+      expect(
+        find.byKey(const Key('revision3-quest-outline-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-transitions-dialog')),
         findsNothing,
       );
       expect(tester.takeException(), isNull);
@@ -1512,7 +1651,24 @@ void main() {
         find.byKey(const Key('revision3-project-dashboard')),
         findsOneWidget,
       );
-      expect(find.byKey(const Key('managed-review-problems')), findsOneWidget);
+      for (final key in const <Key>[
+        Key('managed-home-story'),
+        Key('managed-home-dialog-voice'),
+        Key('managed-home-problems'),
+        Key('managed-home-content'),
+        Key('managed-home-build'),
+      ]) {
+        expect(find.byKey(key), findsOneWidget);
+        expect(tester.widget<ListTile>(find.byKey(key)).onTap, isNotNull);
+      }
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-project-dashboard-tasks')),
+          matching: find.byType(ListTile),
+        ),
+        findsNWidgets(5),
+      );
+      expect(find.byKey(const Key('managed-review-problems')), findsNothing);
 
       await _navigateManagedDataAssets(tester);
       expect(managed.dataAssetListCalls, 1);
@@ -1538,12 +1694,30 @@ void main() {
       );
       expect(
         tester
-            .widget<OutlinedButton>(
-              find.byKey(const Key('revision3-story-workspace-create-quest')),
+            .widget<FilledButton>(
+              find.byKey(
+                const Key('revision3-story-workspace-create-quest-opening'),
+              ),
             )
             .onPressed,
         isNull,
       );
+      final advancedCreate = find.byKey(
+        const Key('revision3-story-workspace-create-advanced'),
+      );
+      expect(advancedCreate, findsOneWidget);
+      await tester.tap(advancedCreate);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-quest')),
+            )
+            .enabled,
+        isFalse,
+      );
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-story-workspace-empty')),
         findsOneWidget,
@@ -1754,11 +1928,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
 
-      final createQuest = find.byKey(
-        const Key('revision3-story-workspace-create-quest'),
-      );
-      expect(tester.widget<OutlinedButton>(createQuest).onPressed, isNotNull);
-      await tester.tap(createQuest);
+      await _openAdvancedQuestCreation(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
@@ -1971,9 +2141,7 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(
-        find.byKey(const Key('revision3-story-workspace-create-quest')),
-      );
+      await _openAdvancedQuestCreation(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       await tester.enterText(
@@ -2089,9 +2257,7 @@ void main() {
         tester,
         const Key('revision3-project-workspace-nav-story'),
       );
-      await tester.tap(
-        find.byKey(const Key('revision3-story-workspace-create-quest')),
-      );
+      await _openAdvancedQuestCreation(tester);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       final oldWizard = find.byKey(const Key('revision3-quest-wizard'));
@@ -2221,11 +2387,11 @@ void main() {
       final createNpc = find.byKey(
         const Key('revision3-story-workspace-create-npc'),
       );
-      final createQuest = find.byKey(
-        const Key('revision3-story-workspace-create-quest'),
+      final createQuestOpening = find.byKey(
+        const Key('revision3-story-workspace-create-quest-opening'),
       );
       expect(tester.widget<FilledButton>(createNpc).onPressed, isNull);
-      expect(tester.widget<OutlinedButton>(createQuest).onPressed, isNull);
+      expect(tester.widget<FilledButton>(createQuestOpening).onPressed, isNull);
       final missingGame = AppLocalizations.of(
         tester.element(createNpc),
       ).managedDashboardMissingGameDescription;
@@ -2236,6 +2402,21 @@ void main() {
         'Spiel benötigen.',
       );
       expect(find.text(missingGame), findsOneWidget);
+      final advancedCreate = find.byKey(
+        const Key('revision3-story-workspace-create-advanced'),
+      );
+      await tester.tap(advancedCreate);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-quest')),
+            )
+            .enabled,
+        isFalse,
+      );
+      await tester.tapAt(const Offset(2, 2));
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
       final quest = find.byKey(
@@ -2577,17 +2758,16 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final createButton = find.byKey(const Key('managed-create-quest-draft'));
-      expect(createButton, findsOneWidget);
-      expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
-      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
-      expect(managed.contentReadCalls, 1);
-
-      await _tapManagedDashboardAction(
-        tester,
-        const Key('managed-create-quest-draft'),
+      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
+      expect(
+        find.byKey(const Key('revision3-story-workspace')),
+        findsOneWidget,
       );
-      await tester.pumpAndSettle();
+      expect(managed.contentReadCalls, 2);
+
+      await _openAdvancedQuestCreation(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('revision3-quest-title')),
@@ -2606,14 +2786,16 @@ void main() {
 
       expect(catalogLoads, 2);
       expect(managed.questPublishCalls, 1);
-      expect(managed.contentReadCalls, 2);
+      expect(managed.contentReadCalls, 4);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       await _expandManagedTechnicalDetails(tester);
       expect(find.byKey(const Key('managed-project-revision')), findsOneWidget);
       expect(find.text('8'), findsWidgets);
       expect(
-        find.textContaining('Quest draft saved in project revision 8'),
+        find.textContaining(
+          'could not be selected at its exact project revision',
+        ),
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
@@ -2733,16 +2915,15 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
+      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
       final recipeAction = find.byKey(
-        const Key('managed-create-quest-opening-recipe'),
+        const Key('revision3-story-workspace-create-quest-opening'),
       );
       expect(recipeAction, findsOneWidget);
       final l10n = AppLocalizations.of(tester.element(recipeAction));
-      await _tapManagedDashboardAction(
-        tester,
-        const Key('managed-create-quest-opening-recipe'),
-      );
-      await tester.pumpAndSettle();
+      await tester.tap(recipeAction);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const Key('managed-quest-opening-recipe-intro')),
         findsOneWidget,
@@ -2754,7 +2935,8 @@ void main() {
       await tester.tap(
         find.byKey(const Key('managed-quest-opening-recipe-start')),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
       await tester.enterText(
@@ -2770,7 +2952,10 @@ void main() {
         'Listen to Asghan',
       );
       await tester.tap(find.byKey(const Key('revision3-quest-submit')));
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-name')),
+      );
 
       expect(
         find.byKey(const Key('revision3-dialog-line-modal')),
@@ -2799,7 +2984,10 @@ void main() {
       final submit = find.byKey(const Key('revision3-dialog-line-submit'));
       await tester.ensureVisible(submit);
       await tester.tap(submit);
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-success')),
+      );
 
       expect(
         find.byKey(const Key('revision3-dialog-line-success')),
@@ -2932,15 +3120,14 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
+      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
       final recipeAction = find.byKey(
-        const Key('managed-create-quest-opening-recipe'),
+        const Key('revision3-story-workspace-create-quest-opening'),
       );
       final l10n = AppLocalizations.of(tester.element(recipeAction));
-      await _tapManagedDashboardAction(
-        tester,
-        const Key('managed-create-quest-opening-recipe'),
-      );
-      await tester.pumpAndSettle();
+      await tester.tap(recipeAction);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(
         find.byKey(const Key('managed-quest-opening-recipe-intro')),
         findsOneWidget,
@@ -2948,7 +3135,8 @@ void main() {
       await tester.tap(
         find.byKey(const Key('managed-quest-opening-recipe-start')),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       await tester.enterText(
         find.byKey(const Key('revision3-quest-title')),
@@ -2963,7 +3151,10 @@ void main() {
         'Keep the exact Quest checkpoint',
       );
       await tester.tap(find.byKey(const Key('revision3-quest-submit')));
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-modal')),
+      );
 
       expect(
         find.byKey(const Key('revision3-dialog-line-modal')),
@@ -4086,19 +4277,21 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final createButton = find.byKey(const Key('managed-create-npc-draft'));
-      expect(createButton, findsOneWidget);
-      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
-      expect(managed.contentReadCalls, 1);
-
-      await _tapManagedDashboardAction(
-        tester,
-        const Key('managed-create-npc-draft'),
+      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
+      final createButton = find.byKey(
+        const Key('revision3-story-workspace-create-npc'),
       );
-      await tester.pumpAndSettle();
+      expect(createButton, findsOneWidget);
+      expect(tester.widget<FilledButton>(createButton).onPressed, isNotNull);
+      expect(managed.contentReadCalls, 2);
+
+      await tester.tap(createButton);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
       await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Asghan guard'), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('revision3-npc-display-name')),
@@ -4109,14 +4302,16 @@ void main() {
 
       expect(catalogLoads, 2);
       expect(managed.npcPublishCalls, 1);
-      expect(managed.contentReadCalls, 2);
+      expect(managed.contentReadCalls, 4);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
       await _expandManagedTechnicalDetails(tester);
       expect(find.text('8'), findsWidgets);
       expect(
-        find.textContaining('NPC draft saved in project revision 8'),
+        find.textContaining(
+          'could not be selected at its exact project revision',
+        ),
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
@@ -4197,14 +4392,21 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final createButton = find.byKey(const Key('managed-create-dialog-line'));
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      final createButton = find.byKey(
+        const Key('revision3-localization-new-line'),
+      );
       expect(createButton, findsOneWidget);
-      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-new-line'),
+        enabled: true,
+      );
       final l10n = AppLocalizations.of(tester.element(createButton));
 
-      await _tapManagedDashboardAction(
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-create-dialog-line'),
+        const Key('revision3-localization-new-line'),
       );
       await tester.pumpAndSettle();
       expect(
@@ -4270,11 +4472,10 @@ void main() {
 
       await tester.tap(find.byKey(const Key('revision3-voice-cancel')));
       await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<InkWell>(find.byKey(const Key('managed-add-voice-take')))
-            .onTap,
-        isNotNull,
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-add-voice'),
+        enabled: true,
       );
       expect(
         find.text(l10n.managedActionNewDialogLineSaved(8)),
@@ -4285,7 +4486,7 @@ void main() {
   );
 
   testWidgets(
-    'Home reuses exact project text only after bounded preview verification',
+    'Dialog and Voice reuses exact project text only after bounded preview verification',
     (tester) async {
       await _setDesktopTestSurface(tester);
       const projectId = '49494949494949494949494949494949';
@@ -4411,17 +4612,24 @@ void main() {
       await tester.pumpAndSettle();
       expectTechnicalIdentityHidden();
 
-      final createButton = find.byKey(const Key('managed-create-dialog-line'));
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      final createButton = find.byKey(
+        const Key('revision3-localization-new-line'),
+      );
       final l10n = AppLocalizations.of(tester.element(createButton));
-      await _tapManagedDashboardAction(
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-create-dialog-line'),
+        const Key('revision3-localization-new-line'),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.text(l10n.managedDialogLineReuseMode));
       await tester.pump();
 
-      expect(find.text(displayName), findsOneWidget);
+      final reuseCandidate = find.descendant(
+        of: find.byKey(const Key('revision3-dialog-line-modal')),
+        matching: find.text(displayName),
+      );
+      expect(reuseCandidate, findsOneWidget);
       expectTechnicalIdentityHidden();
       await tester.enterText(
         find.byKey(const Key('revision3-dialog-line-name')),
@@ -4431,7 +4639,7 @@ void main() {
         find.byKey(const Key('revision3-dialog-line-speaker')),
         'Asghan',
       );
-      await tester.tap(find.text(displayName));
+      await tester.tap(reuseCandidate);
       await tester.pumpAndSettle();
 
       expect(managed.dialogLocalizationReadCalls, 1);
@@ -4553,19 +4761,17 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final voiceButton = find.byKey(const Key('managed-add-voice-take'));
-      expect(voiceButton, findsOneWidget);
-      expect(tester.widget<InkWell>(voiceButton).onTap, isNotNull);
-      expect(
-        tester
-            .widget<InkWell>(find.byKey(const Key('managed-create-npc-draft')))
-            .onTap,
-        isNotNull,
+      expect(find.byKey(const Key('managed-home-story')), findsOneWidget);
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-add-voice'),
+        enabled: true,
       );
 
-      await _tapManagedDashboardAction(
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-add-voice-take'),
+        const Key('revision3-localization-add-voice'),
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
@@ -4646,22 +4852,7 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
-      expect(dashboardAction, findsOneWidget);
-      expect(tester.widget<InkWell>(dashboardAction).onTap, isNull);
-      final dashboardPrerequisite = AppLocalizations.of(
-        tester.element(dashboardAction),
-      ).managedActionAddVoiceTakeRequiresDialogLine;
-      expect(
-        find.descendant(
-          of: dashboardAction,
-          matching: find.text(dashboardPrerequisite),
-        ),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-
-      await _navigateManagedLocalizationVoice(tester);
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
 
       final sectionAction = find.byKey(
         const Key('revision3-localization-add-voice'),
@@ -4680,7 +4871,7 @@ void main() {
     },
   );
 
-  testWidgets('exact DialogLine enables Voice add on dashboard and section', (
+  testWidgets('exact DialogLine enables Voice actions in their workspace', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -4725,11 +4916,7 @@ void main() {
     await _pumpApp(tester, container);
     await tester.pumpAndSettle();
 
-    final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
-    expect(dashboardAction, findsOneWidget);
-    expect(tester.widget<InkWell>(dashboardAction).onTap, isNotNull);
-
-    await _navigateManagedLocalizationVoice(tester);
+    await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
 
     _expectLocalizationVoiceAction(
       tester,
@@ -5232,17 +5419,7 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      for (final key in const <Key>[
-        Key('managed-add-voice-take'),
-        Key('managed-manage-voice-takes'),
-        Key('managed-resolve-voice-target'),
-      ]) {
-        final action = find.byKey(key);
-        expect(action, findsOneWidget);
-        expect(tester.widget<InkWell>(action).onTap, isNull);
-      }
-
-      await _navigateManagedLocalizationVoice(tester);
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
       for (final key in const <Key>[
         Key('revision3-localization-add-voice'),
         Key('revision3-localization-manage-voice'),
@@ -5354,15 +5531,18 @@ void main() {
       );
 
       await _navigateManagedHome(tester);
-      final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
-      expect(dashboardAction, findsOneWidget);
-      expect(tester.widget<InkWell>(dashboardAction).onTap, isNull);
+      final dialogVoiceTask = find.byKey(
+        const Key('managed-home-dialog-voice'),
+      );
+      expect(dialogVoiceTask, findsOneWidget);
+      expect(tester.widget<ListTile>(dialogVoiceTask).onTap, isNotNull);
+      expect(find.byKey(const Key('managed-add-voice-take')), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
 
   testWidgets(
-    'managed Voice media QA is wired through Home without a game root or write',
+    'managed Voice media QA is wired through Dialog and Voice without a game root or write',
     (tester) async {
       await _setDesktopTestSurface(tester);
       tester.view.physicalSize = const Size(1600, 1200);
@@ -5386,9 +5566,10 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      await _tapManagedDashboardAction(
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-manage-voice-takes'),
+        const Key('revision3-localization-manage-voice'),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('voice-selection-line-0')));
@@ -5471,36 +5652,22 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      expect(
-        tester
-            .widget<InkWell>(
-              find.byKey(const Key('managed-manage-voice-takes')),
-            )
-            .onTap,
-        isNotNull,
-      );
-      expect(
-        tester
-            .widget<InkWell>(find.byKey(const Key('managed-add-voice-take')))
-            .onTap,
-        isNull,
-        reason: 'Ogg import still needs its separate safety game root',
-      );
       final missingGame = AppLocalizations.of(
-        tester.element(find.byKey(const Key('managed-add-voice-take'))),
+        tester.element(find.byKey(const Key('managed-home-dialog-voice'))),
       ).managedDashboardMissingGameDescription;
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-manage-voice'),
+        enabled: true,
+      );
       for (final key in const <Key>[
-        Key('managed-add-voice-take'),
-        Key('managed-resolve-voice-target'),
-        Key('managed-build-voice-bundle'),
+        Key('revision3-localization-add-voice'),
+        Key('revision3-localization-resolve-voice'),
       ]) {
-        final action = find.byKey(key);
-        expect(tester.widget<InkWell>(action).onTap, isNull);
-        expect(
-          find.descendant(of: action, matching: find.text(missingGame)),
-          findsOneWidget,
-        );
+        _expectLocalizationVoiceAction(tester, key: key, enabled: false);
       }
+      expect(find.text(missingGame), findsWidgets);
       await _navigateManagedContent(tester);
       final libraryLine = find.byKey(
         const Key('revision3-content-entity-$revision3VoiceContentLineId'),
@@ -5511,9 +5678,10 @@ void main() {
       expect(tester.widget<ListTile>(libraryLine).selected, isTrue);
 
       await _navigateManagedHome(tester);
-      await _tapManagedDashboardAction(
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-manage-voice-takes'),
+        const Key('revision3-localization-manage-voice'),
       );
       await tester.pumpAndSettle();
       expect(
@@ -5654,9 +5822,10 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      await _tapManagedDashboardAction(
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      await _tapLocalizationVoiceAction(
         tester,
-        const Key('managed-manage-voice-takes'),
+        const Key('revision3-localization-manage-voice'),
       );
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('voice-selection-line-0')));
@@ -5777,16 +5946,16 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final resolveTarget = find.byKey(
-        const Key('managed-resolve-voice-target'),
-      );
-      final buildBundle = find.byKey(const Key('managed-build-voice-bundle'));
-      expect(tester.widget<InkWell>(resolveTarget).onTap, isNotNull);
-      expect(tester.widget<InkWell>(buildBundle).onTap, isNotNull);
-
-      await _tapManagedDashboardAction(
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      _expectLocalizationVoiceAction(
         tester,
-        const Key('managed-resolve-voice-target'),
+        key: const Key('revision3-localization-resolve-voice'),
+        enabled: true,
+      );
+
+      await _tapLocalizationVoiceAction(
+        tester,
+        const Key('revision3-localization-resolve-voice'),
       );
       await tester.pumpAndSettle();
       expect(
@@ -5822,10 +5991,20 @@ void main() {
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
 
-      await _tapManagedDashboardAction(
+      await _navigateManagedHome(tester);
+      await _tapManagedHomeTask(tester, const Key('managed-home-build'));
+      _expectManagedSectionAction(
         tester,
-        const Key('managed-build-voice-bundle'),
+        sectionId: 'build-release',
+        actionId: 'build-voice-bundle',
+        enabled: true,
       );
+      final buildBundle = _managedSectionAction(
+        sectionId: 'build-release',
+        actionId: 'build-voice-bundle',
+      );
+      await tester.ensureVisible(buildBundle);
+      await tester.tap(buildBundle);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-voice-build-dialog')),
@@ -5881,32 +6060,33 @@ void main() {
     await _pumpApp(tester, container);
     await tester.pumpAndSettle();
 
-    final voiceButton = find.byKey(const Key('managed-add-voice-take'));
-    expect(tester.widget<InkWell>(voiceButton).onTap, isNull);
-    expect(
-      tester
-          .widget<InkWell>(find.byKey(const Key('managed-manage-voice-takes')))
-          .onTap,
-      isNotNull,
-      reason: 'selection is project-only and intentionally needs no game path',
-    );
-    expect(
-      tester
-          .widget<InkWell>(
-            find.byKey(const Key('managed-resolve-voice-target')),
-          )
-          .onTap,
-      isNull,
-    );
-    expect(
-      tester
-          .widget<InkWell>(find.byKey(const Key('managed-build-voice-bundle')))
-          .onTap,
-      isNull,
-    );
     expect(
       find.byKey(const Key('revision3-project-dashboard-missing-game')),
       findsOneWidget,
+    );
+    await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+    _expectLocalizationVoiceAction(
+      tester,
+      key: const Key('revision3-localization-add-voice'),
+      enabled: false,
+    );
+    _expectLocalizationVoiceAction(
+      tester,
+      key: const Key('revision3-localization-manage-voice'),
+      enabled: true,
+    );
+    _expectLocalizationVoiceAction(
+      tester,
+      key: const Key('revision3-localization-resolve-voice'),
+      enabled: false,
+    );
+    await _navigateManagedHome(tester);
+    await _tapManagedHomeTask(tester, const Key('managed-home-build'));
+    _expectManagedSectionAction(
+      tester,
+      sectionId: 'build-release',
+      actionId: 'build-voice-bundle',
+      enabled: false,
     );
     expect(managed.voicePublishCalls, 0);
     expect(managed.voiceTargetPublishCalls, 0);
@@ -6454,7 +6634,7 @@ void main() {
     expect(find.byType(TabBar), findsOneWidget);
     expect(find.text('Build / Deploy'), findsOneWidget);
     expect(
-      find.textContaining('Managed revision-3 project open failed:'),
+      find.textContaining('Mod Studio project could not be opened:'),
       findsOneWidget,
     );
   });
@@ -6575,8 +6755,15 @@ void main() {
         find.byKey(const Key('revision3-content-workspace-navigation')),
         findsNothing,
       );
-      expect(find.byKey(const Key('managed-create-quest-draft')), findsNothing);
-      expect(find.byKey(const Key('managed-manage-voice-takes')), findsNothing);
+      for (final key in const <Key>[
+        Key('managed-home-story'),
+        Key('managed-home-dialog-voice'),
+        Key('managed-home-problems'),
+        Key('managed-home-content'),
+        Key('managed-home-build'),
+      ]) {
+        expect(find.byKey(key), findsNothing);
+      }
 
       final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
@@ -6992,10 +7179,7 @@ void main() {
       );
       expect(find.textContaining(privatePath), findsNothing);
       expect(find.textContaining('cleanup failed at'), findsNothing);
-      expect(
-        find.textContaining('Opened managed revision-3 project'),
-        findsNothing,
-      );
+      expect(find.text('Mod Studio project opened.'), findsNothing);
     },
   );
 }
@@ -7353,6 +7537,11 @@ void _expectLocalizationVoiceAction(
 }) {
   final action = find.byKey(key);
   expect(action, findsOneWidget);
+  final actionWidget = tester.widget(action);
+  if (actionWidget is FilledButton) {
+    expect(actionWidget.onPressed, enabled ? isNotNull : isNull);
+    return;
+  }
   final button = find.descendant(
     of: action,
     matching: find.byType(OutlinedButton),
@@ -7364,12 +7553,62 @@ void _expectLocalizationVoiceAction(
   );
 }
 
-Future<void> _tapManagedDashboardAction(WidgetTester tester, Key key) async {
+Future<void> _tapManagedHomeTask(WidgetTester tester, Key key) async {
+  final task = find.byKey(key);
+  expect(task, findsOneWidget);
+  expect(tester.widget<ListTile>(task).onTap, isNotNull);
+  await tester.ensureVisible(task);
+  await tester.pumpAndSettle();
+  await tester.tap(task);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _tapLocalizationVoiceAction(WidgetTester tester, Key key) async {
   final action = find.byKey(key);
   expect(action, findsOneWidget);
-  await tester.ensureVisible(action);
+  final actionWidget = tester.widget(action);
+  if (actionWidget is FilledButton) {
+    expect(actionWidget.onPressed, isNotNull);
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    return;
+  }
+  final button = find.descendant(
+    of: action,
+    matching: find.byType(OutlinedButton),
+  );
+  expect(button, findsOneWidget);
+  expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+  await tester.ensureVisible(button);
+  await tester.tap(button);
+}
+
+Future<void> _openAdvancedQuestCreation(WidgetTester tester) async {
+  final menu = find.byKey(
+    const Key('revision3-story-workspace-create-advanced'),
+  );
+  expect(menu, findsOneWidget);
+  await tester.ensureVisible(menu);
+  await tester.tap(menu);
   await tester.pumpAndSettle();
-  await tester.tap(action);
+  final createQuest = find.byKey(
+    const Key('revision3-story-workspace-create-quest'),
+  );
+  expect(createQuest, findsOneWidget);
+  expect(tester.widget<PopupMenuItem<dynamic>>(createQuest).enabled, isTrue);
+  await tester.tap(createQuest);
+}
+
+Future<void> _pumpUntilFound(
+  WidgetTester tester,
+  Finder target, {
+  int maxPumps = 40,
+}) async {
+  for (var pump = 0; pump < maxPumps; pump++) {
+    await tester.pump(const Duration(milliseconds: 50));
+    if (target.evaluate().isNotEmpty) return;
+  }
+  expect(target, findsOneWidget);
 }
 
 Future<void> _sendControlS(WidgetTester tester) async {
