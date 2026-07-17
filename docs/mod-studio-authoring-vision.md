@@ -416,6 +416,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
 | Existing NPC edits | **Bounded managed-R3 name/archetype editor integrated; broader semantic editor missing** | A selected exact-current managed NPC exposes **Edit name & archetype** from its Profile. The friendly form edits only `Entity.display_name` and chooses a verified catalog archetype; stable NPC/module IDs, `UniqueName`, namespace/path, origins, and other technical identity remain unchanged and hidden. Open and pre-save refresh sealed Story+NPC catalogs, and native preparation independently resolves the exact current and desired catalog selections. Archetype equality is the complete `CharacterDefinition` / `AIAgentConfig` / `SpawnAIAgentDefinition` provenance triple, including generation, source seal, layer, selector, and runtime class, so an alias catalog ID with the same triple is not a structural change. A name-only edit increments project/NPC revisions while preserving the complete owned ScriptModule and its revision; a changed triple atomically swaps all three provenances and deterministically regenerates/revisions only that owned module. The prepare-only FFI fully reopens an immutable candidate; guarded exact-head publication and full reopen remain solely in the serialized managed session. The configured installation is read only for catalog evidence, and no game/save write, build, deploy, spawn, or runtime qualification occurs. Visuals, stats, faction, inventory, routine, AI, dialog/quest links, localization/voice, and placement remain unmodeled. Generic CDO overrides remain a separate existing-class subset. |
 | New NPC identity | **Managed revision-3 Draft publication and first Guided wizard proven; build/spawn/runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. The revision-3 core atomically inserts the closed NPC/module pair against an exact head/project/revision/target while consuming fresh Story+NPC catalog selection and a base-game-plus-current-project collision inventory for modules, paths, symbols, and pinned-catalog runtime IDs. It regenerates the complete existing NPC/Quest/module closure, preserves valid Quests, and fails on residual/drift/collisions. Strict Dart DTOs validate the exact native candidate; the managed R3 session publishes by guarded fixed-head byte CAS and full reopen. Home now exposes a Guided wizard that asks only for display name and a searchable qualified archetype, refreshes catalog evidence immediately before publication, derives and hides technical identities, rejects stale/reopen-required publication, and refreshes the visible checkpoint/content view. The separate schema-revision-2 Story Draft flow remains available. This is only a logical-clone shell: visuals, faction, stats, inventory, routine, dialog, quests, and placement are not authored. Every result remains build-blocked/runtime-unqualified/not spawned, with no production lowerer or runtime workflow. Class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not proven. Runtime-ID coverage is limited to the pinned catalog projection. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
+| Guided Character + first greeting | **Two-checkpoint managed-R3 Draft recipe integrated; runtime missing** | The recommended normal NPC route composes the existing exact Character Draft and NPC greeting Create-and-Insert transactions. Step 1 publishes the project-only NPC/ScriptModule pair as N+1. After a full exact root/project/revision/head reopen, step 2 creates one project-owned localized DialogLine and inserts it at greeting index zero as N+2. Completion opens the exact NPC in Story Dialog & Voice with the line selected. A cancelled or safely failed step 2 retains and opens the useful NPC-only N+1 result; uncertain publication requires reopen, drift locks the single-flight recipe, and nothing is rolled back or retried implicitly. The separate advanced Character-only Draft and the one-step Base-game/search starters remain available. This convenience flow creates no topic, choice, condition, effect, Quest relationship, playable conversation, runtime binding, spawn, build, deploy, game write, or save write. |
 | Existing localized dialog lines | **Proven** | The Dialogs tab groups `info_`/`dia_`/`gvl_`/`svm_` IDs, edits languages, and can add an explicit missing localization ID. Localization alone does not create a selectable topic. |
 | Managed-R3 dialog-line prerequisite | **Guided V1 project-local creation/exact reuse integrated; dialog runtime missing** | A fresh managed-R3 project can create one new `LocalizationEntry` and `DialogLine` plus an optional empty unresolved locale `VoiceSlot`, or create the line against one exact existing, currently unused managed localization bound by entity revision and localization identity. The pure transaction binds the exact head/project/revision/target, preserves an exact-reused entry byte-for-byte, and emits only a build-blocked/runtime-unqualified candidate with topic authority not granted. The prepare-only FFI accepts no game root, fully reopens the immutable candidate with asset verification, checks the fixed head after preparation and response construction, and never publishes it; only the serialized managed session may use guarded fixed-head CAS, repair, and full published reopen. This path reads or writes neither the game nor a save. It does not trust the unsealed global localization catalog, adopt vanilla identity or speaker evidence, create a topic or AngelScript, register runtime behavior, or produce playable dialog. |
 | New dialog topic insertion/rendering | **Earlier narrow render proof; version-3 candidate offline-qualified, one controlled live visual run remains** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration previously reached the natural choice UI and was visually confirmed. The current version-3 candidate is deterministic, passes the strengthened forbidden-operation and preflight-order verifier, and deploys/undeploys to exact sandbox tree identity. That is offline/sandbox evidence, not a live version-3 result. Requalification requires exactly one natural Viper-menu run with no selection and no save; automatic discovery and selection effects remain unproven. See [dialog authoring](dialog-authoring.md). |
@@ -458,9 +459,10 @@ keep the original managed directory. See
 The implemented managed-project Home is a compact task router, not a second
 editor or a collection of modal launch cards. It has exactly five continuations:
 **Story**, **Dialog & Voice**, **Problems**, **Content**, and **Build & Release**.
-Each opens the canonical workspace that owns the job. Story owns NPC creation,
-the recommended **Quest + opening line** flow, and the advanced Quest-only
-Draft. Localization & Voice owns project text, dialog-line, and Voice actions;
+Each opens the canonical workspace that owns the job. Story owns the recommended
+**Character + first greeting** and **Quest + opening line** flows plus the
+advanced NPC-only and Quest-only Drafts. Localization & Voice owns project text,
+dialog-line, and Voice actions;
 Validate owns Problems; Content owns discovery and DataAsset work; Build &
 Release owns output actions. Export stays in the Project menu. Normal chrome
 calls this a **Mod Studio project** and keeps schema/head vocabulary in technical
@@ -472,8 +474,9 @@ nine destinations. It keeps the index-derived friendly project name (using only
 the directory name while that exact read is pending) and current primary area
 visible above the lazy page stack. Its three commands are deliberately thin:
 **Search** opens Content's existing `Search all` scope and focuses the existing
-query; **Create** offers the already implemented NPC Draft, recommended Quest
-plus opening line, and new dialog-line journeys; **Problems** opens the existing
+query; **Create** offers the recommended Character plus first greeting and Quest
+plus opening line recipes, the advanced NPC-only Draft, and the new
+dialog-line journey; **Problems** opens the existing
 Validate & Test report. The chooser preserves each flow's truthful gates: NPC
 and Quest require a configured game, and all creation remains disabled for a
 dirty managed workspace, recovery, or `requiresReopen` and revalidates the exact
@@ -487,6 +490,20 @@ change remounts the chrome and invalidates its bound Search controller; a
 same-project revision refreshes its displayed checkpoint-derived name without
 inventing a second project state. This layer grants no new content, read,
 mutation, publication, build, deployment, game/save-write, or runtime authority.
+
+Story's recommended **Character + first greeting** route is a bounded
+two-checkpoint recipe over those same owned editors. The existing Character
+transaction publishes N+1, Studio fully rebinds to that exact checkpoint and
+empty NPC greeting projection, and the existing Create-and-Insert greeting
+transaction may publish one localized line at index zero as N+2. Completion
+opens and selects that exact line in the NPC's **Dialog & Voice** tab. Cancelling
+or safely failing the second form retains the NPC-only N+1 Draft and opens the
+same empty greeting surface; there is no hidden rollback. Project/head drift
+locks the single-flight continuation and uncertain publication requires reopen.
+Base-game and cross-source search starters remain one-step Draft creation rather
+than silently opting into this recipe. The result remains Draft-only and grants
+no topic, choice, condition, effect, Quest relationship, runtime binding,
+playable conversation, spawn, build, deployment, game-write, or save authority.
 
 Creating a project is a guided, resumable onboarding flow:
 
@@ -1524,7 +1541,11 @@ orientation plus Search/Create/Problems routes into the existing owners,
 including exact Search-all focus with zero pre-query source loads and compact
 accessible overflow. It adds no new authority; full command-palette,
 undo/redo, compatibility, build/test, and broader workspace chrome remain.
-Next, (1) complete
+The recommended **Character + first greeting** recipe now also removes the NPC
+creation-to-writing dead end by composing the existing Character and greeting
+transactions across two explicit exact checkpoints. Its partial NPC-only result
+persists safely, while completion selects the inserted first line; it is not a
+playable conversation or spawn. Next, (1) complete
 semantic line/slot relationships and the broader localization/Voice production
 tools; (2) finish semantic/project
 deletion, shared undo/history, and broader recovery, with Close and bounded
@@ -1626,6 +1647,13 @@ keeps generated quests out of production builds. Add project-wide
 generation/rebase diagnostics, the full three-way rebase workflow, offline
 semantic diff/build-plan inspection, and batch edits for compatible semantic
 fields.
+
+The landed bounded NPC subset now includes the recommended two-checkpoint
+Character-plus-first-greeting continuation. It publishes the NPC-only Draft at
+N+1, fully rebinds the exact managed checkpoint, and may create and insert one
+localized greeting at index zero at N+2. A stopped second step retains the
+honest NPC-only checkpoint. This is workflow composition over two existing
+transactions, not a compound atomic graph, runtime dialog, spawn, or build.
 
 The landed bounded Quest subset already provides ordered Draft creation, a
 guided two-checkpoint Quest-plus-opening-line continuation, separate
@@ -1919,7 +1947,14 @@ it:
 1. Each built-in NPC and quest template instantiates a closed graph with unique
    stable IDs, no dangling refs, exactly the documented owned dependencies, and
    deterministic technical identities under collision tests.
-2. The first new-NPC fixture generates a new `UniqueName` and linked AngelScript
+2. The Character-plus-first-greeting recipe must retain coordinator and widget
+   journeys for successful N -> N+1 -> N+2 publication, cancellation/failure
+   before the first mutation, retained NPC-only state after the second form
+   stops, exact created-line selection, project/head drift, stale callbacks,
+   uncertain publication, single-flight behavior, German copy, and compact
+   200%-scale layout. Every result keeps build/runtime/spawn/game/save claims
+   closed.
+3. The first new-NPC fixture generates a new `UniqueName` and linked AngelScript
    `CharacterDefinition`, `AIAgentConfig`, and `SpawnAIAgentDefinition`
    classes/CDOs plus localization, inventory refs, dialog/voice, and spawn
    artifacts while reusing sealed vanilla visuals. Cache reopen/disassembly and
@@ -1927,11 +1962,11 @@ it:
    intended logical NPC and prove that no cooked package was silently assumed.
    A template that declares a genuinely new visual/content asset instead blocks
    until the separate DataAsset gate passes.
-3. DataAsset create/edit fixtures round-trip names, imports, exports, object and
+4. DataAsset create/edit fixtures round-trip names, imports, exports, object and
    package refs, unversioned headers, arrays, maps, and required collection-shape
    changes byte-semantically. Unsupported schema forms produce typed errors
    before output staging; no size or offset is guessed.
-4. The landed bounded V4 fixture round-trips stable objective slots/order, all
+5. The landed bounded V4 fixture round-trips stable objective slots/order, all
    four fixed lifecycle edges, typed DNF conditions, typed cross-node lifecycle
    effects, and parent completion through canonical project JSON and
    deterministic source. Frozen-seed tests reproduce V2/V3 source bytes, and
@@ -1943,10 +1978,10 @@ it:
    rewards/items, semantic reimport/simulation, and complete build diagnostics.
    Runtime transitions, selection, persistence, and other-version mechanisms
    remain blocking diagnostics for profiles that require them.
-5. A spawn fixture resolves an NPC and a qualified world anchor, validates
+6. A spawn fixture resolves an NPC and a qualified world anchor, validates
    transform/policy/condition types, emits one deterministic deployment target,
    and rejects unknown anchors or unsupported persistence without output.
-6. Clone-with-dependencies and CSV round trips over these fixtures preserve all
+7. Clone-with-dependencies and CSV round trips over these fixtures preserve all
    typed refs and semantic values; collision, duplicate row, unknown column,
    stale base, and partial batch failures commit nothing.
 

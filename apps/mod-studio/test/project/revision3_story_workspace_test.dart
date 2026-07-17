@@ -14,6 +14,9 @@ const _moduleId = '44444444444444444444444444444444';
 const _blockerId = '55555555555555555555555555555555';
 const _transcriptLocalizationId = '66666666666666666666666666666666';
 const _transcriptLineId = '77777777777777777777777777777777';
+const _otherNpcId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
+const _greetingLocalizationId = 'abababababababababababababababab';
+const _greetingLineId = 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _artifactSha =
@@ -29,8 +32,10 @@ final _copy = Revision3StoryWorkspaceCopy(
   allFilterLabel: 'All',
   npcFilterLabel: 'NPCs',
   questFilterLabel: 'Quests',
-  createNpcLabel: 'Create NPC',
+  createNpcOpeningLabel: 'Create Character + first greeting',
+  createNpcLabel: 'Create Character draft only (advanced)',
   createQuestLabel: 'Create Quest',
+  creatingNpcOpeningLabel: 'Creating Character + first greeting',
   creatingNpcLabel: 'Creating NPC',
   creatingQuestLabel: 'Creating Quest',
   createQuestOpeningLabel: 'Create Quest + opening line',
@@ -77,8 +82,10 @@ final _longGermanCopy = Revision3StoryWorkspaceCopy(
   allFilterLabel: 'Alle Entwürfe',
   npcFilterLabel: 'Nichtspielercharaktere',
   questFilterLabel: 'Quest-Entwürfe',
-  createNpcLabel: 'Neuen Nichtspielercharakter erstellen',
+  createNpcOpeningLabel: 'Charakter + erste Begrüßung erstellen',
+  createNpcLabel: 'Nur Charakterentwurf erstellen (erweitert)',
   createQuestLabel: 'Neuen Quest-Entwurf erstellen',
+  creatingNpcOpeningLabel: 'Charakter + erste Begrüßung wird erstellt',
   creatingNpcLabel: 'Nichtspielercharakter wird erstellt',
   creatingQuestLabel: 'Quest-Entwurf wird erstellt',
   createQuestOpeningLabel:
@@ -160,14 +167,17 @@ void main() {
 
       expect(find.text('NPC creation is not configured.'), findsOneWidget);
       expect(find.text('Quest creation is not configured.'), findsOneWidget);
+      await _openAdvancedCreateMenu(tester);
       expect(
         tester
-            .widget<FilledButton>(
+            .widget<PopupMenuItem<Object?>>(
               find.byKey(const Key('revision3-story-workspace-create-npc')),
             )
-            .onPressed,
-        isNull,
+            .enabled,
+        isFalse,
       );
+      await tester.tapAt(const Offset(1, 1));
+      await tester.pumpAndSettle();
 
       await tester.enterText(
         find.byKey(const Key('revision3-story-workspace-search')),
@@ -333,59 +343,83 @@ void main() {
     },
   );
 
-  testWidgets('recommended opening is direct and pure Quest stays advanced', (
+  testWidgets('recommended recipes are direct and pure drafts stay advanced', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1000, 700));
-    var npcCalls = 0;
-    var openingCalls = 0;
-    var questCalls = 0;
+    var npcOpeningCalls = 0;
+    var npcDraftCalls = 0;
+    var questOpeningCalls = 0;
+    var questDraftCalls = 0;
     await _pumpWorkspace(
       tester,
       load: () async => _fixture(),
-      createNpcDraft: () async => npcCalls++,
-      createQuestOpening: () async => openingCalls++,
-      createQuestDraft: () async => questCalls++,
+      createNpcOpening: () async => npcOpeningCalls++,
+      createNpcDraft: () async => npcDraftCalls++,
+      createQuestOpening: () async => questOpeningCalls++,
+      createQuestDraft: () async => questDraftCalls++,
     );
     await tester.pumpAndSettle();
 
-    final opening = find.byKey(
+    final npcOpening = find.byKey(
+      const Key('revision3-story-workspace-create-npc-opening'),
+    );
+    final questOpening = find.byKey(
       const Key('revision3-story-workspace-create-quest-opening'),
     );
-    expect(tester.widget<FilledButton>(opening).onPressed, isNotNull);
+    expect(tester.widget<FilledButton>(npcOpening).onPressed, isNotNull);
+    expect(tester.widget<FilledButton>(questOpening).onPressed, isNotNull);
+    expect(find.text('Create Character + first greeting'), findsOneWidget);
     expect(find.text('Create Quest + opening line'), findsOneWidget);
     expect(
       find.byKey(const Key('revision3-story-workspace-create-quest')),
       findsNothing,
-      reason: 'the pure draft is not a competing header action',
+      reason: 'pure drafts are not competing header actions',
     );
-    await tester.tap(opening);
+    await tester.tap(npcOpening);
+    await tester.pumpAndSettle();
+    await tester.tap(questOpening);
+    await tester.pumpAndSettle();
+
+    await _openAdvancedCreateMenu(tester);
+    expect(find.text('Create Character draft only (advanced)'), findsOneWidget);
+    expect(find.text('Create Quest draft only (advanced)'), findsOneWidget);
     await tester.tap(
       find.byKey(const Key('revision3-story-workspace-create-npc')),
     );
     await tester.pumpAndSettle();
     await _openAdvancedCreateMenu(tester);
-    expect(find.text('Create Quest draft only (advanced)'), findsOneWidget);
     await tester.tap(
       find.byKey(const Key('revision3-story-workspace-create-quest')),
     );
     await tester.pumpAndSettle();
 
-    expect(openingCalls, 1);
-    expect(npcCalls, 1);
-    expect(questCalls, 1);
+    expect(npcOpeningCalls, 1);
+    expect(npcDraftCalls, 1);
+    expect(questOpeningCalls, 1);
+    expect(questDraftCalls, 1);
     expect(find.text('NPC creation is not configured.'), findsNothing);
     expect(find.text('Quest creation is not configured.'), findsNothing);
   });
 
-  testWidgets('all three create actions are mutually single-flight', (
+  testWidgets('all four create actions are mutually single-flight', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1000, 700));
-    for (final initiator in const <String>['npc', 'opening', 'quest']) {
+    for (final initiator in const <String>[
+      'npcOpening',
+      'npcDraft',
+      'questOpening',
+      'questDraft',
+    ]) {
       await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
       final pending = Completer<void>();
-      final calls = <String, int>{'npc': 0, 'opening': 0, 'quest': 0};
+      final calls = <String, int>{
+        'npcOpening': 0,
+        'npcDraft': 0,
+        'questOpening': 0,
+        'questDraft': 0,
+      };
       Revision3StoryWorkspaceCreateAction actionFor(String kind) => () {
         calls[kind] = calls[kind]! + 1;
         return kind == initiator ? pending.future : Future<void>.value();
@@ -394,25 +428,33 @@ void main() {
       await _pumpWorkspace(
         tester,
         load: () async => _fixture(),
-        createNpcDraft: actionFor('npc'),
-        createQuestOpening: actionFor('opening'),
-        createQuestDraft: actionFor('quest'),
+        createNpcOpening: actionFor('npcOpening'),
+        createNpcDraft: actionFor('npcDraft'),
+        createQuestOpening: actionFor('questOpening'),
+        createQuestDraft: actionFor('questDraft'),
       );
       await tester.pumpAndSettle();
 
-      final npc = find.byKey(const Key('revision3-story-workspace-create-npc'));
-      final opening = find.byKey(
+      final npcOpening = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
+      );
+      final questOpening = find.byKey(
         const Key('revision3-story-workspace-create-quest-opening'),
       );
       final advanced = find.byKey(
         const Key('revision3-story-workspace-create-advanced'),
       );
       switch (initiator) {
-        case 'npc':
-          await tester.tap(npc);
-        case 'opening':
-          await tester.tap(opening);
-        case 'quest':
+        case 'npcOpening':
+          await tester.tap(npcOpening);
+        case 'npcDraft':
+          await _openAdvancedCreateMenu(tester);
+          await tester.tap(
+            find.byKey(const Key('revision3-story-workspace-create-npc')),
+          );
+        case 'questOpening':
+          await tester.tap(questOpening);
+        case 'questDraft':
           await _openAdvancedCreateMenu(tester);
           await tester.tap(
             find.byKey(const Key('revision3-story-workspace-create-quest')),
@@ -421,14 +463,14 @@ void main() {
       await tester.pump();
 
       expect(calls[initiator], 1);
-      expect(tester.widget<FilledButton>(opening).onPressed, isNull);
-      expect(tester.widget<FilledButton>(npc).onPressed, isNull);
+      expect(tester.widget<FilledButton>(npcOpening).onPressed, isNull);
+      expect(tester.widget<FilledButton>(questOpening).onPressed, isNull);
       expect(
         tester.widget<PopupMenuButton<dynamic>>(advanced).enabled,
         isFalse,
       );
-      await tester.tap(npc);
-      await tester.tap(opening);
+      await tester.tap(npcOpening);
+      await tester.tap(questOpening);
       await tester.tap(advanced);
       await tester.pump();
       expect(
@@ -439,8 +481,8 @@ void main() {
 
       pending.complete();
       await tester.pumpAndSettle();
-      expect(tester.widget<FilledButton>(opening).onPressed, isNotNull);
-      expect(tester.widget<FilledButton>(npc).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(npcOpening).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(questOpening).onPressed, isNotNull);
       expect(tester.widget<PopupMenuButton<dynamic>>(advanced).enabled, isTrue);
     }
   });
@@ -474,7 +516,7 @@ void main() {
     expect(questCalls, 0, reason: 'the empty-state CTA is not the bare draft');
   });
 
-  testWidgets('recommended and advanced Quest gates stay explicit', (
+  testWidgets('recommended recipes and advanced draft gates stay explicit', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1000, 700));
@@ -485,27 +527,41 @@ void main() {
       await _pumpWorkspace(
         tester,
         load: () async => _fixture(includeNpc: false, includeQuest: false),
+        createNpcOpeningDisabledReason: reason,
         createNpcDraftDisabledReason: reason,
         createQuestOpeningDisabledReason: reason,
         createQuestDraftDisabledReason: reason,
       );
       await tester.pumpAndSettle();
 
+      final headerNpcOpening = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
+      );
       final headerOpening = find.byKey(
         const Key('revision3-story-workspace-create-quest-opening'),
       );
       final emptyOpening = find.byKey(
         const Key('revision3-story-workspace-empty-create-quest-opening'),
       );
+      expect(tester.widget<FilledButton>(headerNpcOpening).onPressed, isNull);
       expect(tester.widget<FilledButton>(headerOpening).onPressed, isNull);
       expect(tester.widget<FilledButton>(emptyOpening).onPressed, isNull);
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-create-npc-opening-disabled-reason',
+          ),
+        ),
+        findsOneWidget,
+      );
       expect(
         find.byKey(
           const Key(
             'revision3-story-workspace-create-quest-opening-disabled-reason',
           ),
         ),
-        findsOneWidget,
+        findsNothing,
+        reason: 'one identical visible setup reason is sufficient',
       );
       expect(
         find.byKey(
@@ -517,9 +573,13 @@ void main() {
       );
 
       await _openAdvancedCreateMenu(tester);
+      final advancedNpc = tester.widget<PopupMenuItem<Object?>>(
+        find.byKey(const Key('revision3-story-workspace-create-npc')),
+      );
       final advancedQuest = tester.widget<PopupMenuItem<Object?>>(
         find.byKey(const Key('revision3-story-workspace-create-quest')),
       );
+      expect(advancedNpc.enabled, isFalse);
       expect(advancedQuest.enabled, isFalse);
       expect(find.text(reason), findsWidgets);
       await tester.tapAt(const Offset(4, 4));
@@ -1069,6 +1129,49 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets('360px at 200 percent keeps both recipes and Advanced usable', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(360, 760));
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: _workspace(
+            load: () async => _fixture(),
+            createNpcOpening: () async {},
+            createNpcDraft: () async {},
+            createQuestOpening: () async {},
+            createQuestDraft: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final key in const <Key>[
+      Key('revision3-story-workspace-create-npc-opening'),
+      Key('revision3-story-workspace-create-quest-opening'),
+      Key('revision3-story-workspace-create-advanced'),
+    ]) {
+      final action = find.byKey(key);
+      expect(action, findsOneWidget);
+      await tester.ensureVisible(action);
+      expect(action.hitTestable(), findsOneWidget);
+    }
+    await _openAdvancedCreateMenu(tester);
+    expect(
+      find.byKey(const Key('revision3-story-workspace-create-npc')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'long German chrome stays usable and leaves a real list at tight height',
     (tester) async {
@@ -1079,6 +1182,7 @@ void main() {
         tester,
         load: () async => _fixture(),
         copy: _longGermanCopy,
+        createNpcOpeningDisabledReason: disabledReason,
         createNpcDraftDisabledReason: disabledReason,
         createQuestOpeningDisabledReason: disabledReason,
         createQuestDraftDisabledReason: disabledReason,
@@ -1099,10 +1203,19 @@ void main() {
       expect(
         find.byKey(
           const Key(
-            'revision3-story-workspace-create-quest-opening-disabled-reason',
+            'revision3-story-workspace-create-npc-opening-disabled-reason',
           ),
         ),
         findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-create-quest-opening-disabled-reason',
+          ),
+        ),
+        findsNothing,
+        reason: 'one identical visible setup reason is sufficient',
       );
       expect(
         find.byKey(
@@ -1110,6 +1223,12 @@ void main() {
         ),
         findsNothing,
         reason: 'one identical visible setup reason is sufficient',
+      );
+      expect(
+        find
+            .byKey(const Key('revision3-story-workspace-create-npc-opening'))
+            .hitTestable(),
+        findsOneWidget,
       );
       expect(
         find
@@ -1552,7 +1671,6 @@ void main() {
           }) => Text('Deep-linked line: ${selectedLineId ?? 'none'}'),
     );
     await tester.pumpAndSettle();
-
     expect(
       await controller.selectEntityAtRevision(
         entityId: _questId,
@@ -1597,6 +1715,200 @@ void main() {
       isFalse,
     );
   });
+
+  testWidgets('controller deep-links only an exact same-NPC greeting row', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3StoryWorkspaceController();
+    addTearDown(controller.dispose);
+    final fixture = _fixture(
+      includeTranscriptLine: true,
+      includeNpcGreetingLine: true,
+      includeOtherNpc: true,
+    );
+    await _pumpWorkspace(
+      tester,
+      controller: controller,
+      load: () async => fixture,
+      npcDialogVoiceBuilder:
+          ({
+            required index,
+            required npc,
+            required selectedLineId,
+            required onSelectedLineChanged,
+          }) => Text('Deep-linked greeting: ${selectedLineId ?? 'none'}'),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(
+      find.byKey(Key('revision3-story-workspace-entity-$_npcId')),
+      findsOneWidget,
+      reason: 'the exact NPC fixture must be loaded before deep-linking',
+    );
+
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _greetingLineId,
+      ),
+      isTrue,
+    );
+    await tester.pump();
+
+    expect(find.text('Deep-linked greeting: $_greetingLineId'), findsOneWidget);
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+
+    final rejectedRequests = <Future<bool> Function()>[
+      () => controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: 'missing-line',
+      ),
+      () => controller.selectEntityAtRevision(
+        entityId: _otherNpcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _greetingLineId,
+      ),
+      () => controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _transcriptLineId,
+      ),
+      () => controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _greetingLocalizationId,
+      ),
+      () => controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'head-7',
+        section: Revision3StoryWorkbenchSection.overview,
+        selectedLineId: _greetingLineId,
+      ),
+      () => controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: 'different-head-at-revision-7',
+        section: Revision3StoryWorkbenchSection.dialogVoice,
+        selectedLineId: _greetingLineId,
+      ),
+    ];
+    for (var index = 0; index < rejectedRequests.length; index++) {
+      expect(
+        await rejectedRequests[index](),
+        isFalse,
+        reason: 'invalid deep-link request $index must fail immediately',
+      );
+    }
+    await tester.pump();
+
+    expect(
+      find.text('Deep-linked greeting: $_greetingLineId'),
+      findsOneWidget,
+      reason: 'rejected requests must not replace the exact selection',
+    );
+  });
+
+  testWidgets(
+    'exact NPC greeting deep-link survives a same-project checkpoint refresh',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      final controller = Revision3StoryWorkspaceController();
+      addTearDown(controller.dispose);
+      var revision = 7;
+      var index = _fixture(revision: 7, includeNpcGreetingLine: true);
+      late StateSetter rebuild;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Scaffold(
+                body: _workspace(
+                  revision: revision,
+                  head: 'head-$revision',
+                  controller: controller,
+                  load: () async => index,
+                  npcDialogVoiceBuilder:
+                      ({
+                        required index,
+                        required npc,
+                        required selectedLineId,
+                        required onSelectedLineChanged,
+                      }) => Text(
+                        'Retained greeting: ${selectedLineId ?? 'none'}',
+                      ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        await controller.selectEntityAtRevision(
+          entityId: _npcId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: 'head-7',
+          section: Revision3StoryWorkbenchSection.dialogVoice,
+          selectedLineId: _greetingLineId,
+        ),
+        isTrue,
+      );
+      await tester.pump();
+      expect(find.text('Retained greeting: $_greetingLineId'), findsOneWidget);
+
+      rebuild(() {
+        revision = 8;
+        index = _fixture(revision: 8, includeNpcGreetingLine: true);
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.text('Retained greeting: $_greetingLineId'), findsOneWidget);
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(Key('revision3-story-workspace-entity-$_npcId')),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                Key('revision3-story-workbench-tab-dialogVoice-$_npcId'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+    },
+  );
 
   test('removal preflight proves the pair and filters incoming ownership', () {
     final exactIndex = _fixture();
@@ -2045,6 +2357,10 @@ Future<void> _openAdvancedCreateMenu(WidgetTester tester) async {
   await tester.tap(menu);
   await tester.pumpAndSettle();
   expect(
+    find.byKey(const Key('revision3-story-workspace-create-npc')),
+    findsOneWidget,
+  );
+  expect(
     find.byKey(const Key('revision3-story-workspace-create-quest')),
     findsOneWidget,
   );
@@ -2055,6 +2371,7 @@ Future<void> _pumpWorkspace(
   required Revision3StoryWorkspaceLoader load,
   int revision = 7,
   Revision3StoryWorkspaceController? controller,
+  Revision3StoryWorkspaceCreateAction? createNpcOpening,
   Revision3StoryWorkspaceCreateAction? createNpcDraft,
   Revision3StoryWorkspaceCreateAction? createQuestOpening,
   Revision3StoryWorkspaceCreateAction? createQuestDraft,
@@ -2070,6 +2387,7 @@ Future<void> _pumpWorkspace(
   String? removeDraftDisabledReason,
   String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
+  String? createNpcOpeningDisabledReason,
   String? createNpcDraftDisabledReason,
   String? createQuestOpeningDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -2084,6 +2402,7 @@ Future<void> _pumpWorkspace(
         head: 'head-$revision',
         load: load,
         controller: controller,
+        createNpcOpening: createNpcOpening,
         createNpcDraft: createNpcDraft,
         createQuestOpening: createQuestOpening,
         createQuestDraft: createQuestDraft,
@@ -2099,6 +2418,7 @@ Future<void> _pumpWorkspace(
         removeDraftDisabledReason: removeDraftDisabledReason,
         editNpcProfileDisabledReason: editNpcProfileDisabledReason,
         copy: copy,
+        createNpcOpeningDisabledReason: createNpcOpeningDisabledReason,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
         createQuestOpeningDisabledReason: createQuestOpeningDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
@@ -2117,6 +2437,7 @@ Revision3StoryWorkspace _workspace({
   String head = 'head-7',
   required Revision3StoryWorkspaceLoader load,
   Revision3StoryWorkspaceController? controller,
+  Revision3StoryWorkspaceCreateAction? createNpcOpening,
   Revision3StoryWorkspaceCreateAction? createNpcDraft,
   Revision3StoryWorkspaceCreateAction? createQuestOpening,
   Revision3StoryWorkspaceCreateAction? createQuestDraft,
@@ -2132,6 +2453,7 @@ Revision3StoryWorkspace _workspace({
   String? removeDraftDisabledReason,
   String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
+  String? createNpcOpeningDisabledReason,
   String? createNpcDraftDisabledReason,
   String? createQuestOpeningDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -2146,9 +2468,13 @@ Revision3StoryWorkspace _workspace({
   load: load,
   copy: copy ?? _copy,
   controller: controller,
+  createNpcOpening: createNpcOpening,
   createNpcDraft: createNpcDraft,
   createQuestOpening: createQuestOpening,
   createQuestDraft: createQuestDraft,
+  createNpcOpeningDisabledReason: createNpcOpening == null
+      ? createNpcOpeningDisabledReason
+      : null,
   createNpcDraftDisabledReason: createNpcDraft == null
       ? createNpcDraftDisabledReason ?? 'NPC creation is not configured.'
       : null,
@@ -2185,6 +2511,8 @@ Revision3ContentIndex _fixture({
   String blockerExpectedKind = 'quest_draft',
   String blockerResolution = 'resolved',
   bool includeTranscriptLine = false,
+  bool includeNpcGreetingLine = false,
+  bool includeOtherNpc = false,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': projectId,
@@ -2197,9 +2525,14 @@ Revision3ContentIndex _fixture({
   },
   'authoring_locales': <Object?>['de', 'en'],
   'entity_counts': <String, Object?>{
-    if (includeTranscriptLine) 'localization_entry': 1,
-    if (includeTranscriptLine) 'dialog_line': 1,
-    if (includeNpc) 'npc_draft': 1,
+    if (includeTranscriptLine || includeNpcGreetingLine)
+      'localization_entry':
+          (includeTranscriptLine ? 1 : 0) + (includeNpcGreetingLine ? 1 : 0),
+    if (includeTranscriptLine || includeNpcGreetingLine)
+      'dialog_line':
+          (includeTranscriptLine ? 1 : 0) + (includeNpcGreetingLine ? 1 : 0),
+    if (includeNpc || includeOtherNpc)
+      'npc_draft': (includeNpc ? 1 : 0) + (includeOtherNpc ? 1 : 0),
     if (includeQuest) 'quest_draft': 1,
     if (includeQuest) 'script_module': includeBlocker ? 2 : 1,
   },
@@ -2219,6 +2552,53 @@ Revision3ContentIndex _fixture({
           'data': <String, Object?>{
             'unique_name': 'GORE_GATE_GUARD',
             'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+            'parent_character_definition': 'UCharacterDefinition_Asghan',
+            'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
+            'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+            if (includeNpcGreetingLine) 'greeting_count': 1,
+          },
+        },
+        'references': <Object?>[
+          if (includeNpcGreetingLine)
+            <String, Object?>{
+              'role': 'draft_script_module',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': projectId,
+                'entity_id': _moduleId,
+                'expected_kind': 'script_module',
+              },
+              'resolution': 'resolved',
+            },
+          if (includeNpcGreetingLine)
+            <String, Object?>{
+              'role': 'npc_greeting_line',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': projectId,
+                'entity_id': _greetingLineId,
+                'expected_kind': 'dialog_line',
+              },
+              'resolution': 'resolved',
+            },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeOtherNpc)
+      <String, Object?>{
+        'id': _otherNpcId,
+        'kind': 'npc_draft',
+        'display_name': 'Harbor Guard',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_HARBOR_GUARD',
+        },
+        'summary': <String, Object?>{
+          'kind': 'npc_draft',
+          'data': <String, Object?>{
+            'unique_name': 'GORE_HARBOR_GUARD',
+            'module_namespace': 'PROJECT.NPCS.HARBORGUARD',
             'parent_character_definition': 'UCharacterDefinition_Asghan',
             'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
             'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
@@ -2418,6 +2798,57 @@ Revision3ContentIndex _fixture({
             'target': <String, Object?>{
               'project_id': projectId,
               'entity_id': _transcriptLocalizationId,
+              'expected_kind': 'localization_entry',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeNpcGreetingLine)
+      <String, Object?>{
+        'id': _greetingLocalizationId,
+        'kind': 'localization_entry',
+        'display_name': 'Gate warning',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_GATE_WARNING',
+        },
+        'summary': <String, Object?>{
+          'kind': 'localization_entry',
+          'data': <String, Object?>{
+            'loc_id': 'GORE_GATE_WARNING',
+            'locales': <Object?>['de', 'en'],
+          },
+        },
+        'references': <Object?>[],
+        'asset_references': <Object?>[],
+      },
+    if (includeNpcGreetingLine)
+      <String, Object?>{
+        'id': _greetingLineId,
+        'kind': 'dialog_line',
+        'display_name': 'Gate warning line',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_GATE_WARNING_LINE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'dialog_line',
+          'data': <String, Object?>{
+            'speaker_hint': 'Gate Guard',
+            'voice_slot_locales': <Object?>[],
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'dialog_localization',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _greetingLocalizationId,
               'expected_kind': 'localization_entry',
             },
             'resolution': 'resolved',

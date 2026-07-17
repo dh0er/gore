@@ -564,6 +564,10 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 - Create or open a **managed revision-3 project** and author bounded offline NPC
   Drafts, Quest Drafts and existing-Quest outline/context/lifecycle edits,
   Voice takes, and reviewed DataAsset stages through exact-head transactions.
+  The recommended **Character + first greeting** flow saves an NPC Draft and
+  then creates and inserts its first localized greeting through two explicit
+  project checkpoints; stopping after the first keeps the honest NPC-only
+  Draft.
   Selected managed Quests and NPCs expose **Source/Profile & checks**, including
   an evidence-only game-compiler check with structured diagnostics, exact
   restoration/recovery handling, and no retained compiler artifact.

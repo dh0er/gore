@@ -1340,6 +1340,18 @@ abstract class AppLocalizations {
   /// **'Creating Quest draft…'**
   String get managedStoryWorkspaceCreatingQuest;
 
+  /// No description provided for @managedStoryWorkspaceCreateNpcOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Character + first greeting'**
+  String get managedStoryWorkspaceCreateNpcOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreatingNpcOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Character + first greeting…'**
+  String get managedStoryWorkspaceCreatingNpcOpening;
+
   /// No description provided for @managedStoryWorkspaceCreateQuestOpening.
   ///
   /// In en, this message translates to:
@@ -1357,6 +1369,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Advanced creation options'**
   String get managedStoryWorkspaceCreateAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceCreateNpcAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Character draft only (advanced)'**
+  String get managedStoryWorkspaceCreateNpcAdvanced;
 
   /// No description provided for @managedStoryWorkspaceCreateQuestAdvanced.
   ///
@@ -2305,6 +2323,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Character draft saved in project revision {projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.'**
   String managedNpcDraftSaved(int projectRevision);
+
+  /// No description provided for @managedNpcOpeningRecipeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Character + first greeting'**
+  String get managedNpcOpeningRecipeTitle;
+
+  /// No description provided for @managedNpcOpeningRecipeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended: create a project-only Character draft, then write and insert its first localized greeting. This uses two project checkpoints and does not create a playable conversation or spawn.'**
+  String get managedNpcOpeningRecipeDescription;
+
+  /// No description provided for @managedNpcOpeningRecipeIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'This guided flow first saves the Character draft, then opens its first greeting line. If you stop after step 1, the draft stays saved. It does not create dialog logic, runtime behavior, a spawn, or change the game or save files.'**
+  String get managedNpcOpeningRecipeIntroduction;
+
+  /// No description provided for @managedNpcOpeningRecipeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start guided Character'**
+  String get managedNpcOpeningRecipeStart;
+
+  /// No description provided for @managedNpcOpeningGreetingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Step 2 of 2: First greeting'**
+  String get managedNpcOpeningGreetingTitle;
+
+  /// No description provided for @managedNpcOpeningGreetingIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write the first localized greeting line for this Character draft. Saving creates the line and its text, then inserts it at the start of the draft\'s greeting list. It does not add choices, conditions, effects, or playable conversation behavior.'**
+  String get managedNpcOpeningGreetingIntroduction;
+
+  /// No description provided for @managedNpcOpeningRecipePartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft saved in project revision {projectRevision}; no greeting was added. Continue in Story > Dialog & Voice.'**
+  String managedNpcOpeningRecipePartial(int projectRevision);
+
+  /// No description provided for @managedNpcOpeningRecipeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided Character could not be started. The exact project checkpoint is unchanged; game and save files were not changed.'**
+  String get managedNpcOpeningRecipeFailed;
+
+  /// No description provided for @managedNpcOpeningRecipeStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow stopped because its exact project checkpoint or publication could not be verified. No further step will run automatically; inspect Story and continue manually.'**
+  String get managedNpcOpeningRecipeStopped;
+
+  /// No description provided for @managedNpcOpeningRecipeRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.'**
+  String get managedNpcOpeningRecipeRequiresReopen;
+
+  /// No description provided for @managedNpcOpeningRecipeComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft and first greeting saved in project revision {projectRevision}. Draft only: no playable conversation or spawn was created; game and save files were not changed.'**
+  String managedNpcOpeningRecipeComplete(int projectRevision);
 
   /// No description provided for @managedActionNewQuestTitle.
   ///

@@ -713,6 +713,14 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedStoryWorkspaceCreatingQuest => 'Creating Quest draft…';
 
   @override
+  String get managedStoryWorkspaceCreateNpcOpening =>
+      'Create Character + first greeting';
+
+  @override
+  String get managedStoryWorkspaceCreatingNpcOpening =>
+      'Creating Character + first greeting…';
+
+  @override
   String get managedStoryWorkspaceCreateQuestOpening =>
       'Create Quest + opening line';
 
@@ -722,6 +730,10 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedStoryWorkspaceCreateAdvanced => 'Advanced creation options';
+
+  @override
+  String get managedStoryWorkspaceCreateNpcAdvanced =>
+      'Create Character draft only (advanced)';
 
   @override
   String get managedStoryWorkspaceCreateQuestAdvanced =>
@@ -1311,6 +1323,49 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String managedNpcDraftSaved(int projectRevision) {
     return 'Character draft saved in project revision $projectRevision. It remains build-blocked, runtime-unqualified, and is not spawned.';
+  }
+
+  @override
+  String get managedNpcOpeningRecipeTitle => 'Character + first greeting';
+
+  @override
+  String get managedNpcOpeningRecipeDescription =>
+      'Recommended: create a project-only Character draft, then write and insert its first localized greeting. This uses two project checkpoints and does not create a playable conversation or spawn.';
+
+  @override
+  String get managedNpcOpeningRecipeIntroduction =>
+      'This guided flow first saves the Character draft, then opens its first greeting line. If you stop after step 1, the draft stays saved. It does not create dialog logic, runtime behavior, a spawn, or change the game or save files.';
+
+  @override
+  String get managedNpcOpeningRecipeStart => 'Start guided Character';
+
+  @override
+  String get managedNpcOpeningGreetingTitle => 'Step 2 of 2: First greeting';
+
+  @override
+  String get managedNpcOpeningGreetingIntroduction =>
+      'Write the first localized greeting line for this Character draft. Saving creates the line and its text, then inserts it at the start of the draft\'s greeting list. It does not add choices, conditions, effects, or playable conversation behavior.';
+
+  @override
+  String managedNpcOpeningRecipePartial(int projectRevision) {
+    return 'Character draft saved in project revision $projectRevision; no greeting was added. Continue in Story > Dialog & Voice.';
+  }
+
+  @override
+  String get managedNpcOpeningRecipeFailed =>
+      'The guided Character could not be started. The exact project checkpoint is unchanged; game and save files were not changed.';
+
+  @override
+  String get managedNpcOpeningRecipeStopped =>
+      'The guided flow stopped because its exact project checkpoint or publication could not be verified. No further step will run automatically; inspect Story and continue manually.';
+
+  @override
+  String get managedNpcOpeningRecipeRequiresReopen =>
+      'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.';
+
+  @override
+  String managedNpcOpeningRecipeComplete(int projectRevision) {
+    return 'Character draft and first greeting saved in project revision $projectRevision. Draft only: no playable conversation or spawn was created; game and save files were not changed.';
   }
 
   @override

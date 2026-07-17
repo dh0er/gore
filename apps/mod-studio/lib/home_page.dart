@@ -53,6 +53,7 @@ import 'project/revision3_npc_profile_edit_authoring.dart';
 import 'project/revision3_npc_profile_edit_dialog.dart';
 import 'project/revision3_npc_profile_dialog.dart';
 import 'project/revision3_managed_compiler_check_panel.dart';
+import 'project/revision3_npc_opening_recipe.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_context_authoring.dart';
@@ -144,7 +145,12 @@ final class _ManagedStorySelectionOrigin {
 
 enum _StoryDraftHandoffOutcome { opened, stale, selectionFailed }
 
-enum _ProjectQuickCreateAction { npc, questOpening, dialogLine }
+enum _ProjectQuickCreateAction {
+  npcOpening,
+  questOpening,
+  npcDraft,
+  dialogLine,
+}
 
 _Revision3ManagedCompilerSelection? _revision3ManagedCompilerSelection({
   required Revision3ContentIndex index,
@@ -2332,8 +2338,11 @@ class _ManagedRevision3ProjectViewState
   bool _recoveryTerminal = false;
   String? _recoveryError;
   int _storyAuthorityEpoch = 0;
+  final Revision3NpcOpeningRecipe _npcOpeningRecipe =
+      Revision3NpcOpeningRecipe();
   final Revision3QuestOpeningRecipe _questOpeningRecipe =
       Revision3QuestOpeningRecipe();
+  bool _npcOpeningRecipeUiBusy = false;
   bool _questOpeningRecipeUiBusy = false;
   String? _projectDisplayName;
 
@@ -3231,11 +3240,11 @@ class _ManagedRevision3ProjectViewState
                     ),
                   ),
                   option(
-                    key: const Key('managed-project-create-npc'),
-                    icon: Icons.person_add_alt_1_outlined,
-                    title: l10n.managedActionNewNpcTitle,
-                    description: l10n.managedActionNewNpcDescription,
-                    action: _ProjectQuickCreateAction.npc,
+                    key: const Key('managed-project-create-npc-opening'),
+                    icon: Icons.record_voice_over_outlined,
+                    title: l10n.managedStoryWorkspaceCreateNpcOpening,
+                    description: l10n.managedNpcOpeningRecipeDescription,
+                    action: _ProjectQuickCreateAction.npcOpening,
                     disabledReason: gameConfigured ? null : gameRequiredReason,
                   ),
                   option(
@@ -3244,6 +3253,21 @@ class _ManagedRevision3ProjectViewState
                     title: l10n.managedStoryWorkspaceCreateQuestOpening,
                     description: l10n.managedQuestOpeningRecipeDescription,
                     action: _ProjectQuickCreateAction.questOpening,
+                    disabledReason: gameConfigured ? null : gameRequiredReason,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                    child: Text(
+                      l10n.managedStoryWorkspaceCreateAdvanced,
+                      style: Theme.of(sheetContext).textTheme.labelLarge,
+                    ),
+                  ),
+                  option(
+                    key: const Key('managed-project-create-npc'),
+                    icon: Icons.person_add_alt_1_outlined,
+                    title: l10n.managedActionNewNpcTitle,
+                    description: l10n.managedActionNewNpcDescription,
+                    action: _ProjectQuickCreateAction.npcDraft,
                     disabledReason: gameConfigured ? null : gameRequiredReason,
                   ),
                   option(
@@ -3269,7 +3293,10 @@ class _ManagedRevision3ProjectViewState
       return;
     }
     switch (action) {
-      case _ProjectQuickCreateAction.npc:
+      case _ProjectQuickCreateAction.npcOpening:
+        await _openNpcOpeningRecipe(context);
+        return;
+      case _ProjectQuickCreateAction.npcDraft:
         await _openNpcWizard(context, selectPublishedInStory: true);
         return;
       case _ProjectQuickCreateAction.questOpening:
@@ -3648,6 +3675,9 @@ class _ManagedRevision3ProjectViewState
       removeDraft: canMutateStory ? removeStoryDraft : null,
       removeDraftDisabledReason:
           storyMutationDisabledReason ?? removeStoryDraftDisabledReason,
+      createNpcOpening: canCreateStory
+          ? () => _openNpcOpeningRecipe(context)
+          : null,
       createNpcDraft: canCreateStory
           ? () => _openNpcWizard(context, selectPublishedInStory: true)
           : null,
@@ -3657,6 +3687,9 @@ class _ManagedRevision3ProjectViewState
       createQuestDraft: canCreateStory
           ? () => _openQuestWizard(context, selectPublishedInStory: true)
           : null,
+      createNpcOpeningDisabledReason: canCreateStory
+          ? null
+          : createStoryDisabledReason,
       createNpcDraftDisabledReason: canCreateStory
           ? null
           : createStoryDisabledReason,
@@ -4980,6 +5013,386 @@ class _ManagedRevision3ProjectViewState
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _openNpcOpeningRecipe(BuildContext context) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null ||
+        !_storyMutationsEnabled ||
+        _npcOpeningRecipeUiBusy ||
+        _npcOpeningRecipe.isRunning) {
+      return;
+    }
+    final l10n = AppLocalizations.of(context);
+    final openingCheckpoint = project;
+    final selectionOrigin = _storySelectionOrigin;
+    setState(() => _npcOpeningRecipeUiBusy = true);
+    try {
+      final confirmed =
+          await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              key: const Key('managed-npc-opening-recipe-intro'),
+              scrollable: true,
+              title: Text(l10n.managedNpcOpeningRecipeTitle),
+              content: Text(l10n.managedNpcOpeningRecipeIntroduction),
+              actions: [
+                TextButton(
+                  key: const Key('managed-npc-opening-recipe-cancel'),
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: Text(l10n.cancel),
+                ),
+                FilledButton.icon(
+                  key: const Key('managed-npc-opening-recipe-start'),
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  icon: const Icon(Icons.arrow_forward),
+                  label: Text(l10n.managedNpcOpeningRecipeStart),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!mounted || !context.mounted || !confirmed) return;
+
+      final outcome = await _npcOpeningRecipe.run(
+        openingCheckpoint: openingCheckpoint,
+        readCurrentCheckpoint: () async => currentManagedProject,
+        createNpc: ({required expectedCheckpoint}) async {
+          _requireNpcOpeningCheckpoint(expectedCheckpoint);
+          final publication = await showDialog<Revision3NpcDraftPublication>(
+            context: context,
+            builder: (dialogContext) => Revision3NpcWizardDialog(
+              gameRoot: configuredGameRoot,
+              loadCatalog: loadNpcCatalog,
+              publish: publishNpcDraft,
+              chooseArchetype: chooseNpcArchetype,
+              copy: l10n.localeName.startsWith('de')
+                  ? Revision3NpcWizardCopy.german
+                  : Revision3NpcWizardCopy.english,
+            ),
+          );
+          if (!mounted || !context.mounted || publication == null) return null;
+          await WidgetsBinding.instance.endOfFrame;
+          final checkpoint = currentManagedProject;
+          if (checkpoint == null) {
+            throw const Revision3NpcDraftStaleCheckpointException();
+          }
+          return Revision3NpcOpeningRecipeNpcStep(
+            publication: publication,
+            checkpoint: checkpoint,
+          );
+        },
+        createGreeting: ({required handoff}) =>
+            _createNpcOpeningGreeting(context, l10n, handoff),
+      );
+      if (!mounted || !context.mounted) return;
+      await _handleNpcOpeningOutcome(context, l10n, selectionOrigin, outcome);
+    } finally {
+      if (mounted) setState(() => _npcOpeningRecipeUiBusy = false);
+    }
+  }
+
+  Future<Revision3NpcOpeningRecipeGreetingStep?> _createNpcOpeningGreeting(
+    BuildContext context,
+    AppLocalizations l10n,
+    Revision3NpcOpeningRecipeHandoff handoff,
+  ) async {
+    final checkpoint = handoff.npcCheckpoint;
+    _requireNpcOpeningCheckpoint(checkpoint);
+    final index = await _loadNpcOpeningContent(checkpoint);
+    final npc = index.entityById(handoff.npcPublication.npcId);
+    if (npc == null ||
+        npc.kind != Revision3ContentEntityKind.npcDraft ||
+        npc.summary.npcDraft?.greetingCount != 0 ||
+        !npc.references.any(
+          (reference) =>
+              reference.role == 'draft_script_module' &&
+              reference.resolution ==
+                  Revision3ContentReferenceResolution.resolved &&
+              reference.target.projectId == checkpoint.projectId &&
+              reference.target.entityId ==
+                  handoff.npcPublication.scriptModuleId &&
+              reference.target.expectedKind ==
+                  Revision3ContentEntityKind.scriptModule,
+        )) {
+      throw const Revision3NpcGreetingStaleCheckpointException();
+    }
+
+    Future<AuthoringRevision3DialogLocalizationReadResult> readExact({
+      required String expectedProjectId,
+      required int expectedProjectRevision,
+      required AuthoringWorkingHead expectedHead,
+      required String localizationId,
+      required int expectedLocalizationRevision,
+      required String expectedLocId,
+    }) async {
+      if (expectedProjectId != checkpoint.projectId ||
+          expectedProjectRevision != checkpoint.projectRevision ||
+          expectedHead.canonicalJson != checkpoint.head.canonicalJson) {
+        throw const Revision3NpcGreetingStaleCheckpointException();
+      }
+      _requireNpcOpeningCheckpoint(checkpoint);
+      try {
+        final loaded = await readDialogLocalization(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          localizationId: localizationId,
+          expectedLocalizationRevision: expectedLocalizationRevision,
+          expectedLocId: expectedLocId,
+        );
+        _requireNpcOpeningCheckpoint(checkpoint);
+        return loaded;
+      } on Revision3DialogLineEntryRequiresReopenException {
+        throw const Revision3NpcGreetingRequiresReopenException();
+      } on Revision3DialogLineEntryStaleCheckpointException {
+        throw const Revision3NpcGreetingStaleCheckpointException();
+      }
+    }
+
+    Revision3NpcGreetingPublication? greetingPublication;
+    final greetingService = Revision3NpcGreetingAuthoringService(
+      expectedHead: checkpoint.head,
+      loadContentIndex: () => _loadNpcOpeningContent(checkpoint),
+      readExactLocalization: readExact,
+      publishReplace:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedHead,
+            required plan,
+          }) {
+            _requireNpcOpeningCheckpoint(checkpoint);
+            return publishNpcGreetingReplace(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              expectedHead: expectedHead,
+              plan: plan,
+            );
+          },
+      publishCreate:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedHead,
+            required plan,
+          }) async {
+            _requireNpcOpeningCheckpoint(checkpoint);
+            final publication = await publishNpcGreetingCreate(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              expectedHead: expectedHead,
+              plan: plan,
+            );
+            greetingPublication = publication;
+            return publication;
+          },
+    );
+    final projection = await greetingService.load(
+      npcId: npc.id,
+      expectedNpcRevision: npc.revision,
+    );
+    if (projection.rows.isNotEmpty || !mounted || !context.mounted) {
+      if (projection.rows.isNotEmpty) {
+        throw const Revision3NpcGreetingStaleCheckpointException();
+      }
+      return null;
+    }
+
+    final result = await showDialog<Revision3DialogLineEntryDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Revision3DialogLineEntryDialog(
+        service: Revision3DialogLineEntryAuthoringService(
+          loadContentIndex: () => _loadNpcOpeningContent(checkpoint),
+          readExactLocalization:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required localizationId,
+                required expectedLocalizationRevision,
+                required expectedLocId,
+              }) => readExact(
+                expectedProjectId: expectedProjectId,
+                expectedProjectRevision: expectedProjectRevision,
+                expectedHead: checkpoint.head,
+                localizationId: localizationId,
+                expectedLocalizationRevision: expectedLocalizationRevision,
+                expectedLocId: expectedLocId,
+              ),
+          publishTechnicalPlan: greetingService.createAndInsertPublisher(
+            projection: projection,
+            index: 0,
+          ),
+        ),
+        copy: _dialogLineEntryCopy(l10n).copyWith(
+          title: l10n.managedNpcOpeningGreetingTitle,
+          introduction: l10n.managedNpcOpeningGreetingIntroduction,
+        ),
+        allowOpenVoiceNext: false,
+      ),
+    );
+    if (!mounted || !context.mounted || result == null) return null;
+    final publication = greetingPublication;
+    if (publication == null ||
+        result.publication.projectId != publication.projectId ||
+        result.publication.projectRevision != publication.projectRevision ||
+        result.publication.lineId != publication.createdLineId ||
+        result.publication.localizationId !=
+            publication.createdLocalizationId ||
+        result.publication.voiceSlotId != publication.createdVoiceSlotId) {
+      throw const Revision3NpcGreetingRequiresReopenException();
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    final current = currentManagedProject;
+    if (current == null) {
+      throw const Revision3NpcGreetingStaleCheckpointException();
+    }
+    return Revision3NpcOpeningRecipeGreetingStep(
+      publication: publication,
+      checkpoint: current,
+    );
+  }
+
+  Future<Revision3ContentIndex> _loadNpcOpeningContent(
+    ManagedRevision3CurrentProjectState checkpoint,
+  ) async {
+    _requireNpcOpeningCheckpoint(checkpoint);
+    final index = await loadContentIndex();
+    _requireNpcOpeningCheckpoint(checkpoint);
+    if (index.projectId != checkpoint.projectId ||
+        index.projectRevision != checkpoint.projectRevision) {
+      throw const Revision3NpcGreetingStaleCheckpointException();
+    }
+    return index;
+  }
+
+  void _requireNpcOpeningCheckpoint(
+    ManagedRevision3CurrentProjectState expected,
+  ) {
+    final current = currentManagedProject;
+    if (current != null &&
+        current.root.path == expected.root.path &&
+        current.projectId == expected.projectId &&
+        current.requiresReopen) {
+      throw const Revision3NpcGreetingRequiresReopenException();
+    }
+    if (current == null ||
+        current.root.path != expected.root.path ||
+        current.projectId != expected.projectId ||
+        current.projectRevision != expected.projectRevision ||
+        current.head.canonicalJson != expected.head.canonicalJson) {
+      throw const Revision3NpcGreetingStaleCheckpointException();
+    }
+  }
+
+  Future<void> _handleNpcOpeningOutcome(
+    BuildContext context,
+    AppLocalizations l10n,
+    _ManagedStorySelectionOrigin selectionOrigin,
+    Revision3NpcOpeningRecipeOutcome outcome,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context)..removeCurrentSnackBar();
+    switch (outcome) {
+      case Revision3NpcOpeningRecipeNoChangeOutcome(:final reason):
+        if (reason == Revision3NpcOpeningRecipeNoChangeReason.failed) {
+          messenger.showSnackBar(
+            SnackBar(content: Text(l10n.managedNpcOpeningRecipeFailed)),
+          );
+        }
+      case Revision3NpcOpeningRecipeNpcOnlyOutcome(:final npcStep):
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.managedNpcOpeningRecipePartial(
+                npcStep.checkpoint.projectRevision,
+              ),
+            ),
+          ),
+        );
+        await _openNpcOpeningStory(
+          context,
+          selectionOrigin,
+          npcId: npcStep.publication.npcId,
+          checkpoint: npcStep.checkpoint,
+        );
+      case Revision3NpcOpeningRecipeCompletedOutcome(
+        :final npcStep,
+        :final greetingStep,
+      ):
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.managedNpcOpeningRecipeComplete(
+                greetingStep.checkpoint.projectRevision,
+              ),
+            ),
+          ),
+        );
+        await _openNpcOpeningStory(
+          context,
+          selectionOrigin,
+          npcId: npcStep.publication.npcId,
+          checkpoint: greetingStep.checkpoint,
+          selectedLineId: greetingStep.publication.createdLineId,
+        );
+      case Revision3NpcOpeningRecipeLockedOutcome():
+        messenger.showSnackBar(
+          SnackBar(content: Text(l10n.managedNpcOpeningRecipeStopped)),
+        );
+        // A locked result may carry a rejected or otherwise unverified NPC
+        // receipt. Never consume it for an exact-selection handoff.
+        _openCurrentStoryIfPossible(context, selectionOrigin);
+      case Revision3NpcOpeningRecipeRequiresReopenOutcome():
+        messenger.showSnackBar(
+          SnackBar(content: Text(l10n.managedNpcOpeningRecipeRequiresReopen)),
+        );
+    }
+  }
+
+  Future<void> _openNpcOpeningStory(
+    BuildContext context,
+    _ManagedStorySelectionOrigin origin, {
+    required String npcId,
+    required ManagedRevision3CurrentProjectState checkpoint,
+    String? selectedLineId,
+  }) async {
+    if (!_isCurrentStorySelectionOrigin(origin) ||
+        !_isCurrentNpcOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.story,
+      ),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted ||
+        !context.mounted ||
+        !_isCurrentStorySelectionOrigin(origin) ||
+        !_isCurrentNpcOpeningCheckpoint(checkpoint)) {
+      return;
+    }
+    _selectPublishedStoryEntity(
+      origin,
+      entityId: npcId,
+      projectRevision: checkpoint.projectRevision,
+      projectHeadCanonicalJson: checkpoint.head.canonicalJson,
+      section: Revision3StoryWorkbenchSection.dialogVoice,
+      selectedLineId: selectedLineId,
+    );
+  }
+
+  bool _isCurrentNpcOpeningCheckpoint(
+    ManagedRevision3CurrentProjectState expected,
+  ) {
+    final current = currentManagedProject;
+    return current != null &&
+        !current.requiresReopen &&
+        current.root.path == expected.root.path &&
+        current.projectId == expected.projectId &&
+        current.projectRevision == expected.projectRevision &&
+        current.head.canonicalJson == expected.head.canonicalJson;
+  }
+
   Future<void> _openQuestOpeningRecipe(BuildContext context) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null ||
@@ -6160,8 +6573,10 @@ Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>
       allFilterLabel: l10n.changesAll,
       npcFilterLabel: l10n.managedBaseGameBrowserFilterNpcs,
       questFilterLabel: l10n.managedBaseGameBrowserFilterQuests,
-      createNpcLabel: l10n.managedActionNewNpcTitle,
+      createNpcOpeningLabel: l10n.managedStoryWorkspaceCreateNpcOpening,
+      createNpcLabel: l10n.managedStoryWorkspaceCreateNpcAdvanced,
       createQuestLabel: l10n.managedActionNewQuestTitle,
+      creatingNpcOpeningLabel: l10n.managedStoryWorkspaceCreatingNpcOpening,
       creatingNpcLabel: l10n.managedStoryWorkspaceCreatingNpc,
       creatingQuestLabel: l10n.managedStoryWorkspaceCreatingQuest,
       createQuestOpeningLabel: l10n.managedStoryWorkspaceCreateQuestOpening,

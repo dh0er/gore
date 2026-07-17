@@ -157,6 +157,37 @@ Voice** panel. This is navigation and authoring UX only: it adds no second
 editor, mutation, compiler, spawn, build, deployment, game-write, or runtime
 authority.
 
+### Guided Character + first greeting Draft V1
+
+The recommended managed-R3 creation path is **Character + first greeting**.
+It composes the existing NPC Draft wizard and the existing NPC greeting-line
+authoring form without pretending that their two publications are atomic. Step
+1 publishes the project-only NPC/`ScriptModule` pair from revision N to N+1.
+Studio then fully reopens and verifies that exact root, project ID, revision,
+and canonical head, resolves the exact new NPC, and requires its intact greeting
+projection to still be empty before opening step 2. Saving step 2 creates one
+project-owned localized `DialogLine`, backed by newly authored text or one exact
+eligible managed localization, optionally creates one empty locale `VoiceSlot`,
+and inserts that line at greeting index zero from N+1 to N+2.
+
+Both successful handoffs bind the returned publication to the exact reopened
+checkpoint and require one-revision, new-head progression. Completion opens the
+exact NPC's **Story -> Dialog & Voice** surface at N+2 with the created line
+selected. The recipe is single-flight. Head or project drift locks it, and an
+uncertain publication requires reopening instead of an automatic retry.
+
+Cancellation before step 1 publishes nothing. If step 2 is cancelled or fails
+without an uncertain publication, the NPC-only N+1 result deliberately remains
+saved; Studio opens that exact NPC's empty **Dialog & Voice** surface so the
+author can continue later. There is no hidden rollback and no claim that both
+steps form one transaction.
+
+This recipe creates Draft authoring metadata only. It creates no AngelScript
+topic, player choice, condition, effect, Quest relationship, playable
+conversation, runtime NPC binding, spawn, production build, or deployment. It
+writes neither the game installation nor a save and does not make the NPC
+playable or runtime-qualified.
+
 This is deliberately a logical-clone **Draft** only. The wizard does not compile,
 build, deploy, spawn, write game files, change a save, or claim gameplay
 behavior. Visuals, faction, stats, inventory, routine, dialog, quests, and world

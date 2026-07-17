@@ -721,6 +721,14 @@ class AppLocalizationsDe extends AppLocalizations {
       'Quest-Entwurf wird erstellt…';
 
   @override
+  String get managedStoryWorkspaceCreateNpcOpening =>
+      'Charakter + erste Begrüßung erstellen';
+
+  @override
+  String get managedStoryWorkspaceCreatingNpcOpening =>
+      'Charakter + erste Begrüßung wird erstellt…';
+
+  @override
   String get managedStoryWorkspaceCreateQuestOpening =>
       'Quest + erste Dialogzeile erstellen';
 
@@ -731,6 +739,10 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedStoryWorkspaceCreateAdvanced =>
       'Erweiterte Erstelloptionen';
+
+  @override
+  String get managedStoryWorkspaceCreateNpcAdvanced =>
+      'Nur Charakterentwurf erstellen (erweitert)';
 
   @override
   String get managedStoryWorkspaceCreateQuestAdvanced =>
@@ -1330,6 +1342,50 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String managedNpcDraftSaved(int projectRevision) {
     return 'Charakterentwurf in Projektrevision $projectRevision gespeichert. Er bleibt für Builds gesperrt, ist für die Laufzeit ungeprüft und wird nicht gespawnt.';
+  }
+
+  @override
+  String get managedNpcOpeningRecipeTitle => 'Charakter + erste Begrüßung';
+
+  @override
+  String get managedNpcOpeningRecipeDescription =>
+      'Empfohlen: Erstelle einen projektinternen Charakterentwurf und schreibe und verknüpfe danach seine erste lokalisierte Begrüßung. Das nutzt zwei Projektstände und erzeugt weder spielbaren Dialog noch Spawn.';
+
+  @override
+  String get managedNpcOpeningRecipeIntroduction =>
+      'Dieser geführte Ablauf speichert zuerst den Charakterentwurf und öffnet danach seine erste Begrüßungszeile. Wenn du nach Schritt 1 aufhörst, bleibt der Entwurf gespeichert. Es entstehen weder Dialoglogik, Laufzeitverhalten noch Spawn; Spiel und Spielstände werden nicht verändert.';
+
+  @override
+  String get managedNpcOpeningRecipeStart => 'Geführten Charakter starten';
+
+  @override
+  String get managedNpcOpeningGreetingTitle =>
+      'Schritt 2 von 2: Erste Begrüßung';
+
+  @override
+  String get managedNpcOpeningGreetingIntroduction =>
+      'Schreibe die erste lokalisierte Begrüßungszeile für diesen Charakterentwurf. Beim Speichern werden Zeile und Text erstellt und am Anfang der Begrüßungsliste verknüpft. Dadurch entstehen keine Auswahloptionen, Bedingungen, Effekte oder spielbare Dialoglogik.';
+
+  @override
+  String managedNpcOpeningRecipePartial(int projectRevision) {
+    return 'Charakterentwurf in Projektrevision $projectRevision gespeichert; es wurde keine Begrüßung hinzugefügt. Fahre unter Story > Dialog & Sprachausgabe fort.';
+  }
+
+  @override
+  String get managedNpcOpeningRecipeFailed =>
+      'Der geführte Charakter konnte nicht gestartet werden. Der exakte Projektstand ist unverändert; Spiel und Spielstände wurden nicht verändert.';
+
+  @override
+  String get managedNpcOpeningRecipeStopped =>
+      'Der geführte Ablauf wurde angehalten, weil sein exakter Projektstand oder seine Veröffentlichung nicht verifiziert werden konnte. Es wird kein weiterer Schritt automatisch ausgeführt; prüfe Story und fahre manuell fort.';
+
+  @override
+  String get managedNpcOpeningRecipeRequiresReopen =>
+      'Der geführte Ablauf konnte nicht sicher fortgesetzt werden. Öffne dieses Projekt erneut und prüfe Story, bevor du es erneut versuchst oder manuell fortfährst.';
+
+  @override
+  String managedNpcOpeningRecipeComplete(int projectRevision) {
+    return 'Charakterentwurf und erste Begrüßung in Projektrevision $projectRevision gespeichert. Nur Entwurf: Es wurden weder spielbarer Dialog noch Spawn erzeugt; Spiel und Spielstände wurden nicht verändert.';
   }
 
   @override

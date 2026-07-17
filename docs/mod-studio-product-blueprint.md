@@ -188,6 +188,22 @@ authoring surfaces only; it adds no automatic greeting mutation, second editor,
 compiler, build, deployment, spawn, game/save write, runtime, or playable-NPC
 claim.
 
+Character + first greeting addendum (2026-07-17): the recommended managed-R3
+NPC route now composes the existing Character Draft and greeting-line forms as
+an honest two-checkpoint recipe. Step 1 publishes the project-only NPC and its
+owned ScriptModule as N+1. Studio fully reopens and binds that exact root,
+project, revision, and canonical head before step 2 creates one localized
+DialogLine and inserts it at greeting index zero as N+2. Completion opens the
+exact NPC in **Story -> Dialog & Voice** with the new line selected. If step 2
+is safely cancelled or fails, the useful NPC-only N+1 Draft remains and opens
+at the same empty greeting surface; there is no implicit rollback. Project/head
+drift locks the single-flight recipe, while publication uncertainty requires a
+reopen. The advanced Character-only Draft remains available separately.
+Base-game and cross-source search starters stay one-step Draft routes instead
+of silently forcing this recipe. Neither result creates a topic, choice,
+condition, effect, Quest relationship, playable conversation, runtime binding,
+spawn, build, deploy, game write, or save write.
+
 Story status addendum (2026-07-16): the managed-R3 **Story** destination is now
 a direct workspace rather than a card page that sends authors to Content. It
 loads the exact-current project index, projects only NPC and Quest Drafts, and
@@ -991,7 +1007,12 @@ no pre-query source loads and responsive accessible overflow. It adds no new
 authority. The recommended
 two-checkpoint **Quest + opening line** recipe now removes the creation-to-writing
 dead end while preserving an honest Quest-only result on cancellation; it does
-not create a playable conversation. Direct project-text editing and the direct
+not create a playable conversation. The recommended
+two-checkpoint **Character + first greeting** recipe now applies the same honest
+continuation to NPC authoring: the NPC-only checkpoint survives a stopped second
+step, while successful completion inserts one localized greeting and selects it
+in the existing Story surface. It grants no runtime, spawn, build, game, or save
+authority. Direct project-text editing and the direct
 NPC/Quest Story workspace now replace two former card/modal detours without
 changing their authority boundaries. The first
 reviewed non-World offline build is now integrated for one selected reviewed

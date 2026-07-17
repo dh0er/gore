@@ -31,6 +31,7 @@ import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
+import 'package:gore_mod/project/revision3_npc_greeting_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
@@ -1084,14 +1085,14 @@ void main() {
       final createOpening = find.byKey(
         const Key('revision3-story-workspace-create-quest-opening'),
       );
-      final createNpc = find.byKey(
-        const Key('revision3-story-workspace-create-npc'),
+      final createNpcOpening = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
       );
       expect(tester.widget<FilledButton>(createOpening).onPressed, isNull);
-      expect(tester.widget<FilledButton>(createNpc).onPressed, isNull);
+      expect(tester.widget<FilledButton>(createNpcOpening).onPressed, isNull);
       final createReason = find.byKey(
         const Key(
-          'revision3-story-workspace-create-quest-opening-disabled-reason',
+          'revision3-story-workspace-create-npc-opening-disabled-reason',
         ),
       );
       expect(createReason, findsOneWidget);
@@ -1104,6 +1105,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-npc')),
+            )
+            .enabled,
+        isFalse,
+      );
       expect(
         tester
             .widget<PopupMenuItem<dynamic>>(
@@ -1959,7 +1968,9 @@ void main() {
       expect(
         tester
             .widget<FilledButton>(
-              find.byKey(const Key('revision3-story-workspace-create-npc')),
+              find.byKey(
+                const Key('revision3-story-workspace-create-npc-opening'),
+              ),
             )
             .onPressed,
         isNull,
@@ -1982,6 +1993,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-npc')),
+            )
+            .enabled,
+        isFalse,
+      );
       expect(
         tester
             .widget<PopupMenuItem<dynamic>>(
@@ -2190,11 +2209,27 @@ void main() {
         const Key('revision3-project-workspace-nav-story'),
       );
 
-      final createNpc = find.byKey(
+      final createNpcOpening = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
+      );
+      expect(
+        tester.widget<FilledButton>(createNpcOpening).onPressed,
+        isNotNull,
+      );
+      final advancedCreate = find.byKey(
+        const Key('revision3-story-workspace-create-advanced'),
+      );
+      await tester.ensureVisible(advancedCreate);
+      await tester.tap(advancedCreate);
+      await tester.pumpAndSettle();
+      final createNpcDraft = find.byKey(
         const Key('revision3-story-workspace-create-npc'),
       );
-      expect(tester.widget<FilledButton>(createNpc).onPressed, isNotNull);
-      await tester.tap(createNpc);
+      expect(
+        tester.widget<PopupMenuItem<dynamic>>(createNpcDraft).enabled,
+        isTrue,
+      );
+      await tester.tap(createNpcDraft);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
@@ -2765,16 +2800,16 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final createNpc = find.byKey(
-        const Key('revision3-story-workspace-create-npc'),
+      final createNpcOpening = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
       );
       final createQuestOpening = find.byKey(
         const Key('revision3-story-workspace-create-quest-opening'),
       );
-      expect(tester.widget<FilledButton>(createNpc).onPressed, isNull);
+      expect(tester.widget<FilledButton>(createNpcOpening).onPressed, isNull);
       expect(tester.widget<FilledButton>(createQuestOpening).onPressed, isNull);
       final missingGame = AppLocalizations.of(
-        tester.element(createNpc),
+        tester.element(createNpcOpening),
       ).managedDashboardMissingGameDescription;
       expect(
         missingGame,
@@ -2791,6 +2826,14 @@ void main() {
       expect(advancedCreate.hitTestable(), findsOneWidget);
       await tester.tap(advancedCreate);
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<dynamic>>(
+              find.byKey(const Key('revision3-story-workspace-create-npc')),
+            )
+            .enabled,
+        isFalse,
+      );
       expect(
         tester
             .widget<PopupMenuItem<dynamic>>(
@@ -3496,6 +3539,596 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'guided Character + first greeting inserts line zero and opens exact Dialog Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_opening_recipe_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '18181818181818181818181818181818';
+      const openingRevision = 7;
+      const greetingLineName = 'North Gate welcome';
+      const greetingLineText = 'Willkommen am Nordtor.';
+      final contentRevisions = <int>[];
+      Revision3NpcGreetingCreateTechnicalPlan? greetingPlan;
+      final managed = _FakeNpcGreetingManagedLease(
+        root: Directory(r'C:\mods\npc-opening-recipe'),
+        projectId: projectId,
+        projectRevision: openingRevision,
+        head: _head(openingRevision),
+        contentIndexBuilder: (lease) {
+          contentRevisions.add(lease.projectRevision);
+          return _npcOpeningRecipeContentIndex(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            openingRevision: openingRevision,
+            createPlan: greetingPlan,
+          );
+        },
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.displayName, 'North Gate Guard');
+          expect(input.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+          lease.projectRevision = openingRevision + 1;
+          lease.head = _head(openingRevision + 1);
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+        onNpcGreetingCreate: (lease, plan) {
+          expect(lease.projectRevision, openingRevision + 1);
+          expect(plan.npcId, _homeCreatedNpcId);
+          expect(plan.expectedNpcRevision, 0);
+          expect(plan.expectedModuleId, _homeCreatedNpcModuleId);
+          expect(plan.expectedModuleRevision, 0);
+          expect(plan.expectedGreetingCount, 0);
+          expect(plan.index, 0);
+          expect(plan.line.lineDisplayName, greetingLineName);
+          expect(plan.line.speakerHint, 'North Gate Guard');
+          expect(plan.line.locale, 'de');
+          final localization =
+              plan.line.localization
+                  as AuthoringRevision3DialogLocalizationCreateIntentV1;
+          expect(localization.texts, <String, String>{'de': greetingLineText});
+          greetingPlan = plan;
+          lease.projectRevision = openingRevision + 2;
+          lease.head = _head(openingRevision + 2);
+          return Revision3NpcGreetingPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            npcId: plan.npcId,
+            npcRevision: plan.expectedNpcRevision + 1,
+            moduleId: plan.expectedModuleId,
+            moduleRevision: plan.expectedModuleRevision,
+            mode: AuthoringRevision3NpcGreetingMode.createAndInsert,
+            greetingCount: plan.expectedGreetingCount + 1,
+            createdLineId: plan.line.lineId,
+            createdLocalizationId: localization.localizationId,
+            createdVoiceSlotId: plan.line.voiceSlot?.slotId,
+            localizationAction:
+                AuthoringRevision3DialogLocalizationAction.created,
+          );
+        },
+        onDialogLocalizationRead:
+            (lease, localizationId, localizationRevision, locId) {
+              final plan = greetingPlan;
+              if (plan == null) {
+                throw StateError('greeting plan has not been published');
+              }
+              final localization =
+                  plan.line.localization
+                      as AuthoringRevision3DialogLocalizationCreateIntentV1;
+              expect(localizationId, localization.localizationId);
+              expect(localizationRevision, 0);
+              expect(locId, localization.locId);
+              return _questOpeningRecipeLocalizationReadResult(
+                lease: lease,
+                line: plan.line,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+        reason: 'global Create must still be able to lazy-mount Story',
+      );
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      final recipeAction = find.byKey(
+        const Key('managed-project-create-npc-opening'),
+      );
+      expect(recipeAction, findsOneWidget);
+      final l10n = AppLocalizations.of(tester.element(recipeAction));
+      expect(
+        find.text(l10n.managedStoryWorkspaceCreateNpcOpening),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedNpcOpeningRecipeDescription),
+        findsOneWidget,
+      );
+      await tester.tap(recipeAction);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(
+        find.byKey(const Key('managed-npc-opening-recipe-intro')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedNpcOpeningRecipeIntroduction),
+        findsOneWidget,
+      );
+      expect(
+        l10n.managedNpcOpeningRecipeIntroduction,
+        contains(
+          'does not create dialog logic, runtime behavior, a spawn, '
+          'or change the game or save files',
+        ),
+      );
+      await tester.tap(
+        find.byKey(const Key('managed-npc-opening-recipe-start')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'North Gate Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-name')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedNpcOpeningGreetingIntroduction),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-name')),
+        greetingLineName,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-speaker')),
+        'North Gate Guard',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-locale')),
+        'de',
+      );
+      await _dragUntilFound(
+        tester,
+        scrollable: find.byKey(const Key('revision3-dialog-line-editor')),
+        target: find.byKey(const Key('revision3-dialog-line-text')),
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-text')),
+        greetingLineText,
+      );
+      final submit = find.byKey(const Key('revision3-dialog-line-submit'));
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-success')),
+      );
+
+      expect(managed.npcPublishCalls, 1);
+      expect(managed.npcGreetingCreateCalls, 1);
+      expect(managed.dialogLinePublishCalls, 0);
+      expect(greetingPlan, isNotNull);
+      await tester.tap(find.byKey(const Key('revision3-dialog-line-done')));
+      await tester.pumpAndSettle();
+
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, openingRevision + 2);
+      expect(
+        state.head.canonicalJson,
+        _head(openingRevision + 2).canonicalJson,
+      );
+      expect(contentRevisions.first, openingRevision);
+      expect(contentRevisions, contains(openingRevision + 1));
+      expect(contentRevisions, contains(openingRevision + 2));
+      final completionCopy = l10n.managedNpcOpeningRecipeComplete(
+        openingRevision + 2,
+      );
+      expect(find.text(completionCopy), findsOneWidget);
+      expect(
+        completionCopy,
+        contains('no playable conversation or spawn was created'),
+      );
+      expect(completionCopy, contains('game and save files were not changed'));
+
+      final selectedNpc = find.byKey(
+        const Key('revision3-story-workspace-entity-$_homeCreatedNpcId'),
+      );
+      expect(selectedNpc, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedNpc).selected, isTrue);
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-$_homeCreatedNpcId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-npc-dialog-voice-panel')),
+        findsOneWidget,
+      );
+      final selectedGreeting = find.byKey(
+        const Key('revision3-npc-greeting-row-0'),
+      );
+      expect(selectedGreeting, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedGreeting).selected, isTrue);
+      expect(find.text(greetingLineName), findsWidgets);
+      expect(find.text(greetingLineText), findsOneWidget);
+
+      final plan = greetingPlan!;
+      final localization =
+          plan.line.localization
+              as AuthoringRevision3DialogLocalizationCreateIntentV1;
+      for (final technicalId in <String>[
+        _homeCreatedNpcId,
+        _homeCreatedNpcModuleId,
+        _homeCreatedNpcUniqueName,
+        _homeCreatedNpcModuleNamespace,
+        plan.line.lineId,
+        plan.line.lineAuthoredIdentity,
+        localization.localizationId,
+        localization.locId,
+        if (plan.line.voiceSlot case final slot?) slot.slotId,
+      ]) {
+        expect(find.text(technicalId), findsNothing);
+      }
+      for (final unsupportedClaim in const <String>[
+        'Playable conversation created',
+        'Runtime behavior created',
+        'Spawn created',
+        'Game files changed',
+        'Save files changed',
+      ]) {
+        expect(find.textContaining(unsupportedClaim), findsNothing);
+      }
+      expect(find.text('Build / Deploy'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'guided Character + first greeting cancel keeps exact Character-only checkpoint',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_opening_recipe_cancel_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '17171717171717171717171717171717';
+      const openingRevision = 7;
+      final contentRevisions = <int>[];
+      final managed = _FakeNpcGreetingManagedLease(
+        root: Directory(r'C:\mods\npc-opening-recipe-cancel'),
+        projectId: projectId,
+        projectRevision: openingRevision,
+        head: _head(openingRevision),
+        contentIndexBuilder: (lease) {
+          contentRevisions.add(lease.projectRevision);
+          return _npcOpeningRecipeContentIndex(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            openingRevision: openingRevision,
+          );
+        },
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.displayName, 'Keep this Character');
+          lease.projectRevision = openingRevision + 1;
+          lease.head = _head(openingRevision + 1);
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            head: lease.head,
+            npcId: _homeCreatedNpcId,
+            scriptModuleId: _homeCreatedNpcModuleId,
+          );
+        },
+        onNpcGreetingCreate: (_, _) => throw TestFailure(
+          'cancelling the greeting dialog must not publish a greeting',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedHomeTask(tester, const Key('managed-home-story'));
+
+      final recipeAction = find.byKey(
+        const Key('revision3-story-workspace-create-npc-opening'),
+      );
+      expect(recipeAction, findsOneWidget);
+      final l10n = AppLocalizations.of(tester.element(recipeAction));
+      expect(
+        find.text(l10n.managedStoryWorkspaceCreateNpcOpening),
+        findsOneWidget,
+      );
+      await tester.tap(recipeAction);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.byKey(const Key('managed-npc-opening-recipe-intro')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('managed-npc-opening-recipe-start')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Keep this Character',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-dialog-line-modal')),
+      );
+      await tester.tap(find.byKey(const Key('revision3-dialog-line-cancel')));
+      await tester.pumpAndSettle();
+
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, openingRevision + 1);
+      expect(
+        state.head.canonicalJson,
+        _head(openingRevision + 1).canonicalJson,
+      );
+      expect(managed.npcPublishCalls, 1);
+      expect(managed.npcGreetingCreateCalls, 0);
+      expect(managed.dialogLinePublishCalls, 0);
+      expect(contentRevisions.first, openingRevision);
+      expect(contentRevisions, contains(openingRevision + 1));
+      expect(contentRevisions, isNot(contains(openingRevision + 2)));
+      expect(
+        find.text(l10n.managedNpcOpeningRecipePartial(openingRevision + 1)),
+        findsOneWidget,
+      );
+
+      final selectedNpc = find.byKey(
+        const Key('revision3-story-workspace-entity-$_homeCreatedNpcId'),
+      );
+      expect(selectedNpc, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedNpc).selected, isTrue);
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-$_homeCreatedNpcId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-npc-dialog-voice-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-npc-greeting-row-0')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-npc-greeting-new-line')),
+        findsOneWidget,
+      );
+      for (final technicalId in const <String>[
+        _homeCreatedNpcId,
+        _homeCreatedNpcModuleId,
+        _homeCreatedNpcUniqueName,
+        _homeCreatedNpcModuleNamespace,
+      ]) {
+        expect(find.text(technicalId), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'locked Character opening ignores rejected NPC receipt for Story navigation',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_opening_rejected_receipt_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '16161616161616161616161616161616';
+      const openingRevision = 7;
+      const genericNpcId = '91919191919191919191919191919191';
+      const rejectedNpcId = '99999999999999999999999999999999';
+      const rejectedModuleId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      final managed = _FakeNpcGreetingManagedLease(
+        root: Directory(r'C:\mods\npc-opening-rejected-receipt'),
+        projectId: projectId,
+        projectRevision: openingRevision,
+        head: _head(openingRevision),
+        contentIndexBuilder: (lease) => _globalSearchContentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          targetEntityId: rejectedNpcId,
+        ),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.displayName, 'Rejected receipt guard');
+          lease.projectRevision = openingRevision + 1;
+          lease.head = _head(openingRevision + 1);
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            head: lease.head,
+            npcId: rejectedNpcId,
+            scriptModuleId: rejectedModuleId,
+          );
+        },
+        onNpcGreetingCreate: (_, _) => throw TestFailure(
+          'a rejected NPC receipt must lock before Greeting authoring',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.createKey));
+      await tester.pumpAndSettle();
+      final recipeAction = find.byKey(
+        const Key('managed-project-create-npc-opening'),
+      );
+      final l10n = AppLocalizations.of(tester.element(recipeAction));
+      await tester.tap(recipeAction);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-npc-opening-recipe-start')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Rejected receipt guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pump();
+
+      expect(managed.npcPublishCalls, 1);
+      var current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, openingRevision + 1);
+      expect(
+        current.head.canonicalJson,
+        _head(openingRevision + 1).canonicalJson,
+      );
+
+      // Poison only the checkpoint captured for the recipe step. The valid
+      // publication no longer matches this rebound head, so the recipe returns
+      // a LockedOutcome carrying an explicitly rejected non-null NPC step.
+      managed.head = _head(108);
+      await coordinator.verifyCurrent();
+      await tester.pumpAndSettle();
+
+      current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, openingRevision + 1);
+      expect(current.head.canonicalJson, _head(108).canonicalJson);
+      expect(managed.npcGreetingCreateCalls, 0);
+      expect(find.text(l10n.managedNpcOpeningRecipeStopped), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-page-story')),
+        findsOneWidget,
+      );
+
+      final genericNpc = find.byKey(
+        const Key('revision3-story-workspace-entity-$genericNpcId'),
+      );
+      final rejectedNpc = find.byKey(
+        const Key('revision3-story-workspace-entity-$rejectedNpcId'),
+      );
+      expect(genericNpc, findsOneWidget);
+      expect(tester.widget<ListTile>(genericNpc).selected, isTrue);
+      expect(rejectedNpc, findsOneWidget);
+      expect(tester.widget<ListTile>(rejectedNpc).selected, isFalse);
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-$projectId-$genericNpcId',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-$projectId-$rejectedNpcId',
+          ),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-story-workbench-tab-dialogVoice-$rejectedNpcId'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -9377,6 +10010,20 @@ Future<void> _pumpUntilFound(
   expect(target, findsOneWidget);
 }
 
+Future<void> _dragUntilFound(
+  WidgetTester tester, {
+  required Finder scrollable,
+  required Finder target,
+  int maxDrags = 8,
+}) async {
+  for (var drag = 0; drag < maxDrags; drag++) {
+    if (target.evaluate().isNotEmpty) return;
+    await tester.drag(scrollable, const Offset(0, -180));
+    await tester.pump();
+  }
+  expect(target, findsOneWidget);
+}
+
 Future<void> _sendControlS(WidgetTester tester) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
   await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
@@ -9464,6 +10111,11 @@ typedef _QuestTranscriptCreateCallback =
     FutureOr<Revision3QuestTranscriptPublication> Function(
       _FakeQuestTranscriptManagedLease lease,
       Revision3QuestTranscriptCreateTechnicalPlan plan,
+    );
+typedef _NpcGreetingCreateCallback =
+    FutureOr<Revision3NpcGreetingPublication> Function(
+      _FakeNpcGreetingManagedLease lease,
+      Revision3NpcGreetingCreateTechnicalPlan plan,
     );
 
 class _FakeManagedLease
@@ -10221,6 +10873,47 @@ final class _FakeQuestTranscriptManagedLease extends _FakeManagedLease
   );
 }
 
+final class _FakeNpcGreetingManagedLease extends _FakeManagedLease
+    implements ManagedRevision3NpcGreetingLease {
+  _FakeNpcGreetingManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required this.onNpcGreetingCreate,
+    super.onNpcPublish,
+    super.onDialogLocalizationRead,
+    super.contentIndexBuilder,
+  });
+
+  final _NpcGreetingCreateCallback onNpcGreetingCreate;
+  int npcGreetingCreateCalls = 0;
+
+  @override
+  bool get supportsNpcGreeting => true;
+
+  @override
+  void markRequiresReopenAfterNpcGreetingUncertainty() {
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3NpcGreetingPublication> prepareAndPublishNpcGreetingCreateV1({
+    required Revision3NpcGreetingCreateTechnicalPlan plan,
+  }) async {
+    npcGreetingCreateCalls++;
+    return onNpcGreetingCreate(this, plan);
+  }
+
+  @override
+  Future<Revision3NpcGreetingPublication>
+  prepareAndPublishNpcGreetingReplaceV1({
+    required Revision3NpcGreetingReplaceTechnicalPlan plan,
+  }) => throw StateError(
+    'opening-recipe fake does not support greeting replacement',
+  );
+}
+
 final class _FakeHistoryManagedLease extends _FakeManagedLease
     implements ManagedRevision3ProjectHistoryLease {
   _FakeHistoryManagedLease({
@@ -10719,6 +11412,234 @@ Revision3ContentIndex _createdNpcContentIndex({
   ],
   'assets': <Object?>[],
 });
+
+Revision3ContentIndex _npcOpeningRecipeContentIndex({
+  required String projectId,
+  required int projectRevision,
+  required int openingRevision,
+  Revision3NpcGreetingCreateTechnicalPlan? createPlan,
+}) {
+  if (projectRevision == openingRevision) {
+    return _contentIndex(projectId: projectId, revision: projectRevision);
+  }
+  final npcOnlyRevision = openingRevision + 1;
+  final completedRevision = openingRevision + 2;
+  if (projectRevision != npcOnlyRevision &&
+      projectRevision != completedRevision) {
+    throw StateError(
+      'unexpected Character-opening fixture revision $projectRevision',
+    );
+  }
+  final completed = projectRevision == completedRevision;
+  if (completed && createPlan == null) {
+    throw StateError(
+      'N+2 Character-opening fixture requires the published plan',
+    );
+  }
+  final line = completed ? createPlan!.line : null;
+  AuthoringRevision3DialogLocalizationCreateIntentV1? localization;
+  if (line != null) {
+    final intent = line.localization;
+    if (intent is! AuthoringRevision3DialogLocalizationCreateIntentV1) {
+      throw StateError(
+        'Character-opening fixture requires created localization',
+      );
+    }
+    localization = intent;
+  }
+  final slot = line?.voiceSlot;
+  final entities =
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'id': _homeCreatedNpcId,
+          'kind': 'npc_draft',
+          'display_name': 'North Gate Guard',
+          'revision': completed ? createPlan!.expectedNpcRevision + 1 : 0,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': _homeCreatedNpcUniqueName,
+          },
+          'summary': <String, Object?>{
+            'kind': 'npc_draft',
+            'data': <String, Object?>{
+              'unique_name': _homeCreatedNpcUniqueName,
+              'module_namespace': _homeCreatedNpcModuleNamespace,
+              'parent_character_definition':
+                  'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+              'parent_ai_agent_config':
+                  'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+              'parent_spawn_definition':
+                  'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+              'greeting_count': completed ? 1 : 0,
+            },
+          },
+          'references': <Object?>[
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'draft_script_module',
+              entityId: _homeCreatedNpcModuleId,
+              expectedKind: 'script_module',
+            ),
+            if (line != null)
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'npc_greeting_line',
+                entityId: line.lineId,
+                expectedKind: 'dialog_line',
+              ),
+          ],
+          'asset_references': <Object?>[],
+        },
+        <String, Object?>{
+          'id': _homeCreatedNpcModuleId,
+          'kind': 'script_module',
+          'display_name': 'North Gate Guard Script',
+          'revision': 0,
+          'origin': <String, Object?>{
+            'type': 'generated',
+            'generator_id': revision3NpcFixtureGeneratorId,
+            'generator_version': revision3NpcFixtureGeneratorVersion,
+            'owner': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _homeCreatedNpcId,
+              'expected_kind': 'npc_draft',
+            },
+          },
+          'summary': <String, Object?>{
+            'kind': 'script_module',
+            'data': <String, Object?>{
+              'generator_id': revision3NpcFixtureGeneratorId,
+              'generator_version': revision3NpcFixtureGeneratorVersion,
+              'module_namespace': _homeCreatedNpcModuleNamespace,
+              'module_relative_path': 'GoreMods/Npcs/NorthGateGuard.as',
+              'status': <String, Object?>{
+                'authoring': 'offline_draft',
+                'runtime': 'runtime_unqualified',
+              },
+            },
+          },
+          'references': <Object?>[
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'origin_owner',
+              entityId: _homeCreatedNpcId,
+              expectedKind: 'npc_draft',
+            ),
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'script_owner',
+              entityId: _homeCreatedNpcId,
+              expectedKind: 'npc_draft',
+            ),
+          ],
+          'asset_references': <Object?>[],
+        },
+        if (localization != null)
+          <String, Object?>{
+            'id': localization.localizationId,
+            'kind': 'localization_entry',
+            'display_name': localization.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': localization.locId,
+            },
+            'summary': <String, Object?>{
+              'kind': 'localization_entry',
+              'data': <String, Object?>{
+                'loc_id': localization.locId,
+                'locales': <Object?>[...localization.texts.keys],
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+        if (line != null)
+          <String, Object?>{
+            'id': line.lineId,
+            'kind': 'dialog_line',
+            'display_name': line.lineDisplayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': line.lineAuthoredIdentity,
+            },
+            'summary': <String, Object?>{
+              'kind': 'dialog_line',
+              'data': <String, Object?>{
+                'speaker_hint': line.speakerHint,
+                'voice_slot_locales': <Object?>[if (slot != null) slot.locale],
+              },
+            },
+            'references': <Object?>[
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'dialog_localization',
+                entityId: localization!.localizationId,
+                expectedKind: 'localization_entry',
+              ),
+              if (slot != null)
+                _dialogLineEntityReference(
+                  projectId: projectId,
+                  role: 'dialog_voice_slot',
+                  qualifier: slot.locale,
+                  entityId: slot.slotId,
+                  expectedKind: 'voice_slot',
+                ),
+            ],
+            'asset_references': <Object?>[],
+          },
+        if (slot != null)
+          <String, Object?>{
+            'id': slot.slotId,
+            'kind': 'voice_slot',
+            'display_name': slot.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': 'GORE_VOICE_${slot.slotId.toUpperCase()}',
+            },
+            'summary': <String, Object?>{
+              'kind': 'voice_slot',
+              'data': <String, Object?>{
+                'locale': slot.locale,
+                'target_resolution': 'unresolved',
+                'candidate_count': 0,
+                'has_selected_take': false,
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+      ]..sort(
+        (left, right) =>
+            (left['id']! as String).compareTo(right['id']! as String),
+      );
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'project_name': 'Home Character opening recipe project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 1,
+        'sha256': List<String>.filled(64, '5').join(),
+      },
+    },
+    'authoring_locales': <Object?>['de', 'en'],
+    'entity_counts': <String, Object?>{
+      if (localization != null) 'localization_entry': 1,
+      if (line != null) 'dialog_line': 1,
+      if (slot != null) 'voice_slot': 1,
+      'npc_draft': 1,
+      'script_module': 1,
+    },
+    'entities': entities,
+    'assets': <Object?>[],
+  });
+}
 
 Revision3ContentIndex _questOpeningRecipeContentIndex({
   required String projectId,
