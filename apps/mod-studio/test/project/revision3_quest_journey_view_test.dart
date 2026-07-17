@@ -85,6 +85,45 @@ void main() {
     expect(find.byKey(const Key('revision3-quest-journey-panel')), findsOne);
   });
 
+  testWidgets('forwards a per-action blocker without disabling sibling edits', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(900, 800));
+    final outline = Revision3QuestOutlineFixture();
+    final index = _v4Index();
+    final harness = _harness(outline: outline, transcriptIndex: index);
+    const reason = 'Configure the Gothic game folder first.';
+    var nameEdits = 0;
+
+    await tester.pumpWidget(
+      _app(
+        _view(
+          outline: outline,
+          index: index,
+          service: harness.service,
+          onEditNameObjectives: () => nameEdits++,
+          editDescriptionConnectionsDisabledReason: reason,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final name = find.byKey(
+      const Key('revision3-quest-journey-edit-name-objectives'),
+    );
+    final connections = find.byKey(
+      const Key('revision3-quest-journey-edit-description-connections'),
+    );
+    expect(tester.widget<OutlinedButton>(name).onPressed, isNotNull);
+    expect(tester.widget<OutlinedButton>(connections).onPressed, isNull);
+    expect(find.text(reason), findsOne);
+    await tester.tap(name);
+    await tester.pumpAndSettle();
+    expect(nameEdits, 1);
+    harness.calls.expectNoForbiddenCalls();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('retryable load failure exposes Retry and reloads exactly once', (
     tester,
   ) async {
@@ -190,6 +229,85 @@ void main() {
     expect(harness.calls.transcriptReads, 1);
     harness.calls.expectNoForbiddenCalls();
   });
+
+  testWidgets(
+    'terminal reopen keeps intended edits visible but safely disabled',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(360, 480));
+      final outline = Revision3QuestOutlineFixture();
+      final index = _v4Index();
+      var edits = 0;
+      final harness = _harness(
+        outline: outline,
+        transcriptIndex: index,
+        loadSeed:
+            ({
+              required questId,
+              required expectedQuestRevision,
+              required expectedModuleId,
+              required expectedModuleRevision,
+            }) async =>
+                throw const Revision3QuestTransitionsRequiresReopenException(),
+      );
+
+      await tester.pumpWidget(
+        _app(
+          _view(
+            outline: outline,
+            index: index,
+            service: harness.service,
+            onEditNameObjectives: () => edits++,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final name = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
+      );
+      expect(name, findsOne);
+      expect(
+        find.byKey(
+          const Key('revision3-quest-journey-edit-description-connections'),
+        ),
+        findsOne,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-quest-journey-edit-states-transitions'),
+        ),
+        findsOne,
+      );
+      expect(tester.widget<OutlinedButton>(name).onPressed, isNull);
+      expect(
+        find.textContaining('exact project checkpoint could not be verified'),
+        findsOne,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-journey-edit-disabled-reason')),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widgetList<Tooltip>(find.byType(Tooltip))
+            .where(
+              (tooltip) =>
+                  tooltip.message ==
+                  const Revision3QuestJourneyPanelCopy.english()
+                      .unavailableBody,
+            ),
+        hasLength(3),
+      );
+      await tester.tap(name, warnIfMissed: false);
+      await tester.pump();
+      expect(edits, 0);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-retry')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'authority recovery reloads a terminal same-checkpoint view exactly once',
@@ -348,6 +466,10 @@ Revision3QuestJourneyView _view({
   Revision3QuestJourneyAction? onEditNameObjectives,
   Revision3QuestJourneyAction? onEditDescriptionConnections,
   Revision3QuestJourneyAction? onEditStatesTransitions,
+  String? editDisabledReason,
+  String? editNameObjectivesDisabledReason,
+  String? editDescriptionConnectionsDisabledReason,
+  String? editStatesTransitionsDisabledReason,
   Revision3QuestJourneyOpenDialogLine? onOpenDialogLine,
   int authorityEpoch = 0,
 }) => Revision3QuestJourneyView(
@@ -363,6 +485,11 @@ Revision3QuestJourneyView _view({
   onEditNameObjectives: onEditNameObjectives,
   onEditDescriptionConnections: onEditDescriptionConnections,
   onEditStatesTransitions: onEditStatesTransitions,
+  editDisabledReason: editDisabledReason,
+  editNameObjectivesDisabledReason: editNameObjectivesDisabledReason,
+  editDescriptionConnectionsDisabledReason:
+      editDescriptionConnectionsDisabledReason,
+  editStatesTransitionsDisabledReason: editStatesTransitionsDisabledReason,
   onOpenDialogLine: onOpenDialogLine,
   copy: const Revision3QuestJourneyPanelCopy.english(),
 );

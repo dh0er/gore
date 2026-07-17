@@ -137,6 +137,8 @@ final class _ManagedStorySelectionOrigin {
   final Revision3StoryWorkspaceController controller;
 }
 
+enum _StoryDraftHandoffOutcome { opened, stale, selectionFailed }
+
 _Revision3ManagedCompilerSelection? _revision3ManagedCompilerSelection({
   required Revision3ContentIndex index,
   required Revision3ContentEntity entity,
@@ -2268,9 +2270,11 @@ class _ManagedRevision3ProjectViewState
   late Revision3StoryWorkspaceController _storyWorkspaceController;
   late Revision3LocalizationVoiceWorkspaceController
   _localizationVoiceWorkspaceController;
+  late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   bool _recoveryStarting = false;
   bool _recoveryTerminal = false;
   String? _recoveryError;
+  int _storyAuthorityEpoch = 0;
   final Revision3QuestOpeningRecipe _questOpeningRecipe =
       Revision3QuestOpeningRecipe();
   bool _questOpeningRecipeUiBusy = false;
@@ -2415,6 +2419,7 @@ class _ManagedRevision3ProjectViewState
     _storyWorkspaceController = Revision3StoryWorkspaceController();
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
+    _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
   }
 
   @override
@@ -2426,6 +2431,11 @@ class _ManagedRevision3ProjectViewState
     final checkpointChanged =
         oldWidget.project.projectRevision != project.projectRevision ||
         oldWidget.project.head.canonicalJson != project.head.canonicalJson;
+    if (identityChanged) {
+      _storyAuthorityEpoch = 0;
+    } else if (oldWidget.project.requiresReopen && !project.requiresReopen) {
+      _storyAuthorityEpoch++;
+    }
     if (identityChanged || checkpointChanged || !project.requiresReopen) {
       _recoveryStarting = false;
       _recoveryTerminal = false;
@@ -2443,6 +2453,8 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController.dispose();
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
+    _dataAssetStagePanelController.dispose();
+    _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
   }
 
   bool _stillShowsRecoveryFor(ManagedRevision3CurrentProjectState expected) =>
@@ -2536,6 +2548,7 @@ class _ManagedRevision3ProjectViewState
     _contentLibraryController.dispose();
     _storyWorkspaceController.dispose();
     _localizationVoiceWorkspaceController.dispose();
+    _dataAssetStagePanelController.dispose();
     super.dispose();
   }
 
@@ -2948,55 +2961,19 @@ class _ManagedRevision3ProjectViewState
               projectRevision: project.projectRevision,
               projectHeadCanonicalJson: project.head.canonicalJson,
               load: loadContentIndex,
-              editQuestOutline: _storyMutationsEnabled
-                  ? (index, quest) =>
-                        _openQuestOutlineEditor(context, index, quest)
-                  : null,
-              editQuestOutlineDisabledReason: _storyMutationDisabledReason(
-                l10n,
-              ),
-              editQuestContext: gameRoot == null || !_storyMutationsEnabled
-                  ? null
-                  : (index, quest) =>
-                        _openQuestContextEditor(context, index, quest),
-              editQuestTransitions: _storyMutationsEnabled
-                  ? (index, quest) =>
-                        _openQuestTransitionsEditor(context, index, quest)
-                  : null,
-              editQuestTransitionsDisabledReason: _storyMutationDisabledReason(
-                l10n,
-              ),
-              editNpcProfile: gameRoot == null || !_storyMutationsEnabled
-                  ? null
-                  : (index, npc) => _openNpcProfileEditor(context, index, npc),
-              inspectQuestSource: gameRoot == null
-                  ? null
-                  : (index, quest) =>
-                        _openQuestSourceInspection(context, index, quest),
-              inspectNpcSource: (index, npc) =>
-                  _openNpcProfile(context, index, npc),
               openStoryDraftInStory: project.requiresReopen
                   ? null
                   : (index, entity) =>
                         _openLibraryDraftInStory(context, index, entity),
+              openStoryDraftInStoryDisabledReason: project.requiresReopen
+                  ? l10n.managedContentOpenInStoryRequiresReopen
+                  : null,
               openStoryDraftLabel: l10n.managedContentOpenInStory,
               openStoryDraftDescription:
                   l10n.managedContentOpenInStoryDescription,
-              editNpcProfileDisabledReason:
-                  _storyMutationDisabledReason(l10n) ??
-                  (gameRoot == null
-                      ? l10n.managedDashboardMissingGameDescription
-                      : null),
-              editQuestContextDisabledReason:
-                  _storyMutationDisabledReason(l10n) ??
-                  (gameRoot == null
-                      ? l10n.managedDashboardMissingGameDescription
-                      : null),
-              inspectQuestSourceDisabledReason: gameRoot == null
-                  ? l10n.managedDashboardMissingGameDescription
-                  : null,
+              openStoryDraftFailureMessage:
+                  l10n.managedContentOpenInStoryFailed,
               controller: contentLibraryController,
-              storyWorkbenchCopy: _storyWorkbenchCopy(l10n),
             ),
             baseGame: Revision3BaseGameContentBrowser(
               gameRoot: gameRoot,
@@ -3186,6 +3163,7 @@ class _ManagedRevision3ProjectViewState
           ),
     ),
     dataAssets: Revision3DataAssetStagePanel(
+      controller: _dataAssetStagePanelController,
       projectRoot: project.root.path,
       projectId: project.projectId,
       projectRevision: project.projectRevision,
@@ -3356,6 +3334,7 @@ class _ManagedRevision3ProjectViewState
       projectId: basisProjectId,
       projectRevision: basisProjectRevision,
       checkpointIdentity: basisHead.canonicalJson,
+      authorityEpoch: _storyAuthorityEpoch,
       index: index,
       quest: quest,
       service: service,
@@ -3367,6 +3346,10 @@ class _ManagedRevision3ProjectViewState
           : () => _openQuestContextEditor(context, index, quest),
       onEditStatesTransitions: canEdit
           ? () => _openQuestTransitionsEditor(context, index, quest)
+          : null,
+      editDisabledReason: _storyMutationDisabledReason(l10n),
+      editDescriptionConnectionsDisabledReason: gameRoot == null
+          ? l10n.managedDashboardMissingGameDescription
           : null,
       onOpenDialogLine: (row) => onOpenDialogLine(row.lineId),
       copy: copy,
@@ -3563,19 +3546,22 @@ class _ManagedRevision3ProjectViewState
           onCreateDialogLine: project.requiresReopen
               ? null
               : () => _openDialogLineEntry(context),
-          onAddVoiceTake: gameConfigured && intactVoiceLine
+          onAddVoiceTake:
+              gameConfigured && intactVoiceLine && !project.requiresReopen
               ? () => _openVoiceWizard(context)
               : null,
           onImportVoiceFolder: gameConfigured && !project.requiresReopen
               ? () => _openVoiceFolderImport(context)
               : null,
-          onManageVoiceTakes: intactVoiceLine
+          onManageVoiceTakes: intactVoiceLine && !project.requiresReopen
               ? () => _openVoiceTakeSelection(context)
               : null,
-          onResolveVoiceTarget: gameConfigured && intactVoiceLine
+          onResolveVoiceTarget:
+              gameConfigured && intactVoiceLine && !project.requiresReopen
               ? () => _openVoiceTargetResolver(context)
               : null,
-          onAddVoiceTakeFor: gameConfigured && intactVoiceLine
+          onAddVoiceTakeFor:
+              gameConfigured && intactVoiceLine && !project.requiresReopen
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceWizard(
                       context,
@@ -3584,7 +3570,7 @@ class _ManagedRevision3ProjectViewState
                       fixedContext: true,
                     )
               : null,
-          onManageVoiceTakesFor: intactVoiceLine
+          onManageVoiceTakesFor: intactVoiceLine && !project.requiresReopen
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceTakeSelection(
                       context,
@@ -3593,7 +3579,8 @@ class _ManagedRevision3ProjectViewState
                       fixedContext: true,
                     )
               : null,
-          onResolveVoiceTargetFor: gameConfigured && intactVoiceLine
+          onResolveVoiceTargetFor:
+              gameConfigured && intactVoiceLine && !project.requiresReopen
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceTargetResolver(
                       context,
@@ -3612,6 +3599,10 @@ class _ManagedRevision3ProjectViewState
     AppLocalizations l10n,
   ) {
     final gameConfigured = gameRoot != null;
+    final problemProjectRoot = project.root.path;
+    final problemProjectId = project.projectId;
+    final problemProjectRevision = project.projectRevision;
+    final problemProjectHeadCanonicalJson = project.head.canonicalJson;
     return Column(
       children: [
         Padding(
@@ -3647,23 +3638,41 @@ class _ManagedRevision3ProjectViewState
         ),
         Expanded(
           child: Revision3ProjectProblemsView(
+            projectRoot: project.root.path,
             projectId: project.projectId,
             projectRevision: project.projectRevision,
+            projectHeadCanonicalJson: project.head.canonicalJson,
             loadContent: loadContentIndex,
             loadDataAssetStages: loadDataAssetStages,
             gameConfigured: gameConfigured,
             copy: _projectProblemsCopy(l10n),
             actions: Revision3ProjectProblemsActions(
-              openEntity: (entityId) =>
-                  _openProblemEntity(context, entityId: entityId),
-              openAsset: (assetSha256) =>
-                  _openProblemAsset(context, assetSha256: assetSha256),
-              openDataAssetStage: (_) => Revision3ProjectWorkspace.navigate(
+              openEntity: (entityId) => _openProblemEntity(
                 context,
-                const Revision3ProjectWorkspaceLocation(
-                  Revision3ProjectWorkspaceSection.content,
-                  secondary: 'data-assets',
-                ),
+                entityId: entityId,
+                expectedProjectRoot: problemProjectRoot,
+                expectedProjectId: problemProjectId,
+                expectedProjectRevision: problemProjectRevision,
+                expectedProjectHeadCanonicalJson:
+                    problemProjectHeadCanonicalJson,
+              ),
+              openAsset: (assetSha256) => _openProblemAsset(
+                context,
+                assetSha256: assetSha256,
+                expectedProjectRoot: problemProjectRoot,
+                expectedProjectId: problemProjectId,
+                expectedProjectRevision: problemProjectRevision,
+                expectedProjectHeadCanonicalJson:
+                    problemProjectHeadCanonicalJson,
+              ),
+              openDataAssetStage: (targetPath) => _openProblemDataAssetStage(
+                context,
+                targetPath: targetPath,
+                expectedProjectRoot: problemProjectRoot,
+                expectedProjectId: problemProjectId,
+                expectedProjectRevision: problemProjectRevision,
+                expectedProjectHeadCanonicalJson:
+                    problemProjectHeadCanonicalJson,
               ),
               openSettings: () => Revision3ProjectWorkspace.navigate(
                 context,
@@ -4976,9 +4985,37 @@ class _ManagedRevision3ProjectViewState
     Revision3ContentIndex index,
     Revision3ContentEntity entity,
   ) async {
+    final outcome = await _tryOpenDraftInStory(
+      context,
+      index,
+      entity,
+      section: Revision3StoryWorkbenchSection.overview,
+    );
+    if (outcome != _StoryDraftHandoffOutcome.selectionFailed ||
+        !context.mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context)..removeCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          AppLocalizations.of(
+            context,
+          ).managedStoryWorkspacePublishedSelectionStale,
+        ),
+      ),
+    );
+  }
+
+  Future<_StoryDraftHandoffOutcome> _tryOpenDraftInStory(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity, {
+    required Revision3StoryWorkbenchSection section,
+  }) async {
     final origin = _storySelectionOrigin;
     final expected = currentManagedProject;
-    if (expected == null) return;
+    if (expected == null) return _StoryDraftHandoffOutcome.stale;
 
     bool isExactCurrentDraft() =>
         context.mounted &&
@@ -4990,7 +5027,7 @@ class _ManagedRevision3ProjectViewState
         (entity.kind == Revision3ContentEntityKind.questDraft ||
             entity.kind == Revision3ContentEntityKind.npcDraft);
 
-    if (!isExactCurrentDraft()) return;
+    if (!isExactCurrentDraft()) return _StoryDraftHandoffOutcome.stale;
     Revision3ProjectWorkspace.navigate(
       context,
       const Revision3ProjectWorkspaceLocation(
@@ -4998,24 +5035,17 @@ class _ManagedRevision3ProjectViewState
       ),
     );
     await WidgetsBinding.instance.endOfFrame;
-    if (!isExactCurrentDraft()) return;
+    if (!isExactCurrentDraft()) return _StoryDraftHandoffOutcome.stale;
     final selected = await origin.controller.selectEntityAtRevision(
       entityId: entity.id,
       projectRevision: expected.projectRevision,
       projectHeadCanonicalJson: expected.head.canonicalJson,
-      section: Revision3StoryWorkbenchSection.overview,
+      section: section,
     );
-    if (!context.mounted || selected || !isExactCurrentDraft()) return;
-    final messenger = ScaffoldMessenger.of(context)..removeCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          AppLocalizations.of(
-            context,
-          ).managedStoryWorkspacePublishedSelectionStale,
-        ),
-      ),
-    );
+    if (selected) return _StoryDraftHandoffOutcome.opened;
+    return isExactCurrentDraft()
+        ? _StoryDraftHandoffOutcome.selectionFailed
+        : _StoryDraftHandoffOutcome.stale;
   }
 
   void _openStoryExternalEntity(BuildContext context, String entityId) {
@@ -5065,18 +5095,74 @@ class _ManagedRevision3ProjectViewState
   Future<void> _openProblemEntity(
     BuildContext context, {
     required String entityId,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
   }) async {
-    final openProblems = _contentLibraryController.openEntityProblemsById(
-      entityId,
-    );
+    bool isExactCurrentProject() {
+      final current = currentManagedProject;
+      return context.mounted &&
+          current != null &&
+          !current.requiresReopen &&
+          current.root.path == expectedProjectRoot &&
+          current.projectId == expectedProjectId &&
+          current.projectRevision == expectedProjectRevision &&
+          current.head.canonicalJson == expectedProjectHeadCanonicalJson;
+    }
+
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact project entity is no longer available.');
+    }
+    final index = await loadContentIndex();
+    if (!context.mounted) {
+      throw StateError('The exact project entity is no longer available.');
+    }
+    if (!isExactCurrentProject() ||
+        index.projectId != expectedProjectId ||
+        index.projectRevision != expectedProjectRevision) {
+      throw StateError('The exact project entity is no longer available.');
+    }
+    final entity = index.entityById(entityId);
+    if (entity == null) {
+      throw StateError('The exact project entity is no longer available.');
+    }
+    if (entity.kind == Revision3ContentEntityKind.questDraft ||
+        entity.kind == Revision3ContentEntityKind.npcDraft) {
+      final outcome = await _tryOpenDraftInStory(
+        context,
+        index,
+        entity,
+        section: Revision3StoryWorkbenchSection.problemsChecks,
+      );
+      if (outcome == _StoryDraftHandoffOutcome.opened) return;
+      throw StateError('The exact project entity is no longer available.');
+    }
+
+    final openProblems = _contentLibraryController
+        .openEntityProblemsByIdAtCheckpoint(
+          entityId,
+          projectRevision: expectedProjectRevision,
+          projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+        );
     Revision3ProjectWorkspace.navigate(
       context,
       const Revision3ProjectWorkspaceLocation(
         Revision3ProjectWorkspaceSection.content,
       ),
     );
-    if (await openProblems ||
-        await _contentLibraryController.openEntityById(entityId)) {
+    if (await openProblems && isExactCurrentProject()) {
+      return;
+    }
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact project entity is no longer available.');
+    }
+    if (await _contentLibraryController.openEntityByIdAtCheckpoint(
+          entityId,
+          projectRevision: expectedProjectRevision,
+          projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+        ) &&
+        isExactCurrentProject()) {
       return;
     }
     throw StateError('The exact project entity is no longer available.');
@@ -5085,16 +5171,77 @@ class _ManagedRevision3ProjectViewState
   Future<void> _openProblemAsset(
     BuildContext context, {
     required String assetSha256,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
   }) async {
-    final openAsset = _contentLibraryController.openAssetBySha256(assetSha256);
+    bool isExactCurrentProject() {
+      final current = currentManagedProject;
+      return context.mounted &&
+          current != null &&
+          !current.requiresReopen &&
+          current.root.path == expectedProjectRoot &&
+          current.projectId == expectedProjectId &&
+          current.projectRevision == expectedProjectRevision &&
+          current.head.canonicalJson == expectedProjectHeadCanonicalJson;
+    }
+
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact project asset is no longer available.');
+    }
+    final openAsset = _contentLibraryController.openAssetBySha256AtCheckpoint(
+      assetSha256,
+      projectRevision: expectedProjectRevision,
+      projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
     Revision3ProjectWorkspace.navigate(
       context,
       const Revision3ProjectWorkspaceLocation(
         Revision3ProjectWorkspaceSection.content,
       ),
     );
-    if (await openAsset) return;
+    if (await openAsset && isExactCurrentProject()) return;
     throw StateError('The exact project asset is no longer available.');
+  }
+
+  Future<void> _openProblemDataAssetStage(
+    BuildContext context, {
+    required String targetPath,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isExactCurrentProject() {
+      final current = currentManagedProject;
+      return context.mounted &&
+          current != null &&
+          !current.requiresReopen &&
+          current.root.path == expectedProjectRoot &&
+          current.projectId == expectedProjectId &&
+          current.projectRevision == expectedProjectRevision &&
+          current.head.canonicalJson == expectedProjectHeadCanonicalJson;
+    }
+
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact DataAsset edit is no longer available.');
+    }
+    final openStage = _dataAssetStagePanelController.openStageByIdAtCheckpoint(
+      targetPath,
+      projectId: expectedProjectId,
+      projectRevision: expectedProjectRevision,
+      projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+        secondary: 'data-assets',
+      ),
+    );
+    if (await openStage && isExactCurrentProject()) return;
+    throw StateError('The exact DataAsset edit is no longer available.');
   }
 
   Future<void> _openSettings(BuildContext context) =>
@@ -5137,6 +5284,7 @@ Revision3DialogLineEntryDialogCopy _dialogLineEntryCopy(
 Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   AppLocalizations l10n,
 ) => Revision3StoryEntityWorkbenchCopy(
+  actionFailed: l10n.managedStoryWorkbenchActionFailed,
   draftBadge: l10n.managedStoryWorkbenchDraftBadge,
   buildBlockedBadge: l10n.managedStoryWorkbenchBuildBlockedBadge,
   runtimeUnqualifiedBadge: l10n.managedStoryWorkbenchRuntimeUnqualifiedBadge,

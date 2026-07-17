@@ -1236,6 +1236,316 @@ void main() {
     );
   });
 
+  testWidgets(
+    'controller opens only the exact stage at the exact wide checkpoint',
+    (tester) async {
+      final controller = Revision3DataAssetStagePanelController();
+      await _pumpPanel(
+        tester,
+        Revision3DataAssetStagePanel(
+          projectRoot: _projectRoot,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHead: fixture.stagedHead,
+          load: () async => [stage],
+          publish: _unexpectedPublish,
+          remove: _unexpectedRemove,
+          controller: controller,
+        ),
+      );
+      addTearDown(controller.dispose);
+
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath,
+          projectId: 'another-project',
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isFalse,
+      );
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath,
+          projectId: stage.projectId,
+          projectRevision: 4,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isFalse,
+      );
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.removedHead.canonicalJson,
+        ),
+        isFalse,
+      );
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath.toLowerCase(),
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isFalse,
+        reason: 'stage identity is exact, not case-folded or fuzzy',
+      );
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          '/Game/Missing',
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isFalse,
+        reason: 'opening the generic registry cannot claim stage success',
+      );
+
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isTrue,
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('revision3-dataasset-stage-search')),
+            )
+            .controller
+            ?.text,
+        stage.targetPath,
+      );
+      expect(
+        tester
+            .widget<ExpansionTile>(
+              find.byKey(
+                ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
+              ),
+            )
+            .controller
+            ?.isExpanded,
+        isTrue,
+      );
+      expect(
+        find.byKey(
+          ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'controller buffers compact pre-mount navigation until exact load',
+    (tester) async {
+      final controller = Revision3DataAssetStagePanelController();
+      addTearDown(controller.dispose);
+      final load = Completer<List<AuthoringRevision3DataAssetStage>>();
+      bool? resolved;
+      final opening = controller.openStageByIdAtCheckpoint(
+        stage.targetPath,
+        projectId: stage.projectId,
+        projectRevision: 5,
+        projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+      );
+      unawaited(opening.then((value) => resolved = value));
+
+      await _pumpPanel(
+        tester,
+        Revision3DataAssetStagePanel(
+          projectRoot: _projectRoot,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHead: fixture.stagedHead,
+          load: () => load.future,
+          publish: _unexpectedPublish,
+          remove: _unexpectedRemove,
+          controller: controller,
+        ),
+        settle: false,
+        surfaceSize: const Size(560, 760),
+      );
+      await tester.pump();
+      expect(resolved, isNull, reason: 'lazy mounting does not claim success');
+
+      load.complete([stage]);
+      await tester.pumpAndSettle();
+
+      expect(await opening, isTrue);
+      expect(
+        tester
+            .widget<ExpansionTile>(
+              find.byKey(
+                ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
+              ),
+            )
+            .controller
+            ?.isExpanded,
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('pending exact navigation cancels on same-revision head drift', (
+    tester,
+  ) async {
+    final controller = Revision3DataAssetStagePanelController();
+    addTearDown(controller.dispose);
+    final oldHeadReload = Completer<List<AuthoringRevision3DataAssetStage>>();
+    final newHeadReload = Completer<List<AuthoringRevision3DataAssetStage>>();
+    var head = fixture.stagedHead;
+    var loadCalls = 0;
+    late StateSetter rebuild;
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: Revision3DataAssetStagePanel(
+                key: const ValueKey('same-dataasset-panel'),
+                projectRoot: _projectRoot,
+                projectId: stage.projectId,
+                projectRevision: 5,
+                projectHead: head,
+                load: () {
+                  loadCalls++;
+                  return switch (loadCalls) {
+                    1 => Future.value([stage]),
+                    2 => oldHeadReload.future,
+                    _ => newHeadReload.future,
+                  };
+                },
+                publish: _unexpectedPublish,
+                remove: _unexpectedRemove,
+                controller: controller,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('revision3-dataasset-stage-refresh')),
+    );
+    await tester.pump();
+    final staleOpening = controller.openStageByIdAtCheckpoint(
+      stage.targetPath,
+      projectId: stage.projectId,
+      projectRevision: 5,
+      projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+    );
+    await tester.pump();
+
+    rebuild(() => head = fixture.removedHead);
+    await tester.pump();
+    expect(await staleOpening, isFalse);
+
+    final currentOpening = controller.openStageByIdAtCheckpoint(
+      stage.targetPath,
+      projectId: stage.projectId,
+      projectRevision: 5,
+      projectHeadCanonicalJson: fixture.removedHead.canonicalJson,
+    );
+    oldHeadReload.complete([stage]);
+    await tester.pump();
+    newHeadReload.complete([stage]);
+    await tester.pumpAndSettle();
+
+    expect(await currentOpening, isTrue);
+    expect(
+      tester
+          .widget<ExpansionTile>(
+            find.byKey(
+              ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
+            ),
+          )
+          .controller
+          ?.isExpanded,
+      isTrue,
+    );
+  });
+
+  testWidgets(
+    'project switch detach and controller disposal reject pending navigation',
+    (tester) async {
+      final controller = Revision3DataAssetStagePanelController();
+      final projectALoad = Completer<List<AuthoringRevision3DataAssetStage>>();
+      final projectBLoad = Completer<List<AuthoringRevision3DataAssetStage>>();
+      var projectId = stage.projectId;
+      late StateSetter rebuild;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Scaffold(
+                body: Revision3DataAssetStagePanel(
+                  key: const ValueKey('switching-dataasset-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: projectId,
+                  projectRevision: 5,
+                  projectHead: fixture.stagedHead,
+                  load: () => projectId == stage.projectId
+                      ? projectALoad.future
+                      : projectBLoad.future,
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  controller: controller,
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final projectAOpening = controller.openStageByIdAtCheckpoint(
+        stage.targetPath,
+        projectId: stage.projectId,
+        projectRevision: 5,
+        projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+      );
+      rebuild(() => projectId = 'project-b');
+      await tester.pump();
+      expect(await projectAOpening, isFalse);
+
+      final projectBOpening = controller.openStageByIdAtCheckpoint(
+        stage.targetPath,
+        projectId: 'project-b',
+        projectRevision: 5,
+        projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+      );
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pump();
+      expect(await projectBOpening, isFalse);
+
+      controller.dispose();
+      expect(
+        await controller.openStageByIdAtCheckpoint(
+          stage.targetPath,
+          projectId: 'project-b',
+          projectRevision: 5,
+          projectHeadCanonicalJson: fixture.stagedHead.canonicalJson,
+        ),
+        isFalse,
+      );
+    },
+  );
+
   testWidgets('verified receipt import passes only the selected path', (
     tester,
   ) async {

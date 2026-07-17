@@ -26,6 +26,10 @@ class Revision3QuestJourneyView extends StatefulWidget {
     this.onEditNameObjectives,
     this.onEditDescriptionConnections,
     this.onEditStatesTransitions,
+    this.editDisabledReason,
+    this.editNameObjectivesDisabledReason,
+    this.editDescriptionConnectionsDisabledReason,
+    this.editStatesTransitionsDisabledReason,
     this.onOpenDialogLine,
     this.copy = const Revision3QuestJourneyPanelCopy.english(),
     super.key,
@@ -50,6 +54,17 @@ class Revision3QuestJourneyView extends StatefulWidget {
   final Revision3QuestJourneyAction? onEditNameObjectives;
   final Revision3QuestJourneyAction? onEditDescriptionConnections;
   final Revision3QuestJourneyAction? onEditStatesTransitions;
+
+  /// Localized owner-provided reason that keeps all edit affordances visible
+  /// but disabled. Leave null together with null callbacks for a deliberately
+  /// read-only journey.
+  final String? editDisabledReason;
+
+  /// Localized reasons that disable only their matching edit action. The
+  /// shared [editDisabledReason] takes precedence when both are supplied.
+  final String? editNameObjectivesDisabledReason;
+  final String? editDescriptionConnectionsDisabledReason;
+  final String? editStatesTransitionsDisabledReason;
   final Revision3QuestJourneyOpenDialogLine? onOpenDialogLine;
   final Revision3QuestJourneyPanelCopy copy;
 
@@ -203,9 +218,28 @@ final class _Revision3QuestJourneyViewState
         onEditNameObjectives: widget.onEditNameObjectives,
         onEditDescriptionConnections: widget.onEditDescriptionConnections,
         onEditStatesTransitions: widget.onEditStatesTransitions,
+        editDisabledReason: widget.editDisabledReason,
+        editNameObjectivesDisabledReason:
+            widget.editNameObjectivesDisabledReason,
+        editDescriptionConnectionsDisabledReason:
+            widget.editDescriptionConnectionsDisabledReason,
+        editStatesTransitionsDisabledReason:
+            widget.editStatesTransitionsDisabledReason,
       ),
     _Revision3QuestJourneyViewPhase.requiresReopen =>
-      Revision3QuestJourneyPanel.unavailable(copy: widget.copy),
+      Revision3QuestJourneyPanel.unavailable(
+        copy: widget.copy,
+        editDisabledReason:
+            widget.editDisabledReason ??
+            (widget.onEditNameObjectives != null ||
+                    widget.onEditDescriptionConnections != null ||
+                    widget.onEditStatesTransitions != null ||
+                    widget.editNameObjectivesDisabledReason != null ||
+                    widget.editDescriptionConnectionsDisabledReason != null ||
+                    widget.editStatesTransitionsDisabledReason != null
+                ? widget.copy.unavailableBody
+                : null),
+      ),
     _Revision3QuestJourneyViewPhase.available => Revision3QuestJourneyPanel(
       projection: _projection!,
       giverDisplayName: widget.giverDisplayName,
@@ -213,6 +247,12 @@ final class _Revision3QuestJourneyViewState
       onEditNameObjectives: widget.onEditNameObjectives,
       onEditDescriptionConnections: widget.onEditDescriptionConnections,
       onEditStatesTransitions: widget.onEditStatesTransitions,
+      editDisabledReason: widget.editDisabledReason,
+      editNameObjectivesDisabledReason: widget.editNameObjectivesDisabledReason,
+      editDescriptionConnectionsDisabledReason:
+          widget.editDescriptionConnectionsDisabledReason,
+      editStatesTransitionsDisabledReason:
+          widget.editStatesTransitionsDisabledReason,
       onOpenDialogLine: widget.onOpenDialogLine,
       copy: widget.copy,
     ),

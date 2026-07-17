@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
@@ -169,6 +171,289 @@ void main() {
     expect(find.text('Dialog line 3'), findsOne);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'wide blocked edits stay visible, disabled and explain the owner reason',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 900));
+      final projection = await _projection(legacy: false);
+      const reason = 'Save or discard the pending project changes first.';
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          editDisabledReason: reason,
+        ),
+      );
+
+      final name = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
+      );
+      final connections = find.byKey(
+        const Key('revision3-quest-journey-edit-description-connections'),
+      );
+      final transitions = find.byKey(
+        const Key('revision3-quest-journey-edit-states-transitions'),
+      );
+      expect(name, findsOne);
+      expect(connections, findsOne);
+      expect(transitions, findsOne);
+      expect(tester.widget<OutlinedButton>(name).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(connections).onPressed, isNull);
+      expect(tester.widget<FilledButton>(transitions).onPressed, isNull);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-edit-disabled-reason')),
+        findsOne,
+      );
+      expect(find.text(reason), findsOne);
+      expect(
+        tester
+            .widgetList<Tooltip>(find.byType(Tooltip))
+            .where((tooltip) => tooltip.message == reason),
+        hasLength(3),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'compact partial blocker keeps other edits enabled without overflow',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(320, 480));
+      final projection = await _projection(legacy: false);
+      const reason =
+          'Richte zuerst den Gothic-Spielordner in den Einstellungen ein, bevor du Beschreibung und Verknüpfungen dieser Quest bearbeitest.';
+      var nameEdits = 0;
+      var transitionEdits = 0;
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          onEditNameObjectives: () => nameEdits++,
+          editDescriptionConnectionsDisabledReason: reason,
+          onEditStatesTransitions: () => transitionEdits++,
+          copy: const Revision3QuestJourneyPanelCopy.german(),
+        ),
+      );
+
+      expect(find.byKey(const Key('revision3-quest-journey-narrow')), findsOne);
+      final name = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
+      );
+      final connections = find.byKey(
+        const Key('revision3-quest-journey-edit-description-connections'),
+      );
+      final transitions = find.byKey(
+        const Key('revision3-quest-journey-edit-states-transitions'),
+      );
+      expect(name, findsOne);
+      expect(connections, findsOne);
+      expect(transitions, findsOne);
+      expect(tester.widget<OutlinedButton>(name).onPressed, isNotNull);
+      expect(tester.widget<OutlinedButton>(connections).onPressed, isNull);
+      expect(tester.widget<FilledButton>(transitions).onPressed, isNotNull);
+      expect(find.text(reason), findsOne);
+      expect(
+        tester
+            .widgetList<Tooltip>(find.byType(Tooltip))
+            .where((tooltip) => tooltip.message == reason),
+        hasLength(1),
+      );
+      await tester.tap(name);
+      await tester.pumpAndSettle();
+      await tester.tap(transitions);
+      await tester.pumpAndSettle();
+      expect(nameEdits, 1);
+      expect(transitionEdits, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'duplicate per-action reasons render once but explain each action',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(900, 700));
+      final projection = await _projection(legacy: false);
+      const reason = 'The configured game folder is required for this editor.';
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          editDescriptionConnectionsDisabledReason: reason,
+          editStatesTransitionsDisabledReason: reason,
+        ),
+      );
+
+      expect(find.text(reason), findsOne);
+      expect(
+        tester
+            .widgetList<Tooltip>(find.byType(Tooltip))
+            .where((tooltip) => tooltip.message == reason),
+        hasLength(2),
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(
+                const Key(
+                  'revision3-quest-journey-edit-description-connections',
+                ),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(
+                const Key('revision3-quest-journey-edit-states-transitions'),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'edit actions keep one single-flight lane and explain busy state',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(900, 820));
+      final projection = await _projection(legacy: false);
+      final pending = Completer<void>();
+      var nameEdits = 0;
+      var connectionEdits = 0;
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          onEditNameObjectives: () {
+            nameEdits++;
+            return pending.future;
+          },
+          onEditDescriptionConnections: () => connectionEdits++,
+        ),
+      );
+
+      final name = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
+      );
+      final connections = find.byKey(
+        const Key('revision3-quest-journey-edit-description-connections'),
+      );
+      await tester.tap(name);
+      await tester.pump();
+
+      expect(nameEdits, 1);
+      expect(tester.widget<OutlinedButton>(name).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(connections).onPressed, isNull);
+      expect(
+        tester
+            .widgetList<Tooltip>(find.byType(Tooltip))
+            .where(
+              (tooltip) =>
+                  tooltip.message ==
+                  const Revision3QuestJourneyPanelCopy.english()
+                      .editActionBusyReason,
+            ),
+        hasLength(2),
+      );
+      final progress = find.byKey(
+        const Key('revision3-quest-journey-action-progress'),
+      );
+      expect(progress, findsOne);
+      expect(
+        find.text(
+          const Revision3QuestJourneyPanelCopy.english().editActionBusyReason,
+        ),
+        findsOne,
+      );
+      expect(tester.widget<Semantics>(progress).properties.liveRegion, isTrue);
+      final progressIndicator = tester.widget<CircularProgressIndicator>(
+        find.descendant(
+          of: progress,
+          matching: find.byType(CircularProgressIndicator),
+        ),
+      );
+      expect(
+        progressIndicator.semanticsLabel,
+        const Revision3QuestJourneyPanelCopy.english().editActionBusyReason,
+      );
+
+      await tester.tap(connections, warnIfMissed: false);
+      await tester.pump();
+      expect(connectionEdits, 0);
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(progress, findsNothing);
+      expect(tester.widget<OutlinedButton>(connections).onPressed, isNotNull);
+      await tester.tap(connections);
+      await tester.pumpAndSettle();
+      expect(connectionEdits, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'compact German busy status keeps long progress guidance accessible',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(300, 440));
+      final projection = await _projection(legacy: false, german: true);
+      final pending = Completer<void>();
+      const copy = Revision3QuestJourneyPanelCopy.german();
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          onEditNameObjectives: () => pending.future,
+          copy: copy,
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
+      );
+      await tester.pump();
+
+      final progress = find.byKey(
+        const Key('revision3-quest-journey-action-progress'),
+      );
+      expect(progress, findsOne);
+      expect(find.text(copy.editActionBusyReason), findsOne);
+      expect(tester.widget<Semantics>(progress).properties.liveRegion, isTrue);
+      expect(
+        tester
+            .widget<CircularProgressIndicator>(
+              find.descendant(
+                of: progress,
+                matching: find.byType(CircularProgressIndicator),
+              ),
+            )
+            .semanticsLabel,
+        copy.editActionBusyReason,
+      );
+      await tester.ensureVisible(progress);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(progress, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'German narrow view localizes actions, boundaries, legacy and general dialog',
@@ -355,6 +640,14 @@ void main() {
     );
 
     expect(projection.orderedDialogLines, isEmpty);
+    expect(
+      find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('revision3-quest-journey-edit-disabled-reason')),
+      findsNothing,
+    );
     expect(
       find.text('No dialog is linked to this objective.'),
       findsNWidgets(3),

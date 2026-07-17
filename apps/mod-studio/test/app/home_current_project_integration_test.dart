@@ -32,6 +32,7 @@ import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
+import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_journey_view.dart';
@@ -1117,66 +1118,45 @@ void main() {
       expect(journeyView.onEditNameObjectives, isNull);
       expect(journeyView.onEditDescriptionConnections, isNull);
       expect(journeyView.onEditStatesTransitions, isNull);
-      expect(
-        find.byKey(const Key('revision3-quest-journey-edit-name-objectives')),
-        findsNothing,
-      );
+      for (final key in const <Key>[
+        Key('revision3-quest-journey-edit-name-objectives'),
+        Key('revision3-quest-journey-edit-description-connections'),
+        Key('revision3-quest-journey-edit-states-transitions'),
+      ]) {
+        final action = find.byKey(key);
+        expect(action, findsOneWidget);
+        expect(tester.widget<ButtonStyleButton>(action).onPressed, isNull);
+      }
+      expect(find.text(blockedReason), findsWidgets);
       expect(
         find.byKey(
-          const Key('revision3-quest-journey-edit-states-transitions'),
+          const Key(
+            'revision3-story-workbench-tab-logic-'
+            '$_homeQuestTranscriptQuestId',
+          ),
         ),
         findsNothing,
-      );
-
-      final logicTab = find.byKey(
-        const Key(
-          'revision3-story-workbench-tab-logic-$_homeQuestTranscriptQuestId',
-        ),
-      );
-      await tester.ensureVisible(logicTab);
-      await tester.tap(logicTab);
-      await tester.pumpAndSettle();
-      final storyLogicEdit = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-logic-'
-          '$_homeQuestTranscriptQuestId',
-        ),
-      );
-      await _revealWorkbenchAction(tester, storyLogicEdit);
-      expect(
-        _workbenchActionTileWidget(tester, storyLogicEdit).enabled,
-        isFalse,
-      );
-      expect(
-        find.descendant(
-          of: storyLogicEdit,
-          matching: find.text(blockedReason, skipOffstage: false),
-          skipOffstage: false,
-        ),
-        findsOneWidget,
       );
 
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, _homeQuestTranscriptQuestId);
-      final contentOverviewEdit = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-overview-'
-          '$_homeQuestTranscriptQuestId',
-        ),
-      );
-      await _revealWorkbenchAction(tester, contentOverviewEdit);
       expect(
-        _workbenchActionTileWidget(tester, contentOverviewEdit).enabled,
-        isFalse,
+        find.byKey(
+          const Key(
+            'revision3-story-workbench-action-edit-overview-'
+            '$_homeQuestTranscriptQuestId',
+          ),
+        ),
+        findsNothing,
+      );
+      final reopenedJourneyEdit = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
       );
       expect(
-        find.descendant(
-          of: contentOverviewEdit,
-          matching: find.text(blockedReason, skipOffstage: false),
-          skipOffstage: false,
-        ),
-        findsOneWidget,
+        tester.widget<OutlinedButton>(reopenedJourneyEdit).onPressed,
+        isNull,
       );
+      expect(find.text(blockedReason), findsWidgets);
 
       expect(managed.npcPublishCalls, 0);
       expect(managed.questPublishCalls, 0);
@@ -2457,7 +2437,7 @@ void main() {
     },
   );
 
-  testWidgets('Problems opens the exact referenced entity in Content checks', (
+  testWidgets('Problems opens the exact referenced entity in Story checks', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -2504,6 +2484,7 @@ void main() {
     await tester.tap(openEntity);
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('revision3-story-workspace')), findsOneWidget);
     expect(
       find.byKey(
         const Key(
@@ -2530,6 +2511,318 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+    'Problems rendered entity action rejects same-revision head replacement',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3ProjectProblemsFixture(
+        includeDialogGraph: false,
+        includeReferenceProblem: true,
+        includeAssetProblem: false,
+        includeVoiceProblems: false,
+        includeDataAssetStage: false,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\problems-rendered-head-a'),
+        projectId: fixture.projectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onDataAssetList: (_) => fixture.dataAssetStages,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+
+      final openEntity = find.byKey(
+        const Key(
+          'revision3-project-problems-action-entity-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      );
+      await tester.ensureVisible(openEntity);
+      await tester.pump();
+      final renderedAction = tester.widget<FilledButton>(openEntity).onPressed;
+      expect(renderedAction, isNotNull);
+
+      final replacementHead = _head(fixture.projectRevision + 1);
+      managed.head = replacementHead;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: replacementHead,
+        requiresReopen: false,
+      );
+      renderedAction!();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-content-workspace-navigation')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-problems-view')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Problems rendered entity action rejects another root at the same head',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3ProjectProblemsFixture(
+        includeDialogGraph: false,
+        includeReferenceProblem: true,
+        includeAssetProblem: false,
+        includeVoiceProblems: false,
+        includeDataAssetStage: false,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\problems-rendered-root-a'),
+        projectId: fixture.projectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onDataAssetList: (_) => fixture.dataAssetStages,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+
+      final openEntity = find.byKey(
+        const Key(
+          'revision3-project-problems-action-entity-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      );
+      await tester.ensureVisible(openEntity);
+      await tester.pump();
+      final renderedAction = tester.widget<FilledButton>(openEntity).onPressed;
+      expect(renderedAction, isNotNull);
+
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: Directory(r'C:\mods\problems-rendered-root-b'),
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: managed.head,
+        requiresReopen: false,
+      );
+      renderedAction!();
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-content-workspace-navigation')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Problems entity handoff rejects delayed same-revision head drift',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3ProjectProblemsFixture(
+        includeDialogGraph: false,
+        includeReferenceProblem: true,
+        includeAssetProblem: false,
+        includeVoiceProblems: false,
+        includeDataAssetStage: false,
+      );
+      final delayedEntityLoad = Completer<Revision3ContentIndex>();
+      var reads = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\problems-head-drift'),
+        projectId: fixture.projectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        onContentIndexRead: (_) {
+          reads++;
+          return switch (reads) {
+            1 => Future<Revision3ContentIndex>.value(fixture.contentIndex),
+            2 => Future<Revision3ContentIndex>.value(fixture.contentIndex),
+            3 => delayedEntityLoad.future,
+            _ => Future<Revision3ContentIndex>.value(fixture.contentIndex),
+          };
+        },
+        onDataAssetList: (_) => fixture.dataAssetStages,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+      expect(reads, 2);
+      final openEntity = find.byKey(
+        const Key(
+          'revision3-project-problems-action-entity-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      );
+      await tester.ensureVisible(openEntity);
+      await tester.pump();
+      await tester.tap(openEntity);
+      await tester.pump();
+      expect(reads, 3);
+
+      final driftedHead = _head(fixture.projectRevision + 1);
+      managed.head = driftedHead;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: driftedHead,
+        requiresReopen: false,
+      );
+      await tester.pump();
+      delayedEntityLoad.complete(fixture.contentIndex);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-project-problems-view')),
+        findsOneWidget,
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .head
+            .canonicalJson,
+        driftedHead.canonicalJson,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Problems opens and expands the exact DataAsset edit', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = revision3ProjectProblemsFixture(
+      includeDialogGraph: false,
+      includeReferenceProblem: false,
+      includeAssetProblem: false,
+      includeVoiceProblems: false,
+      includeDataAssetStage: true,
+    );
+    final stage = fixture.dataAssetStage!;
+    final report = Revision3ProjectProblemBuilder.build(
+      fixture.contentIndex,
+      dataAssetStages: fixture.dataAssetStages,
+      gameConfigured: true,
+    );
+    final stageProblem = report.problems.singleWhere(
+      (problem) =>
+          problem.code == Revision3ProjectProblemCode.dataAssetStageOfflineOnly,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\problems-dataasset-deep-link'),
+      projectId: fixture.projectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex,
+      onDataAssetList: (_) => fixture.dataAssetStages,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedWorkspace(
+      tester,
+      const Key('revision3-project-workspace-nav-validate-test'),
+    );
+    await tester.tap(
+      find.byKey(Key('revision3-project-problem-${stageProblem.id}')),
+    );
+    await tester.pump();
+    final openStage = find.byKey(
+      Key(
+        'revision3-project-problems-action-dataAssetStage-${stage.targetPath}',
+      ),
+    );
+    await tester.ensureVisible(openStage);
+    await tester.tap(openStage);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-dataasset-stage-panel')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const Key('revision3-dataasset-stage-search')),
+          )
+          .controller!
+          .text,
+      stage.targetPath,
+    );
+    expect(
+      find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -3278,14 +3571,14 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
-      final edit = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-overview-$revision3QuestOutlineQuestId',
-        ),
+      final edit = find.byKey(
+        const Key('revision3-quest-journey-edit-name-objectives'),
       );
-      await _revealWorkbenchAction(tester, edit);
-      await _tapWorkbenchAction(tester, edit);
-      await tester.pumpAndSettle();
+      expect(edit, findsOneWidget);
+      await tester.ensureVisible(edit);
+      await tester.tap(edit);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(
         find.byKey(const Key('revision3-quest-outline-dialog')),
         findsOneWidget,
@@ -3303,7 +3596,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(managed.questOutlinePublishCalls, 1);
-      expect(managed.contentReadCalls, 4);
+      expect(managed.contentReadCalls, 8);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -3311,7 +3604,9 @@ void main() {
       );
       expect(currentFixture.title, 'Find Homer safely');
       final selectedQuest = find.byKey(
-        const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+        const Key(
+          'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+        ),
       );
       expect(
         tester.widget<ListTile>(selectedQuest).selected,
@@ -3618,34 +3913,20 @@ void main() {
 
       await tester.tap(
         find.byKey(
-          const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+          const Key(
+            'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+          ),
         ),
       );
       await tester.pumpAndSettle();
 
-      final storyTab = find.byKey(
-        const Key(
-          'revision3-story-workbench-tab-story-$revision3QuestOutlineQuestId',
-        ),
+      final editStory = find.byKey(
+        const Key('revision3-quest-journey-edit-description-connections'),
       );
-      await tester.ensureVisible(storyTab);
-      await tester.tap(storyTab);
-      await tester.pumpAndSettle();
-      final editStory = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-story-$revision3QuestOutlineQuestId',
-        ),
-      );
-      await _revealWorkbenchAction(tester, editStory);
-      expect(_workbenchActionTileWidget(tester, editStory).enabled, isFalse);
-      expect(
-        find.descendant(
-          of: editStory,
-          matching: find.text(missingGameReason, skipOffstage: false),
-          skipOffstage: false,
-        ),
-        findsOneWidget,
-      );
+      expect(editStory, findsOneWidget);
+      await tester.ensureVisible(editStory);
+      expect(tester.widget<OutlinedButton>(editStory).onPressed, isNull);
+      expect(find.text(missingGameReason, skipOffstage: false), findsWidgets);
 
       final problemsTab = find.byKey(
         const Key(
@@ -3813,6 +4094,19 @@ void main() {
               ? fixture.moduleRevision
               : fixture.moduleRevision + 1,
         ).contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: Revision3QuestOutlineFixture(
+                    projectRevision: lease.projectRevision,
+                    questRevision: questRevision,
+                    moduleRevision: moduleRevision,
+                  ).projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
         onQuestContextSeed:
             (
               lease,
@@ -3870,24 +4164,32 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
-      final storyTab = find.byKey(
-        const Key(
-          'revision3-story-workbench-tab-story-$revision3QuestOutlineQuestId',
-        ),
+      final editStory = find.byKey(
+        const Key('revision3-quest-journey-edit-description-connections'),
       );
-      expect(storyTab, findsOneWidget);
-      await tester.ensureVisible(storyTab);
-      await tester.tap(storyTab);
-      await tester.pumpAndSettle();
-      final editStory = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-story-$revision3QuestOutlineQuestId',
-        ),
+      expect(editStory, findsOneWidget);
+      await tester.ensureVisible(editStory);
+      final journey = tester.widget<Revision3QuestJourneyView>(
+        find.byType(Revision3QuestJourneyView),
       );
-      await _revealWorkbenchAction(tester, editStory);
-      expect(_workbenchActionTileWidget(tester, editStory).enabled, isTrue);
-      await _tapWorkbenchAction(tester, editStory);
-      await tester.pumpAndSettle();
+      expect(journey.onEditDescriptionConnections, isNotNull);
+      expect(journey.editDisabledReason, isNull);
+      expect(journey.editDescriptionConnectionsDisabledReason, isNull);
+      final actionTooltip = find.ancestor(
+        of: editStory,
+        matching: find.byType(Tooltip),
+      );
+      final tooltipMessage = actionTooltip.evaluate().isEmpty
+          ? null
+          : tester.widget<Tooltip>(actionTooltip.first).message;
+      expect(
+        tester.widget<OutlinedButton>(editStory).onPressed,
+        isNotNull,
+        reason: 'unexpected Journey action gate: $tooltipMessage',
+      );
+      await tester.tap(editStory);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(
         find.byKey(const Key('revision3-quest-context-dialog')),
         findsOneWidget,
@@ -3904,7 +4206,7 @@ void main() {
       expect(managed.questContextSeedCalls, 1);
       expect(catalogLoads, 2);
       expect(managed.questContextPublishCalls, 1);
-      expect(managed.contentReadCalls, 4);
+      expect(managed.contentReadCalls, 8);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -3955,17 +4257,17 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedStory(tester);
-      final logic = find.byKey(
+      final references = find.byKey(
         const Key(
-          'revision3-story-workbench-tab-logic-'
+          'revision3-story-workbench-tab-references-'
           '$revision3QuestOutlineQuestId',
         ),
       );
-      expect(logic, findsOneWidget);
-      await tester.ensureVisible(logic);
-      await tester.tap(logic);
+      expect(references, findsOneWidget);
+      await tester.ensureVisible(references);
+      await tester.tap(references);
       await tester.pump();
-      expect(tester.widget<ChoiceChip>(logic).selected, isTrue);
+      expect(tester.widget<ChoiceChip>(references).selected, isTrue);
 
       await _navigateManagedContent(tester);
       await tester.tap(
@@ -4068,8 +4370,20 @@ void main() {
         find.byKey(
           const Key('revision3-quest-journey-edit-description-connections'),
         ),
-        findsNothing,
+        findsOneWidget,
         reason: 'only the catalog-bound context editor needs a game root',
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(
+                const Key(
+                  'revision3-quest-journey-edit-description-connections',
+                ),
+              ),
+            )
+            .onPressed,
+        isNull,
       );
       final states = find.byKey(
         const Key('revision3-quest-journey-edit-states-transitions'),
@@ -4172,24 +4486,15 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
-      final logicTab = find.byKey(
-        const Key(
-          'revision3-story-workbench-tab-logic-$revision3QuestOutlineQuestId',
-        ),
+      final editLogic = find.byKey(
+        const Key('revision3-quest-journey-edit-states-transitions'),
       );
-      expect(logicTab, findsOneWidget);
-      await tester.ensureVisible(logicTab);
-      await tester.tap(logicTab);
-      await tester.pumpAndSettle();
-      final editLogic = _storyWorkbenchAction(
-        const Key(
-          'revision3-story-workbench-action-edit-logic-$revision3QuestOutlineQuestId',
-        ),
-      );
-      await _revealWorkbenchAction(tester, editLogic);
-      expect(_workbenchActionTileWidget(tester, editLogic).enabled, isTrue);
-      await _tapWorkbenchAction(tester, editLogic);
-      await tester.pumpAndSettle();
+      expect(editLogic, findsOneWidget);
+      await tester.ensureVisible(editLogic);
+      expect(tester.widget<ButtonStyleButton>(editLogic).onPressed, isNotNull);
+      await tester.tap(editLogic);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
       expect(
         find.byKey(const Key('revision3-quest-transitions-dialog')),
         findsOneWidget,
@@ -4205,9 +4510,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(managed.questTransitionsSeedCalls, 1);
+      expect(managed.questTransitionsSeedCalls, 3);
       expect(managed.questTransitionsPublishCalls, 1);
-      expect(managed.contentReadCalls, 4);
+      expect(managed.contentReadCalls, 8);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -6947,6 +7252,86 @@ void main() {
   });
 
   testWidgets(
+    'same-head recovery advances Story authority and loads Journey once',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = Revision3QuestOutlineFixture();
+      final snapshot = _recoverySnapshot(
+        projectId: revision3QuestOutlineProjectId,
+        revision: fixture.projectRevision,
+      );
+      late final _FakeRecoverableManagedLease managed;
+      managed = _FakeRecoverableManagedLease(
+        root: Directory(r'C:\mods\recover-quest-journey'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: snapshot.head,
+        canonicalProjectJsonValue: snapshot.projectJson,
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: fixture.projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
+        onRecovery: (lease) {
+          lease.requiresReopenValue = false;
+          return _recoveryCheckpoint(
+            projectId: revision3QuestOutlineProjectId,
+            previousRevision: fixture.projectRevision,
+            previousHead: snapshot.head,
+            recoveredRevision: fixture.projectRevision,
+            recoveredHead: snapshot.head,
+            recoveredProjectJson: snapshot.projectJson,
+          );
+        },
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('managed-project-requires-reopen-warning')),
+        findsOneWidget,
+      );
+      expect(managed.questTransitionsSeedCalls, 0);
+
+      await tester.tap(find.byKey(const Key('managed-project-try-recovery')));
+      await tester.pumpAndSettle();
+      await _navigateManagedStory(tester);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-quest-journey-panel')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Revision3QuestJourneyView>(
+              find.byType(Revision3QuestJourneyView),
+            )
+            .authorityEpoch,
+        1,
+      );
+      expect(managed.questTransitionsSeedCalls, 1);
+      await tester.pumpAndSettle();
+      expect(managed.questTransitionsSeedCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'retryable recovery failure stays locked and enables one later retry',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -7465,6 +7850,12 @@ Future<void> _openStoryWorkbenchEntity(
   expect(entity, findsOneWidget);
   await tester.tap(entity);
   await tester.pumpAndSettle();
+  final openStory = find.byKey(Key('revision3-content-open-story-$entityId'));
+  expect(openStory, findsOneWidget);
+  await tester.ensureVisible(openStory);
+  await tester.tap(openStory);
+  await tester.pumpAndSettle();
+  expect(find.byKey(const Key('revision3-story-workspace')), findsOneWidget);
   expect(
     find.byKey(ValueKey('revision3-content-entity-details-$entityId')),
     findsOneWidget,
@@ -8526,6 +8917,8 @@ final class _FakeRecoverableManagedLease extends _FakeManagedLease
     required super.head,
     required this.onRecovery,
     super.canonicalProjectJsonValue,
+    super.onQuestTransitionsSeed,
+    super.contentIndexBuilder,
   });
 
   final _RecoveryCallback onRecovery;

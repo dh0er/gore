@@ -36,6 +36,8 @@ final class Revision3QuestJourneyPanelCopy {
     required this.editNameObjectives,
     required this.editDescriptionConnections,
     required this.editStatesTransitions,
+    this.editActionBusyReason =
+        'Another Quest action is still running. Wait for it to finish.',
     required this.mainQuestTitle,
     required this.mainQuestSubtitle,
     required this.objectivesTitle,
@@ -85,6 +87,8 @@ final class Revision3QuestJourneyPanelCopy {
       editNameObjectives = 'Edit name & objectives',
       editDescriptionConnections = 'Edit description & connections',
       editStatesTransitions = 'Edit states & transitions',
+      editActionBusyReason =
+          'Another Quest action is still running. Wait for it to finish.',
       mainQuestTitle = 'Main Quest',
       mainQuestSubtitle =
           'How the Quest itself can become available, start, succeed, or fail.',
@@ -138,6 +142,8 @@ final class Revision3QuestJourneyPanelCopy {
       editNameObjectives = 'Name & Ziele bearbeiten',
       editDescriptionConnections = 'Beschreibung & Verknüpfungen bearbeiten',
       editStatesTransitions = 'Zustände & Übergänge bearbeiten',
+      editActionBusyReason =
+          'Eine andere Quest-Aktion läuft noch. Warte, bis sie abgeschlossen ist.',
       mainQuestTitle = 'Hauptquest',
       mainQuestSubtitle =
           'Wie die Quest selbst verfügbar werden, starten, erfolgreich enden oder fehlschlagen kann.',
@@ -191,6 +197,7 @@ final class Revision3QuestJourneyPanelCopy {
   final String editNameObjectives;
   final String editDescriptionConnections;
   final String editStatesTransitions;
+  final String editActionBusyReason;
   final String mainQuestTitle;
   final String mainQuestSubtitle;
   final String objectivesTitle;
@@ -237,6 +244,10 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
     this.onEditNameObjectives,
     this.onEditDescriptionConnections,
     this.onEditStatesTransitions,
+    this.editDisabledReason,
+    this.editNameObjectivesDisabledReason,
+    this.editDescriptionConnectionsDisabledReason,
+    this.editStatesTransitionsDisabledReason,
     this.onOpenDialogLine,
     this.copy = const Revision3QuestJourneyPanelCopy.english(),
     super.key,
@@ -247,6 +258,10 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
     this.onEditNameObjectives,
     this.onEditDescriptionConnections,
     this.onEditStatesTransitions,
+    this.editDisabledReason,
+    this.editNameObjectivesDisabledReason,
+    this.editDescriptionConnectionsDisabledReason,
+    this.editStatesTransitionsDisabledReason,
     this.copy = const Revision3QuestJourneyPanelCopy.english(),
     super.key,
   }) : projection = null,
@@ -263,6 +278,22 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
   final Revision3QuestJourneyAction? onEditNameObjectives;
   final Revision3QuestJourneyAction? onEditDescriptionConnections;
   final Revision3QuestJourneyAction? onEditStatesTransitions;
+
+  /// Localized owner-provided reason that disables all three edit actions.
+  ///
+  /// Supplying a non-empty reason preserves the edit controls even when their
+  /// callbacks are unavailable (for example while the project is dirty, busy,
+  /// or requires reopening). Supplying neither callbacks nor a reason keeps a
+  /// deliberately read-only journey free of edit controls.
+  final String? editDisabledReason;
+
+  /// Optional localized reasons that disable only their matching action.
+  ///
+  /// A non-empty per-action reason keeps that action visible even when its
+  /// callback is null. [editDisabledReason] remains the global override.
+  final String? editNameObjectivesDisabledReason;
+  final String? editDescriptionConnectionsDisabledReason;
+  final String? editStatesTransitionsDisabledReason;
   final Revision3QuestJourneyOpenDialogLine? onOpenDialogLine;
   final Revision3QuestJourneyAction? onRetry;
   final Revision3QuestJourneyPanelCopy copy;
@@ -327,6 +358,13 @@ final class _Revision3QuestJourneyPanelState
         copy: widget.copy,
         busyAction: _busyAction,
         actionError: _actionError,
+        editDisabledReason: widget.editDisabledReason,
+        editNameObjectivesDisabledReason:
+            widget.editNameObjectivesDisabledReason,
+        editDescriptionConnectionsDisabledReason:
+            widget.editDescriptionConnectionsDisabledReason,
+        editStatesTransitionsDisabledReason:
+            widget.editStatesTransitionsDisabledReason,
         onRetry: widget.onRetry == null
             ? null
             : () => _runAction('retry', widget.onRetry!),
@@ -372,6 +410,13 @@ final class _Revision3QuestJourneyPanelState
                       parentStoryDisplayName: widget.parentStoryDisplayName,
                       copy: widget.copy,
                       busyAction: _busyAction,
+                      editDisabledReason: widget.editDisabledReason,
+                      editNameObjectivesDisabledReason:
+                          widget.editNameObjectivesDisabledReason,
+                      editDescriptionConnectionsDisabledReason:
+                          widget.editDescriptionConnectionsDisabledReason,
+                      editStatesTransitionsDisabledReason:
+                          widget.editStatesTransitionsDisabledReason,
                       onEditNameObjectives: widget.onEditNameObjectives == null
                           ? null
                           : () => _runAction(
@@ -394,6 +439,10 @@ final class _Revision3QuestJourneyPanelState
                             ),
                     ),
                   ),
+                  if (_busyAction != null) ...<Widget>[
+                    const SizedBox(height: 12),
+                    _JourneyBusyStatus(copy: widget.copy),
+                  ],
                   const SizedBox(height: 16),
                   _AuthorityBoundary(copy: widget.copy),
                   if (_actionError != null) ...<Widget>[
@@ -479,6 +528,10 @@ final class _JourneyHeader extends StatelessWidget {
     required this.parentStoryDisplayName,
     required this.copy,
     required this.busyAction,
+    required this.editDisabledReason,
+    required this.editNameObjectivesDisabledReason,
+    required this.editDescriptionConnectionsDisabledReason,
+    required this.editStatesTransitionsDisabledReason,
     required this.onEditNameObjectives,
     required this.onEditDescriptionConnections,
     required this.onEditStatesTransitions,
@@ -489,6 +542,10 @@ final class _JourneyHeader extends StatelessWidget {
   final String? parentStoryDisplayName;
   final Revision3QuestJourneyPanelCopy copy;
   final String? busyAction;
+  final String? editDisabledReason;
+  final String? editNameObjectivesDisabledReason;
+  final String? editDescriptionConnectionsDisabledReason;
+  final String? editStatesTransitionsDisabledReason;
   final VoidCallback? onEditNameObjectives;
   final VoidCallback? onEditDescriptionConnections;
   final VoidCallback? onEditStatesTransitions;
@@ -551,58 +608,242 @@ final class _JourneyHeader extends StatelessWidget {
         ),
         if (onEditNameObjectives != null ||
             onEditDescriptionConnections != null ||
-            onEditStatesTransitions != null) ...<Widget>[
+            onEditStatesTransitions != null ||
+            _nonEmptyReason(editDisabledReason) != null ||
+            _nonEmptyReason(editNameObjectivesDisabledReason) != null ||
+            _nonEmptyReason(editDescriptionConnectionsDisabledReason) != null ||
+            _nonEmptyReason(editStatesTransitionsDisabledReason) !=
+                null) ...<Widget>[
           const SizedBox(height: 16),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: <Widget>[
-              if (onEditNameObjectives != null)
+          _JourneyEditActions(
+            copy: copy,
+            busyAction: busyAction,
+            editDisabledReason: editDisabledReason,
+            editNameObjectivesDisabledReason: editNameObjectivesDisabledReason,
+            editDescriptionConnectionsDisabledReason:
+                editDescriptionConnectionsDisabledReason,
+            editStatesTransitionsDisabledReason:
+                editStatesTransitionsDisabledReason,
+            onEditNameObjectives: onEditNameObjectives,
+            onEditDescriptionConnections: onEditDescriptionConnections,
+            onEditStatesTransitions: onEditStatesTransitions,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+final class _JourneyEditActions extends StatelessWidget {
+  const _JourneyEditActions({
+    required this.copy,
+    required this.busyAction,
+    required this.editDisabledReason,
+    required this.editNameObjectivesDisabledReason,
+    required this.editDescriptionConnectionsDisabledReason,
+    required this.editStatesTransitionsDisabledReason,
+    required this.onEditNameObjectives,
+    required this.onEditDescriptionConnections,
+    required this.onEditStatesTransitions,
+    this.center = false,
+    this.visibleReasonExclusions = const <String>{},
+  });
+
+  final Revision3QuestJourneyPanelCopy copy;
+  final String? busyAction;
+  final String? editDisabledReason;
+  final String? editNameObjectivesDisabledReason;
+  final String? editDescriptionConnectionsDisabledReason;
+  final String? editStatesTransitionsDisabledReason;
+  final VoidCallback? onEditNameObjectives;
+  final VoidCallback? onEditDescriptionConnections;
+  final VoidCallback? onEditStatesTransitions;
+  final bool center;
+  final Set<String> visibleReasonExclusions;
+
+  @override
+  Widget build(BuildContext context) {
+    final globalReason = _nonEmptyReason(editDisabledReason);
+    final busyReason = busyAction == null ? null : copy.editActionBusyReason;
+    final nameReason = _nonEmptyReason(editNameObjectivesDisabledReason);
+    final connectionsReason = _nonEmptyReason(
+      editDescriptionConnectionsDisabledReason,
+    );
+    final transitionsReason = _nonEmptyReason(
+      editStatesTransitionsDisabledReason,
+    );
+    final showAll = globalReason != null;
+    final candidateVisibleReasons = globalReason == null
+        ? <String>{
+            ?nameReason,
+            ?connectionsReason,
+            ?transitionsReason,
+          }.toList(growable: false)
+        : <String>[globalReason];
+    final visibleReasons = candidateVisibleReasons
+        .where((reason) => !visibleReasonExclusions.contains(reason))
+        .toList(growable: false);
+
+    String? effectiveReason(String? actionReason) =>
+        globalReason ?? busyReason ?? actionReason;
+
+    Widget explainDisabled(Widget button, String? reason) =>
+        reason == null ? button : Tooltip(message: reason, child: button);
+
+    VoidCallback? enabledCallback(
+      VoidCallback? callback,
+      String? actionReason,
+    ) => callback != null && effectiveReason(actionReason) == null
+        ? callback
+        : null;
+
+    return Column(
+      crossAxisAlignment: center
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
+      children: <Widget>[
+        Wrap(
+          alignment: center ? WrapAlignment.center : WrapAlignment.start,
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            if (showAll || onEditNameObjectives != null || nameReason != null)
+              explainDisabled(
                 OutlinedButton.icon(
                   key: const Key(
                     'revision3-quest-journey-edit-name-objectives',
                   ),
-                  onPressed: busyAction == null ? onEditNameObjectives : null,
+                  onPressed: enabledCallback(onEditNameObjectives, nameReason),
                   icon: _ActionIcon(
                     busy: busyAction == 'name-objectives',
                     fallback: Icons.edit_outlined,
                   ),
                   label: Text(copy.editNameObjectives),
                 ),
-              if (onEditDescriptionConnections != null)
+                effectiveReason(nameReason),
+              ),
+            if (showAll ||
+                onEditDescriptionConnections != null ||
+                connectionsReason != null)
+              explainDisabled(
                 OutlinedButton.icon(
                   key: const Key(
                     'revision3-quest-journey-edit-description-connections',
                   ),
-                  onPressed: busyAction == null
-                      ? onEditDescriptionConnections
-                      : null,
+                  onPressed: enabledCallback(
+                    onEditDescriptionConnections,
+                    connectionsReason,
+                  ),
                   icon: _ActionIcon(
                     busy: busyAction == 'description-connections',
                     fallback: Icons.hub_outlined,
                   ),
                   label: Text(copy.editDescriptionConnections),
                 ),
-              if (onEditStatesTransitions != null)
+                effectiveReason(connectionsReason),
+              ),
+            if (showAll ||
+                onEditStatesTransitions != null ||
+                transitionsReason != null)
+              explainDisabled(
                 FilledButton.tonalIcon(
                   key: const Key(
                     'revision3-quest-journey-edit-states-transitions',
                   ),
-                  onPressed: busyAction == null
-                      ? onEditStatesTransitions
-                      : null,
+                  onPressed: enabledCallback(
+                    onEditStatesTransitions,
+                    transitionsReason,
+                  ),
                   icon: _ActionIcon(
                     busy: busyAction == 'states-transitions',
                     fallback: Icons.schema_outlined,
                   ),
                   label: Text(copy.editStatesTransitions),
                 ),
-            ],
+                effectiveReason(transitionsReason),
+              ),
+          ],
+        ),
+        if (visibleReasons.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Container(
+            key: const Key('revision3-quest-journey-edit-disabled-reason'),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: center
+                  ? CrossAxisAlignment.center
+                  : CrossAxisAlignment.start,
+              children: <Widget>[
+                for (
+                  var index = 0;
+                  index < visibleReasons.length;
+                  index++
+                ) ...<Widget>[
+                  if (index > 0) const SizedBox(height: 6),
+                  Text(
+                    visibleReasons[index],
+                    textAlign: center ? TextAlign.center : TextAlign.start,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
           ),
         ],
       ],
     );
   }
+}
+
+String? _nonEmptyReason(String? reason) {
+  final normalized = reason?.trim();
+  return normalized?.isNotEmpty == true ? normalized : null;
+}
+
+final class _JourneyBusyStatus extends StatelessWidget {
+  const _JourneyBusyStatus({required this.copy});
+
+  final Revision3QuestJourneyPanelCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    key: const Key('revision3-quest-journey-action-progress'),
+    container: true,
+    liveRegion: true,
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: <Widget>[
+          SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              semanticsLabel: copy.editActionBusyReason,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: ExcludeSemantics(
+              child: Text(
+                copy.editActionBusyReason,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 final class _ActionIcon extends StatelessWidget {
@@ -1314,6 +1555,10 @@ final class _UnavailableJourney extends StatelessWidget {
     required this.copy,
     required this.busyAction,
     required this.actionError,
+    required this.editDisabledReason,
+    required this.editNameObjectivesDisabledReason,
+    required this.editDescriptionConnectionsDisabledReason,
+    required this.editStatesTransitionsDisabledReason,
     required this.onRetry,
     required this.onEditNameObjectives,
     required this.onEditDescriptionConnections,
@@ -1323,6 +1568,10 @@ final class _UnavailableJourney extends StatelessWidget {
   final Revision3QuestJourneyPanelCopy copy;
   final String? busyAction;
   final String? actionError;
+  final String? editDisabledReason;
+  final String? editNameObjectivesDisabledReason;
+  final String? editDescriptionConnectionsDisabledReason;
+  final String? editStatesTransitionsDisabledReason;
   final VoidCallback? onRetry;
   final VoidCallback? onEditNameObjectives;
   final VoidCallback? onEditDescriptionConnections;
@@ -1350,6 +1599,10 @@ final class _UnavailableJourney extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(copy.unavailableBody, textAlign: TextAlign.center),
+              if (busyAction != null) ...<Widget>[
+                const SizedBox(height: 10),
+                _JourneyBusyStatus(copy: copy),
+              ],
               if (actionError != null) ...<Widget>[
                 const SizedBox(height: 10),
                 Text(
@@ -1361,56 +1614,31 @@ final class _UnavailableJourney extends StatelessWidget {
               ],
               if (onEditNameObjectives != null ||
                   onEditDescriptionConnections != null ||
-                  onEditStatesTransitions != null) ...<Widget>[
+                  onEditStatesTransitions != null ||
+                  _nonEmptyReason(editDisabledReason) != null ||
+                  _nonEmptyReason(editNameObjectivesDisabledReason) != null ||
+                  _nonEmptyReason(editDescriptionConnectionsDisabledReason) !=
+                      null ||
+                  _nonEmptyReason(editStatesTransitionsDisabledReason) !=
+                      null) ...<Widget>[
                 const SizedBox(height: 14),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: <Widget>[
-                    if (onEditNameObjectives != null)
-                      OutlinedButton.icon(
-                        key: const Key(
-                          'revision3-quest-journey-edit-name-objectives',
-                        ),
-                        onPressed: busyAction == null
-                            ? onEditNameObjectives
-                            : null,
-                        icon: _ActionIcon(
-                          busy: busyAction == 'name-objectives',
-                          fallback: Icons.edit_outlined,
-                        ),
-                        label: Text(copy.editNameObjectives),
-                      ),
-                    if (onEditDescriptionConnections != null)
-                      OutlinedButton.icon(
-                        key: const Key(
-                          'revision3-quest-journey-edit-description-connections',
-                        ),
-                        onPressed: busyAction == null
-                            ? onEditDescriptionConnections
-                            : null,
-                        icon: _ActionIcon(
-                          busy: busyAction == 'description-connections',
-                          fallback: Icons.hub_outlined,
-                        ),
-                        label: Text(copy.editDescriptionConnections),
-                      ),
-                    if (onEditStatesTransitions != null)
-                      FilledButton.tonalIcon(
-                        key: const Key(
-                          'revision3-quest-journey-edit-states-transitions',
-                        ),
-                        onPressed: busyAction == null
-                            ? onEditStatesTransitions
-                            : null,
-                        icon: _ActionIcon(
-                          busy: busyAction == 'states-transitions',
-                          fallback: Icons.schema_outlined,
-                        ),
-                        label: Text(copy.editStatesTransitions),
-                      ),
-                  ],
+                _JourneyEditActions(
+                  copy: copy,
+                  busyAction: busyAction,
+                  editDisabledReason: editDisabledReason,
+                  editNameObjectivesDisabledReason:
+                      editNameObjectivesDisabledReason,
+                  editDescriptionConnectionsDisabledReason:
+                      editDescriptionConnectionsDisabledReason,
+                  editStatesTransitionsDisabledReason:
+                      editStatesTransitionsDisabledReason,
+                  onEditNameObjectives: onEditNameObjectives,
+                  onEditDescriptionConnections: onEditDescriptionConnections,
+                  onEditStatesTransitions: onEditStatesTransitions,
+                  center: true,
+                  visibleReasonExclusions: <String>{
+                    ?_nonEmptyReason(copy.unavailableBody),
+                  },
                 ),
               ],
               if (onRetry != null) ...<Widget>[

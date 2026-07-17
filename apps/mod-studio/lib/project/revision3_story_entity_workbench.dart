@@ -38,6 +38,7 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.removingDraft,
     required this.reviewRemovalBlockers,
     required this.capabilityUnavailable,
+    this.actionFailed = 'Could not open this editor. Please try again.',
     required this.npcStoryUnavailable,
     required this.npcRoutineUnavailable,
     required this.npcInventoryUnavailable,
@@ -70,67 +71,68 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.referenceUnresolvedLabel,
   });
 
-  const Revision3StoryEntityWorkbenchCopy.english()
-    : draftBadge = 'Draft only',
-      buildBlockedBadge = 'Build blocked',
-      runtimeUnqualifiedBadge = 'Runtime not verified',
-      overviewTab = 'Overview',
-      profileTab = 'Profile',
-      storyTab = 'Story',
-      logicTab = 'Logic',
-      routineTab = 'Routine',
-      inventoryTab = 'Inventory',
-      dialogVoiceTab = 'Dialog & Voice',
-      referencesTab = 'References',
-      problemsChecksTab = 'Problems & Checks',
-      editOverview = 'Edit name & objectives',
-      editNpcProfile = 'Edit name & archetype',
-      editStory = 'Edit description & connections',
-      editLogic = 'Edit states & transitions',
-      inspectQuest = 'Open source & compiler checks',
-      inspectNpc = 'Open profile & compiler checks',
-      moreActions = 'More actions',
-      removeDraft = 'Remove draft…',
-      removingDraft = 'Removing draft…',
-      reviewRemovalBlockers = 'Review removal blockers',
-      capabilityUnavailable = 'Not modeled yet',
-      npcStoryUnavailable =
-          'Quest and story relationships are not modeled for NPC drafts yet.',
-      npcRoutineUnavailable =
-          'Routine and world placement are not modeled yet.',
-      npcInventoryUnavailable =
-          'Inventory, equipment, and trading are not modeled yet.',
-      npcDialogVoiceUnavailable =
-          'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.',
-      questDialogVoiceUnavailable =
-          'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.',
-      noReferenceProblems = 'No unresolved project references',
-      referenceProblemCount = _englishReferenceProblemCount,
-      referenceScopeNotice =
-          'Reference status only; this is not build or runtime readiness.',
-      technicalDetails = 'Technical details',
-      questKindLabel = 'Quest draft',
-      npcKindLabel = 'NPC draft',
-      questTitleLabel = 'Quest title',
-      npcDisplayNameLabel = 'Character name',
-      technicalIdLabel = 'Technical ID',
-      objectivesLabel = 'Objectives',
-      uniqueNameLabel = 'Unique name',
-      moduleNamespaceLabel = 'Module namespace',
-      questGiverLabel = 'Quest giver',
-      runtimeParentLabel = 'Runtime parent',
-      logicDescription =
-          'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.',
-      outgoingHeading = 'Outgoing',
-      noOutgoingReferences = 'No projected references',
-      incomingHeading = 'Incoming',
-      noIncomingReferences = 'No incoming project references',
-      semanticIdentityLabel = 'Semantic identity',
-      originLabel = 'Origin',
-      entityRevisionLabel = 'Entity revision',
-      stableIdLabel = 'Stable ID',
-      referenceResolvedLabel = 'Reference resolved',
-      referenceUnresolvedLabel = 'Reference unresolved';
+  const Revision3StoryEntityWorkbenchCopy.english({
+    this.actionFailed = 'Could not open this editor. Please try again.',
+  }) : draftBadge = 'Draft only',
+       buildBlockedBadge = 'Build blocked',
+       runtimeUnqualifiedBadge = 'Runtime not verified',
+       overviewTab = 'Overview',
+       profileTab = 'Profile',
+       storyTab = 'Story',
+       logicTab = 'Logic',
+       routineTab = 'Routine',
+       inventoryTab = 'Inventory',
+       dialogVoiceTab = 'Dialog & Voice',
+       referencesTab = 'References',
+       problemsChecksTab = 'Problems & Checks',
+       editOverview = 'Edit name & objectives',
+       editNpcProfile = 'Edit name & archetype',
+       editStory = 'Edit description & connections',
+       editLogic = 'Edit states & transitions',
+       inspectQuest = 'Open source & compiler checks',
+       inspectNpc = 'Open profile & compiler checks',
+       moreActions = 'More actions',
+       removeDraft = 'Remove draft…',
+       removingDraft = 'Removing draft…',
+       reviewRemovalBlockers = 'Review removal blockers',
+       capabilityUnavailable = 'Not modeled yet',
+       npcStoryUnavailable =
+           'Quest and story relationships are not modeled for NPC drafts yet.',
+       npcRoutineUnavailable =
+           'Routine and world placement are not modeled yet.',
+       npcInventoryUnavailable =
+           'Inventory, equipment, and trading are not modeled yet.',
+       npcDialogVoiceUnavailable =
+           'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.',
+       questDialogVoiceUnavailable =
+           'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.',
+       noReferenceProblems = 'No unresolved project references',
+       referenceProblemCount = _englishReferenceProblemCount,
+       referenceScopeNotice =
+           'Reference status only; this is not build or runtime readiness.',
+       technicalDetails = 'Technical details',
+       questKindLabel = 'Quest draft',
+       npcKindLabel = 'NPC draft',
+       questTitleLabel = 'Quest title',
+       npcDisplayNameLabel = 'Character name',
+       technicalIdLabel = 'Technical ID',
+       objectivesLabel = 'Objectives',
+       uniqueNameLabel = 'Unique name',
+       moduleNamespaceLabel = 'Module namespace',
+       questGiverLabel = 'Quest giver',
+       runtimeParentLabel = 'Runtime parent',
+       logicDescription =
+           'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.',
+       outgoingHeading = 'Outgoing',
+       noOutgoingReferences = 'No projected references',
+       incomingHeading = 'Incoming',
+       noIncomingReferences = 'No incoming project references',
+       semanticIdentityLabel = 'Semantic identity',
+       originLabel = 'Origin',
+       entityRevisionLabel = 'Entity revision',
+       stableIdLabel = 'Stable ID',
+       referenceResolvedLabel = 'Reference resolved',
+       referenceUnresolvedLabel = 'Reference unresolved';
 
   final String draftBadge;
   final String buildBlockedBadge;
@@ -155,6 +157,7 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String removingDraft;
   final String reviewRemovalBlockers;
   final String capabilityUnavailable;
+  final String actionFailed;
   final String npcStoryUnavailable;
   final String npcRoutineUnavailable;
   final String npcInventoryUnavailable;
@@ -237,6 +240,8 @@ final class Revision3StoryEntityWorkbenchActions {
 
 enum _Revision3StoryWorkbenchMenuAction { removeDraft, reviewRemovalBlockers }
 
+enum _Revision3QuestContextAction { overview, story, logic }
+
 enum Revision3StoryWorkbenchSection {
   overview,
   profile,
@@ -302,18 +307,25 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
       ? Revision3StoryWorkbenchSection.overview
       : Revision3StoryWorkbenchSection.profile;
 
+  /// Whether [section] is a valid incoming selection for [entity].
+  ///
+  /// Legacy Quest Story/Logic values remain accepted for API compatibility;
+  /// the workbench normalizes both to the canonical Journey/Overview. Use
+  /// [sectionsFor] for the tabs that should actually be presented to authors.
   static bool supportsSection(
     Revision3ContentEntity entity,
     Revision3StoryWorkbenchSection section,
-  ) => sectionsFor(entity).contains(section);
+  ) =>
+      sectionsFor(entity).contains(section) ||
+      (entity.kind == Revision3ContentEntityKind.questDraft &&
+          (section == Revision3StoryWorkbenchSection.story ||
+              section == Revision3StoryWorkbenchSection.logic));
 
   static List<Revision3StoryWorkbenchSection> sectionsFor(
     Revision3ContentEntity entity,
   ) => entity.kind == Revision3ContentEntityKind.questDraft
       ? const <Revision3StoryWorkbenchSection>[
           Revision3StoryWorkbenchSection.overview,
-          Revision3StoryWorkbenchSection.story,
-          Revision3StoryWorkbenchSection.logic,
           Revision3StoryWorkbenchSection.dialogVoice,
           Revision3StoryWorkbenchSection.references,
           Revision3StoryWorkbenchSection.problemsChecks,
@@ -339,13 +351,25 @@ class _Revision3StoryEntityWorkbenchState
     widget.entity,
     widget.selectedSection,
   );
+  _Revision3QuestContextAction? _activeQuestContextAction;
+  var _questContextActionEpoch = 0;
 
   @override
   void didUpdateWidget(covariant Revision3StoryEntityWorkbench oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectId != widget.projectId ||
+    final selectedEntityChanged =
+        oldWidget.projectId != widget.projectId ||
         oldWidget.entity.id != widget.entity.id ||
-        oldWidget.entity.kind != widget.entity.kind ||
+        oldWidget.entity.kind != widget.entity.kind;
+    final actionAuthorityChanged =
+        selectedEntityChanged ||
+        !identical(oldWidget.index, widget.index) ||
+        oldWidget.entity.revision != widget.entity.revision;
+    if (actionAuthorityChanged) {
+      _questContextActionEpoch++;
+      _activeQuestContextAction = null;
+    }
+    if (selectedEntityChanged ||
         oldWidget.selectedSection != widget.selectedSection) {
       _section = _normalizedSection(widget.entity, widget.selectedSection);
     }
@@ -531,6 +555,38 @@ class _Revision3StoryEntityWorkbenchState
     widget.onSectionChanged(section);
   }
 
+  Future<void> _runQuestContextAction(
+    _Revision3QuestContextAction contextAction,
+    Revision3StoryWorkbenchAction action,
+    int authorityEpoch,
+  ) async {
+    if (_activeQuestContextAction != null ||
+        authorityEpoch != _questContextActionEpoch) {
+      return;
+    }
+    setState(() => _activeQuestContextAction = contextAction);
+    try {
+      await action();
+    } on Object {
+      if (mounted && authorityEpoch == _questContextActionEpoch) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.copy.actionFailed,
+              key: Key(
+                'revision3-story-workbench-action-error-${widget.entity.id}',
+              ),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted && authorityEpoch == _questContextActionEpoch) {
+        setState(() => _activeQuestContextAction = null);
+      }
+    }
+  }
+
   Widget _buildSection(BuildContext context) {
     final entity = widget.entity;
     final sectionKey = Key(
@@ -586,6 +642,11 @@ class _Revision3StoryEntityWorkbenchState
   List<Widget> _questOverview(BuildContext context) {
     final entity = widget.entity;
     final quest = entity.summary.questDraft!;
+    final editOverview = widget.actions.editOverview;
+    final editStory = widget.actions.editStory;
+    final editLogic = widget.actions.editLogic;
+    final actionEpoch = _questContextActionEpoch;
+    final actionLaneBusy = _activeQuestContextAction != null;
     return <Widget>[
       _SectionHeading(widget.copy.overviewTab),
       _AtomicActionCard(
@@ -595,7 +656,52 @@ class _Revision3StoryEntityWorkbenchState
         unavailable:
             widget.actions.editOverviewDisabledReason ??
             widget.copy.capabilityUnavailable,
-        onPressed: widget.actions.editOverview,
+        busy:
+            _activeQuestContextAction == _Revision3QuestContextAction.overview,
+        blocked: actionLaneBusy,
+        onPressed: editOverview == null
+            ? null
+            : () => _runQuestContextAction(
+                _Revision3QuestContextAction.overview,
+                editOverview,
+                actionEpoch,
+              ),
+      ),
+      const SizedBox(height: 12),
+      _AtomicActionCard(
+        key: Key('revision3-story-workbench-action-edit-story-${entity.id}'),
+        icon: Icons.account_tree_outlined,
+        title: widget.copy.editStory,
+        unavailable:
+            widget.actions.editStoryDisabledReason ??
+            widget.copy.capabilityUnavailable,
+        busy: _activeQuestContextAction == _Revision3QuestContextAction.story,
+        blocked: actionLaneBusy,
+        onPressed: editStory == null
+            ? null
+            : () => _runQuestContextAction(
+                _Revision3QuestContextAction.story,
+                editStory,
+                actionEpoch,
+              ),
+      ),
+      const SizedBox(height: 12),
+      _AtomicActionCard(
+        key: Key('revision3-story-workbench-action-edit-logic-${entity.id}'),
+        icon: Icons.schema_outlined,
+        title: widget.copy.editLogic,
+        unavailable:
+            widget.actions.editLogicDisabledReason ??
+            widget.copy.capabilityUnavailable,
+        busy: _activeQuestContextAction == _Revision3QuestContextAction.logic,
+        blocked: actionLaneBusy,
+        onPressed: editLogic == null
+            ? null
+            : () => _runQuestContextAction(
+                _Revision3QuestContextAction.logic,
+                editLogic,
+                actionEpoch,
+              ),
       ),
       const SizedBox(height: 12),
       _Fact(label: widget.copy.questTitleLabel, value: quest.title),
@@ -853,9 +959,20 @@ class _Revision3StoryEntityWorkbenchState
 Revision3StoryWorkbenchSection _normalizedSection(
   Revision3ContentEntity entity,
   Revision3StoryWorkbenchSection candidate,
-) => Revision3StoryEntityWorkbench.supportsSection(entity, candidate)
-    ? candidate
-    : Revision3StoryEntityWorkbench.defaultSectionFor(entity);
+) {
+  // Story and Logic used to be standalone Quest tabs. Their exact editors now
+  // live behind contextual hand-offs in the canonical Journey/Overview, but
+  // the enum values remain public so persisted and in-flight selections from
+  // older callers can be accepted safely.
+  if (entity.kind == Revision3ContentEntityKind.questDraft &&
+      (candidate == Revision3StoryWorkbenchSection.story ||
+          candidate == Revision3StoryWorkbenchSection.logic)) {
+    return Revision3StoryWorkbenchSection.overview;
+  }
+  return Revision3StoryEntityWorkbench.supportsSection(entity, candidate)
+      ? candidate
+      : Revision3StoryEntityWorkbench.defaultSectionFor(entity);
+}
 
 String _sectionLabel(
   Revision3StoryEntityWorkbenchCopy copy,
@@ -907,6 +1024,8 @@ class _AtomicActionCard extends StatelessWidget {
     required this.title,
     required this.unavailable,
     required this.onPressed,
+    this.busy = false,
+    this.blocked = false,
     super.key,
   });
 
@@ -914,6 +1033,8 @@ class _AtomicActionCard extends StatelessWidget {
   final String title;
   final String unavailable;
   final Revision3StoryWorkbenchAction? onPressed;
+  final bool busy;
+  final bool blocked;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -922,9 +1043,14 @@ class _AtomicActionCard extends StatelessWidget {
       leading: Icon(icon),
       title: Text(title),
       subtitle: onPressed == null ? Text(unavailable) : null,
-      trailing: const Icon(Icons.chevron_right),
-      enabled: onPressed != null,
-      onTap: onPressed,
+      trailing: busy
+          ? const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.chevron_right),
+      enabled: onPressed != null && !blocked,
+      onTap: blocked ? null : onPressed,
     ),
   );
 }

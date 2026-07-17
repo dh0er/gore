@@ -2246,6 +2246,24 @@ abstract class AppLocalizations {
   /// **'Continue this Quest or NPC in the complete Story workspace.'**
   String get managedContentOpenInStoryDescription;
 
+  /// No description provided for @managedContentOpenInStoryRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this project before opening Story.'**
+  String get managedContentOpenInStoryRequiresReopen;
+
+  /// No description provided for @managedContentOpenInStoryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Story could not be opened. The project was not changed.'**
+  String get managedContentOpenInStoryFailed;
+
+  /// No description provided for @managedStoryWorkbenchActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open this editor. Please try again.'**
+  String get managedStoryWorkbenchActionFailed;
+
   /// No description provided for @managedDashboardLoading.
   ///
   /// In en, this message translates to:
@@ -3137,7 +3155,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedStoryWorkbenchOverviewTab.
   ///
   /// In en, this message translates to:
-  /// **'Overview'**
+  /// **'Journey'**
   String get managedStoryWorkbenchOverviewTab;
 
   /// No description provided for @managedStoryWorkbenchProfileTab.

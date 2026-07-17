@@ -582,13 +582,13 @@ void main() {
         find.byKey(Key('revision3-story-workspace-entity-$_questId')),
       );
       await tester.pump();
-      final logicTab = find.byKey(
-        Key('revision3-story-workbench-tab-logic-$_questId'),
+      final referencesTab = find.byKey(
+        Key('revision3-story-workbench-tab-references-$_questId'),
       );
-      await tester.ensureVisible(logicTab);
-      await tester.tap(logicTab);
+      await tester.ensureVisible(referencesTab);
+      await tester.tap(referencesTab);
       await tester.pump();
-      expect(tester.widget<ChoiceChip>(logicTab).selected, isTrue);
+      expect(tester.widget<ChoiceChip>(referencesTab).selected, isTrue);
 
       rebuild(() {
         revision = 8;
@@ -602,14 +602,14 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(tester.widget<ChoiceChip>(logicTab).selected, isTrue);
+      expect(tester.widget<ChoiceChip>(referencesTab).selected, isTrue);
 
       rebuild(() {
         revision = 9;
         index = _fixture(revision: 9, includeQuest: false);
       });
       await tester.pumpAndSettle();
-      expect(logicTab, findsNothing);
+      expect(referencesTab, findsNothing);
       expect(
         find.byKey(Key('revision3-story-workbench-tab-profile-$_npcId')),
         findsOneWidget,
@@ -624,10 +624,10 @@ void main() {
         find.byKey(Key('revision3-story-workspace-entity-$_questId')),
       );
       await tester.pump();
-      final restoredLogic = find.byKey(
-        Key('revision3-story-workbench-tab-logic-$_questId'),
+      final restoredReferences = find.byKey(
+        Key('revision3-story-workbench-tab-references-$_questId'),
       );
-      expect(tester.widget<ChoiceChip>(restoredLogic).selected, isFalse);
+      expect(tester.widget<ChoiceChip>(restoredReferences).selected, isFalse);
       expect(
         tester
             .widget<ChoiceChip>(
@@ -1444,9 +1444,13 @@ void main() {
       isTrue,
     );
     expect(
+      find.byKey(Key('revision3-story-workbench-tab-logic-$_questId')),
+      findsNothing,
+    );
+    expect(
       tester
           .widget<ChoiceChip>(
-            find.byKey(Key('revision3-story-workbench-tab-logic-$_questId')),
+            find.byKey(Key('revision3-story-workbench-tab-overview-$_questId')),
           )
           .selected,
       isTrue,

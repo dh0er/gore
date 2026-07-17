@@ -81,12 +81,21 @@ class Revision3ContentLibraryController {
 
   Object? _attachment;
   Revision3ContentProjectIdentity? _projectIdentity;
+  int? _projectRevision;
+  String? _projectHeadCanonicalJson;
   Future<bool> Function(
     String entityId, {
     Revision3StoryWorkbenchSection? storySection,
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
   })?
   _openEntityById;
-  Future<bool> Function(String sha256)? _openAssetBySha256;
+  Future<bool> Function(
+    String sha256, {
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
+  })?
+  _openAssetBySha256;
   _PendingContentNavigation? _bufferedNavigation;
   final Set<_PendingContentNavigation> _forwardedNavigations = {};
   bool _disposed = false;
@@ -107,9 +116,49 @@ class Revision3ContentLibraryController {
     ),
   );
 
+  /// Opens [entityId] only at the exact expected project checkpoint.
+  ///
+  /// [storySection] remains optional so callers can safely fall back from a
+  /// Problems route to read-only inspection without dropping checkpoint
+  /// authority.
+  Future<bool> openEntityByIdAtCheckpoint(
+    String entityId, {
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+    Revision3StoryWorkbenchSection? storySection,
+  }) => _request(
+    _PendingContentNavigation(
+      _PendingContentTargetKind.entity,
+      entityId,
+      storySection: storySection,
+      expectedProjectRevision: projectRevision,
+      expectedProjectHeadCanonicalJson: projectHeadCanonicalJson,
+    ),
+  );
+
   /// Opens an exact Quest/NPC entity directly on Problems & checks.
+  ///
+  /// Resolves to `false` when the attached Content surface delegates that
+  /// entity to canonical Story, because its discovery summary has no Problems
+  /// section and must not claim that one was presented.
   Future<bool> openEntityProblemsById(String entityId) => openEntityById(
     entityId,
+    storySection: Revision3StoryWorkbenchSection.problemsChecks,
+  );
+
+  /// Opens Problems for [entityId] only at the exact expected checkpoint.
+  ///
+  /// Unlike [openEntityProblemsById], this request never follows a project to
+  /// another revision or canonical head. A mismatch while buffered, forwarded,
+  /// or waiting for Content to reload resolves to `false`.
+  Future<bool> openEntityProblemsByIdAtCheckpoint(
+    String entityId, {
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) => openEntityByIdAtCheckpoint(
+    entityId,
+    projectRevision: projectRevision,
+    projectHeadCanonicalJson: projectHeadCanonicalJson,
     storySection: Revision3StoryWorkbenchSection.problemsChecks,
   );
 
@@ -118,12 +167,32 @@ class Revision3ContentLibraryController {
     _PendingContentNavigation(_PendingContentTargetKind.asset, sha256),
   );
 
+  /// Opens [sha256] only at the exact expected project checkpoint.
+  ///
+  /// This is the asset counterpart to
+  /// [openEntityProblemsByIdAtCheckpoint] and observes the same buffer,
+  /// forward, reload, and canonical-head cancellation rules.
+  Future<bool> openAssetBySha256AtCheckpoint(
+    String sha256, {
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) => _request(
+    _PendingContentNavigation(
+      _PendingContentTargetKind.asset,
+      sha256,
+      expectedProjectRevision: projectRevision,
+      expectedProjectHeadCanonicalJson: projectHeadCanonicalJson,
+    ),
+  );
+
   /// Permanently releases this controller and resolves outstanding requests
   /// to `false`. A disposed controller cannot attach again.
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     _attachment = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
     _openEntityById = null;
     _openAssetBySha256 = null;
     _cancelControllerNavigations();
@@ -144,18 +213,37 @@ class Revision3ContentLibraryController {
   }
 
   Future<bool> _forward(_PendingContentNavigation navigation) {
+    if (!navigation.matchesCheckpoint(
+      _projectRevision,
+      _projectHeadCanonicalJson,
+    )) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
     Future<bool> Function()? operation;
     switch (navigation.kind) {
       case _PendingContentTargetKind.entity:
         final open = _openEntityById;
         if (open != null) {
-          operation = () =>
-              open(navigation.exactId, storySection: navigation.storySection);
+          operation = () => open(
+            navigation.exactId,
+            storySection: navigation.storySection,
+            expectedProjectRevision: navigation.expectedProjectRevision,
+            expectedProjectHeadCanonicalJson:
+                navigation.expectedProjectHeadCanonicalJson,
+          );
         }
         break;
       case _PendingContentTargetKind.asset:
         final open = _openAssetBySha256;
-        if (open != null) operation = () => open(navigation.exactId);
+        if (open != null) {
+          operation = () => open(
+            navigation.exactId,
+            expectedProjectRevision: navigation.expectedProjectRevision,
+            expectedProjectHeadCanonicalJson:
+                navigation.expectedProjectHeadCanonicalJson,
+          );
+        }
         break;
     }
     if (operation == null) {
@@ -172,18 +260,35 @@ class Revision3ContentLibraryController {
 
   void _completeForwarded(_PendingContentNavigation navigation, bool resolved) {
     _forwardedNavigations.remove(navigation);
-    if (!navigation.result.isCompleted) navigation.result.complete(resolved);
+    if (!navigation.result.isCompleted) {
+      navigation.result.complete(
+        resolved &&
+            navigation.matchesCheckpoint(
+              _projectRevision,
+              _projectHeadCanonicalJson,
+            ),
+      );
+    }
   }
 
   bool _attach(
     Object attachment, {
     required Revision3ContentProjectIdentity projectIdentity,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
     required Future<bool> Function(
       String entityId, {
       Revision3StoryWorkbenchSection? storySection,
+      int? expectedProjectRevision,
+      String? expectedProjectHeadCanonicalJson,
     })
     openEntityById,
-    required Future<bool> Function(String sha256) openAssetBySha256,
+    required Future<bool> Function(
+      String sha256, {
+      int? expectedProjectRevision,
+      String? expectedProjectHeadCanonicalJson,
+    })
+    openAssetBySha256,
   }) {
     if (_disposed ||
         (_projectIdentity != null && _projectIdentity != projectIdentity) ||
@@ -202,6 +307,8 @@ class Revision3ContentLibraryController {
     );
     _projectIdentity ??= projectIdentity;
     _attachment = attachment;
+    _projectRevision = projectRevision;
+    _projectHeadCanonicalJson = projectHeadCanonicalJson;
     _openEntityById = openEntityById;
     _openAssetBySha256 = openAssetBySha256;
     final buffered = _bufferedNavigation;
@@ -213,6 +320,8 @@ class Revision3ContentLibraryController {
   void _detach(Object attachment) {
     if (!identical(_attachment, attachment)) return;
     _attachment = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
     _openEntityById = null;
     _openAssetBySha256 = null;
     _cancelControllerNavigations();
@@ -227,6 +336,41 @@ class Revision3ContentLibraryController {
       return;
     }
     _detach(attachment);
+  }
+
+  void _checkpointChanged(
+    Object attachment, {
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) {
+    if (!identical(_attachment, attachment)) return;
+    _projectRevision = projectRevision;
+    _projectHeadCanonicalJson = projectHeadCanonicalJson;
+    _cancelMismatchedControllerNavigations();
+  }
+
+  void _cancelMismatchedControllerNavigations() {
+    final buffered = _bufferedNavigation;
+    if (buffered != null &&
+        !buffered.matchesCheckpoint(
+          _projectRevision,
+          _projectHeadCanonicalJson,
+        )) {
+      _bufferedNavigation = null;
+      if (!buffered.result.isCompleted) buffered.result.complete(false);
+    }
+    final stale = _forwardedNavigations
+        .where(
+          (navigation) => !navigation.matchesCheckpoint(
+            _projectRevision,
+            _projectHeadCanonicalJson,
+          ),
+        )
+        .toList(growable: false);
+    _forwardedNavigations.removeAll(stale);
+    for (final navigation in stale) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
   }
 
   void _cancelControllerNavigations() {
@@ -248,12 +392,31 @@ enum _ContentMode { entities, assets }
 enum _PendingContentTargetKind { entity, asset }
 
 class _PendingContentNavigation {
-  _PendingContentNavigation(this.kind, this.exactId, {this.storySection});
+  _PendingContentNavigation(
+    this.kind,
+    this.exactId, {
+    this.storySection,
+    this.expectedProjectRevision,
+    this.expectedProjectHeadCanonicalJson,
+  }) : assert(
+         (expectedProjectRevision == null) ==
+             (expectedProjectHeadCanonicalJson == null),
+       );
 
   final _PendingContentTargetKind kind;
   final String exactId;
   final Revision3StoryWorkbenchSection? storySection;
+  final int? expectedProjectRevision;
+  final String? expectedProjectHeadCanonicalJson;
   final Completer<bool> result = Completer<bool>();
+
+  bool matchesCheckpoint(int? projectRevision, String? headCanonicalJson) {
+    final expectedRevision = expectedProjectRevision;
+    final expectedHead = expectedProjectHeadCanonicalJson;
+    if (expectedRevision == null && expectedHead == null) return true;
+    return expectedRevision == projectRevision &&
+        expectedHead == headCanonicalJson;
+  }
 }
 
 enum _EntityToolAction {
@@ -294,9 +457,12 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.inspectQuestSourceDisabledReason,
     this.inspectNpcSourceDisabledReason,
     this.openStoryDraftInStory,
+    this.openStoryDraftInStoryDisabledReason,
     this.openStoryDraftLabel = 'Open in Story',
     this.openStoryDraftDescription =
         'Continue editing this draft in the canonical Story workspace.',
+    this.openStoryDraftFailureMessage =
+        'Story could not be opened. The project was not changed.',
     this.storyWorkbenchCopy = const Revision3StoryEntityWorkbenchCopy.english(),
     this.controller,
     super.key,
@@ -319,9 +485,18 @@ class Revision3ContentLibrary extends StatefulWidget {
   final String? editNpcProfileDisabledReason;
   final String? inspectQuestSourceDisabledReason;
   final String? inspectNpcSourceDisabledReason;
+
+  /// Canonical continuation for Quest/NPC drafts discovered in Content.
+  ///
+  /// A non-empty [openStoryDraftInStoryDisabledReason] retains canonical Story
+  /// ownership while disabling this callback. It must not fall back to the
+  /// duplicate Content workbench merely because Story temporarily requires
+  /// recovery or reopen.
   final Revision3StoryDraftOpener? openStoryDraftInStory;
+  final String? openStoryDraftInStoryDisabledReason;
   final String openStoryDraftLabel;
   final String openStoryDraftDescription;
+  final String openStoryDraftFailureMessage;
   final Revision3StoryEntityWorkbenchCopy storyWorkbenchCopy;
   final Revision3ContentLibraryController? controller;
 
@@ -360,6 +535,22 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   @override
   void didUpdateWidget(covariant Revision3ContentLibrary oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final oldHandoffDisabledReason = _normalizedStoryHandoffDisabledReason(
+      oldWidget.openStoryDraftInStoryDisabledReason,
+    );
+    final oldHasCanonicalStoryHandoff =
+        oldWidget.openStoryDraftInStory != null ||
+        oldHandoffDisabledReason != null;
+    final oldStoryHandoffEnabled =
+        oldWidget.openStoryDraftInStory != null &&
+        oldHandoffDisabledReason == null;
+    if (oldHasCanonicalStoryHandoff != _hasCanonicalStoryHandoff ||
+        oldStoryHandoffEnabled != _storyHandoffEnabled ||
+        oldHandoffDisabledReason != _storyHandoffDisabledReason) {
+      _storyHandoffGeneration++;
+      _storyHandoffBusy = false;
+      _storyHandoffError = null;
+    }
     final controllerChanged = !identical(
       oldWidget.controller,
       widget.controller,
@@ -376,8 +567,21 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       final changedProject =
           oldWidget.projectRoot != widget.projectRoot ||
           oldWidget.projectId != widget.projectId;
+      final changedCheckpoint =
+          oldWidget.projectRevision != widget.projectRevision ||
+          oldWidget.projectHeadCanonicalJson != widget.projectHeadCanonicalJson;
+      if (!changedProject && !controllerChanged && changedCheckpoint) {
+        widget.controller?._checkpointChanged(
+          this,
+          projectRevision: widget.projectRevision,
+          projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
+        );
+      }
       if (oldWidget.projectRevision != widget.projectRevision) {
         _cancelPendingNavigations();
+      } else if (oldWidget.projectHeadCanonicalJson !=
+          widget.projectHeadCanonicalJson) {
+        _cancelMismatchedPendingNavigations();
       }
       if (changedProject) {
         _cancelPendingNavigations();
@@ -417,10 +621,25 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         projectId: widget.projectId,
       );
 
+  String? get _storyHandoffDisabledReason =>
+      _normalizedStoryHandoffDisabledReason(
+        widget.openStoryDraftInStoryDisabledReason,
+      );
+
+  bool get _hasCanonicalStoryHandoff =>
+      widget.openStoryDraftInStory != null ||
+      _storyHandoffDisabledReason != null;
+
+  bool get _storyHandoffEnabled =>
+      widget.openStoryDraftInStory != null &&
+      _storyHandoffDisabledReason == null;
+
   void _attachController(Revision3ContentLibraryController? controller) {
     controller?._attach(
       this,
       projectIdentity: _projectIdentity,
+      projectRevision: widget.projectRevision,
+      projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
       openEntityById: _openEntityById,
       openAssetBySha256: _openAssetBySha256,
     );
@@ -429,26 +648,48 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   Future<bool> _openEntityById(
     String entityId, {
     Revision3StoryWorkbenchSection? storySection,
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
   }) => _openExactTarget(
     _PendingContentTargetKind.entity,
     entityId,
     storySection: storySection,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
   );
 
-  Future<bool> _openAssetBySha256(String sha256) =>
-      _openExactTarget(_PendingContentTargetKind.asset, sha256);
+  Future<bool> _openAssetBySha256(
+    String sha256, {
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
+  }) => _openExactTarget(
+    _PendingContentTargetKind.asset,
+    sha256,
+    expectedProjectRevision: expectedProjectRevision,
+    expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+  );
 
   Future<bool> _openExactTarget(
     _PendingContentTargetKind kind,
     String exactId, {
     Revision3StoryWorkbenchSection? storySection,
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
   }) {
     if (!mounted || exactId.isEmpty) return Future<bool>.value(false);
+    if (!_matchesExpectedCheckpoint(
+      expectedProjectRevision,
+      expectedProjectHeadCanonicalJson,
+    )) {
+      return Future<bool>.value(false);
+    }
     if (_loading || (_index == null && _error == null)) {
       final pending = _PendingContentNavigation(
         kind,
         exactId,
         storySection: storySection,
+        expectedProjectRevision: expectedProjectRevision,
+        expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
       );
       _pendingNavigations.add(pending);
       return pending.result.future;
@@ -457,8 +698,27 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     final index = _index;
     if (index == null) return Future<bool>.value(false);
     return Future<bool>.value(
-      _resolveExactTarget(index, kind, exactId, storySection: storySection),
+      _resolveExactTarget(
+        index,
+        kind,
+        exactId,
+        storySection: storySection,
+        expectedProjectRevision: expectedProjectRevision,
+        expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+      ),
     );
+  }
+
+  bool _matchesExpectedCheckpoint(
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
+  ) {
+    if (expectedProjectRevision == null &&
+        expectedProjectHeadCanonicalJson == null) {
+      return true;
+    }
+    return expectedProjectRevision == widget.projectRevision &&
+        expectedProjectHeadCanonicalJson == widget.projectHeadCanonicalJson;
   }
 
   bool _resolveExactTarget(
@@ -466,13 +726,22 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     _PendingContentTargetKind kind,
     String exactId, {
     Revision3StoryWorkbenchSection? storySection,
+    int? expectedProjectRevision,
+    String? expectedProjectHeadCanonicalJson,
   }) {
+    if (!_matchesExpectedCheckpoint(
+      expectedProjectRevision,
+      expectedProjectHeadCanonicalJson,
+    )) {
+      return false;
+    }
     switch (kind) {
       case _PendingContentTargetKind.entity:
         final entity = index.entityById(exactId);
         if (entity == null) return false;
         if (storySection != null &&
             (!_isStoryDraft(entity) ||
+                _hasCanonicalStoryHandoff ||
                 !Revision3StoryEntityWorkbench.supportsSection(
                   entity,
                   storySection,
@@ -501,6 +770,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
             navigation.kind,
             navigation.exactId,
             storySection: navigation.storySection,
+            expectedProjectRevision: navigation.expectedProjectRevision,
+            expectedProjectHeadCanonicalJson:
+                navigation.expectedProjectHeadCanonicalJson,
           );
       navigation.result.complete(resolved);
     }
@@ -511,6 +783,21 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     _pendingNavigations.clear();
     for (final navigation in pending) {
       navigation.result.complete(false);
+    }
+  }
+
+  void _cancelMismatchedPendingNavigations() {
+    final stale = _pendingNavigations
+        .where(
+          (navigation) => !_matchesExpectedCheckpoint(
+            navigation.expectedProjectRevision,
+            navigation.expectedProjectHeadCanonicalJson,
+          ),
+        )
+        .toList(growable: false);
+    _pendingNavigations.removeWhere(stale.contains);
+    for (final navigation in stale) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
     }
   }
 
@@ -630,10 +917,12 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
 
   Future<void> _openStoryDraft(
     Revision3ContentIndex index,
-    Revision3ContentEntity entity,
-  ) async {
+    Revision3ContentEntity entity, {
+    bool showFailureSnackBar = false,
+  }) async {
     final open = widget.openStoryDraftInStory;
     if (_storyHandoffBusy ||
+        !_storyHandoffEnabled ||
         open == null ||
         !_storyHandoffIsExact(index, entity)) {
       return;
@@ -656,13 +945,17 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       failed = true;
     }
     if (!mounted || operation != _storyHandoffGeneration) return;
+    final failureMessage = widget.openStoryDraftFailureMessage;
+    final showFailure = failed && _storyHandoffIsExact(index, entity);
     setState(() {
       _storyHandoffBusy = false;
-      if (failed && _storyHandoffIsExact(index, entity)) {
-        _storyHandoffError =
-            'Story could not be opened. The project was not changed.';
-      }
+      if (showFailure) _storyHandoffError = failureMessage;
     });
+    if (showFailure && showFailureSnackBar && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(failureMessage)));
+    }
   }
 
   void _scheduleExactDetailsPresentation(
@@ -878,7 +1171,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     if (!mounted || !identical(_index, index) || editAction == null) return;
     switch (editAction) {
       case _EntityToolAction.openStoryDraft:
-        await _openStoryDraft(index, entity);
+        await _openStoryDraft(index, entity, showFailureSnackBar: true);
       case _EntityToolAction.questOutline:
         await widget.editQuestOutline?.call(index, entity);
       case _EntityToolAction.questContext:
@@ -908,10 +1201,23 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     required Future<void> Function()? onInspectNpcSource,
   }) {
     if (_isStoryDraft(entity)) {
+      final handoffDisabledReason = _storyHandoffDisabledReason;
+      if (onOpenStory != null || handoffDisabledReason != null) {
+        return _StoryDraftDiscoveryDetails(
+          entity: entity,
+          openLabel: widget.openStoryDraftLabel,
+          openDescription: widget.openStoryDraftDescription,
+          handoffBusy: _storyHandoffBusy,
+          handoffError: _storyHandoffError,
+          onOpenStory: handoffDisabledReason == null ? onOpenStory : null,
+          handoffDisabledReason: handoffDisabledReason,
+          copy: widget.storyWorkbenchCopy,
+        );
+      }
       final selectedSection =
           _storySections[entity.id] ??
           Revision3StoryEntityWorkbench.defaultSectionFor(entity);
-      final workbench = Revision3StoryEntityWorkbench(
+      return Revision3StoryEntityWorkbench(
         key: ValueKey(
           'revision3-story-workbench-${widget.projectId}-${entity.id}',
         ),
@@ -952,22 +1258,6 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
         ),
         copy: widget.storyWorkbenchCopy,
-      );
-      if (onOpenStory == null) return workbench;
-      return Column(
-        key: ValueKey('revision3-content-story-draft-details-${entity.id}'),
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _StoryDraftContinuation(
-            entity: entity,
-            label: widget.openStoryDraftLabel,
-            description: widget.openStoryDraftDescription,
-            busy: _storyHandoffBusy,
-            error: _storyHandoffError,
-            onPressed: onOpenStory,
-          ),
-          Expanded(child: workbench),
-        ],
       );
     }
     return _EntityDetails(
@@ -1084,6 +1374,99 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   }
 }
 
+/// Read-only discovery surface for Story-owned content.
+///
+/// Content remains useful for finding and identifying Quest/NPC drafts, while
+/// their editing and source-check tools stay in the canonical Story workspace.
+/// Keeping this as one scroll owner also makes the handoff usable in compact
+/// details sheets and on short desktop windows.
+class _StoryDraftDiscoveryDetails extends StatelessWidget {
+  const _StoryDraftDiscoveryDetails({
+    required this.entity,
+    required this.openLabel,
+    required this.openDescription,
+    required this.handoffBusy,
+    required this.handoffError,
+    required this.onOpenStory,
+    required this.handoffDisabledReason,
+    required this.copy,
+  });
+
+  final Revision3ContentEntity entity;
+  final String openLabel;
+  final String openDescription;
+  final bool handoffBusy;
+  final String? handoffError;
+  final Future<void> Function()? onOpenStory;
+  final String? handoffDisabledReason;
+  final Revision3StoryEntityWorkbenchCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final quest = entity.summary.questDraft;
+    final kindLabel = entity.kind == Revision3ContentEntityKind.questDraft
+        ? copy.questKindLabel
+        : copy.npcKindLabel;
+    final problemSummary = entity.problemCount == 0
+        ? copy.noReferenceProblems
+        : copy.referenceProblemCount(entity.problemCount);
+    return KeyedSubtree(
+      key: ValueKey('revision3-content-story-discovery-${entity.id}'),
+      child: KeyedSubtree(
+        key: ValueKey('revision3-content-entity-details-${entity.id}'),
+        child: ListView(
+          key: const Key('revision3-content-entity-details'),
+          padding: const EdgeInsets.all(20),
+          children: [
+            Icon(_kindIcon(entity.kind), size: 36),
+            const SizedBox(height: 12),
+            Semantics(
+              header: true,
+              child: Text(
+                _entityTitle(entity),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Text(kindLabel),
+            if (quest != null && quest.objectiveTitles.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(quest.objectiveTitles.join('\n')),
+            ],
+            const SizedBox(height: 12),
+            Semantics(
+              label: problemSummary,
+              excludeSemantics: true,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    entity.problemCount == 0
+                        ? Icons.check_circle_outline
+                        : Icons.warning_amber_rounded,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(problemSummary)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _StoryDraftContinuation(
+              entity: entity,
+              label: openLabel,
+              description: openDescription,
+              busy: handoffBusy,
+              error: handoffError,
+              onPressed: onOpenStory,
+              disabledReason: handoffDisabledReason,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _StoryDraftContinuation extends StatelessWidget {
   const _StoryDraftContinuation({
     required this.entity,
@@ -1092,6 +1475,7 @@ class _StoryDraftContinuation extends StatelessWidget {
     required this.busy,
     required this.error,
     required this.onPressed,
+    required this.disabledReason,
   });
 
   final Revision3ContentEntity entity;
@@ -1099,7 +1483,8 @@ class _StoryDraftContinuation extends StatelessWidget {
   final String description;
   final bool busy;
   final String? error;
-  final Future<void> Function() onPressed;
+  final Future<void> Function()? onPressed;
+  final String? disabledReason;
 
   @override
   Widget build(BuildContext context) {
@@ -1113,9 +1498,9 @@ class _StoryDraftContinuation extends StatelessWidget {
       fallback: 'Continue editing this draft in the canonical Story workspace.',
       maxLength: 240,
     );
-    final button = FilledButton.tonalIcon(
+    Widget button = FilledButton.icon(
       key: Key('revision3-content-open-story-${entity.id}'),
-      onPressed: busy ? null : onPressed,
+      onPressed: busy || disabledReason != null ? null : onPressed,
       icon: busy
           ? const SizedBox.square(
               dimension: 16,
@@ -1124,9 +1509,12 @@ class _StoryDraftContinuation extends StatelessWidget {
           : const Icon(Icons.arrow_forward_outlined),
       label: Text(friendlyLabel),
     );
+    if (disabledReason != null) {
+      button = Tooltip(message: disabledReason!, child: button);
+    }
     return Card(
       key: const Key('revision3-content-open-story-continuation'),
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      margin: EdgeInsets.zero,
       color: Theme.of(context).colorScheme.primaryContainer,
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -1151,6 +1539,18 @@ class _StoryDraftContinuation extends StatelessWidget {
                     ),
                   ),
                 ],
+                if (disabledReason != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    disabledReason!,
+                    key: const Key(
+                      'revision3-content-open-story-disabled-reason',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ],
             );
             if (compact) {
@@ -1164,9 +1564,9 @@ class _StoryDraftContinuation extends StatelessWidget {
               key: const Key('revision3-content-open-story-wide'),
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(child: explanation),
+                Expanded(flex: 3, child: explanation),
                 const SizedBox(width: 16),
-                button,
+                Flexible(flex: 2, child: button),
               ],
             );
           },
@@ -1185,6 +1585,12 @@ String _friendlyStoryHandoffCopy(
   return normalized.isEmpty || normalized.length > maxLength
       ? fallback
       : normalized;
+}
+
+String? _normalizedStoryHandoffDisabledReason(String? value) {
+  if (value == null) return null;
+  final normalized = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+  return normalized.isEmpty ? null : normalized;
 }
 
 class _LibraryHeader extends StatelessWidget {

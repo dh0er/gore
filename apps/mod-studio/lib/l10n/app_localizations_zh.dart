@@ -1255,6 +1255,18 @@ class AppLocalizationsZh extends AppLocalizations {
       'Continue this Quest or NPC in the complete Story workspace.';
 
   @override
+  String get managedContentOpenInStoryRequiresReopen =>
+      'Reopen this project before opening Story.';
+
+  @override
+  String get managedContentOpenInStoryFailed =>
+      'Story could not be opened. The project was not changed.';
+
+  @override
+  String get managedStoryWorkbenchActionFailed =>
+      'Could not open this editor. Please try again.';
+
+  @override
   String get managedDashboardLoading => '正在加载项目概览';
 
   @override

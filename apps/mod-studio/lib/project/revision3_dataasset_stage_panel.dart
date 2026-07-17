@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
@@ -17,6 +19,223 @@ typedef Revision3ReviewedDataAssetStageBuilder =
 
 typedef Revision3InstalledDataAssetBrowser =
     Future<DataAssetSemanticStagePublication?> Function();
+
+/// Programmatic navigation into the exact DataAsset stage registry shown by a
+/// [Revision3DataAssetStagePanel].
+///
+/// Problems currently use a stage's canonical target path as [stageId]. A
+/// request is bound to one exact project ID, revision, and canonical head. One
+/// request may be buffered before the matching panel mounts; a newer buffered
+/// request supersedes it. Project switches, same-revision head drift, detach,
+/// and disposal resolve outstanding requests to `false` rather than following
+/// another registry or claiming that a generic DataAsset surface was opened.
+class Revision3DataAssetStagePanelController {
+  Object? _attachment;
+  String? _projectRoot;
+  String? _projectId;
+  int? _projectRevision;
+  String? _projectHeadCanonicalJson;
+  Future<bool> Function(
+    String stageId, {
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  })?
+  _openStageById;
+  _PendingDataAssetStageNavigation? _bufferedNavigation;
+  final Set<_PendingDataAssetStageNavigation> _forwardedNavigations = {};
+  bool _disposed = false;
+
+  /// Opens exactly [stageId] at the supplied managed-project checkpoint.
+  ///
+  /// [stageId] is the exact target path carried by a DataAsset-stage problem.
+  /// The result is `true` only when that stage exists in the exact registry and
+  /// the panel selected and scheduled it for expansion.
+  Future<bool> openStageByIdAtCheckpoint(
+    String stageId, {
+    required String projectId,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) {
+    final navigation = _PendingDataAssetStageNavigation(
+      stageId: stageId,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      projectHeadCanonicalJson: projectHeadCanonicalJson,
+    );
+    if (_disposed || !navigation.isValid) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    if (_attachment != null) return _forward(navigation);
+    final superseded = _bufferedNavigation;
+    _bufferedNavigation = navigation;
+    if (superseded != null && !superseded.result.isCompleted) {
+      superseded.result.complete(false);
+    }
+    return navigation.result.future;
+  }
+
+  /// Permanently releases this controller and resolves outstanding requests
+  /// to `false`. A disposed controller cannot attach again.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _projectRoot = null;
+    _projectId = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
+    _openStageById = null;
+    _cancelNavigations();
+  }
+
+  Future<bool> _forward(_PendingDataAssetStageNavigation navigation) {
+    final open = _openStageById;
+    if (open == null || !_matches(navigation)) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    _forwardedNavigations.add(navigation);
+    Future<bool>.sync(
+      () => open(
+        navigation.stageId,
+        expectedProjectId: navigation.projectId,
+        expectedProjectRevision: navigation.projectRevision,
+        expectedProjectHeadCanonicalJson: navigation.projectHeadCanonicalJson,
+      ),
+    ).then(
+      (resolved) => _completeForwarded(navigation, resolved),
+      onError: (_, _) => _completeForwarded(navigation, false),
+    );
+    return navigation.result.future;
+  }
+
+  void _completeForwarded(
+    _PendingDataAssetStageNavigation navigation,
+    bool resolved,
+  ) {
+    _forwardedNavigations.remove(navigation);
+    if (!navigation.result.isCompleted) {
+      navigation.result.complete(resolved && _matches(navigation));
+    }
+  }
+
+  bool _matches(_PendingDataAssetStageNavigation navigation) =>
+      navigation.projectId == _projectId &&
+      navigation.projectRevision == _projectRevision &&
+      navigation.projectHeadCanonicalJson == _projectHeadCanonicalJson;
+
+  bool _attach(
+    Object attachment, {
+    required String projectRoot,
+    required String projectId,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+    required Future<bool> Function(
+      String stageId, {
+      required String expectedProjectId,
+      required int expectedProjectRevision,
+      required String expectedProjectHeadCanonicalJson,
+    })
+    openStageById,
+  }) {
+    if (_disposed ||
+        (_attachment != null && !identical(_attachment, attachment))) {
+      final buffered = _bufferedNavigation;
+      _bufferedNavigation = null;
+      if (buffered != null && !buffered.result.isCompleted) {
+        buffered.result.complete(false);
+      }
+      return false;
+    }
+    _attachment = attachment;
+    _projectRoot = projectRoot;
+    _projectId = projectId;
+    _projectRevision = projectRevision;
+    _projectHeadCanonicalJson = projectHeadCanonicalJson;
+    _openStageById = openStageById;
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null) _forward(buffered);
+    return true;
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _projectRoot = null;
+    _projectId = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
+    _openStageById = null;
+    _cancelForwardedNavigations();
+  }
+
+  void _bindingChanged(
+    Object attachment, {
+    required String projectRoot,
+    required String projectId,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) {
+    if (!identical(_attachment, attachment)) return;
+    final rootChanged = _projectRoot != projectRoot;
+    _projectRoot = projectRoot;
+    _projectId = projectId;
+    _projectRevision = projectRevision;
+    _projectHeadCanonicalJson = projectHeadCanonicalJson;
+    if (rootChanged) {
+      _cancelForwardedNavigations();
+      return;
+    }
+    final stale = _forwardedNavigations
+        .where((navigation) => !_matches(navigation))
+        .toList(growable: false);
+    _forwardedNavigations.removeAll(stale);
+    for (final navigation in stale) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
+  }
+
+  void _cancelForwardedNavigations() {
+    final forwarded = _forwardedNavigations.toList(growable: false);
+    _forwardedNavigations.clear();
+    for (final navigation in forwarded) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
+  }
+
+  void _cancelNavigations() {
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null && !buffered.result.isCompleted) {
+      buffered.result.complete(false);
+    }
+    _cancelForwardedNavigations();
+  }
+}
+
+class _PendingDataAssetStageNavigation {
+  _PendingDataAssetStageNavigation({
+    required this.stageId,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+  });
+
+  final String stageId;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+  final Completer<bool> result = Completer<bool>();
+
+  bool get isValid =>
+      stageId.isNotEmpty &&
+      projectId.isNotEmpty &&
+      projectRevision >= 0 &&
+      projectHeadCanonicalJson.isNotEmpty;
+}
 
 /// Visible management surface for receipt-verified DataAsset edits already
 /// supported by the managed revision-3 session.
@@ -45,6 +264,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
     this.buildReviewedStage,
     this.pickBuildParentDirectory,
     this.buildUnavailableReason,
+    this.controller,
     super.key,
   });
 
@@ -67,6 +287,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final Revision3ReviewedDataAssetStageBuilder? buildReviewedStage;
   final Revision3DataAssetBuildParentDirectoryPicker? pickBuildParentDirectory;
   final String? buildUnavailableReason;
+  final Revision3DataAssetStagePanelController? controller;
 
   @override
   State<Revision3DataAssetStagePanel> createState() =>
@@ -94,9 +315,11 @@ class _Revision3DataAssetStagePanelState
   int _installedBrowserEpoch = 0;
   String? _focusedTargetPath;
   int? _focusedProjectRevision;
+  bool _focusedStageRequiresPublishedRevision = false;
   String? _stageRevealMessage;
   final Map<String, ExpansibleController> _stageExpansionControllers = {};
   final Map<String, GlobalKey> _stageFocusKeys = {};
+  final List<_PendingDataAssetStageNavigation> _pendingStageNavigations = [];
 
   bool get _busy =>
       _picking ||
@@ -113,20 +336,37 @@ class _Revision3DataAssetStagePanelState
     _search.addListener(_searchChanged);
     if (widget.requiresReopen) {
       _loadError = const Revision3DataAssetRequiresReopenException();
-    } else {
-      _reload();
     }
+    _attachController(widget.controller);
+    if (!widget.requiresReopen) _reload();
   }
 
   @override
   void didUpdateWidget(covariant Revision3DataAssetStagePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
     final checkpointChanged =
         oldWidget.projectRoot != widget.projectRoot ||
         oldWidget.projectId != widget.projectId ||
         oldWidget.projectRevision != widget.projectRevision ||
         oldWidget.projectHead.canonicalJson != widget.projectHead.canonicalJson;
+    if (controllerChanged) {
+      _cancelPendingStageNavigations();
+      oldWidget.controller?._detach(this);
+    } else if (checkpointChanged) {
+      widget.controller?._bindingChanged(
+        this,
+        projectRoot: widget.projectRoot,
+        projectId: widget.projectId,
+        projectRevision: widget.projectRevision,
+        projectHeadCanonicalJson: widget.projectHead.canonicalJson,
+      );
+    }
     if (checkpointChanged) {
+      _cancelPendingStageNavigations();
       final projectIdentityChanged =
           oldWidget.projectRoot != widget.projectRoot ||
           oldWidget.projectId != widget.projectId;
@@ -139,11 +379,16 @@ class _Revision3DataAssetStagePanelState
         _installedBrowserEpoch++;
         _focusedTargetPath = null;
         _focusedProjectRevision = null;
+        _focusedStageRequiresPublishedRevision = false;
         _stageRevealMessage = null;
         _search.clear();
-      } else if (_focusedProjectRevision != widget.projectRevision) {
+      } else if (_focusedProjectRevision != widget.projectRevision ||
+          (oldWidget.projectRevision == widget.projectRevision &&
+              oldWidget.projectHead.canonicalJson !=
+                  widget.projectHead.canonicalJson)) {
         _focusedTargetPath = null;
         _focusedProjectRevision = null;
+        _focusedStageRequiresPublishedRevision = false;
         _stageRevealMessage = null;
         _search.clear();
       }
@@ -165,10 +410,13 @@ class _Revision3DataAssetStagePanelState
       } else {
         _reload(clearCurrent: true);
       }
+      if (controllerChanged) _attachController(widget.controller);
       return;
     }
+    if (controllerChanged) _attachController(widget.controller);
     if (oldWidget.requiresReopen != widget.requiresReopen) {
       if (widget.requiresReopen) {
+        _cancelPendingStageNavigations();
         _loadEpoch++;
         _actionEpoch++;
         _installedBrowserEpoch++;
@@ -194,6 +442,8 @@ class _Revision3DataAssetStagePanelState
     _loadEpoch++;
     _actionEpoch++;
     _installedBrowserEpoch++;
+    _cancelPendingStageNavigations();
+    widget.controller?._detach(this);
     _search
       ..removeListener(_searchChanged)
       ..dispose();
@@ -205,6 +455,133 @@ class _Revision3DataAssetStagePanelState
   }
 
   void _searchChanged() => setState(() {});
+
+  void _attachController(Revision3DataAssetStagePanelController? controller) {
+    controller?._attach(
+      this,
+      projectRoot: widget.projectRoot,
+      projectId: widget.projectId,
+      projectRevision: widget.projectRevision,
+      projectHeadCanonicalJson: widget.projectHead.canonicalJson,
+      openStageById: _openStageByIdAtCheckpoint,
+    );
+  }
+
+  Future<bool> _openStageByIdAtCheckpoint(
+    String stageId, {
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) {
+    if (!mounted ||
+        _effectivelyLocked ||
+        !_matchesStageCheckpoint(
+          expectedProjectId,
+          expectedProjectRevision,
+          expectedProjectHeadCanonicalJson,
+        )) {
+      return Future<bool>.value(false);
+    }
+    if (_loading || (_stages == null && _loadError == null)) {
+      final pending = _PendingDataAssetStageNavigation(
+        stageId: stageId,
+        projectId: expectedProjectId,
+        projectRevision: expectedProjectRevision,
+        projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+      );
+      _pendingStageNavigations.add(pending);
+      return pending.result.future;
+    }
+    final stages = _stages;
+    if (_loadError != null || stages == null) {
+      return Future<bool>.value(false);
+    }
+    return Future<bool>.value(
+      _resolveExactStage(
+        stages,
+        stageId,
+        expectedProjectId: expectedProjectId,
+        expectedProjectRevision: expectedProjectRevision,
+        expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+      ),
+    );
+  }
+
+  bool _resolveExactStage(
+    List<AuthoringRevision3DataAssetStage> stages,
+    String stageId, {
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) {
+    if (!_matchesStageCheckpoint(
+      expectedProjectId,
+      expectedProjectRevision,
+      expectedProjectHeadCanonicalJson,
+    )) {
+      return false;
+    }
+    AuthoringRevision3DataAssetStage? exactStage;
+    for (final stage in stages) {
+      if (stage.targetPath == stageId) {
+        exactStage = stage;
+        break;
+      }
+    }
+    if (exactStage == null || exactStage.projectId != expectedProjectId) {
+      return false;
+    }
+    _focusedTargetPath = exactStage.targetPath;
+    _focusedProjectRevision = expectedProjectRevision;
+    _focusedStageRequiresPublishedRevision = false;
+    _stageRevealMessage = null;
+    _search.text = exactStage.targetPath;
+    _scheduleFocusedStageReveal();
+    return true;
+  }
+
+  bool _matchesStageCheckpoint(
+    String projectId,
+    int projectRevision,
+    String projectHeadCanonicalJson,
+  ) =>
+      widget.projectId == projectId &&
+      widget.projectRevision == projectRevision &&
+      widget.projectHead.canonicalJson == projectHeadCanonicalJson;
+
+  void _resolvePendingStageNavigations(
+    List<AuthoringRevision3DataAssetStage> stages,
+  ) {
+    final pending = List<_PendingDataAssetStageNavigation>.of(
+      _pendingStageNavigations,
+    );
+    _pendingStageNavigations.clear();
+    for (final navigation in pending) {
+      final resolved =
+          mounted &&
+          _resolveExactStage(
+            stages,
+            navigation.stageId,
+            expectedProjectId: navigation.projectId,
+            expectedProjectRevision: navigation.projectRevision,
+            expectedProjectHeadCanonicalJson:
+                navigation.projectHeadCanonicalJson,
+          );
+      if (!navigation.result.isCompleted) {
+        navigation.result.complete(resolved);
+      }
+    }
+  }
+
+  void _cancelPendingStageNavigations() {
+    final pending = List<_PendingDataAssetStageNavigation>.of(
+      _pendingStageNavigations,
+    );
+    _pendingStageNavigations.clear();
+    for (final navigation in pending) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
+  }
 
   Future<void> _reload({bool clearCurrent = false}) async {
     if (_effectivelyLocked) return;
@@ -228,11 +605,14 @@ class _Revision3DataAssetStagePanelState
       }
       final focusTarget = _focusedTargetPath;
       final focusRevision = _focusedProjectRevision;
+      final focusRequiresPublishedRevision =
+          _focusedStageRequiresPublishedRevision;
       AuthoringRevision3DataAssetStage? focusedStage;
       if (focusTarget != null && focusRevision == widget.projectRevision) {
         for (final stage in stages) {
-          if (stage.targetPath.toLowerCase() == focusTarget.toLowerCase() &&
-              stage.stagedProjectRevision == focusRevision) {
+          if (stage.targetPath == focusTarget &&
+              (!focusRequiresPublishedRevision ||
+                  stage.stagedProjectRevision == focusRevision)) {
             focusedStage = stage;
             break;
           }
@@ -252,11 +632,13 @@ class _Revision3DataAssetStagePanelState
         } else if (focusMissing) {
           _focusedTargetPath = null;
           _focusedProjectRevision = null;
+          _focusedStageRequiresPublishedRevision = false;
           _stageRevealMessage = null;
           _actionError =
               'The newly saved DataAsset edit was not present at its published project revision. Refresh the exact project list before continuing.';
         }
       });
+      _resolvePendingStageNavigations(stages);
       if (focusMissing) {
         _search.clear();
       } else {
@@ -264,6 +646,7 @@ class _Revision3DataAssetStagePanelState
       }
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
+      _cancelPendingStageNavigations();
       setState(() {
         _loading = false;
         _loadError = error;
@@ -403,6 +786,7 @@ class _Revision3DataAssetStagePanelState
   void _focusPublishedStage(DataAssetSemanticStagePublication publication) {
     _focusedTargetPath = publication.targetPath;
     _focusedProjectRevision = publication.revision;
+    _focusedStageRequiresPublishedRevision = true;
     _search.text = publication.targetPath;
   }
 
@@ -425,15 +809,16 @@ class _Revision3DataAssetStagePanelState
     if (stages == null ||
         !stages.any(
           (stage) =>
-              stage.targetPath.toLowerCase() == targetPath.toLowerCase() &&
-              stage.stagedProjectRevision == focusedRevision,
+              stage.targetPath == targetPath &&
+              (!_focusedStageRequiresPublishedRevision ||
+                  stage.stagedProjectRevision == focusedRevision),
         )) {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted ||
           _focusedProjectRevision != widget.projectRevision ||
-          _focusedTargetPath?.toLowerCase() != targetPath.toLowerCase()) {
+          _focusedTargetPath != targetPath) {
         return;
       }
       final folded = targetPath.toLowerCase();
@@ -450,6 +835,7 @@ class _Revision3DataAssetStagePanelState
       setState(() {
         _focusedTargetPath = null;
         _focusedProjectRevision = null;
+        _focusedStageRequiresPublishedRevision = false;
       });
     });
   }

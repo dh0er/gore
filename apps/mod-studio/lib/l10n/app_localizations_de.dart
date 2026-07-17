@@ -1296,6 +1296,18 @@ class AppLocalizationsDe extends AppLocalizations {
       'Bearbeite diese Quest oder diesen NPC im vollständigen Story-Arbeitsbereich weiter.';
 
   @override
+  String get managedContentOpenInStoryRequiresReopen =>
+      'Öffne dieses Projekt erneut, bevor du Story öffnest.';
+
+  @override
+  String get managedContentOpenInStoryFailed =>
+      'Story konnte nicht geöffnet werden. Das Projekt wurde nicht verändert.';
+
+  @override
+  String get managedStoryWorkbenchActionFailed =>
+      'Dieser Editor konnte nicht geöffnet werden. Versuche es erneut.';
+
+  @override
   String get managedDashboardLoading => 'Projektübersicht wird geladen';
 
   @override
@@ -1830,7 +1842,7 @@ class AppLocalizationsDe extends AppLocalizations {
       'Laufzeit nicht verifiziert';
 
   @override
-  String get managedStoryWorkbenchOverviewTab => 'Überblick';
+  String get managedStoryWorkbenchOverviewTab => 'Quest-Verlauf';
 
   @override
   String get managedStoryWorkbenchProfileTab => 'Profil';

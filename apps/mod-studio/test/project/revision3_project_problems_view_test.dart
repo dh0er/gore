@@ -521,6 +521,161 @@ void main() {
     );
     semantics.dispose();
   });
+
+  testWidgets('same-revision head drift invalidates a delayed report action', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(640, 420));
+    final fixture = revision3ProjectProblemsFilterFixture();
+    final pendingAction = Completer<void>();
+    var actionCalls = 0;
+    var contentCalls = 0;
+    var stageCalls = 0;
+    var head = '{"checkpoint":"a"}';
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Revision3ProjectProblemsView(
+                projectRoot: r'C:\mods\problems-a',
+                projectId: fixture.projectId,
+                projectRevision: fixture.projectRevision,
+                projectHeadCanonicalJson: head,
+                loadContent: () async {
+                  contentCalls++;
+                  return fixture.contentIndex;
+                },
+                loadDataAssetStages: () async {
+                  stageCalls++;
+                  return fixture.dataAssetStages;
+                },
+                gameConfigured: true,
+                copy: _copy,
+                actions: Revision3ProjectProblemsActions(
+                  openEntity: (_) {
+                    actionCalls++;
+                    return pendingAction.future;
+                  },
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final first = _report(fixture).problems.first;
+    await tester.tap(find.byKey(Key('revision3-project-problem-${first.id}')));
+    await tester.pumpAndSettle();
+    final staleAction = find.byKey(
+      const Key(
+        'revision3-project-problems-action-entity-'
+        '$revision3ProjectProblemsNpcId',
+      ),
+    );
+    await tester.ensureVisible(staleAction);
+    await tester.tap(staleAction);
+    await tester.pump();
+    expect(actionCalls, 1);
+
+    rebuild(() => head = '{"checkpoint":"b"}');
+    await tester.pump();
+    await tester.pump();
+    expect(contentCalls, 2);
+    expect(stageCalls, 2);
+
+    pendingAction.complete();
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-problems-detail')),
+      findsOneWidget,
+      reason: 'a stale action must not close its retained detail sheet',
+    );
+    expect(find.text(_copy.actionFailedMessage), findsOneWidget);
+    expect(actionCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'root collision invalidates an old report callback at the same id and head',
+    (tester) async {
+      await _setSurface(tester, const Size(640, 420));
+      final fixture = revision3ProjectProblemsFilterFixture();
+      var root = r'C:\mods\problems-a';
+      const head = '{"checkpoint":"same"}';
+      var actionCalls = 0;
+      var contentCalls = 0;
+      var stageCalls = 0;
+      late StateSetter rebuild;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3ProjectProblemsView(
+                  projectRoot: root,
+                  projectId: fixture.projectId,
+                  projectRevision: fixture.projectRevision,
+                  projectHeadCanonicalJson: head,
+                  loadContent: () async {
+                    contentCalls++;
+                    return fixture.contentIndex;
+                  },
+                  loadDataAssetStages: () async {
+                    stageCalls++;
+                    return fixture.dataAssetStages;
+                  },
+                  gameConfigured: true,
+                  copy: _copy,
+                  actions: Revision3ProjectProblemsActions(
+                    openEntity: (_) => actionCalls++,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final first = _report(fixture).problems.first;
+      await tester.tap(
+        find.byKey(Key('revision3-project-problem-${first.id}')),
+      );
+      await tester.pumpAndSettle();
+      final staleAction = find.byKey(
+        const Key(
+          'revision3-project-problems-action-entity-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      );
+      await tester.ensureVisible(staleAction);
+
+      rebuild(() => root = r'C:\mods\problems-copy');
+      await tester.pumpAndSettle();
+      expect(contentCalls, 2);
+      expect(stageCalls, 2);
+
+      await tester.tap(staleAction);
+      await tester.pumpAndSettle();
+
+      expect(actionCalls, 0);
+      expect(
+        find.byKey(const Key('revision3-project-problems-detail')),
+        findsOneWidget,
+      );
+      expect(find.text(_copy.actionFailedMessage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _pumpView(
