@@ -18,6 +18,7 @@ void main() {
         slotExpected: false,
         loading: true,
         onAddTake: () {},
+        onPlanRecording: () {},
       );
       expect(
         find.byKey(const Key('revision3-voice-production-loading')),
@@ -34,6 +35,7 @@ void main() {
           '${revision3VoiceContentLineId}_C:\\private\\recording.ogg',
         ),
         onAddTake: () {},
+        onPlanRecording: () {},
       );
       expect(
         find.byKey(const Key('revision3-voice-production-error')),
@@ -50,6 +52,7 @@ void main() {
         locale: null,
         slotExpected: false,
         onAddTake: () {},
+        onPlanRecording: () {},
         onManageTakes: () {},
         onResolveTarget: () {},
       );
@@ -62,10 +65,11 @@ void main() {
     },
   );
 
-  testWidgets('no-slot state offers only the exact gated add action', (
+  testWidgets('no-slot state offers exact add and planning actions', (
     tester,
   ) async {
     var addCalls = 0;
+    var planCalls = 0;
     var manageCalls = 0;
     var resolveCalls = 0;
     final line = _line(existingDeSlot: false);
@@ -76,6 +80,7 @@ void main() {
       locale: 'de',
       slotExpected: false,
       onAddTake: () => addCalls++,
+      onPlanRecording: () => planCalls++,
       onManageTakes: () => manageCalls++,
       onResolveTarget: () => resolveCalls++,
     );
@@ -87,11 +92,17 @@ void main() {
     expect(find.text('Asghan — Mine entrance question'), findsOneWidget);
     expect(find.text('Language: de'), findsOneWidget);
     expect(
-      find.text('Add a recording to create this language\'s Voice setup.'),
+      find.text(
+        'Plan this recording to add the language to the Work list, or add a finished take now.',
+      ),
       findsOneWidget,
     );
     expect(
       find.byKey(const Key('revision3-voice-production-add')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-voice-production-plan')),
       findsOneWidget,
     );
     expect(
@@ -104,8 +115,9 @@ void main() {
     );
 
     await tester.tap(find.byKey(const Key('revision3-voice-production-add')));
+    await tester.tap(find.byKey(const Key('revision3-voice-production-plan')));
     await tester.pump();
-    expect((addCalls, manageCalls, resolveCalls), (1, 0, 0));
+    expect((addCalls, planCalls, manageCalls, resolveCalls), (1, 1, 0, 0));
   });
 
   testWidgets(
@@ -128,6 +140,7 @@ void main() {
         locale: 'de',
         slotExpected: true,
         onAddTake: () => addCalls++,
+        onPlanRecording: () {},
         onManageTakes: () => manageCalls++,
         onResolveTarget: () => resolveCalls++,
       );
@@ -240,6 +253,7 @@ void main() {
       locale: 'de',
       slotExpected: true,
       onAddTake: () {},
+      onPlanRecording: () {},
       onManageTakes: () {},
       onResolveTarget: () {},
     );
@@ -249,8 +263,54 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Voice setup needs attention'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-voice-production-plan')),
+      findsNothing,
+    );
     expect(_actionFinder, findsNothing);
   });
+
+  testWidgets(
+    'planning stays responsive and semantic at 360px and 200 percent text',
+    (tester) async {
+      await _setSurface(tester, const Size(360, 1600));
+      var planCalls = 0;
+      await _pumpCard(
+        tester,
+        line: _line(existingDeSlot: false),
+        locale: 'de',
+        slotExpected: false,
+        textScaler: const TextScaler.linear(2),
+        onAddTake: () {},
+        onPlanRecording: () => planCalls++,
+      );
+
+      final add = find.byKey(const Key('revision3-voice-production-add'));
+      final plan = find.byKey(const Key('revision3-voice-production-plan'));
+      expect(add, findsOneWidget);
+      expect(plan, findsOneWidget);
+      expect(
+        tester.getSemantics(plan),
+        matchesSemantics(
+          label: 'Plan recording',
+          hasTapAction: true,
+          isButton: true,
+          isEnabled: true,
+          hasEnabledState: true,
+          hasFocusAction: true,
+          isFocusable: true,
+        ),
+      );
+      expect(
+        tester.getTopLeft(plan).dy,
+        greaterThan(tester.getTopLeft(add).dy),
+      );
+      await tester.tap(plan);
+      await tester.pump();
+      expect(planCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('all intact actions wrap without overflow at narrow width', (
     tester,
@@ -305,6 +365,22 @@ void main() {
     expect(find.text('1 Aufnahme'), findsOneWidget);
     expect(find.text('Ziel: Aufgelöst'), findsOneWidget);
     expect(find.text('Freigegeben'), findsWidgets);
+
+    await _pumpCard(
+      tester,
+      line: _line(existingDeSlot: false),
+      locale: 'de',
+      slotExpected: false,
+      onPlanRecording: () {},
+      copy: Revision3VoiceProductionCardCopy.german,
+    );
+    expect(find.text('Aufnahme einplanen'), findsOneWidget);
+    expect(
+      find.text(
+        'Plane diese Aufnahme für die Arbeitsliste ein oder füge jetzt eine fertige Aufnahme hinzu.',
+      ),
+      findsOneWidget,
+    );
   });
 }
 
@@ -336,12 +412,18 @@ Future<void> _pumpCard(
   bool loading = false,
   Object? error,
   VoidCallback? onAddTake,
+  VoidCallback? onPlanRecording,
   VoidCallback? onManageTakes,
   VoidCallback? onResolveTarget,
+  TextScaler textScaler = TextScaler.noScaling,
   Revision3VoiceProductionCardCopy copy =
       Revision3VoiceProductionCardCopy.english,
 }) => tester.pumpWidget(
   MaterialApp(
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+      child: child!,
+    ),
     home: Scaffold(
       body: Align(
         alignment: Alignment.topCenter,
@@ -352,6 +434,7 @@ Future<void> _pumpCard(
           loading: loading,
           error: error,
           onAddTake: onAddTake,
+          onPlanRecording: onPlanRecording,
           onManageTakes: onManageTakes,
           onResolveTarget: onResolveTarget,
           copy: copy,

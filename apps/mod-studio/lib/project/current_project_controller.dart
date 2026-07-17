@@ -16,6 +16,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
+import 'revision3_dialog_voice_slot_creation_authoring.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_npc_greeting_authoring.dart';
@@ -366,6 +367,26 @@ const _revision3DialogVoiceSlotRemovalCorrectableCodes = <String>{
   'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_REJECTED',
   'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SIGNED_WIRE_LIMIT',
+};
+
+const _revision3DialogVoiceSlotCreationCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LINE_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOC_ID_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOCALE_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_BACKLINK_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REVISION_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_INVALID',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SIGNED_WIRE_LIMIT',
 };
 
 const _revision3NpcProfileEditCorrectableCodes = <String>{
@@ -835,6 +856,19 @@ abstract interface class ManagedRevision3DialogVoiceSlotRemovalLease {
   });
 }
 
+/// Optional exact-current authority for creating one empty dialog VoiceSlot
+/// and its line/locale binding as project-only recording intent.
+abstract interface class ManagedRevision3DialogVoiceSlotCreationLease {
+  bool get supportsDialogVoiceSlotCreation;
+
+  void markRequiresReopenAfterDialogVoiceSlotCreationUncertainty();
+
+  Future<Revision3DialogVoiceSlotCreationPublication>
+  prepareAndPublishDialogVoiceSlotCreationV1({
+    required Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+  });
+}
+
 /// Optional authority for reconciling one managed lease after an uncertain
 /// publication. Recovery remains separate from normal editing so unrelated
 /// leases and fakes do not accidentally claim repair authority.
@@ -1026,6 +1060,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3VoiceBatchLease,
         ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3DialogVoiceSlotRemovalLease,
+        ManagedRevision3DialogVoiceSlotCreationLease,
         ManagedRevision3RecoveryLease,
         ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
@@ -1111,6 +1146,10 @@ final class _ManagedRevision3SessionLease
       _session.supportsDialogVoiceSlotRemoval;
 
   @override
+  bool get supportsDialogVoiceSlotCreation =>
+      _session.supportsDialogVoiceSlotCreation;
+
+  @override
   bool get supportsNpcProfileEdit => _session.supportsNpcProfileEdit;
 
   @override
@@ -1141,6 +1180,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterDialogVoiceSlotCreationUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1692,6 +1735,36 @@ final class _ManagedRevision3SessionLease
       selectionCleared: checkpoint.selectionCleared,
       takeEntityRemoved: checkpoint.takeEntityRemoved,
       remainingCandidateCount: checkpoint.remainingCandidateCount,
+    );
+  }
+
+  @override
+  Future<Revision3DialogVoiceSlotCreationPublication>
+  prepareAndPublishDialogVoiceSlotCreationV1({
+    required Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session
+        .prepareAndPublishDialogVoiceSlotCreationV1(
+          lineId: plan.lineId,
+          expectedLineRevision: plan.expectedLineRevision,
+          localizationId: plan.localizationId,
+          expectedLocalizationRevision: plan.expectedLocalizationRevision,
+          slotId: plan.slotId,
+          locale: plan.locale,
+          expectedLocId: plan.locId,
+        );
+    return Revision3DialogVoiceSlotCreationPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      lineRevision: checkpoint.lineRevision,
+      localizationId: checkpoint.localizationId,
+      localizationRevision: checkpoint.localizationRevision,
+      slotId: checkpoint.slotId,
+      slotRevision: checkpoint.slotRevision,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      targetResolution: checkpoint.targetResolution,
     );
   }
 
@@ -4942,6 +5015,104 @@ final class CurrentProjectCoordinator
       removalLease.markRequiresReopenAfterVoiceTakeRemovalUncertainty();
       Error.throwWithStackTrace(
         const Revision3VoiceTakeRemovalRequiresReopenException(),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Create one exact empty dialog Voice slot as project-only recording intent.
+  /// Correctable prepublication conflicts become stale checkpoints; uncertain
+  /// outcomes remove mutation authority until recovery or reopen.
+  Future<Revision3DialogVoiceSlotCreationPublication>
+  createCurrentRevision3DialogVoiceSlot({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'dialog Voice slot creation is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogVoiceSlotCreationRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogVoiceSlotCreationStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3DialogVoiceSlotCreationLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project lease does not support dialog Voice slot creation',
+      );
+    }
+    final creationLease = lease as ManagedRevision3DialogVoiceSlotCreationLease;
+    if (!creationLease.supportsDialogVoiceSlotCreation) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project Store does not support dialog Voice slot creation',
+      );
+    }
+    try {
+      final publication = await creationLease
+          .prepareAndPublishDialogVoiceSlotCreationV1(plan: plan);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.lineRevision != plan.expectedLineRevision + 1 ||
+          publication.localizationId != plan.localizationId ||
+          publication.localizationRevision !=
+              plan.expectedLocalizationRevision ||
+          publication.slotId != plan.slotId ||
+          publication.slotRevision != 0 ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId ||
+          publication.targetResolution !=
+              Revision3ContentVoiceTargetResolution.unresolved) {
+        creationLease
+            .markRequiresReopenAfterDialogVoiceSlotCreationUncertainty();
+        throw const Revision3DialogVoiceSlotCreationRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3DialogVoiceSlotCreationRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          creationLease
+              .markRequiresReopenAfterDialogVoiceSlotCreationUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogVoiceSlotCreationRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3DialogVoiceSlotCreationCorrectableCodes.contains(
+            error.code,
+          )) {
+        Error.throwWithStackTrace(
+          const Revision3DialogVoiceSlotCreationStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error is Revision3DialogVoiceSlotCreationStaleCheckpointException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      creationLease.markRequiresReopenAfterDialogVoiceSlotCreationUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3DialogVoiceSlotCreationRequiresReopenException(),
         stackTrace,
       );
     } finally {

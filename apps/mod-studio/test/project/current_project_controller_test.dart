@@ -14,6 +14,7 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_voice_slot_creation_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_profile_edit_authoring.dart';
@@ -4871,6 +4872,238 @@ void main() {
   );
 
   test(
+    'dialog Voice slot creation capability-off stays unsupported and unpoisoned',
+    () async {
+      final plan = _dialogVoiceSlotCreationPlan();
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory('managed-dialog-voice-slot-creation-unsupported'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        supportsCreation: false,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.createCurrentRevision3DialogVoiceSlot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.creationCalls, 0);
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.relatchCalls, 0);
+    },
+  );
+
+  test(
+    'dialog Voice slot creation binds exact checkpoint and refreshes state',
+    () async {
+      final plan = _dialogVoiceSlotCreationPlan();
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory('managed-dialog-voice-slot-creation'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.createCurrentRevision3DialogVoiceSlot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision - 1,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(
+          isA<Revision3DialogVoiceSlotCreationStaleCheckpointException>(),
+        ),
+      );
+      expect(managed.creationCalls, 0);
+
+      final publication = await coordinator
+          .createCurrentRevision3DialogVoiceSlot(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: plan,
+          );
+      expect(publication.projectRevision, 8);
+      expect(publication.lineRevision, plan.expectedLineRevision + 1);
+      expect(
+        publication.localizationRevision,
+        plan.expectedLocalizationRevision,
+      );
+      expect(publication.slotRevision, 0);
+      expect(publication.slotId, plan.slotId);
+      expect(
+        publication.targetResolution,
+        Revision3ContentVoiceTargetResolution.unresolved,
+      );
+      expect(managed.creationCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(state.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'correctable dialog Voice slot creation conflict is stale and retryable',
+    () async {
+      final plan = _dialogVoiceSlotCreationPlan();
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory('managed-dialog-voice-slot-creation-stale'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        nextError: const ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+          code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SLOT_CONFLICT',
+          message: 'injected closed conflict',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<Revision3DialogVoiceSlotCreationPublication> create() =>
+          coordinator.createCurrentRevision3DialogVoiceSlot(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: plan,
+          );
+
+      await expectLater(
+        create(),
+        throwsA(
+          isA<Revision3DialogVoiceSlotCreationStaleCheckpointException>(),
+        ),
+      );
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.relatchCalls, 0);
+      final publication = await create();
+      expect(publication.projectRevision, 8);
+      expect(managed.creationCalls, 2);
+    },
+  );
+
+  test(
+    'unknown dialog Voice slot creation failure poisons the lease',
+    () async {
+      final plan = _dialogVoiceSlotCreationPlan();
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory('managed-dialog-voice-slot-creation-unknown'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        nextError: const ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+          code:
+              'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_STORE_INVARIANT',
+          message: 'injected uncertain integrity failure',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.createCurrentRevision3DialogVoiceSlot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<Revision3DialogVoiceSlotCreationRequiresReopenException>()),
+      );
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.relatchCalls, 1);
+    },
+  );
+
+  test(
+    'dialog Voice slot creation receipt mismatch latches and blocks retry',
+    () async {
+      final plan = _dialogVoiceSlotCreationPlan();
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory('managed-dialog-voice-slot-creation-mismatch'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        localizationReceiptMismatch: true,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> create() async {
+        await coordinator.createCurrentRevision3DialogVoiceSlot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        create(),
+        throwsA(isA<Revision3DialogVoiceSlotCreationRequiresReopenException>()),
+      );
+      expect(managed.projectRevision, 8);
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.relatchCalls, 1);
+      expect(managed.creationCalls, 1);
+      await expectLater(
+        create(),
+        throwsA(isA<Revision3DialogVoiceSlotCreationRequiresReopenException>()),
+      );
+      expect(managed.creationCalls, 1);
+    },
+  );
+
+  test(
     'dialog Voice slot removal binds exact checkpoint and refreshes state',
     () async {
       final plan = _dialogVoiceSlotRemovalPlan();
@@ -8811,6 +9044,62 @@ final class _FakeDialogVoiceSlotRemovalManagedLease extends _FakeManagedLease
   }
 }
 
+final class _FakeDialogVoiceSlotCreationManagedLease extends _FakeManagedLease
+    implements ManagedRevision3DialogVoiceSlotCreationLease {
+  _FakeDialogVoiceSlotCreationManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    this.supportsCreation = true,
+    this.localizationReceiptMismatch = false,
+    this.nextError,
+  });
+
+  final bool supportsCreation;
+  final bool localizationReceiptMismatch;
+  Object? nextError;
+  int creationCalls = 0;
+  int relatchCalls = 0;
+
+  @override
+  bool get supportsDialogVoiceSlotCreation => supportsCreation;
+
+  @override
+  void markRequiresReopenAfterDialogVoiceSlotCreationUncertainty() {
+    relatchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3DialogVoiceSlotCreationPublication>
+  prepareAndPublishDialogVoiceSlotCreationV1({
+    required Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+  }) async {
+    creationCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+    projectRevision++;
+    head = _head(projectRevision);
+    return Revision3DialogVoiceSlotCreationPublication(
+      projectId: projectId,
+      projectRevision: projectRevision,
+      lineId: plan.lineId,
+      lineRevision: plan.expectedLineRevision + 1,
+      localizationId: plan.localizationId,
+      localizationRevision: localizationReceiptMismatch
+          ? plan.expectedLocalizationRevision + 1
+          : plan.expectedLocalizationRevision,
+      slotId: plan.slotId,
+      slotRevision: 0,
+      locale: plan.locale,
+      locId: plan.locId,
+      targetResolution: Revision3ContentVoiceTargetResolution.unresolved,
+    );
+  }
+}
+
 final class _FakeRecoveryManagedLease extends _FakeManagedLease
     implements ManagedRevision3RecoveryLease {
   _FakeRecoveryManagedLease({
@@ -9039,6 +9328,17 @@ Revision3DialogVoiceSlotRemovalTechnicalPlan _dialogVoiceSlotRemovalPlan() {
     revision3VoiceContentIndexFixture(existingSlotGenerated: true),
   );
   return Revision3DialogVoiceSlotRemovalTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    lineId: revision3VoiceContentLineId,
+    locale: 'de',
+  );
+}
+
+Revision3DialogVoiceSlotCreationTechnicalPlan _dialogVoiceSlotCreationPlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(existingDeSlot: false),
+  );
+  return Revision3DialogVoiceSlotCreationTechnicalPlan.forCheckpoint(
     catalog: catalog,
     lineId: revision3VoiceContentLineId,
     locale: 'de',

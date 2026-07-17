@@ -28,6 +28,7 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_voice_slot_creation_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
@@ -2491,6 +2492,379 @@ void main() {
         tester.widget<TextField>(germanText).controller?.text,
         'Willkommen am Mineneingang.',
       );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Story NPC no-slot greeting plans exact Voice intent and rebinds its work item',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_story_npc_voice_plan_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const locId = 'GRD_263_ASGHAN_OPEN_INFO_06_02';
+      Revision3DialogVoiceSlotCreationTechnicalPlan? publishedPlan;
+      String? plannedSlotId;
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory(r'C:\mods\story-npc-voice-plan'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _npcGreetingHomeIndex(
+          revision: lease.projectRevision,
+          existingDeSlot: lease.projectRevision == 8,
+          lineRevision: lease.projectRevision == 8 ? 3 : 2,
+          slotRevision: 0,
+          slotId: plannedSlotId ?? revision3VoiceContentSlotId,
+        ),
+        onDialogLocalizationRead:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationReadResult(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                nonemptyPreview: 'Willkommen am Mineneingang.',
+              );
+            },
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) {
+              expect(localizationId, revision3VoiceContentLocalizationId);
+              expect(localizationRevision, 0);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: requestedLocId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance greeting',
+                speaker: 'Asghan',
+                voiceSlotLocales: lease.projectRevision == 8
+                    ? const <String>{'de'}
+                    : const <String>{},
+                germanText: 'Willkommen am Mineneingang.',
+              );
+            },
+        onDialogVoiceSlotCreation: (lease, plan) {
+          expect(lease.projectRevision, 7);
+          expect(plan.lineId, revision3VoiceContentLineId);
+          expect(plan.expectedLineRevision, 2);
+          expect(plan.localizationId, revision3VoiceContentLocalizationId);
+          expect(plan.expectedLocalizationRevision, 0);
+          expect(plan.locId, locId);
+          expect(plan.locale, 'de');
+          expect(plan.slotId, matches(RegExp(r'^[0-9a-f]{32}$')));
+          publishedPlan = plan;
+          plannedSlotId = plan.slotId;
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3DialogVoiceSlotCreationPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            lineId: plan.lineId,
+            lineRevision: plan.expectedLineRevision + 1,
+            localizationId: plan.localizationId,
+            localizationRevision: plan.expectedLocalizationRevision,
+            slotId: plan.slotId,
+            slotRevision: 0,
+            locale: plan.locale,
+            locId: plan.locId,
+            targetResolution: Revision3ContentVoiceTargetResolution.unresolved,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-story-workspace-entity-$_homeNpcGreetingNpcId'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final dialogVoiceTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$_homeNpcGreetingNpcId',
+        ),
+      );
+      await tester.ensureVisible(dialogVoiceTab);
+      await tester.tap(dialogVoiceTab);
+      await tester.pumpAndSettle();
+      final openTextVoice = find.byKey(
+        const Key('revision3-npc-greeting-open-text-voice'),
+      );
+      final outerGreetingScroll = find
+          .ancestor(of: openTextVoice, matching: find.byType(Scrollable))
+          .last;
+      await tester.scrollUntilVisible(
+        openTextVoice,
+        240,
+        scrollable: outerGreetingScroll,
+      );
+      await tester.ensureVisible(openTextVoice);
+      await tester.pumpAndSettle();
+      expect(openTextVoice.hitTestable(), findsOneWidget);
+      await tester.tap(openTextVoice);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-voice-production-no-slot')),
+        findsOneWidget,
+      );
+      expect(find.text('Language: de'), findsOneWidget);
+      expect(find.text('Asghan — Mine entrance question'), findsOneWidget);
+      final addTake = find.byKey(const Key('revision3-voice-production-add'));
+      final planRecording = find.byKey(
+        const Key('revision3-voice-production-plan'),
+      );
+      await _scrollManagedEditorUntilVisible(tester, planRecording);
+      expect(addTake, findsOneWidget);
+      expect(tester.widget<FilledButton>(addTake).onPressed, isNotNull);
+      expect(planRecording, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(planRecording).onPressed, isNotNull);
+      for (final technicalIdentity in const <String>[
+        revision3VoiceContentProjectId,
+        revision3VoiceContentLocalizationId,
+        revision3VoiceContentLineId,
+        _homeNpcGreetingNpcId,
+      ]) {
+        expect(find.textContaining(technicalIdentity), findsNothing);
+      }
+
+      await tester.tap(planRecording);
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogVoiceSlotCreationCalls, 1);
+      expect(managed.projectRevision, 8);
+      expect(publishedPlan, isNotNull);
+      expect(
+        find.text(
+          'Recording planned. An empty Voice setup was added for this line and language. No audio, game file, or save was changed; build and runtime remain unqualified.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-production-intact')),
+        findsOneWidget,
+      );
+      expect(find.text('0 takes'), findsOneWidget);
+      expect(find.text('Language: de'), findsOneWidget);
+      expect(find.text('Asghan — Mine entrance question'), findsOneWidget);
+      expect(planRecording, findsNothing);
+
+      final mode = find.byKey(const Key('revision3-localization-voice-mode'));
+      final workspace = tester.widget<Revision3LocalizationVoiceWorkspace>(
+        find.byType(Revision3LocalizationVoiceWorkspace),
+      );
+      final workListMode = find.descendant(
+        of: mode,
+        matching: find.text(workspace.voiceProductionQueueCopy.title),
+      );
+      await tester.ensureVisible(workListMode);
+      await tester.tap(workListMode);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
+      );
+      const itemKey = 'voice:$revision3VoiceContentLineId:de';
+      final addRecording = find.byKey(
+        const ValueKey('revision3-voice-production-queue-action-$itemKey'),
+      );
+      expect(addRecording, findsOneWidget);
+      expect(tester.widget<FilledButton>(addRecording).onPressed, isNotNull);
+      expect(
+        find.descendant(of: addRecording, matching: find.text('Add recording')),
+        findsOneWidget,
+      );
+      for (final technicalIdentity in <String>[
+        revision3VoiceContentProjectId,
+        revision3VoiceContentLocalizationId,
+        revision3VoiceContentLineId,
+        _homeNpcGreetingNpcId,
+        plannedSlotId!,
+      ]) {
+        expect(find.textContaining(technicalIdentity), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'no game configuration keeps planning available while Add take stays unavailable',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory(r'C:\mods\voice-plan-without-game'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+          revision: lease.projectRevision,
+          existingDeSlot: false,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: requestedLocId,
+                  lineId: revision3VoiceContentLineId,
+                  lineDisplayName: 'Mine entrance question',
+                  speaker: 'Asghan',
+                  voiceSlotLocales: const <String>{},
+                  germanText: 'Willkommen am Mineneingang.',
+                ),
+        onDialogVoiceSlotCreation: (lease, plan) => throw StateError(
+          'the no-game availability test must not publish recording intent',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      await _switchManagedLocalizationVoiceToProjectTexts(tester);
+
+      expect(
+        find.byKey(const Key('revision3-voice-production-no-slot')),
+        findsOneWidget,
+      );
+      final planRecording = find.byKey(
+        const Key('revision3-voice-production-plan'),
+      );
+      await _scrollManagedEditorUntilVisible(tester, planRecording);
+      expect(planRecording, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(planRecording).onPressed, isNotNull);
+      expect(
+        find.byKey(const Key('revision3-voice-production-add')),
+        findsNothing,
+      );
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-add-voice'),
+        enabled: false,
+      );
+      expect(find.textContaining('Gothic 1 Remake installation'), findsWidgets);
+      expect(managed.dialogVoiceSlotCreationCalls, 0);
+      for (final technicalIdentity in const <String>[
+        revision3VoiceContentProjectId,
+        revision3VoiceContentLocalizationId,
+        revision3VoiceContentLineId,
+      ]) {
+        expect(find.textContaining(technicalIdentity), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'mismatched planning receipt fails closed and requires a project reopen',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeDialogVoiceSlotCreationManagedLease(
+        root: Directory(r'C:\mods\voice-plan-mismatched-receipt'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+          revision: lease.projectRevision,
+          existingDeSlot: false,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, requestedLocId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: requestedLocId,
+                  lineId: revision3VoiceContentLineId,
+                  lineDisplayName: 'Mine entrance question',
+                  speaker: 'Asghan',
+                  voiceSlotLocales: const <String>{},
+                ),
+        onDialogVoiceSlotCreation: (lease, plan) =>
+            Revision3DialogVoiceSlotCreationPublication(
+              projectId: lease.projectId,
+              projectRevision: lease.projectRevision + 2,
+              lineId: plan.lineId,
+              lineRevision: plan.expectedLineRevision + 1,
+              localizationId: plan.localizationId,
+              localizationRevision: plan.expectedLocalizationRevision,
+              slotId: plan.slotId,
+              slotRevision: 0,
+              locale: plan.locale,
+              locId: plan.locId,
+              targetResolution:
+                  Revision3ContentVoiceTargetResolution.unresolved,
+            ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+      await _switchManagedLocalizationVoiceToProjectTexts(tester);
+      final planRecording = find.byKey(
+        const Key('revision3-voice-production-plan'),
+      );
+      await _scrollManagedEditorUntilVisible(tester, planRecording);
+      await tester.tap(planRecording);
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogVoiceSlotCreationCalls, 1);
+      expect(managed.projectRevision, 7);
+      expect(managed.requiresReopen, isTrue);
+      expect(
+        find.text(
+          'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Recording planned.'), findsNothing);
+      expect(planRecording, findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -10117,6 +10491,11 @@ typedef _NpcGreetingCreateCallback =
       _FakeNpcGreetingManagedLease lease,
       Revision3NpcGreetingCreateTechnicalPlan plan,
     );
+typedef _DialogVoiceSlotCreationCallback =
+    FutureOr<Revision3DialogVoiceSlotCreationPublication> Function(
+      _FakeDialogVoiceSlotCreationManagedLease lease,
+      Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+    );
 
 class _FakeManagedLease
     implements
@@ -10828,6 +11207,42 @@ final class _FakeVoiceMediaQaManagedLease extends _FakeManagedLease
       revision3VoiceMediaQaResponse(request: request),
       request: request,
     );
+  }
+}
+
+final class _FakeDialogVoiceSlotCreationManagedLease extends _FakeManagedLease
+    implements ManagedRevision3DialogVoiceSlotCreationLease {
+  _FakeDialogVoiceSlotCreationManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required this.onDialogVoiceSlotCreation,
+    super.onDialogLocalizationRead,
+    super.onDialogLocalizationEditSeed,
+    super.contentIndexBuilder,
+  });
+
+  final _DialogVoiceSlotCreationCallback onDialogVoiceSlotCreation;
+  int dialogVoiceSlotCreationCalls = 0;
+  Revision3DialogVoiceSlotCreationTechnicalPlan? lastDialogVoiceSlotPlan;
+
+  @override
+  bool get supportsDialogVoiceSlotCreation => true;
+
+  @override
+  void markRequiresReopenAfterDialogVoiceSlotCreationUncertainty() {
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3DialogVoiceSlotCreationPublication>
+  prepareAndPublishDialogVoiceSlotCreationV1({
+    required Revision3DialogVoiceSlotCreationTechnicalPlan plan,
+  }) async {
+    dialogVoiceSlotCreationCalls++;
+    lastDialogVoiceSlotPlan = plan;
+    return onDialogVoiceSlotCreation(this, plan);
   }
 }
 
@@ -11864,12 +12279,14 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
 Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
   required int revision,
   int localizationRevision = 0,
+  bool existingDeSlot = true,
   int existingSlotCandidateCount = 0,
   bool existingSlotHasSelectedTake = false,
   String existingSlotTargetResolution = 'unresolved',
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
+    existingDeSlot: existingDeSlot,
     existingSlotCandidateCount: existingSlotCandidateCount,
     existingSlotHasSelectedTake: existingSlotHasSelectedTake,
     existingSlotTargetResolution: existingSlotTargetResolution,
@@ -13053,13 +13470,41 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
   return Revision3ContentIndex.fromJsonObject(json);
 }
 
-Revision3ContentIndex _npcGreetingHomeIndex({required int revision}) {
-  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+Revision3ContentIndex _npcGreetingHomeIndex({
+  required int revision,
+  bool existingDeSlot = true,
+  int lineRevision = 2,
+  int slotRevision = 1,
+  String slotId = revision3VoiceContentSlotId,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingDeSlot: existingDeSlot,
+  );
   final counts = (json['entity_counts']! as Map).cast<String, Object?>();
   counts['npc_draft'] = 1;
   counts['script_module'] = 1;
   final entities = (json['entities']! as List<Object?>)
       .cast<Map<String, Object?>>();
+  final line = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLineId,
+  );
+  line['revision'] = lineRevision;
+  if (existingDeSlot) {
+    final slot = entities.singleWhere(
+      (entity) => entity['id'] == revision3VoiceContentSlotId,
+    );
+    slot['id'] = slotId;
+    slot['revision'] = slotRevision;
+    final lineReferences = (line['references']! as List<Object?>)
+        .cast<Map<String, Object?>>();
+    final slotReference = lineReferences.singleWhere(
+      (reference) => reference['role'] == 'dialog_voice_slot',
+    );
+    final slotTarget = (slotReference['target']! as Map)
+        .cast<String, Object?>();
+    slotTarget['entity_id'] = slotId;
+  }
   final localization = entities.singleWhere(
     (entity) => entity['id'] == revision3VoiceContentLocalizationId,
   );

@@ -7338,6 +7338,163 @@ void main() {
     },
   );
 
+  test(
+    'checkpoint-only store does not claim dialog Voice slot creation',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_unsupported',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _dialogVoiceSlotCreationProjectJson(),
+      );
+
+      expect(session.supportsDialogVoiceSlotCreation, isFalse);
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog Voice slot creation publishes exact delta through full reopen',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final basisJson = _dialogVoiceSlotCreationProjectJson();
+      final basis = (jsonDecode(basisJson) as Map).cast<String, Object?>();
+      final basisEntities = (basis['entities']! as Map).cast<String, Object?>();
+      final basisLocalization = jsonEncode(
+        basisEntities[revision3VoiceFixtureLocalizationId],
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisJson,
+      );
+      final headOpens = store.headVerifications.length;
+
+      final created = await _createDialogVoiceSlot(session);
+
+      expect(session.supportsDialogVoiceSlotCreation, isTrue);
+      expect(store.creationCalls, 1);
+      expect(created.projectRevision, 8);
+      expect(created.projectRevision, session.projectRevision);
+      expect(created.lineRevision, 3);
+      expect(created.localizationRevision, 4);
+      expect(created.slotRevision, 0);
+      expect(created.locale, 'de');
+      expect(
+        created.targetResolution,
+        Revision3ContentVoiceTargetResolution.unresolved,
+      );
+      final published = (jsonDecode(session.projectJson) as Map)
+          .cast<String, Object?>();
+      final entities = (published['entities']! as Map).cast<String, Object?>();
+      expect(entities.length, basisEntities.length + 1);
+      expect(entities, contains(revision3VoiceFixtureSlotId));
+      expect(
+        jsonEncode(entities[revision3VoiceFixtureLocalizationId]),
+        basisLocalization,
+      );
+      final line = (entities[revision3VoiceFixtureLineId]! as Map)
+          .cast<String, Object?>();
+      expect(line['revision'], 3);
+      final linePayload = (line['payload']! as Map).cast<String, Object?>();
+      final lineData = (linePayload['data']! as Map).cast<String, Object?>();
+      final slots = (lineData['voice_slots']! as Map).cast<String, Object?>();
+      expect((slots['de']! as Map)['id'], revision3VoiceFixtureSlotId);
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'closed dialog Voice slot creation conflict stays retryable while unknown integrity poisons',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_errors',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _dialogVoiceSlotCreationProjectJson(),
+      );
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SLOT_CONFLICT',
+        message: 'injected correctable conflict',
+      );
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.verifyCurrentHead();
+
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_STORE_INVARIANT',
+        message: 'injected uncertain integrity failure',
+      );
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog Voice slot creation post-publication reopen mismatch poisons and cannot retry',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_reopen_mismatch',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final basisJson = _dialogVoiceSlotCreationProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisJson,
+      );
+      store.nextOpenProjectOverride = basisJson;
+
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.creationCalls, 1);
+      expect(session.projectRevision, 7);
+      expect(session.requiresReopen, isTrue);
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.creationCalls, 1);
+      await session.close();
+    },
+  );
+
   for (final kind in AuthoringStoryDraftKind.values) {
     test(
       '${kind.wireName} removal publishes only the Draft/module pair through full reopen',
@@ -7950,6 +8107,43 @@ Future<ManagedRevision3DialogVoiceSlotRemovalCheckpoint> _removeDialogVoiceSlot(
     localizationId: revision3VoiceFixtureLocalizationId,
     slotId: revision3DialogVoiceSlotRemovalSlotId,
     expectedSlotRevision: slot['revision']! as int,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+  );
+}
+
+String _dialogVoiceSlotCreationProjectJson() {
+  final project = (jsonDecode(revision3VoiceFixtureProjectJson()) as Map)
+      .cast<String, Object?>();
+  project['authoring_locales'] = <Object?>['de'];
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final localization = (entities[revision3VoiceFixtureLocalizationId]! as Map)
+      .cast<String, Object?>();
+  final payload = (localization['payload']! as Map).cast<String, Object?>();
+  final data = (payload['data']! as Map).cast<String, Object?>();
+  data['texts'] = <String, Object?>{'de': 'Willkommen.'};
+  payload['data'] = data;
+  localization['payload'] = payload;
+  entities[revision3VoiceFixtureLocalizationId] = localization;
+  project['entities'] = SplayTreeMap<String, Object?>.from(entities);
+  return jsonEncode(project);
+}
+
+Future<ManagedRevision3DialogVoiceSlotCreationCheckpoint>
+_createDialogVoiceSlot(ManagedRevision3AuthoringProjectSession session) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  final localization = (entities[revision3VoiceFixtureLocalizationId]! as Map)
+      .cast<String, Object?>();
+  return session.prepareAndPublishDialogVoiceSlotCreationV1(
+    lineId: revision3VoiceFixtureLineId,
+    expectedLineRevision: line['revision']! as int,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    expectedLocalizationRevision: localization['revision']! as int,
+    slotId: revision3VoiceFixtureSlotId,
     locale: 'de',
     expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
   );
@@ -10547,6 +10741,109 @@ final class _FakeRevision3DialogVoiceSlotRemovalStore
         'locale': request.locale,
         'loc_id': request.expectedLocId,
         'removed_target_resolution': 'unresolved',
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'target_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3DialogVoiceSlotCreationStore
+    extends _FakeRevision3Store
+    implements ManagedRevision3DialogVoiceSlotCreationStore {
+  int creationCalls = 0;
+  Object? nextError;
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotCreationPreparation>
+  prepareDialogVoiceSlotCreationV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotCreationRequestV1 request,
+  }) async {
+    creationCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_HEAD_CONFLICT',
+        message: 'fake native dialog Voice slot creation basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final line = (entities[request.lineId]! as Map).cast<String, Object?>();
+    line['revision'] = request.expectedLineRevision + 1;
+    final linePayload = (line['payload']! as Map).cast<String, Object?>();
+    final lineData = (linePayload['data']! as Map).cast<String, Object?>();
+    final slots = (lineData['voice_slots']! as Map).cast<String, Object?>();
+    slots[request.locale] = <String, Object?>{
+      'project_id': request.expectedProjectId,
+      'id': request.slotId,
+      'expected_kind': 'voice_slot',
+    };
+    lineData['voice_slots'] = slots;
+    linePayload['data'] = lineData;
+    line['payload'] = linePayload;
+    entities[request.lineId] = line;
+    entities[request.slotId] = <String, Object?>{
+      'id': request.slotId,
+      'display_name': 'Voice ${request.locale}',
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.voice-slot',
+        'generator_version': 1,
+        'owner': <String, Object?>{
+          'project_id': request.expectedProjectId,
+          'id': request.lineId,
+          'expected_kind': 'dialog_line',
+        },
+      },
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'voice_slot',
+        'data': <String, Object?>{
+          'locale': request.locale,
+          'target_resolution': <String, Object?>{'state': 'unresolved'},
+          'candidates': <Object?>[],
+        },
+      },
+    };
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    final localization = (entities[request.localizationId]! as Map)
+        .cast<String, Object?>();
+    return AuthoringRevision3DialogVoiceSlotCreationPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'line_revision': request.expectedLineRevision + 1,
+        'localization_id': request.localizationId,
+        'localization_revision': localization['revision']! as int,
+        'slot_id': request.slotId,
+        'slot_revision': 0,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'target_resolution': 'unresolved',
         'build_status': 'blocked',
         'runtime_status': 'runtime_unqualified',
         'target_authority': 'not_granted',

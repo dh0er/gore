@@ -2572,6 +2572,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.';
 
   @override
+  String get managedVoiceSlotPlanSuccess =>
+      'Recording planned. An empty Voice setup was added for this line and language. No audio, game file, or save was changed; build and runtime remain unqualified.';
+
+  @override
   String get managedVoiceSlotRemoveStale =>
       'The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.';
 

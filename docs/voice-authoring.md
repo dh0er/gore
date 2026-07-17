@@ -30,14 +30,18 @@ remains a separate **Build & Release** action and needs that installation too.
 3. The **guided dialog-line V1** flow lets a fresh project create the minimum
    managed line/localization structure needed by the Voice tools. Its narrow
    contract and limits are described below.
-4. **Add Voice take** imports one real local Ogg for an existing dialog line and
+4. **Plan recording** explicitly adds one empty unresolved Voice setup for an
+   existing dialog line and language that already has nonblank project text.
+   This records production intent and adds the line to the Work list without
+   importing audio or requiring a configured game installation.
+5. **Add Voice take** imports one real local Ogg for an existing dialog line and
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-5. **Import recording folder** reviews and atomically imports up to 256 direct
+6. **Import recording folder** reviews and atomically imports up to 256 direct
    `<LocID>.ogg` children for one canonical locale. It is the bounded production
    path described below, not a recursive or partial file importer.
-6. **Manage Voice takes** searches existing dialog lines, lets the author move
+7. **Manage Voice takes** searches existing dialog lines, lets the author move
    a retained take through Draft/Recorded/Reviewed/Approved, and selects one
    Approved candidate for an existing locale slot or explicitly clears the
    current selection. The same dialog can remove one take from that exact
@@ -45,11 +49,11 @@ remains a separate **Build & Release** action and needs that installation too.
    a take shared by another slot remains there. Status and selection are
    separate saved changes. No operation rewrites or physically deletes media,
    and the workflow needs no game path.
-7. **Resolve Voice target** inspects the exact installed locale archive for one
+8. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-8. Under **Build & Release**, **Build Voice bundle** evaluates every current
+9. Under **Build & Release**, **Build Voice bundle** evaluates every current
    Voice slot and either shows all structured blockers without creating output,
    or writes one sealed voice-only bundle into a brand-new folder selected by
    the author. This is an offline build; the dialog has no deployment action.
@@ -76,7 +80,8 @@ localization and Voice catalogs. It creates only two kinds of rows:
 - **Voice production** means one intact, already-existing `VoiceSlot` for an
   exact `DialogLine` and locale. The list never invents a missing-recording row
   merely because a line has no `VoiceSlot`; absence of a slot is not recorded
-  authoring intent.
+  authoring intent. An author can now record that intent explicitly through
+  **Plan recording**; only the resulting exact empty slot creates the row.
 
 For an existing slot, one pure rule selects exactly one next step in this
 precedence:
@@ -197,6 +202,39 @@ installation or a save. Its result is explicitly build `blocked`, runtime
 `not_supported`. The new `DialogLine` can be selected by subsequent managed
 Voice authoring, but it creates no dialog topic, AngelScript, conditions,
 effects, game registration, or playable conversation.
+
+## Existing-line recording intent V1
+
+For an exact selected project `DialogLine` and canonical locale with nonblank
+localized text but no existing Voice edge, the same **Voice production** card
+offers **Plan recording** beside the existing direct **Add take** action. The
+action creates no recording. It adds exactly one generated, unresolved, empty,
+unselected `VoiceSlot`, binds it to that line/locale, increments only the line
+and project revisions, and then reloads the same line and language. The Work
+list can consequently show **Add a recording** from recorded project intent
+instead of guessing from every untranslated or unvoiced line.
+
+The pure native transaction is bound to the exact head, project identity,
+revision and target, line identity/revision, localization identity and LocID,
+locale, and a deterministic collision-probed slot identity. It rejects an
+existing edge, an occupied or locally referenced proposed ID, missing or blank
+text, capacity/revision exhaustion, and every unrelated candidate delta. The
+new entity has revision zero, the managed Voice-slot generator origin, matching
+locale, unresolved target, no candidates, and no selection. Localization text
+and revision, authoring locales, all unrelated entities, assets, game files,
+and saves remain byte-exact.
+
+The FFI route fully opens the published basis, independently reconstructs the
+permitted delta, prepares and fully reopens an immutable candidate, and repeats
+the fixed-head guard without publishing it. The serialized managed session
+alone may publish by guarded CAS and fully reopen the result. A stale semantic
+conflict is retryable after refresh; malformed evidence or uncertain
+publication requires recovery or reopen. The inverse remains the separately
+confirmed **Remove empty Voice setup** operation.
+
+This project-only intent is build-blocked and runtime-unqualified. It grants no
+audio, installed-target, game, save, deployment, playback, or recording
+authority, and it does not claim the dialog is playable.
 
 ## Exact take import and Ogg safety
 
@@ -546,7 +584,8 @@ The managed-R3 workflow still does not provide:
 - recursive, partial, or multi-locale folder import, complete translation/Voice
   coverage dashboards, CSV/XLIFF, or broader batch/team review queues. The
   bounded Work list now covers only absent authoring locales and next decisions
-  for already-existing Voice slots;
+  for explicit, already-existing Voice slots; **Plan recording** can create one
+  such intent at a time but is not a coverage dashboard or batch planner;
 - qualified Opus output; or
 - new-member namespace/lookup proof or a sealed generation-bound path for
   adopting vanilla dialog/localization identities;
@@ -555,7 +594,8 @@ The managed-R3 workflow still does not provide:
 - localization delete/clone, general line relinking/speaker/NPC relationships,
   bulk language production, provenance/rebase workflows, or a complete
   conversation graph editor. Empty generated line/locale slots can now be
-  removed safely, but that narrow inverse is not a general relationship editor.
+  created and removed safely, but this narrow pair is not a general
+  relationship editor.
 
 This closes the fresh-project project-local prerequisite, adds the first honest
 per-item production queue, and retains the managed existing-member target and

@@ -621,12 +621,18 @@ Selecting a managed `NpcDraft` opens **Profile**, **Story**, **Routine**,
 Profile presents the friendly display name and the direct bounded **Edit name &
 archetype** action. That form deliberately exposes neither `UniqueName` nor
 module/source identities. **Problems & Checks** retains the separate exact-
-current profile/source inspection and evidence-only compiler check. Story,
-Routine, Inventory, and Dialog & Voice stay visible but explicitly unavailable
-because the Draft schema does not model them. Outgoing and incoming links come
-only from the current `Revision3ContentIndex`, while the problem count covers
-only unresolved projected links. The three separate Draft-only, build-blocked,
-and runtime-unqualified badges therefore remain mandatory.
+current profile/source inspection and evidence-only compiler check. **Dialog &
+Voice** now owns the ordered project-only greeting list: authors can attach,
+create, reorder, or detach exact managed lines, preview localized text and Voice
+coverage, continue into the existing Localization & Voice workspace, and
+explicitly plan an empty Voice setup for one selected nonblank line/language.
+That plan records production intent only; it creates no audio, topic, runtime
+speaker binding, playable conversation, or spawn. Story, Routine, and Inventory
+remain visible but explicitly unavailable because the Draft schema does not
+model them. Outgoing and incoming links come only from the current
+`Revision3ContentIndex`, while the problem count covers only unresolved
+projected links. The three separate Draft-only, build-blocked, and
+runtime-unqualified badges therefore remain mandatory.
 
 ### 4.5 Story workspace: quest and dialog
 
@@ -1545,8 +1551,12 @@ The recommended **Character + first greeting** recipe now also removes the NPC
 creation-to-writing dead end by composing the existing Character and greeting
 transactions across two explicit exact checkpoints. Its partial NPC-only result
 persists safely, while completion selects the inserted first line; it is not a
-playable conversation or spawn. Next, (1) complete
-semantic line/slot relationships and the broader localization/Voice production
+playable conversation or spawn. The first explicit existing-line/locale slot
+relationship is also landed: **Plan recording** creates one exact empty,
+unresolved VoiceSlot without audio or a game-installation dependency, after
+which the existing Work list owns the next recording step; the inverse empty-
+slot removal remains separately confirmed. Next, (1) complete the broader
+semantic dialog/NPC/topic relationships and localization/Voice production
 tools; (2) finish semantic/project
 deletion, shared undo/history, and broader recovery, with Close and bounded
 same-lock recovery already landed; (3) deepen the existing NPC and Quest

@@ -4362,6 +4362,12 @@ abstract class AppLocalizations {
   /// **'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.'**
   String get managedVoiceSlotRemoveSuccess;
 
+  /// No description provided for @managedVoiceSlotPlanSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Recording planned. An empty Voice setup was added for this line and language. No audio, game file, or save was changed; build and runtime remain unqualified.'**
+  String get managedVoiceSlotPlanSuccess;
+
   /// No description provided for @managedVoiceSlotRemoveStale.
   ///
   /// In en, this message translates to:

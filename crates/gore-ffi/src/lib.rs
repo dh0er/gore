@@ -226,6 +226,7 @@ mod authoring_dataasset_revision3;
 mod authoring_dialog_localization_edit_revision3;
 mod authoring_dialog_localization_revision3;
 mod authoring_dialog_revision3;
+mod authoring_dialog_voice_slot_create_revision3;
 mod authoring_dialog_voice_slot_remove_revision3;
 mod authoring_drafts;
 mod authoring_history_revision3;
@@ -326,6 +327,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_dialog_line_v1",
     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
+    authoring_dialog_voice_slot_create_revision3::COMMAND,
     authoring_dialog_voice_slot_remove_revision3::COMMAND,
     authoring_history_revision3::RESTORE_COMMAND,
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
@@ -711,6 +713,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_reviewed_installed_dataasset_edit_v1_raw,
+        ),
+        authoring_dialog_voice_slot_create_revision3::COMMAND => Some(
+            authoring_dialog_voice_slot_create_revision3::prepare_revision3_dialog_voice_slot_creation_v1_raw,
         ),
         authoring_dialog_voice_slot_remove_revision3::COMMAND => Some(
             authoring_dialog_voice_slot_remove_revision3::prepare_revision3_dialog_voice_slot_removal_v1_raw,
@@ -1821,6 +1826,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_dialog_line_v1",
                     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
+                    "authoring_store_prepare_revision3_dialog_voice_slot_creation_v1",
                     "authoring_store_prepare_revision3_dialog_voice_slot_removal_v1",
                     "authoring_store_prepare_revision3_history_restore_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",

@@ -2585,6 +2585,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Das leere Voice-Setup wurde entfernt. Dialogtext, Audiospeicher, Spieldateien und Spielstände wurden nicht verändert.';
 
   @override
+  String get managedVoiceSlotPlanSuccess =>
+      'Aufnahme eingeplant. Für diese Zeile und Sprache wurde ein leeres Voice-Setup angelegt. Audio, Spieldateien und Spielstände wurden nicht verändert; Build und Laufzeit bleiben unqualifiziert.';
+
+  @override
   String get managedVoiceSlotRemoveStale =>
       'Das Projekt wurde geändert, bevor das leere Voice-Setup entfernt werden konnte. Lade die aktuellen Voice-Takes neu und versuche es erneut.';
 

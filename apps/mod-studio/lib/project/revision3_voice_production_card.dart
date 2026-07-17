@@ -47,6 +47,7 @@ final class Revision3VoiceProductionCardCopy {
     required this.statusReviewedLabel,
     required this.statusApprovedLabel,
     required this.addTakeLabel,
+    required this.planRecordingLabel,
     required this.manageTakesLabel,
     required this.resolveTargetLabel,
   });
@@ -81,7 +82,8 @@ final class Revision3VoiceProductionCardCopy {
     targetAmbiguousLabel: 'Ambiguous',
     targetResolvedLabel: 'Resolved',
     nextStepLabel: 'Next step',
-    nextNoSlot: 'Add a recording to create this language\'s Voice setup.',
+    nextNoSlot:
+        'Plan this recording to add the language to the Work list, or add a finished take now.',
     nextNoTakes: 'Add the first recording for this language.',
     nextApproveTake:
         'Review a take, mark it Approved, and then select it in Manage takes.',
@@ -97,6 +99,7 @@ final class Revision3VoiceProductionCardCopy {
     statusReviewedLabel: 'Reviewed',
     statusApprovedLabel: 'Approved',
     addTakeLabel: 'Add take',
+    planRecordingLabel: 'Plan recording',
     manageTakesLabel: 'Manage takes',
     resolveTargetLabel: 'Resolve target',
   );
@@ -132,7 +135,7 @@ final class Revision3VoiceProductionCardCopy {
     targetResolvedLabel: 'Aufgelöst',
     nextStepLabel: 'Nächster Schritt',
     nextNoSlot:
-        'Füge eine Aufnahme hinzu, um das Voice-Setup für diese Sprache anzulegen.',
+        'Plane diese Aufnahme für die Arbeitsliste ein oder füge jetzt eine fertige Aufnahme hinzu.',
     nextNoTakes: 'Füge die erste Aufnahme für diese Sprache hinzu.',
     nextApproveTake:
         'Prüfe eine Aufnahme, gib sie frei und wähle sie anschließend unter „Aufnahmen verwalten“ aus.',
@@ -149,6 +152,7 @@ final class Revision3VoiceProductionCardCopy {
     statusReviewedLabel: 'Geprüft',
     statusApprovedLabel: 'Freigegeben',
     addTakeLabel: 'Aufnahme hinzufügen',
+    planRecordingLabel: 'Aufnahme einplanen',
     manageTakesLabel: 'Aufnahmen verwalten',
     resolveTargetLabel: 'Ziel auflösen',
   );
@@ -189,6 +193,7 @@ final class Revision3VoiceProductionCardCopy {
   final String statusReviewedLabel;
   final String statusApprovedLabel;
   final String addTakeLabel;
+  final String planRecordingLabel;
   final String manageTakesLabel;
   final String resolveTargetLabel;
 
@@ -225,6 +230,7 @@ class Revision3VoiceProductionCard extends StatelessWidget {
     this.loading = false,
     this.error,
     this.onAddTake,
+    this.onPlanRecording,
     this.onManageTakes,
     this.onResolveTarget,
     this.copy = Revision3VoiceProductionCardCopy.english,
@@ -245,6 +251,7 @@ class Revision3VoiceProductionCard extends StatelessWidget {
   final Object? error;
 
   final VoidCallback? onAddTake;
+  final VoidCallback? onPlanRecording;
   final VoidCallback? onManageTakes;
   final VoidCallback? onResolveTarget;
   final Revision3VoiceProductionCardCopy copy;
@@ -486,6 +493,7 @@ class Revision3VoiceProductionCard extends StatelessWidget {
     final allowAdd =
         state == _VoiceProductionCardState.noSlot ||
         state == _VoiceProductionCardState.intact;
+    final allowPlan = state == _VoiceProductionCardState.noSlot;
     final allowExistingSlotActions = state == _VoiceProductionCardState.intact;
     return Wrap(
       key: const Key('revision3-voice-production-actions'),
@@ -498,6 +506,13 @@ class Revision3VoiceProductionCard extends StatelessWidget {
             onPressed: onAddTake,
             icon: const Icon(Icons.add),
             label: Text(copy.addTakeLabel),
+          ),
+        if (allowPlan && onPlanRecording != null)
+          OutlinedButton.icon(
+            key: const Key('revision3-voice-production-plan'),
+            onPressed: onPlanRecording,
+            icon: const Icon(Icons.event_note_outlined),
+            label: Text(copy.planRecordingLabel),
           ),
         if (allowExistingSlotActions && onManageTakes != null)
           OutlinedButton.icon(
@@ -518,7 +533,8 @@ class Revision3VoiceProductionCard extends StatelessWidget {
   }
 
   bool _showsActions(_VoiceProductionCardState state) => switch (state) {
-    _VoiceProductionCardState.noSlot => onAddTake != null,
+    _VoiceProductionCardState.noSlot =>
+      onAddTake != null || onPlanRecording != null,
     _VoiceProductionCardState.intact =>
       onAddTake != null || onManageTakes != null || onResolveTarget != null,
     _ => false,

@@ -430,6 +430,20 @@ callbacks, or `requiresReopen`. Broader coverage dashboards, recursive/partial
 or multi-locale production, CSV/XLIFF, and batch/team review queues remain
 missing. No World or level work is included.
 
+Voice recording-intent addendum (2026-07-17): an exact selected project line
+and language with nonblank text but no Voice slot now offers **Plan recording**
+inside the existing Voice-production card. It remains beside the direct **Add
+take** path and creates no new dashboard, modal, or project model. The bounded
+transaction adds exactly one generated, unresolved, empty VoiceSlot and its
+line/locale edge, then reopens the same line and language; the existing Work
+list consequently owns the next **Add a recording** step. The action works
+without a configured game installation, exposes no technical identity, and is
+usable at 360 logical pixels and 200% text. Native preparation, strict Dart
+transport, serialized fixed-head publication, full reopen, and the inverse
+confirmed empty-slot removal all fail closed on drift or uncertain evidence.
+This records project intent only: no audio, target, game, save, build,
+deployment, playback, runtime, topic, or playable-dialog authority is granted.
+
 "Complete" does not mean exposing every Unreal file type. It means every
 advertised operation is semantic, reversible, deterministic, inspectable, and
 qualified for the selected game version. Unknown game-source/property
@@ -1023,7 +1037,9 @@ review artifact with no importer or restore claim. Exact-current managed-CAS
 Voice take preview is integrated as a read-only in-app capability. The first
 Voice production Work list is also integrated: it defaults Localization & Voice
 to evidence-backed missing-language and existing-slot next steps while keeping
-Project texts one switch away. Next, complete the broader
+Project texts one switch away. Authors can now explicitly create one empty
+existing-line/language slot through **Plan recording**, so the list can show
+recording work from stored intent rather than guessing. Next, complete the broader
 line/localization/Voice production journey, safe project fundamentals such as
 semantic/project deletion, undo/history, and broader recovery, and deeper
 NPC/Quest semantics before general managed build/release and qualified test

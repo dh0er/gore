@@ -368,6 +368,12 @@ void main() {
               initialLineId: initialLineId,
               initialLocale: initialLocale,
             ),
+        onPlanRecordingFor:
+            ({required initialLineId, required initialLocale}) => record(
+              'plan',
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
+            ),
         onManageVoiceTakesFor:
             ({required initialLineId, required initialLocale}) => record(
               'manage',
@@ -404,7 +410,14 @@ void main() {
       await _scrollEditorUntilVisible(tester, add);
       await tester.tap(add);
       await tester.pump();
-      expect(calls, <String>['add:$_secondLineId:en']);
+      final plan = find.byKey(const Key('revision3-voice-production-plan'));
+      await _scrollEditorUntilVisible(tester, plan);
+      await tester.tap(plan);
+      await tester.pump();
+      expect(calls, <String>[
+        'add:$_secondLineId:en',
+        'plan:$_secondLineId:en',
+      ]);
       expect(
         find.byKey(const Key('revision3-voice-production-manage')),
         findsNothing,
@@ -432,11 +445,311 @@ void main() {
       await tester.pump();
       expect(calls, <String>[
         'add:$_secondLineId:en',
+        'plan:$_secondLineId:en',
         'manage:$_lineId:de',
         'resolve:$_lineId:de',
       ]);
     },
   );
+
+  testWidgets('planning requires nonblank text in the exact no-slot locale', (
+    tester,
+  ) async {
+    await _setSurface(tester, width: 1200);
+    final index = _contentIndex(
+      displayName: 'Mine warning',
+      locales: const <String>['de', 'en'],
+      existingDeSlot: false,
+    );
+    final service = _serviceForIndex(
+      index,
+      seedFor:
+          ({
+            required projectId,
+            required projectRevision,
+            required localizationId,
+            required localizationRevision,
+            required locId,
+          }) => _exactSeed(
+            projectId: projectId,
+            projectRevision: projectRevision,
+            localizationId: localizationId,
+            localizationRevision: localizationRevision,
+            locId: locId,
+            voiceSlots: const <String>{},
+            backlinks: _backlinks(voiceSlotLocales: const <String>[]),
+          ),
+    );
+    var planCalls = 0;
+
+    await _pumpWorkspace(
+      tester,
+      service: service,
+      loadVoiceCatalog: () async =>
+          Revision3VoiceCatalog.fromContentIndex(index),
+      onPlanRecordingFor: ({required initialLineId, required initialLocale}) =>
+          planCalls++,
+    );
+
+    final plan = find.byKey(const Key('revision3-voice-production-plan'));
+    await _scrollEditorUntilVisible(tester, plan);
+    expect(plan, findsOneWidget);
+    final stalePlan = tester.widget<OutlinedButton>(plan).onPressed!;
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-localization-text-de')),
+      '   ',
+    );
+    await tester.pump();
+    expect(plan, findsNothing);
+    stalePlan();
+    await tester.pump();
+    expect(planCalls, 0);
+    expect(find.text(_copy.voiceUnsavedTitle), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-localization-text-de')),
+      'Neu aufzunehmen',
+    );
+    await tester.pump();
+    expect(plan, findsOneWidget);
+  });
+
+  testWidgets(
+    'planning reloads the same line and locale as an intact empty slot',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final initialIndex = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        existingDeSlot: false,
+      );
+      final plannedIndex = _contentIndex(
+        revision: 8,
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      final initialService = _serviceForIndex(
+        initialIndex,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              voiceSlots: const <String>{},
+              backlinks: _backlinks(voiceSlotLocales: const <String>[]),
+            ),
+      );
+      final plannedService = _serviceForIndex(plannedIndex);
+      late StateSetter setHostState;
+      var projectRevision = 7;
+      Object checkpointIdentity = 'head-a';
+      var service = initialService;
+      var index = initialIndex;
+      var planCalls = 0;
+      var voiceLoads = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return Revision3LocalizationVoiceWorkspace(
+                  projectId: _projectId,
+                  projectRevision: projectRevision,
+                  projectCheckpointIdentity: checkpointIdentity,
+                  service: service,
+                  copy: _copy,
+                  loadVoiceCatalog: () async {
+                    voiceLoads++;
+                    return Revision3VoiceCatalog.fromContentIndex(index);
+                  },
+                  onPlanRecordingFor:
+                      ({required initialLineId, required initialLocale}) {
+                        expect(initialLineId, _lineId);
+                        expect(initialLocale, 'de');
+                        planCalls++;
+                        setHostState(() {
+                          projectRevision = 8;
+                          checkpointIdentity = 'head-b';
+                          service = plannedService;
+                          index = plannedIndex;
+                        });
+                      },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-voice-production-no-slot')),
+        findsOneWidget,
+      );
+      final plan = find.byKey(const Key('revision3-voice-production-plan'));
+      await _scrollEditorUntilVisible(tester, plan);
+      await tester.tap(plan);
+      await tester.pumpAndSettle();
+
+      expect(planCalls, 1);
+      expect(voiceLoads, 2);
+      expect(
+        find.byKey(const Key('revision3-voice-production-intact')),
+        findsOneWidget,
+      );
+      expect(find.text('0 takes'), findsOneWidget);
+      expect(find.text('Language: de'), findsOneWidget);
+      expect(find.text('Asghan — Mine entrance question'), findsOneWidget);
+      expect(plan, findsNothing);
+    },
+  );
+
+  testWidgets('save and continue rejects planning after a fresh slot appears', (
+    tester,
+  ) async {
+    await _setSurface(tester, width: 1200);
+    const savedText = 'Diesen Text vor der Voice-Planung speichern';
+    final initialIndex = _contentIndex(
+      displayName: 'Mine warning',
+      locales: const <String>['de', 'en'],
+      existingDeSlot: false,
+    );
+    final reboundIndex = _contentIndex(
+      revision: 8,
+      localizationRevision: 5,
+      displayName: 'Mine warning',
+      locales: const <String>['de', 'en'],
+    );
+    var publications = 0;
+    final initialService = _serviceForIndex(
+      initialIndex,
+      seedFor:
+          ({
+            required projectId,
+            required projectRevision,
+            required localizationId,
+            required localizationRevision,
+            required locId,
+          }) => _exactSeed(
+            projectId: projectId,
+            projectRevision: projectRevision,
+            localizationId: localizationId,
+            localizationRevision: localizationRevision,
+            locId: locId,
+            voiceSlots: const <String>{},
+            backlinks: _backlinks(voiceSlotLocales: const <String>[]),
+          ),
+      publish:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required technicalPlan,
+          }) async {
+            publications++;
+            return _publication(
+              projectId: expectedProjectId,
+              projectRevision: 8,
+              localizationId: technicalPlan.localizationId,
+              localizationRevision: 5,
+            );
+          },
+    );
+    final reboundService = _serviceForIndex(
+      reboundIndex,
+      seedFor:
+          ({
+            required projectId,
+            required projectRevision,
+            required localizationId,
+            required localizationRevision,
+            required locId,
+          }) => _exactSeed(
+            projectId: projectId,
+            projectRevision: projectRevision,
+            localizationId: localizationId,
+            localizationRevision: localizationRevision,
+            locId: locId,
+            texts: const <String, String>{
+              'de': savedText,
+              'en': 'Stop right there!',
+            },
+          ),
+    );
+    late StateSetter setHostState;
+    var projectRevision = 7;
+    Object checkpointIdentity = 'head-a';
+    var service = initialService;
+    var index = initialIndex;
+    var planCalls = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              setHostState = setState;
+              return Revision3LocalizationVoiceWorkspace(
+                projectId: _projectId,
+                projectRevision: projectRevision,
+                projectCheckpointIdentity: checkpointIdentity,
+                service: service,
+                copy: _copy,
+                loadVoiceCatalog: () async =>
+                    Revision3VoiceCatalog.fromContentIndex(index),
+                onPublished: (publication) {
+                  setHostState(() {
+                    projectRevision = publication.projectRevision;
+                    checkpointIdentity = 'head-b';
+                    service = reboundService;
+                    index = reboundIndex;
+                  });
+                },
+                onPlanRecordingFor:
+                    ({required initialLineId, required initialLocale}) =>
+                        planCalls++,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-localization-text-de')),
+      savedText,
+    );
+    await tester.pump();
+    final plan = find.byKey(const Key('revision3-voice-production-plan'));
+    await _scrollEditorUntilVisible(tester, plan);
+    await tester.tap(plan);
+    await tester.pumpAndSettle();
+    expect(find.text(_copy.voiceUnsavedTitle), findsOneWidget);
+    await tester.tap(find.text(_copy.saveAndContinueLabel));
+    await tester.pumpAndSettle();
+
+    expect(publications, 1);
+    expect(planCalls, 0);
+    expect(find.textContaining(_copy.savedLabel), findsOneWidget);
+    expect(find.textContaining(_copy.staleMessage), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-voice-production-intact')),
+      findsOneWidget,
+    );
+    expect(find.text('0 takes'), findsOneWidget);
+    expect(plan, findsNothing);
+  });
 
   testWidgets(
     'context actions fail closed when the exact Voice catalog rejects a seeded slot',
@@ -4385,6 +4698,7 @@ Future<void> _pumpWorkspace(
   Revision3LocalizationVoiceAction? onManageVoiceTakes,
   Revision3LocalizationVoiceAction? onResolveVoiceTarget,
   Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor,
+  Revision3LocalizationVoiceContextAction? onPlanRecordingFor,
   Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor,
   Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor,
   Revision3LocalizationVoiceContextAction? onReviewVoiceChecksFor,
@@ -4415,6 +4729,7 @@ Future<void> _pumpWorkspace(
           onManageVoiceTakes: onManageVoiceTakes ?? () {},
           onResolveVoiceTarget: onResolveVoiceTarget ?? () {},
           onAddVoiceTakeFor: onAddVoiceTakeFor,
+          onPlanRecordingFor: onPlanRecordingFor,
           onManageVoiceTakesFor: onManageVoiceTakesFor,
           onResolveVoiceTargetFor: onResolveVoiceTargetFor,
           onReviewVoiceChecksFor: onReviewVoiceChecksFor,

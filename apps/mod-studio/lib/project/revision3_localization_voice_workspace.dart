@@ -111,7 +111,12 @@ enum _UnsavedExternalActionDecision {
   saveAndContinue,
 }
 
-enum _VoiceContextActionKind { addTake, manageTakes, resolveTarget }
+enum _VoiceContextActionKind {
+  addTake,
+  planRecording,
+  manageTakes,
+  resolveTarget,
+}
 
 enum _PublicationAuthorityStatus { waiting, ready, invalid }
 
@@ -344,6 +349,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     this.onManageVoiceTakes,
     this.onResolveVoiceTarget,
     this.onAddVoiceTakeFor,
+    this.onPlanRecordingFor,
     this.onManageVoiceTakesFor,
     this.onResolveVoiceTargetFor,
     this.onReviewVoiceChecksFor,
@@ -378,6 +384,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Revision3LocalizationVoiceAction? onManageVoiceTakes;
   final Revision3LocalizationVoiceAction? onResolveVoiceTarget;
   final Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor;
+  final Revision3LocalizationVoiceContextAction? onPlanRecordingFor;
   final Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor;
   final Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor;
   final Revision3LocalizationVoiceContextAction? onReviewVoiceChecksFor;
@@ -1171,17 +1178,24 @@ class _Revision3LocalizationVoiceWorkspaceState
     if (line == null || !voiceCatalog.suggestedLocales.contains(locale)) {
       return _PublicationAuthorityStatus.invalid;
     }
+    final selectedSeedLine = seed.lineBacklinks
+        .where((candidate) => candidate.lineId == lineId)
+        .firstOrNull;
+    final selectedSeedLocale = seed.locale(locale);
     if (requiresSelectedLocalizationContext) {
-      final seedHasLine = seed.lineBacklinks.any(
-        (candidate) => candidate.lineId == lineId,
-      );
-      final seedHasLocale = seed.locales.any((entry) => entry.locale == locale);
-      if (!seedHasLine || !seedHasLocale) {
+      if (selectedSeedLine == null || selectedSeedLocale == null) {
         return _PublicationAuthorityStatus.invalid;
       }
     }
     final contextIsCurrent = switch (contextKind) {
       _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
+      _VoiceContextActionKind.planRecording =>
+        selectedSeedLine != null &&
+            selectedSeedLocale != null &&
+            !selectedSeedLine.voiceSlotLocales.contains(locale) &&
+            selectedSeedLocale.text.trim().isNotEmpty &&
+            line.slotIdForLocale(locale) == null &&
+            line.slotSummaryForLocale(locale) == null,
       _VoiceContextActionKind.manageTakes =>
         line.slotSummaryForLocale(locale) != null,
       _VoiceContextActionKind.resolveTarget => line.isLocaleTargetable(locale),
@@ -1376,6 +1390,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     _VoiceContextActionKind kind,
   ) => switch (kind) {
     _VoiceContextActionKind.addTake => widget.onAddVoiceTakeFor,
+    _VoiceContextActionKind.planRecording => widget.onPlanRecordingFor,
     _VoiceContextActionKind.manageTakes => widget.onManageVoiceTakesFor,
     _VoiceContextActionKind.resolveTarget => widget.onResolveVoiceTargetFor,
   };
@@ -1390,6 +1405,29 @@ class _Revision3LocalizationVoiceWorkspaceState
     final lineId = _voiceLineId;
     final locale = _voiceLocale;
     if (lineId == null || locale == null) return;
+    bool contextIsCurrent() {
+      final line = checkpoint.line(lineId);
+      if (line == null) return false;
+      return switch (kind) {
+        _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
+        _VoiceContextActionKind.planRecording =>
+          line.slotIdForLocale(locale) == null &&
+              line.slotSummaryForLocale(locale) == null &&
+              _seed?.lineBacklinks.any(
+                    (candidate) =>
+                        candidate.lineId == lineId &&
+                        !candidate.voiceSlotLocales.contains(locale),
+                  ) ==
+                  true &&
+              _texts[locale]?.text.trim().isNotEmpty == true,
+        _VoiceContextActionKind.manageTakes =>
+          line.slotSummaryForLocale(locale) != null,
+        _VoiceContextActionKind.resolveTarget => line.isLocaleTargetable(
+          locale,
+        ),
+      };
+    }
+
     bool authorityIsCurrent() =>
         mounted &&
         widget.projectId == projectId &&
@@ -1404,7 +1442,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         identical(_voiceCatalog, checkpoint) &&
         _voiceLineId == lineId &&
         _voiceLocale == locale &&
-        checkpoint.line(lineId) != null;
+        contextIsCurrent();
     if (!authorityIsCurrent()) {
       return;
     }
@@ -1478,6 +1516,9 @@ class _Revision3LocalizationVoiceWorkspaceState
       if (currentDecision.nextStep != item.nextStep) return false;
       return switch (kind) {
         _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
+        // Planning creates the slot that this queue item already requires, so
+        // it is never a valid queue action.
+        _VoiceContextActionKind.planRecording => false,
         _VoiceContextActionKind.manageTakes => true,
         _VoiceContextActionKind.resolveTarget => line.isLocaleTargetable(
           locale,
@@ -2448,6 +2489,15 @@ class _Revision3LocalizationVoiceWorkspaceState
         locale != null &&
         exactLine?.isLocaleAuthorable(locale) == true &&
         widget.onAddVoiceTakeFor != null;
+    final canPlan =
+        !busy &&
+        !slotExpected &&
+        locale != null &&
+        _texts[locale]?.text.trim().isNotEmpty == true &&
+        exactLine != null &&
+        exactLine.slotIdForLocale(locale) == null &&
+        exactLine.slotSummaryForLocale(locale) == null &&
+        widget.onPlanRecordingFor != null;
     final canManage =
         !busy && exactSummary != null && widget.onManageVoiceTakesFor != null;
     final canResolve =
@@ -2542,6 +2592,14 @@ class _Revision3LocalizationVoiceWorkspaceState
               ? () => unawaited(
                   _runContextAction(
                     _VoiceContextActionKind.addTake,
+                    voiceCatalog!,
+                  ),
+                )
+              : null,
+          onPlanRecording: canPlan
+              ? () => unawaited(
+                  _runContextAction(
+                    _VoiceContextActionKind.planRecording,
                     voiceCatalog!,
                   ),
                 )

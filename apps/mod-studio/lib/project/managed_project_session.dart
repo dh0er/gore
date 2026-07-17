@@ -714,6 +714,40 @@ final class ManagedRevision3DialogVoiceSlotRemovalCheckpoint {
   final Revision3ContentVoiceTargetResolution removedTargetResolution;
 }
 
+/// One exact empty dialog VoiceSlot created after native preparation, full
+/// candidate reopen, fixed-head CAS publication, and full published reopen.
+final class ManagedRevision3DialogVoiceSlotCreationCheckpoint {
+  const ManagedRevision3DialogVoiceSlotCreationCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.lineRevision,
+    required this.localizationId,
+    required this.localizationRevision,
+    required this.slotId,
+    required this.slotRevision,
+    required this.locale,
+    required this.locId,
+    required this.targetResolution,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final int lineRevision;
+  final String localizationId;
+  final int localizationRevision;
+  final String slotId;
+  final int slotRevision;
+  final String locale;
+  final String locId;
+  final Revision3ContentVoiceTargetResolution targetResolution;
+}
+
 /// One retained VoiceTake review-status change returned only after native
 /// preparation, full candidate reopen, fixed-head CAS publication, and a full
 /// published reopen. The VoiceSlot is unchanged; build remains blocked and
@@ -1300,6 +1334,17 @@ abstract interface class ManagedRevision3DialogVoiceSlotRemovalStore {
   });
 }
 
+/// Narrow capability for creating one exact empty dialog VoiceSlot. Alternate
+/// checkpoint stores receive no implicit project-mutation authority.
+abstract interface class ManagedRevision3DialogVoiceSlotCreationStore {
+  Future<AuthoringRevision3DialogVoiceSlotCreationPreparation>
+  prepareDialogVoiceSlotCreationV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotCreationRequestV1 request,
+  });
+}
+
 /// Narrow capability for preparing one existing NPC name/archetype edit.
 /// Checkpoint-only alternate stores do not gain this mutation authority.
 abstract interface class ManagedRevision3NpcProfileEditStore {
@@ -1325,6 +1370,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
+        ManagedRevision3DialogVoiceSlotCreationStore,
         ManagedRevision3NpcProfileEditStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
@@ -1743,6 +1789,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3DialogVoiceSlotRemovalV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotCreationPreparation>
+  prepareDialogVoiceSlotCreationV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotCreationRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3DialogVoiceSlotCreationV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -2249,6 +2307,8 @@ class ManagedRevision3AuthoringProjectSession {
   bool get supportsNpcGreeting => _store is ManagedRevision3NpcGreetingStore;
   bool get supportsDialogVoiceSlotRemoval =>
       _store is ManagedRevision3DialogVoiceSlotRemovalStore;
+  bool get supportsDialogVoiceSlotCreation =>
+      _store is ManagedRevision3DialogVoiceSlotCreationStore;
   bool get supportsNpcProfileEdit =>
       _store is ManagedRevision3NpcProfileEditStore;
   bool get supportsProjectHistory =>
@@ -4339,6 +4399,112 @@ class ManagedRevision3AuthoringProjectSession {
             selectionCleared: prepared.selectionCleared,
             takeEntityRemoved: prepared.takeEntityRemoved,
             remainingCandidateCount: prepared.remainingCandidateCount,
+          ),
+        );
+      },
+    );
+  }
+
+  /// Create one exact empty dialog VoiceSlot through the project-only managed
+  /// publication lane. This records Voice production intent only; it installs
+  /// no audio and grants no game, build, runtime, save, or target authority.
+  Future<ManagedRevision3DialogVoiceSlotCreationCheckpoint>
+  prepareAndPublishDialogVoiceSlotCreationV1({
+    required String lineId,
+    required int expectedLineRevision,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String slotId,
+    required String locale,
+    required String expectedLocId,
+  }) {
+    final creationStore = _store;
+    if (creationStore is! ManagedRevision3DialogVoiceSlotCreationStore) {
+      return Future<ManagedRevision3DialogVoiceSlotCreationCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no dialog Voice slot creation capability',
+        ),
+      );
+    }
+    final creationCapability =
+        creationStore as ManagedRevision3DialogVoiceSlotCreationStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3DialogVoiceSlotCreationCheckpoint
+    >(
+      operation: 'prepareAndPublishDialogVoiceSlotCreationV1',
+      handlePrepareError:
+          _core._throwRevision3DialogVoiceSlotCreationPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 dialog Voice slot creation has no exact project identity',
+          );
+        }
+        if (projectRevision >= 0x7fffffffffffffff) {
+          throw const ModFfiException(
+            command:
+                'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+            code:
+                'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REVISION_LIMIT',
+            message:
+                'dialog Voice slot creation cannot advance the signed wire revision',
+          );
+        }
+        final request =
+            AuthoringRevision3DialogVoiceSlotCreationRequestV1.forProject(
+              expectedHead: basis.head,
+              currentProjectJson: basis.projectJson,
+              lineId: lineId,
+              expectedLineRevision: expectedLineRevision,
+              localizationId: localizationId,
+              expectedLocId: expectedLocId,
+              locale: locale,
+              slotId: slotId,
+            );
+        final prepared = await creationCapability
+            .prepareDialogVoiceSlotCreationV1(
+              root: root.path,
+              currentProjectJson: basis.projectJson,
+              request: request,
+            );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.lineId != request.lineId ||
+            prepared.lineRevision != request.expectedLineRevision + 1 ||
+            prepared.localizationId != request.localizationId ||
+            prepared.localizationRevision != expectedLocalizationRevision ||
+            prepared.slotId != request.slotId ||
+            prepared.slotRevision != 0 ||
+            prepared.locale != request.locale ||
+            prepared.locId != request.expectedLocId ||
+            prepared.targetResolution !=
+                Revision3ContentVoiceTargetResolution.unresolved) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 dialog Voice slot creation preparation disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3DialogVoiceSlotCreationCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3DialogVoiceSlotCreationCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            lineId: prepared.lineId,
+            lineRevision: prepared.lineRevision,
+            localizationId: prepared.localizationId,
+            localizationRevision: prepared.localizationRevision,
+            slotId: prepared.slotId,
+            slotRevision: prepared.slotRevision,
+            locale: prepared.locale,
+            locId: prepared.locId,
+            targetResolution: prepared.targetResolution,
           ),
         );
       },
@@ -7228,6 +7394,45 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3DialogVoiceSlotCreationPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogVoiceSlotCreationPrepareErrorIsRetryable(
+        error.code,
+      )) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 dialog Voice slot creation could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DialogVoiceSlotRemovalPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -8468,6 +8673,27 @@ bool _revision3DialogVoiceSlotRemovalPrepareErrorIsRetryable(String code) =>
       'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_REJECTED',
       'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_RESPONSE_LIMIT',
       'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SIGNED_WIRE_LIMIT',
+    }.contains(code);
+
+bool _revision3DialogVoiceSlotCreationPrepareErrorIsRetryable(String code) =>
+    const {
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_INPUT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_PROJECT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_TARGET_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LINE_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOCALIZATION_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOC_ID_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_LOCALE_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SLOT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_BACKLINK_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REFERENCE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REVISION_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_PROJECT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_INVALID',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_REQUEST_REJECTED',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_RESPONSE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SIGNED_WIRE_LIMIT',
     }.contains(code);
 
 bool _revision3VoiceTakeStatusPrepareErrorIsRetryable(String code) => const {

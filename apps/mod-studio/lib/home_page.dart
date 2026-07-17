@@ -45,6 +45,7 @@ import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_dialog_line_authoring.dart';
 import 'project/revision3_dialog_line_dialog.dart';
 import 'project/revision3_dialog_localization_authoring.dart';
+import 'project/revision3_dialog_voice_slot_creation_authoring.dart';
 import 'project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
@@ -1597,6 +1598,28 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          publishDialogVoiceSlotCreation:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3DialogVoiceSlotCreationStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .createCurrentRevision3DialogVoiceSlot(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTarget:
               ({
                 required expectedProjectId,
@@ -2199,6 +2222,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceTakeStatus,
     required this.publishVoiceTakeRemoval,
     required this.publishDialogVoiceSlotRemoval,
+    required this.publishDialogVoiceSlotCreation,
     required this.publishVoiceTarget,
     required this.planVoiceBuild,
     required this.buildVoiceBundle,
@@ -2281,6 +2305,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
   final Revision3DialogVoiceSlotRemovalTechnicalPublisher
   publishDialogVoiceSlotRemoval;
+  final Revision3DialogVoiceSlotCreationTechnicalPublisher
+  publishDialogVoiceSlotCreation;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceBuildPlanLoader planVoiceBuild;
   final Revision3VoiceExactBuild buildVoiceBundle;
@@ -2395,6 +2421,8 @@ class _ManagedRevision3ProjectViewState
       widget.publishVoiceTakeRemoval;
   Revision3DialogVoiceSlotRemovalTechnicalPublisher
   get publishDialogVoiceSlotRemoval => widget.publishDialogVoiceSlotRemoval;
+  Revision3DialogVoiceSlotCreationTechnicalPublisher
+  get publishDialogVoiceSlotCreation => widget.publishDialogVoiceSlotCreation;
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
   Revision3VoiceBuildPlanLoader get planVoiceBuild => widget.planVoiceBuild;
@@ -4181,6 +4209,14 @@ class _ManagedRevision3ProjectViewState
                       fixedContext: true,
                     )
               : null,
+          onPlanRecordingFor: intactVoiceLine && !project.requiresReopen
+              ? ({required initialLineId, required initialLocale}) =>
+                    _planVoiceRecording(
+                      context,
+                      lineId: initialLineId,
+                      locale: initialLocale,
+                    )
+              : null,
           onManageVoiceTakesFor: intactVoiceLine && !project.requiresReopen
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceTakeSelection(
@@ -4775,6 +4811,34 @@ class _ManagedRevision3ProjectViewState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(l10n.managedVoiceTakeSaved(publication.projectRevision)),
+      ),
+    );
+  }
+
+  Future<void> _planVoiceRecording(
+    BuildContext context, {
+    required String lineId,
+    required String locale,
+  }) async {
+    if (project.requiresReopen) return;
+    final service = Revision3DialogVoiceSlotCreationAuthoringService(
+      loadContentIndex: loadContentIndex,
+      publishTechnicalPlan: publishDialogVoiceSlotCreation,
+    );
+    final checkpoint = await service.loadCatalog();
+    if (checkpoint.projectId != project.projectId ||
+        checkpoint.projectRevision != project.projectRevision) {
+      throw const Revision3DialogVoiceSlotCreationStaleCheckpointException();
+    }
+    await service.publish(
+      checkpoint: checkpoint,
+      lineId: lineId,
+      locale: locale,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(AppLocalizations.of(context).managedVoiceSlotPlanSuccess),
       ),
     );
   }

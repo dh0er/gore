@@ -966,6 +966,7 @@
   "managedVoiceSlotRemoveCancel": "Keep setup",
   "managedVoiceSlotRemoveConfirm": "Remove setup",
   "managedVoiceSlotRemoveSuccess": "Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.",
+  "managedVoiceSlotPlanSuccess": "Recording planned. An empty Voice setup was added for this line and language. No audio, game file, or save was changed; build and runtime remain unqualified.",
   "managedVoiceSlotRemoveStale": "The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.",
   "managedVoiceSlotRemoveRequiresReopen": "Reopen the managed project before removing this Voice setup.",
   "managedVoiceSlotRemoveSavedUnconfirmed": "The result could not be confirmed and the empty Voice setup may have been saved. Do not repeat the removal. Close this window, reopen the managed project, and inspect the line.",

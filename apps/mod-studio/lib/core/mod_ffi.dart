@@ -23,6 +23,7 @@ part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
 part '../project/revision3_dialog_localization_edit.dart';
 part '../project/revision3_dialog_line_entry.dart';
+part '../project/revision3_dialog_voice_slot_creation.dart';
 part '../project/revision3_dialog_voice_slot_removal.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
@@ -2001,6 +2002,42 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakeRemovalPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Create one exact empty managed dialog Voice slot, preparing only an
+  /// unpublished project candidate.
+  Future<AuthoringRevision3DialogVoiceSlotCreationPreparation>
+  authoringStorePrepareRevision3DialogVoiceSlotCreationV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotCreationRequestV1 request,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'dialog_voice_slot_creation_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3DialogVoiceSlotCreationPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,
