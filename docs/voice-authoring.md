@@ -13,27 +13,31 @@ treated as deployed compatibility state.
 ## Visible Studio workflow
 
 With a managed revision-3 project open, **Localization & Voice** is a direct
-search/list/editor workspace rather than a capability-card landing page. It
-keeps project text, language editing, the guided line action, and the bounded
-Voice authoring actions in steps 1–7 together. Text/line and take-selection
-flows are project-only. Import and installed-target resolution additionally
-need a Gothic 1 Remake installation configured in Settings. Bundle construction
+production workspace rather than a capability-card landing page. It opens on a
+bounded **Work list** and keeps a **Project texts** switch beside it. The two
+views share the existing project-text, guided-line, and Voice actions instead
+of creating another authoring backend. Text/line and take-selection flows are
+project-only. Import and installed-target resolution additionally need a
+Gothic 1 Remake installation configured in Settings. Bundle construction
 remains a separate **Build & Release** action and needs that installation too.
 
-1. **Project texts** searches exact project-owned localization entries and opens
+1. **Work list** derives the next evidence-backed production decision for
+   missing project languages and existing Voice slots. Its exact limits are
+   described below.
+2. **Project texts** searches exact project-owned localization entries and opens
    their complete multilingual text maps inline. Its bounded edit contract is
    described below.
-2. The **guided dialog-line V1** flow lets a fresh project create the minimum
+3. The **guided dialog-line V1** flow lets a fresh project create the minimum
    managed line/localization structure needed by the Voice tools. Its narrow
    contract and limits are described below.
-3. **Add Voice take** imports one real local Ogg for an existing dialog line and
+4. **Add Voice take** imports one real local Ogg for an existing dialog line and
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-4. **Import recording folder** reviews and atomically imports up to 256 direct
+5. **Import recording folder** reviews and atomically imports up to 256 direct
    `<LocID>.ogg` children for one canonical locale. It is the bounded production
    path described below, not a recursive or partial file importer.
-5. **Manage Voice takes** searches existing dialog lines, lets the author move
+6. **Manage Voice takes** searches existing dialog lines, lets the author move
    a retained take through Draft/Recorded/Reviewed/Approved, and selects one
    Approved candidate for an existing locale slot or explicitly clears the
    current selection. The same dialog can remove one take from that exact
@@ -41,11 +45,11 @@ remains a separate **Build & Release** action and needs that installation too.
    a take shared by another slot remains there. Status and selection are
    separate saved changes. No operation rewrites or physically deletes media,
    and the workflow needs no game path.
-6. **Resolve Voice target** inspects the exact installed locale archive for one
+7. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-7. Under **Build & Release**, **Build Voice bundle** evaluates every current
+8. Under **Build & Release**, **Build Voice bundle** evaluates every current
    Voice slot and either shows all structured blockers without creating output,
    or writes one sealed voice-only bundle into a brand-new folder selected by
    the author. This is an offline build; the dialog has no deployment action.
@@ -59,6 +63,59 @@ The normal UI never asks for entity IDs, archive paths, member names, hashes,
 CAS paths, or bundle internals. A full Voice slot remains eligible for target
 resolution even though its candidate-capacity limit correctly prevents adding
 another take.
+
+## Voice production Work list V1
+
+The default **Work list** is a bounded projection over the exact project
+localization and Voice catalogs. It creates only two kinds of rows:
+
+- **Language not added** means one project authoring locale is absent from one
+  safely editable project-owned `LocalizationEntry`. It does not claim that an
+  existing translation is blank, wrong, or low quality because the catalog
+  does not contain evidence for those judgments.
+- **Voice production** means one intact, already-existing `VoiceSlot` for an
+  exact `DialogLine` and locale. The list never invents a missing-recording row
+  merely because a line has no `VoiceSlot`; absence of a slot is not recorded
+  authoring intent.
+
+For an existing slot, one pure rule selects exactly one next step in this
+precedence:
+
+1. zero candidate takes → **Add a recording**;
+2. candidates but no Approved take → **Review and approve a recording**;
+3. an Approved take exists but the selection is absent, invalid, or not
+   Approved → **Choose an approved recording**;
+4. an Approved take is selected but its target is unresolved or ambiguous →
+   **Resolve the Voice target**; and
+5. an Approved take is selected and its target is resolved → **Production
+   decisions complete**.
+
+Draft or Recorded alternatives remain visible as optional review backlog, but
+they do not regress a slot whose approved selection and target are already set.
+The final label deliberately does **not** mean Ready, buildable, deployed,
+audible, runtime-qualified, or project-wide valid. Its action opens **Validate
+& Test** so the separately bounded checks can be reviewed.
+
+Every actionable row reuses an existing exact workflow. **Add language** opens
+the matching project text and prefills the locale dialog; recording rows open
+the exact line/locale in Add take, Manage takes, or Resolve target. The Work
+list does not publish its own mutation format, choose a take, approve audio, or
+resolve a target implicitly.
+
+The projection retains at most 500 rows in the normal workspace, prioritizes
+actionable work before completed decisions, reports the exact omitted count,
+and offers search plus All/Needs action/Languages/Recordings/Decisions complete
+filters. If Voice catalog loading is unavailable, known language work remains
+visible with an explicit warning that recording work and counts were not
+verified. Mismatched catalog project/revision checkpoints fail closed.
+
+The host binds the workspace to the current managed root, project identity,
+revision, and canonical-head lifecycle. Queue actions recheck the same catalog
+objects, exact line/locale, derived next step, and head token before and after
+asynchronous work. Same-revision head replacement, project/root replacement,
+late reads, stale dirty text, and `requiresReopen` therefore cannot authorize
+an old row. Mutations are globally single-flight and expose a visible disabled
+reason while another action is unresolved.
 
 ## Project-text editor V1
 
@@ -486,8 +543,10 @@ The managed-R3 workflow still does not provide:
   pre-import Ogg preview and on-demand exact media QA are integrated, but media
   QA currently reports only duration and its codec-specific validation
   assurance; none is an in-game proof;
-- recursive, partial, or multi-locale folder import, translation/Voice coverage,
-  CSV/XLIFF, or review queues;
+- recursive, partial, or multi-locale folder import, complete translation/Voice
+  coverage dashboards, CSV/XLIFF, or broader batch/team review queues. The
+  bounded Work list now covers only absent authoring locales and next decisions
+  for already-existing Voice slots;
 - qualified Opus output; or
 - new-member namespace/lookup proof or a sealed generation-bound path for
   adopting vanilla dialog/localization identities;
@@ -498,7 +557,7 @@ The managed-R3 workflow still does not provide:
   conversation graph editor. Empty generated line/locale slots can now be
   removed safely, but that narrow inverse is not a general relationship editor.
 
-This closes the fresh-project project-local prerequisite and retains the
-managed existing-member target and offline build foundation. It does not
-complete the Voice production milestone, vanilla adoption, or any runtime
-dialog workflow.
+This closes the fresh-project project-local prerequisite, adds the first honest
+per-item production queue, and retains the managed existing-member target and
+offline build foundation. It does not complete the Voice production milestone,
+vanilla adoption, or any runtime dialog workflow.

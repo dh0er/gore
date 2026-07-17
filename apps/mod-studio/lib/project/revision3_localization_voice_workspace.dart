@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_production_card.dart';
+import 'revision3_voice_production_queue.dart';
+import 'revision3_voice_production_queue_view.dart';
 
 typedef Revision3LocalizationVoiceAction = FutureOr<void> Function();
 typedef Revision3LocalizationVoiceContextAction =
@@ -333,7 +335,9 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     required this.copy,
     this.controller,
     this.loadVoiceCatalog,
+    this.enableProductionQueue = false,
     this.voiceProductionCopy = Revision3VoiceProductionCardCopy.english,
+    this.voiceProductionQueueCopy = const Revision3VoiceProductionQueueCopy(),
     this.onCreateDialogLine,
     this.onAddVoiceTake,
     this.onImportVoiceFolder,
@@ -342,6 +346,10 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     this.onAddVoiceTakeFor,
     this.onManageVoiceTakesFor,
     this.onResolveVoiceTargetFor,
+    this.onReviewVoiceChecksFor,
+    this.addVoiceDisabledReason,
+    this.manageVoiceDisabledReason,
+    this.resolveVoiceDisabledReason,
     this.onPublished,
     this.onDirtyChanged,
     this.notice,
@@ -361,7 +369,9 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Revision3LocalizationVoiceWorkspaceCopy copy;
   final Revision3LocalizationVoiceWorkspaceController? controller;
   final Revision3LocalizationVoiceCatalogLoader? loadVoiceCatalog;
+  final bool enableProductionQueue;
   final Revision3VoiceProductionCardCopy voiceProductionCopy;
+  final Revision3VoiceProductionQueueCopy voiceProductionQueueCopy;
   final Revision3LocalizationVoiceAction? onCreateDialogLine;
   final Revision3LocalizationVoiceAction? onAddVoiceTake;
   final Revision3LocalizationVoiceAction? onImportVoiceFolder;
@@ -370,6 +380,10 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor;
   final Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor;
   final Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor;
+  final Revision3LocalizationVoiceContextAction? onReviewVoiceChecksFor;
+  final String? addVoiceDisabledReason;
+  final String? manageVoiceDisabledReason;
+  final String? resolveVoiceDisabledReason;
   final Revision3LocalizationPublished? onPublished;
   final ValueChanged<bool>? onDirtyChanged;
   final String? notice;
@@ -399,6 +413,7 @@ class _Revision3LocalizationVoiceWorkspaceState
   bool _saving = false;
   int? _runningExternalActionOwner;
   bool _showEditorOnCompact = false;
+  late bool _showProductionQueue;
   bool _checkpointChangedWhileDirty = false;
   bool _lastReportedDirty = false;
   int _catalogEpoch = 0;
@@ -415,6 +430,7 @@ class _Revision3LocalizationVoiceWorkspaceState
   @override
   void initState() {
     super.initState();
+    _showProductionQueue = widget.enableProductionQueue;
     _search.addListener(_searchChanged);
     _attachController(widget.controller);
     unawaited(_reloadCatalog());
@@ -439,6 +455,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       _voiceLineId = null;
       _voiceLocale = null;
       _showEditorOnCompact = false;
+      _showProductionQueue = widget.enableProductionQueue;
       _checkpointChangedWhileDirty = false;
       _voiceCatalog = null;
       _voiceCatalogError = null;
@@ -469,6 +486,9 @@ class _Revision3LocalizationVoiceWorkspaceState
     } else if (oldWidget.loadVoiceCatalog == null &&
         widget.loadVoiceCatalog != null) {
       unawaited(_reloadVoiceCatalog());
+    }
+    if (oldWidget.enableProductionQueue != widget.enableProductionQueue) {
+      _showProductionQueue = widget.enableProductionQueue;
     }
     if (!identical(oldWidget.onDirtyChanged, widget.onDirtyChanged)) {
       oldWidget.onDirtyChanged?.call(false);
@@ -565,6 +585,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       setState(() {
         _selectedKey = target.localizationStableKey;
         _showEditorOnCompact = true;
+        _showProductionQueue = false;
       });
       await _loadSeed(catalog, target.localizationStableKey);
       if (!mounted ||
@@ -909,33 +930,42 @@ class _Revision3LocalizationVoiceWorkspaceState
         _UnsavedExternalActionDecision.keepEditing;
   }
 
-  Future<void> _selectChoice(String stableKey) async {
-    if (_contextMutationBlocked) return;
+  Future<bool> _selectChoice(String stableKey) async {
+    if (_contextMutationBlocked) return false;
     if (_selectedKey == stableKey) {
       if (!_showEditorOnCompact) {
         setState(() => _showEditorOnCompact = true);
       }
-      return;
+      return _seed?.choice.stableKey == stableKey && !_loadingSeed;
     }
-    if (!await _confirmDiscard() || !mounted || _contextMutationBlocked) return;
+    if (!await _confirmDiscard() || !mounted || _contextMutationBlocked) {
+      return false;
+    }
     if (_checkpointChangedWhileDirty) {
       setState(() {
         _showEditorOnCompact = false;
         _replaceSeed(null);
       });
       await _reloadCatalog(clearCurrent: true);
-      return;
+      return false;
     }
     final catalog = _catalog;
-    if (catalog == null || catalog.choiceByStableKey(stableKey) == null) return;
+    if (catalog == null || catalog.choiceByStableKey(stableKey) == null) {
+      return false;
+    }
     setState(() {
       _selectedKey = stableKey;
       _showEditorOnCompact = true;
     });
     await _loadSeed(catalog, stableKey);
+    return mounted &&
+        identical(_catalog, catalog) &&
+        _selectedKey == stableKey &&
+        _seed?.choice.stableKey == stableKey &&
+        !_loadingSeed;
   }
 
-  Future<void> _addLocale() async {
+  Future<void> _addLocale({String? initialLocale}) async {
     if (_contextMutationBlocked) return;
     final catalogEpoch = _catalogEpoch;
     final seedEpoch = _seedEpoch;
@@ -944,6 +974,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       builder: (context) => _AddLocaleDialog(
         copy: widget.copy,
         existingLocales: Set<String>.unmodifiable(_texts.keys),
+        initialLocale: initialLocale,
       ),
     );
     if (added == null || !mounted) return;
@@ -1096,6 +1127,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     _LocalizationSaveCompletion saved, {
     required Object publicationCheckpointIdentity,
     required bool requiresVoiceAuthority,
+    required bool requiresSelectedLocalizationContext,
     _VoiceContextActionKind? contextKind,
     String? lineId,
     String? locale,
@@ -1135,14 +1167,18 @@ class _Revision3LocalizationVoiceWorkspaceState
     if (lineId == null || locale == null) {
       return _PublicationAuthorityStatus.invalid;
     }
-    final seedHasLine = seed.lineBacklinks.any((line) => line.lineId == lineId);
-    final seedHasLocale = seed.locales.any((entry) => entry.locale == locale);
     final line = voiceCatalog.line(lineId);
-    if (!seedHasLine ||
-        !seedHasLocale ||
-        line == null ||
-        !voiceCatalog.suggestedLocales.contains(locale)) {
+    if (line == null || !voiceCatalog.suggestedLocales.contains(locale)) {
       return _PublicationAuthorityStatus.invalid;
+    }
+    if (requiresSelectedLocalizationContext) {
+      final seedHasLine = seed.lineBacklinks.any(
+        (candidate) => candidate.lineId == lineId,
+      );
+      final seedHasLocale = seed.locales.any((entry) => entry.locale == locale);
+      if (!seedHasLine || !seedHasLocale) {
+        return _PublicationAuthorityStatus.invalid;
+      }
     }
     final contextIsCurrent = switch (contextKind) {
       _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
@@ -1158,6 +1194,7 @@ class _Revision3LocalizationVoiceWorkspaceState
   Future<Object?> _awaitPublicationAuthority(
     _LocalizationSaveCompletion saved, {
     required bool requiresVoiceAuthority,
+    required bool requiresSelectedLocalizationContext,
     _VoiceContextActionKind? contextKind,
     String? lineId,
     String? locale,
@@ -1200,6 +1237,8 @@ class _Revision3LocalizationVoiceWorkspaceState
           saved,
           publicationCheckpointIdentity: publicationCheckpointIdentity,
           requiresVoiceAuthority: requiresVoiceAuthority,
+          requiresSelectedLocalizationContext:
+              requiresSelectedLocalizationContext,
           contextKind: contextKind,
           lineId: lineId,
           locale: locale,
@@ -1213,6 +1252,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     bool Function()? authorityIsCurrent,
     VoidCallback? onAuthorityDrift,
     bool requiresVoiceAuthority = false,
+    bool requiresSelectedLocalizationContext = true,
     _VoiceContextActionKind? contextKind,
     String? lineId,
     String? locale,
@@ -1258,6 +1298,8 @@ class _Revision3LocalizationVoiceWorkspaceState
         final publicationCheckpointIdentity = await _awaitPublicationAuthority(
           saved,
           requiresVoiceAuthority: requiresVoiceAuthority,
+          requiresSelectedLocalizationContext:
+              requiresSelectedLocalizationContext,
           contextKind: contextKind,
           lineId: lineId,
           locale: locale,
@@ -1381,6 +1423,182 @@ class _Revision3LocalizationVoiceWorkspaceState
       lineId: lineId,
       locale: locale,
     );
+  }
+
+  _VoiceContextActionKind? _queueContextKind(
+    Revision3VoiceProductionNextStep nextStep,
+  ) => switch (nextStep) {
+    Revision3VoiceProductionNextStep.addRecording =>
+      _VoiceContextActionKind.addTake,
+    Revision3VoiceProductionNextStep.reviewAndApprove ||
+    Revision3VoiceProductionNextStep.selectOrRepair =>
+      _VoiceContextActionKind.manageTakes,
+    Revision3VoiceProductionNextStep.resolveTarget =>
+      _VoiceContextActionKind.resolveTarget,
+    Revision3VoiceProductionNextStep.addLanguage ||
+    Revision3VoiceProductionNextStep.productionDecisionsComplete => null,
+  };
+
+  Future<void> _runQueueVoiceAction(
+    Revision3VoiceSlotQueueItem item,
+    Revision3VoiceProductionQueue queue,
+    Revision3DialogLocalizationEditCatalog localizationCheckpoint,
+    Revision3VoiceCatalog voiceCheckpoint,
+  ) async {
+    final kind = _queueContextKind(item.nextStep);
+    if (kind == null) return;
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectCheckpointIdentity = widget.projectCheckpointIdentity;
+    final lineId = item.lineId;
+    final locale = item.locale;
+
+    bool authorityIsCurrent() {
+      if (!mounted ||
+          widget.projectId != projectId ||
+          widget.projectRevision != projectRevision ||
+          widget.projectCheckpointIdentity != projectCheckpointIdentity ||
+          _saving ||
+          _loadingCatalog ||
+          _loadingVoiceCatalog ||
+          _runningExternalAction ||
+          _checkpointChangedWhileDirty ||
+          _catalogError != null ||
+          _voiceCatalogError != null ||
+          !identical(_catalog, localizationCheckpoint) ||
+          !identical(_voiceCatalog, voiceCheckpoint) ||
+          queue.projectId != projectId ||
+          queue.projectRevision != projectRevision) {
+        return false;
+      }
+      final line = voiceCheckpoint.line(lineId);
+      final summary = line?.slotSummaryForLocale(locale);
+      if (line == null || summary == null) return false;
+      final currentDecision = revision3VoiceProductionDecisionFor(summary);
+      if (currentDecision.nextStep != item.nextStep) return false;
+      return switch (kind) {
+        _VoiceContextActionKind.addTake => line.isLocaleAuthorable(locale),
+        _VoiceContextActionKind.manageTakes => true,
+        _VoiceContextActionKind.resolveTarget => line.isLocaleTargetable(
+          locale,
+        ),
+      };
+    }
+
+    if (!authorityIsCurrent()) return;
+    Revision3LocalizationVoiceAction? resolveAction() {
+      final currentAction = _contextAction(kind);
+      if (currentAction == null) return null;
+      return () => currentAction(initialLineId: lineId, initialLocale: locale);
+    }
+
+    await _runExternalAction(
+      resolveAction,
+      authorityIsCurrent: authorityIsCurrent,
+      onAuthorityDrift: () => _showMessage(widget.copy.staleMessage),
+      requiresVoiceAuthority: true,
+      requiresSelectedLocalizationContext: false,
+      contextKind: kind,
+      lineId: lineId,
+      locale: locale,
+    );
+  }
+
+  Future<void> _openQueueReviewChecks(
+    Revision3VoiceSlotQueueItem item,
+    Revision3VoiceProductionQueue queue,
+    Revision3DialogLocalizationEditCatalog localizationCheckpoint,
+    Revision3VoiceCatalog voiceCheckpoint,
+  ) async {
+    final action = widget.onReviewVoiceChecksFor;
+    if (action == null || _contextMutationBlocked) return;
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectCheckpointIdentity = widget.projectCheckpointIdentity;
+    bool authorityIsCurrent({int? owner}) =>
+        mounted &&
+        widget.projectId == projectId &&
+        widget.projectRevision == projectRevision &&
+        widget.projectCheckpointIdentity == projectCheckpointIdentity &&
+        !_saving &&
+        !_loadingCatalog &&
+        !_loadingVoiceCatalog &&
+        !_checkpointChangedWhileDirty &&
+        _catalogError == null &&
+        _voiceCatalogError == null &&
+        identical(_catalog, localizationCheckpoint) &&
+        identical(_voiceCatalog, voiceCheckpoint) &&
+        queue.projectId == projectId &&
+        queue.projectRevision == projectRevision &&
+        voiceCheckpoint.line(item.lineId)?.slotSummaryForLocale(item.locale) !=
+            null &&
+        (owner == null || _externalActionOwnerIsCurrent(owner));
+
+    if (!authorityIsCurrent()) return;
+    final owner = _beginExternalAction();
+    if (owner == null) return;
+    if (!authorityIsCurrent(owner: owner)) {
+      _endExternalAction(owner);
+      return;
+    }
+    try {
+      await action(initialLineId: item.lineId, initialLocale: item.locale);
+    } catch (_) {
+      if (authorityIsCurrent(owner: owner)) {
+        _showMessage(widget.copy.voiceActionFailedMessage);
+      }
+    } finally {
+      _endExternalAction(owner);
+    }
+  }
+
+  Future<void> _openQueueMissingLanguage(
+    Revision3VoiceMissingLanguageQueueItem item,
+    Revision3VoiceProductionQueue queue,
+    Revision3DialogLocalizationEditCatalog localizationCheckpoint,
+  ) async {
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectCheckpointIdentity = widget.projectCheckpointIdentity;
+    bool authorityIsCurrent() {
+      final choice = localizationCheckpoint.choiceByStableKey(
+        item.choiceStableKey,
+      );
+      return mounted &&
+          widget.projectId == projectId &&
+          widget.projectRevision == projectRevision &&
+          widget.projectCheckpointIdentity == projectCheckpointIdentity &&
+          !_contextMutationBlocked &&
+          !_loadingSeed &&
+          !_checkpointChangedWhileDirty &&
+          _catalogError == null &&
+          identical(_catalog, localizationCheckpoint) &&
+          queue.projectId == projectId &&
+          queue.projectRevision == projectRevision &&
+          localizationCheckpoint.authoringLocales.contains(item.locale) &&
+          choice != null &&
+          !choice.locales.contains(item.locale) &&
+          (_selectedKey != item.choiceStableKey ||
+              !_texts.containsKey(item.locale));
+    }
+
+    if (!authorityIsCurrent()) return;
+    final selected = await _selectChoice(item.choiceStableKey);
+    if (!selected) return;
+    if (!authorityIsCurrent() ||
+        _seed?.choice.stableKey != item.choiceStableKey) {
+      if (mounted &&
+          widget.projectId == projectId &&
+          widget.projectCheckpointIdentity == projectCheckpointIdentity) {
+        _showMessage(widget.copy.staleMessage);
+      }
+      return;
+    }
+    setState(() {
+      _showProductionQueue = false;
+      _showEditorOnCompact = true;
+    });
+    await _addLocale(initialLocale: item.locale);
   }
 
   void _selectVoiceLine(Revision3DialogLocalizationLineBacklink line) {
@@ -1527,9 +1745,13 @@ class _Revision3LocalizationVoiceWorkspaceState
             dense: denseHeader,
             compactActions: !wide || denseHeader,
           ),
+          if (widget.enableProductionQueue)
+            _buildWorkspaceModeSwitcher(dense: denseHeader, compact: !wide),
           const Divider(height: 1),
           Expanded(
-            child: wide
+            child: widget.enableProductionQueue && _showProductionQueue
+                ? _buildProductionQueue()
+                : wide
                 ? Row(
                     children: [
                       SizedBox(
@@ -1548,6 +1770,286 @@ class _Revision3LocalizationVoiceWorkspaceState
       );
     },
   );
+
+  Widget _buildWorkspaceModeSwitcher({
+    required bool dense,
+    required bool compact,
+  }) {
+    final enabled = !_saving && !_runningExternalAction;
+    final control = compact
+        ? Wrap(
+            key: const Key('revision3-localization-voice-mode'),
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              ChoiceChip(
+                key: const Key('revision3-localization-voice-mode-work-list'),
+                avatar: const Icon(Icons.view_list_outlined, size: 18),
+                label: Text(widget.voiceProductionQueueCopy.title),
+                selected: _showProductionQueue,
+                onSelected: enabled
+                    ? (_) => setState(() => _showProductionQueue = true)
+                    : null,
+              ),
+              ChoiceChip(
+                key: const Key(
+                  'revision3-localization-voice-mode-project-texts',
+                ),
+                avatar: const Icon(Icons.translate_outlined, size: 18),
+                label: Text(widget.copy.projectTextsLabel),
+                selected: !_showProductionQueue,
+                onSelected: enabled
+                    ? (_) => setState(() => _showProductionQueue = false)
+                    : null,
+              ),
+            ],
+          )
+        : SegmentedButton<bool>(
+            key: const Key('revision3-localization-voice-mode'),
+            segments: <ButtonSegment<bool>>[
+              ButtonSegment<bool>(
+                value: true,
+                icon: const Icon(Icons.view_list_outlined),
+                label: Text(widget.voiceProductionQueueCopy.title),
+              ),
+              ButtonSegment<bool>(
+                value: false,
+                icon: const Icon(Icons.translate_outlined),
+                label: Text(widget.copy.projectTextsLabel),
+              ),
+            ],
+            selected: <bool>{_showProductionQueue},
+            showSelectedIcon: false,
+            onSelectionChanged: enabled
+                ? (selection) {
+                    if (selection.isEmpty) return;
+                    setState(() => _showProductionQueue = selection.single);
+                  }
+                : null,
+          );
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: dense ? 8 : 16,
+          vertical: dense ? 6 : 8,
+        ),
+        child: Align(alignment: Alignment.centerLeft, child: control),
+      ),
+    );
+  }
+
+  Widget _buildProductionQueue() {
+    final localizationCheckpoint = _catalog;
+    if (localizationCheckpoint == null && _loadingCatalog) {
+      return Center(
+        child: Semantics(
+          liveRegion: true,
+          label: widget.copy.loadingLabel,
+          child: const CircularProgressIndicator(),
+        ),
+      );
+    }
+    if (localizationCheckpoint == null || _catalogError != null) {
+      final retryable =
+          _catalogError == null || _loadErrorRetryable(_catalogError!);
+      return _WorkspaceFailure(
+        title: widget.copy.loadFailedTitle,
+        retryLabel: widget.copy.retryLabel,
+        retryKey: const Key('revision3-voice-production-queue-retry'),
+        showRetry: retryable,
+        retry: _contextMutationBlocked || !retryable
+            ? null
+            : () => _retryCatalog(clearCurrent: true),
+      );
+    }
+
+    final voiceCheckpoint = _voiceCatalog;
+    if (voiceCheckpoint == null && _loadingVoiceCatalog) {
+      return Center(
+        child: Semantics(
+          liveRegion: true,
+          label: widget.copy.loadingLabel,
+          child: const CircularProgressIndicator(),
+        ),
+      );
+    }
+    late final Revision3VoiceProductionQueue queue;
+    try {
+      queue = Revision3VoiceProductionQueue.fromCatalogs(
+        localizationCatalog: localizationCheckpoint,
+        voiceCatalog: voiceCheckpoint,
+      );
+    } on Revision3VoiceProductionQueueCheckpointMismatch {
+      return _WorkspaceFailure(
+        title: widget.copy.staleMessage,
+        retryLabel: widget.copy.refreshLabel,
+        retryKey: const Key('revision3-voice-production-queue-retry'),
+        showRetry: true,
+        retry: _contextMutationBlocked
+            ? null
+            : () => _retryCatalog(clearCurrent: true),
+      );
+    }
+
+    final busy =
+        _saving ||
+        _loadingCatalog ||
+        _loadingSeed ||
+        _loadingVoiceCatalog ||
+        _runningExternalAction;
+    return Column(
+      key: const Key('revision3-localization-voice-work-list'),
+      children: [
+        if (_loadingVoiceCatalog)
+          Semantics(
+            liveRegion: true,
+            label: widget.copy.loadingLabel,
+            child: const LinearProgressIndicator(),
+          ),
+        Expanded(
+          child: Revision3VoiceProductionQueueView(
+            queue: queue,
+            copy: widget.voiceProductionQueueCopy,
+            busy: busy,
+            disabledReasonFor: (item) => _queueDisabledReason(
+              item,
+              localizationCheckpoint: localizationCheckpoint,
+              voiceCheckpoint: voiceCheckpoint,
+            ),
+            onAddLanguage: (stableKey, locale, item) async {
+              if (stableKey != item.choiceStableKey || locale != item.locale) {
+                return;
+              }
+              await _openQueueMissingLanguage(
+                item,
+                queue,
+                localizationCheckpoint,
+              );
+            },
+            onAddRecording: voiceCheckpoint == null
+                ? null
+                : (lineId, locale, item) async {
+                    if (lineId != item.lineId || locale != item.locale) return;
+                    await _runQueueVoiceAction(
+                      item,
+                      queue,
+                      localizationCheckpoint,
+                      voiceCheckpoint,
+                    );
+                  },
+            onReviewAndApprove: voiceCheckpoint == null
+                ? null
+                : (lineId, locale, item) async {
+                    if (lineId != item.lineId || locale != item.locale) return;
+                    await _runQueueVoiceAction(
+                      item,
+                      queue,
+                      localizationCheckpoint,
+                      voiceCheckpoint,
+                    );
+                  },
+            onSelectOrRepair: voiceCheckpoint == null
+                ? null
+                : (lineId, locale, item) async {
+                    if (lineId != item.lineId || locale != item.locale) return;
+                    await _runQueueVoiceAction(
+                      item,
+                      queue,
+                      localizationCheckpoint,
+                      voiceCheckpoint,
+                    );
+                  },
+            onResolveTarget: voiceCheckpoint == null
+                ? null
+                : (lineId, locale, item) async {
+                    if (lineId != item.lineId || locale != item.locale) return;
+                    await _runQueueVoiceAction(
+                      item,
+                      queue,
+                      localizationCheckpoint,
+                      voiceCheckpoint,
+                    );
+                  },
+            onReviewChecks: voiceCheckpoint == null
+                ? null
+                : (lineId, locale, item) async {
+                    if (lineId != item.lineId || locale != item.locale) return;
+                    await _openQueueReviewChecks(
+                      item,
+                      queue,
+                      localizationCheckpoint,
+                      voiceCheckpoint,
+                    );
+                  },
+          ),
+        ),
+      ],
+    );
+  }
+
+  String? _queueDisabledReason(
+    Revision3VoiceProductionQueueItem item, {
+    required Revision3DialogLocalizationEditCatalog localizationCheckpoint,
+    required Revision3VoiceCatalog? voiceCheckpoint,
+  }) {
+    if (_checkpointChangedWhileDirty ||
+        !identical(_catalog, localizationCheckpoint)) {
+      return widget.copy.staleMessage;
+    }
+    switch (item) {
+      case Revision3VoiceMissingLanguageQueueItem():
+        final choice = localizationCheckpoint.choiceByStableKey(
+          item.choiceStableKey,
+        );
+        if (choice == null ||
+            !localizationCheckpoint.authoringLocales.contains(item.locale) ||
+            choice.locales.contains(item.locale) ||
+            (_selectedKey == item.choiceStableKey &&
+                _texts.containsKey(item.locale))) {
+          return widget.copy.staleMessage;
+        }
+        return null;
+      case Revision3VoiceSlotQueueItem():
+        if (voiceCheckpoint == null ||
+            !identical(_voiceCatalog, voiceCheckpoint) ||
+            _voiceCatalogError != null) {
+          return widget.voiceProductionQueueCopy.actionUnavailableReason;
+        }
+        final summary = voiceCheckpoint
+            .line(item.lineId)
+            ?.slotSummaryForLocale(item.locale);
+        if (summary == null ||
+            revision3VoiceProductionDecisionFor(summary).nextStep !=
+                item.nextStep) {
+          return widget.copy.staleMessage;
+        }
+        return switch (item.nextStep) {
+          Revision3VoiceProductionNextStep.addRecording =>
+            widget.onAddVoiceTakeFor == null
+                ? widget.addVoiceDisabledReason ??
+                      widget.voiceProductionQueueCopy.actionUnavailableReason
+                : null,
+          Revision3VoiceProductionNextStep.reviewAndApprove ||
+          Revision3VoiceProductionNextStep.selectOrRepair =>
+            widget.onManageVoiceTakesFor == null
+                ? widget.manageVoiceDisabledReason ??
+                      widget.voiceProductionQueueCopy.actionUnavailableReason
+                : null,
+          Revision3VoiceProductionNextStep.resolveTarget =>
+            widget.onResolveVoiceTargetFor == null
+                ? widget.resolveVoiceDisabledReason ??
+                      widget.voiceProductionQueueCopy.actionUnavailableReason
+                : null,
+          Revision3VoiceProductionNextStep.productionDecisionsComplete =>
+            widget.onReviewVoiceChecksFor == null
+                ? widget.voiceProductionQueueCopy.actionUnavailableReason
+                : null,
+          Revision3VoiceProductionNextStep.addLanguage =>
+            widget.voiceProductionQueueCopy.actionUnavailableReason,
+        };
+    }
+  }
 
   Widget _buildBrowser({required bool dense}) {
     if (_catalogError != null) {
@@ -2497,18 +2999,29 @@ class _LocaleEditor extends StatelessWidget {
 }
 
 class _AddLocaleDialog extends StatefulWidget {
-  const _AddLocaleDialog({required this.copy, required this.existingLocales});
+  const _AddLocaleDialog({
+    required this.copy,
+    required this.existingLocales,
+    this.initialLocale,
+  });
 
   final Revision3LocalizationVoiceWorkspaceCopy copy;
   final Set<String> existingLocales;
+  final String? initialLocale;
 
   @override
   State<_AddLocaleDialog> createState() => _AddLocaleDialogState();
 }
 
 class _AddLocaleDialogState extends State<_AddLocaleDialog> {
-  final _locale = TextEditingController();
+  late final TextEditingController _locale;
   final _text = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _locale = TextEditingController(text: widget.initialLocale);
+  }
 
   @override
   void dispose() {

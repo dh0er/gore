@@ -209,6 +209,104 @@ AuthoringRevision3DialogLocalizationEditSeed _exactSeed({
 }
 
 void main() {
+  test('catalog keeps exact authoring locales canonical and immutable', () {
+    final catalog = Revision3DialogLocalizationEditCatalog.fromContentIndex(
+      _contentIndex(
+        mutateJson: (json) {
+          json['authoring_locales'] = <Object?>['de', 'en', 'fr'];
+        },
+      ),
+    );
+
+    expect(catalog.authoringLocales, <String>['de', 'en', 'fr']);
+    expect(catalog.authoringLocales.toSet(), <String>{'de', 'en', 'fr'});
+    expect(() => catalog.authoringLocales.add('it'), throwsUnsupportedError);
+  });
+
+  test('orchestration resolver returns only exact editable choices', () {
+    final catalog = Revision3DialogLocalizationEditCatalog.fromContentIndex(
+      _contentIndex(),
+    );
+
+    final choice = catalog.choiceForLocalizationId(
+      revision3VoiceContentLocalizationId,
+    );
+    expect(choice, same(catalog.choices.single));
+    expect(choice?.stableKey, matches(RegExp(r'^[0-9a-f]{24}$')));
+    expect(
+      choice?.stableKey,
+      isNot(contains(revision3VoiceContentLocalizationId)),
+    );
+    expect(catalog.choiceForLocalizationId(_unknownEntityId), isNull);
+    expect(
+      catalog.choiceForLocalizationId('$revision3VoiceContentLocalizationId '),
+      isNull,
+    );
+
+    final nonEditableCatalog =
+        Revision3DialogLocalizationEditCatalog.fromContentIndex(
+          _contentIndex(
+            mutateJson: (json) {
+              final entities = (json['entities']! as List<Object?>)
+                  .cast<Map<String, Object?>>();
+              final localization = entities.singleWhere(
+                (entity) => entity['id'] == revision3VoiceContentLocalizationId,
+              );
+              localization['origin'] = <String, Object?>{
+                'type': 'imported',
+                'importer': 'tests',
+                'source_seal': <String, Object?>{
+                  'byte_len': 10,
+                  'sha256': 'd' * 64,
+                },
+                'external_identity': 'legacy-asghan',
+              };
+            },
+          ),
+        );
+    expect(nonEditableCatalog.choices, isEmpty);
+    expect(
+      nonEditableCatalog.choiceForLocalizationId(
+        revision3VoiceContentLocalizationId,
+      ),
+      isNull,
+    );
+  });
+
+  test('orchestration choices stay scoped to their exact catalog', () async {
+    var exactReads = 0;
+    final service = _service(
+      loadExactSeed:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required localizationId,
+            required expectedLocalizationRevision,
+            required expectedLocId,
+          }) async {
+            exactReads++;
+            return _exactSeed();
+          },
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async => throw UnimplementedError(),
+    );
+    final firstCatalog = await service.loadCatalog();
+    final secondCatalog = await service.loadCatalog();
+    final secondChoice = secondCatalog.choiceForLocalizationId(
+      revision3VoiceContentLocalizationId,
+    )!;
+
+    await expectLater(
+      service.loadSeed(catalog: firstCatalog, choice: secondChoice),
+      throwsA(isA<Revision3DialogLocalizationEditStaleCheckpointException>()),
+    );
+    expect(exactReads, 0);
+  });
+
   test(
     'catalog exposes friendly opaque choices and disambiguates duplicates',
     () {
@@ -585,6 +683,61 @@ void main() {
       expect(publishCalls, 0);
     },
   );
+
+  test('same-revision authoring locale drift stales the catalog', () async {
+    var exactReads = 0;
+    var publishCalls = 0;
+    final service = _service(
+      contentIndexes: <Revision3ContentIndex>[
+        _contentIndex(),
+        _contentIndex(
+          mutateJson: (json) {
+            json['authoring_locales'] = <Object?>['de', 'en', 'fr'];
+          },
+        ),
+      ],
+      loadExactSeed:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required localizationId,
+            required expectedLocalizationRevision,
+            required expectedLocId,
+          }) async {
+            exactReads++;
+            return _exactSeed();
+          },
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            publishCalls++;
+            throw UnimplementedError();
+          },
+    );
+    final catalog = await service.loadCatalog();
+    final seed = await service.loadSeed(
+      catalog: catalog,
+      choice: catalog.choices.single,
+    );
+
+    await expectLater(
+      service.publish(
+        seed: seed,
+        input: Revision3DialogLocalizationEditInput(
+          texts: const <String, String>{
+            'de': 'Neue Warnung',
+            'en': 'Stop right there!',
+          },
+        ),
+      ),
+      throwsA(isA<Revision3DialogLocalizationEditStaleCheckpointException>()),
+    );
+    expect(exactReads, 1);
+    expect(publishCalls, 0);
+  });
 
   test(
     'same-revision backlink identity drift is stale despite equal search facts',

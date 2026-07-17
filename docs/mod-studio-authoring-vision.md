@@ -16,7 +16,7 @@ Related evidence and operating boundaries:
 - [Cooked DataAsset fixed-leaf workflow](dataasset-authoring.md)
 - [Offline AngelScript default patching](angelscript-default-patching.md)
 
-### Current implementation delta (2026-07-16)
+### Current implementation delta (2026-07-17)
 
 The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
@@ -132,6 +132,21 @@ been consolidated:
   no topic, AngelScript, build, runtime, deployment, or native publication
   authority. The unsealed global localization catalog remains excluded: this is
   project-local creation/exact reuse, not vanilla adoption.
+- **Localization & Voice** now defaults to a bounded **Work list**, with the
+  existing **Project texts** editor one switch away. It derives only two
+  evidence-backed item kinds: a project authoring locale absent from one safely
+  editable localization, and one intact already-existing `VoiceSlot` for an
+  exact line/locale. It never treats absence of a slot as missing-recording
+  intent. Existing slots receive one next step in strict order: add recording,
+  review/approve, select/repair, resolve target, or production decisions
+  complete. The final state opens **Validate & Test** and grants no Ready,
+  build, deployment, audibility, or runtime authority. Actions reuse the exact
+  project-text/Add/Manage/Resolve flows and recheck root/project/revision/head,
+  catalog identity, line/locale, and the derived next step around asynchronous
+  work. The normal list is capped at 500 rows, reports omissions, and preserves
+  known language work with an explicit warning when Voice evidence is
+  unavailable. Broader coverage, batch/team review, CSV/XLIFF, and multi-locale
+  production remain missing; no World work is included.
 - **Manage Voice takes** now owns review status as well as selection. An author
   can move one retained take through Draft/Recorded/Reviewed/Approved and then
   select a newly Approved take without re-importing it or leaving the dialog.
@@ -406,7 +421,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | New dialog topic insertion/rendering | **Earlier narrow render proof; version-3 candidate offline-qualified, one controlled live visual run remains** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration previously reached the natural choice UI and was visually confirmed. The current version-3 candidate is deterministic, passes the strengthened forbidden-operation and preflight-order verifier, and deploys/undeploys to exact sandbox tree identity. That is offline/sandbox evidence, not a live version-3 result. Requalification requires exactly one natural Viper-menu run with no selection and no save; automatic discovery and selection effects remain unproven. See [dialog authoring](dialog-authoring.md). |
 | Dialog selection effects | **Unproven** | Topic selection, quest/knowledge changes, `ActedTopics`, and selection-side save effects are outside the render proof. The safe proof intentionally selected nothing. |
 | Quest inspection/edit/create | **Managed revision-3 creation, Story Workbench V1, outline/context, bounded V4 states-and-transitions, and ordered transcript editing proven; build/runtime missing** | Managed R3 Home exposes the friendly one-to-eight-objective Quest Draft wizard. A selected Quest opens four canonical Story tabs: **Journey**, **Dialog & Voice**, **References**, and **Problems & Checks**. Journey presents the objective-centered behavior projection and owns the contextual **Name & objectives**, **Description & connections**, and **States & transitions** handoffs; legacy Story/Logic requests normalize to Journey. Dialog & Voice owns the bounded ordered transcript, References projects exact-current links without claiming readiness, and Problems & Checks owns source/compiler inspection. The transcript presents friendly speaker/text/locale/Voice coverage, attaches, reorders, groups by stable V4 objective slot, detaches without deleting shared lines, atomically creates and inserts one DialogLine/localization/optional empty Voice slot, and hands one exact line/locale to **Localization & Voice**. The V4 behavior dialog presents the main Quest/objectives against Available/Start/Success/Failure, a sequential template, independent direct-engine triggers and typed conditions, bounded Start/Succeed/Fail follow-up actions, and objective-parent completion. Conditions use the six reviewed lifecycle tests with optional negation and are capped at 8 DNF alternatives x 8 atoms; each transition has at most 8 effects. The closed native validator enforces canonical order, stable active objective slots, drivers, required availability/start and objective terminal edges, valid references, contradiction rules, same-handler terminal conflicts, same-kind cycles, and at most 256 unique same-project transcript lines. It accepts no raw AngelScript, runtime topic, selection effect, journal, reward, item, or arbitrary effect. Schema revision remains 3: merely reading or deriving the effective plan or an empty transcript does not migrate a generator-v2/v3 Quest; an otherwise unchanged Quest keeps its JSON/source bytes. V4 retains a canonical plan with stable slots, and its legacy seed regenerates V2/V3 source byte-for-byte. Outline/context/transitions/source inspection preserve transcript metadata. Transcript edits increment project/Quest only and leave the owned module/source/revision unchanged; the compound create-and-insert path still publishes exactly one project revision. The prepare-only transition and transcript FFI routes accept no `game_root`, prepare and fully reopen only immutable candidates, and never replace the fixed head. Native status remains `blocked`, `runtime_unqualified`, topic authority `not_granted`, and publication `not_supported`; the managed session is the only publisher through guarded exact-head byte CAS, repair journal, and full published reopen. An isolated 1.0.3 qualifier compiled the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes twice and produced the same reopened 7,306-module composed cache (123,406,626 bytes, SHA-256 `FB041B3DF1CBD5A0AFC1D87F47BFCA6392AA19CE6475CE9DBD61A6D099D9C41A`). It did not compile one renderer-produced fixture spanning every state-test expression, and it is compiler/cache evidence rather than gameplay. Runtime transition order/effects, transcript-driven dialog selection, journal/rewards/items, persistence/save/reload/uninstall, production build/deploy, and a synchronized general Quest/dialog graph remain missing. Quest authoring transactions write neither the game installation nor a save; the separate explicit exact-current compiler check temporarily stages the exact generated source and mutates the authenticated compiler/cache paths under guarded restoration of every touched install path or retained recovery, then discards its output. See [quest authoring](quest-authoring.md). |
-| Voice archive editing | **Compatibility existing-member slice proven; managed revision-3 entry, import, exact in-app preview, status, selection, safe take removal, installed-target, and sealed offline-build foundation proven; production workflow missing** | The compatibility line-first editor still resolves installed language archives beside dialog text, validates and previews/removes a chosen Ogg, persists it in the portable project, and includes exact existing-member replacement in Build/Deploy. Managed R3 Home exposes the guided project-local prerequisite described above and four bounded Voice actions. **Add Voice take** uses a configured game root only as a read-only forbidden Store-root boundary, double-reads one safe local Vorbis/Opus Ogg after semantic/capacity preflight, and appends it to an exact existing line/locale while preserving localization text and all alternatives. **Manage Voice takes** needs no game path: it reloads the exact content index, shows ordered friendly candidates, previews one exact-current managed Vorbis/Opus Ogg in-app, edits author-managed status, selects or clears an Approved candidate, and removes a candidate from this line/language. Preview verifies the complete line/localization/slot/take/asset chain and selected CAS object, materializes one fixed leaf through a natively retained opaque cleanup token, unloads playback before token-bound release, and writes no project or Store state. Removal atomically clears the selected take when necessary, never auto-selects a replacement, retains a take shared by other slots, and removes only its project entity after the final permitted use; the complete AssetStore and physical Ogg CAS remain untouched. Each mutation uses a separately bounded prepare-only full-reopen transaction and guarded managed-session publication. **Resolve Voice target** binds the installed executable generation and authenticated pristine locale archive before/after inspection, records unresolved/resolved/ambiguous evidence, and never picks an ambiguous member. **Build Voice bundle** derives all blockers from the complete exact-current graph and, only when ready, writes a deterministic sealed Vorbis existing-member replacement bundle into a new offline folder; it performs no deployment. Fixed-head races and uncertain publication fail closed. Managed Voice still lacks deploy/undeploy, isolated runtime testing, audible-game qualification, ambiguous-member choice, recording/transcode/batch/coverage, qualified Opus lowering, sealed vanilla adoption, and new-member lookup proof. Line creation/exact reuse, preview, and all project-only take mutations never write the game or a save; offline bundle output and desktop playback are not runtime evidence. See [Voice authoring](voice-authoring.md). |
+| Voice archive editing | **Compatibility existing-member slice proven; managed revision-3 Work list, entry, import, exact preview/QA, status, selection, safe removal, installed-target, and sealed offline-build foundation proven; production workflow incomplete** | The compatibility line-first editor remains separate. Managed R3 **Localization & Voice** defaults to a bounded Work list and keeps Project texts one switch away. It projects only absent authoring-locale membership and intact existing `VoiceSlot`s; absence of a slot never invents recording intent. Exact slot precedence is zero takes → add, no Approved take → review/approve, no valid Approved selection → select/repair, unresolved/ambiguous target → resolve, otherwise production decisions complete. Unreviewed alternatives do not regress that final decision, and completion opens checks without claiming Ready/build/runtime. Rows reuse the existing exact Add/Manage/Resolve or locale-edit flows. The list retains 500 normal rows, reports omitted work, preserves known language work when Voice evidence is unavailable, and fails closed on root/project/revision/head/catalog/next-step drift. Existing bounded take import, status, selection, preview/media QA, slot/take removal, target resolution, and deterministic sealed Vorbis existing-member offline build retain their independent exact prepare/full-reopen/session-publication contracts. | Line/localization/take project mutations write neither game nor save; offline output and desktop playback are not runtime evidence. Managed Voice still lacks deploy/undeploy, isolated runtime testing, audible-game qualification, ambiguous-member choice, recording/transcode, complete coverage and broader batch/team review, CSV/XLIFF, qualified Opus lowering, sealed vanilla adoption, and new-member lookup proof. “Production decisions complete” is intentionally narrower than any of those claims. See [Voice authoring](voice-authoring.md). |
 | FMOD sound/music replacement | **Proven** | Studio browses samples, previews originals or staged WAVs, and stages replacements for the bundle engine. This is sound-bank replacement, not spoken-dialog voice authoring. |
 | Texture replacement | **Proven subset** | Existing texture assets can be browsed and replaced with additive IoStore output. This is not general cooked-asset creation, visual-media round trip, or an Unreal Editor bridge. |
 | Existing cooked DataAsset fixed leaves | **Managed revision-3 typed editor, reviewed Footstep quick start, verified registry, and one offline build proven** | Receipt-bound extract/patch/re-inspect/offline-pack and the generic inspector-proven Bool/integer/float/color/vector editor remain available under **Expert tools**. The normal quick start names the exact Human, Scavenger, and Wolf `FootstepTag` targets and opens installed data as the primary path to the reviewed `BoneData/BoneFeetData/FeetTextureSize` Vector4 form. Studio exposes X/Y scale presets, Before/After preview, and preserved Z/W; values are explicitly raw asset units. A successful typed publication is returned to the registry, accepted only as the next revision, reloaded, and expanded only when target plus staged revision match. The separate exact-current **Build files...** action can emit the reviewed offline package triplet. Neither editing nor build grants deployment, gameplay, runtime, structural/new-asset, or Unreal-bridge authority. Broader reviewed schemas, gameplay-qualified units, multi-edit/undo, structural editing, new assets, and the sealed Unreal handoff remain missing. Neither path writes the game installation or a save file. See [DataAsset authoring](dataasset-authoring.md). |
@@ -684,6 +699,34 @@ Publication reloads the content index, binds the exact managed checkpoint, and
 refreshes the visible project revision/head. This is the landed subset below,
 not the complete production surface described by the remaining requirements.
 
+The workspace now opens on a bounded **Work list**, with **Project texts** as a
+peer view. Its projection has exactly two evidence-backed inputs: authoring
+locales absent from editable project-local localizations and intact existing
+Voice slots. Missing locale membership means “language not added,” not blank or
+poor translation. A line without a slot produces no Voice row because the graph
+contains no recording intent to complete.
+
+For each existing slot, the decision precedence is zero takes → add recording;
+no Approved take → review/approve; no valid Approved selection → select/repair;
+unresolved or ambiguous target → resolve; otherwise → production decisions
+complete. Draft/Recorded alternatives are optional backlog and do not regress
+an already approved, selected, and resolved slot. Completion leads to the
+existing checks; it does not mean Ready, buildable, deployed, audible, or
+runtime-qualified. The row actions reuse the current exact locale, Add take,
+Manage takes, and Resolve target flows rather than introducing queue-specific
+mutations.
+
+The normal projection retains at most 500 rows, prioritizes actionable items,
+reports the omitted count, and keeps search plus work-kind/status filters. If
+the Voice catalog cannot be verified, known language work remains visible with
+an explicit partial-evidence warning. Catalog project/revision mismatch fails
+closed. The host retains the exact managed root/project/revision/canonical-head
+lifecycle; callbacks recheck the same catalog objects, exact line/locale,
+derived next step, and head token around asynchronous work. Same-revision head
+replacement, root/project replacement, late completion, dirty-text drift, and
+`requiresReopen` cannot authorize an old item. Queue mutations share one
+single-flight interlock and visible disabled reason.
+
 Exact managed-take media QA is integrated as a separate on-demand action in
 **Manage Voice takes**. One pathless read-only request binds an exact current
 managed take through the complete line/localization/slot/take/asset chain,
@@ -881,6 +924,12 @@ spreadsheet paste, mapped import, and transactional undo. Bulk CSV uses stable
 line/entity IDs and locale columns, exports a schema/version header, and rejects
 unknown or duplicate IDs on import. New IDs are explicitly project-owned and
 collision-checked against the selected game version and other project entities.
+
+The current bounded Work list is the first production projection toward this
+end state. It covers only absent authoring-locale membership and next decisions
+for already-existing Voice slots. It is not the complete translation/Voice
+coverage dashboard, blank/quality analysis, batch assignment system, or team
+review queue described above.
 
 ### 4.10 Validation, build, isolated test, deploy, and undeploy
 
@@ -1441,8 +1490,11 @@ existing Workbench; this improves access but does not make the underlying Drafts
 buildable or runtime-qualified. One reviewed managed DataAsset stage can now be
 built, reopened, and re-inspected in a receipt-owned offline output, and one
 exact R3 checkpoint can be exported as a deterministic project copy without an
-import or restore claim. Next, (1) complete semantic line/slot relationships and
-the remaining localization/Voice production tools; (2) finish semantic/project
+import or restore claim. The first Voice production Work list is also landed:
+Localization & Voice defaults to bounded missing-language and existing-slot
+next steps while Project texts stays one switch away. Next, (1) complete
+semantic line/slot relationships and the broader localization/Voice production
+tools; (2) finish semantic/project
 deletion, shared undo/history, and broader recovery, with Close and bounded
 same-lock recovery already landed; (3) deepen the existing NPC and Quest
 journeys beyond their direct workspace; and (4) complete honest managed
@@ -1477,7 +1529,8 @@ uses its derived language slot without seeing archive paths, imports and
 validates a take, selects an existing Approved candidate, survives save/reopen
 without external paths, resolves an exact installed existing-member target,
 and builds a verified sealed format-3 offline bundle from owned Store bytes.
-Preview remains part of completing the production editor. The first valid
+Exact-current preview is landed, while broader production and runtime
+qualification remain part of completing the production editor. The first valid
 multilingual acceptance build uses two exact existing-member replacements.
 New-member `add` retains a separate offline Experimental acceptance case and is
 not part of the managed production builder until its exact target rule and
@@ -1497,16 +1550,22 @@ direct search/list/editor workspace for the complete bounded text map of intact
 project-owned localizations. It hides technical identity, shows shared-line
 backlinks, preserves VoiceSlot locales, locks candidate-backed transcripts, and
 publishes only the exact localization/project revision delta through the
-managed session. These slices do not adopt vanilla data or complete this phase:
+managed session. The default Work list now adds the first truthful production
+queue over that same authority: absent authoring locales and existing Voice
+slots only, strict next-step precedence, exact line/locale handoff, a 500-row
+retention bound, and explicit partial Voice evidence. “Production decisions
+complete” remains narrower than Ready/build/runtime, and absence of a VoiceSlot
+never invents missing-recording intent. These slices do not adopt vanilla data
+or complete this phase:
 the new line remains build-blocked and runtime-unqualified and still needs the
 installed-target, broader production, deployment, and qualified audible-runtime
 journey. Exact-current managed-CAS take preview is now landed as a separate
 read-only in-app capability: it verifies the complete graph and selected Ogg,
 materializes one fixed temporary leaf through a natively retained opaque cleanup
 token, and grants no project, build, game, save, deployment, or runtime
-authority. It creates no topic or
-AngelScript; bulk translation/review, history, and semantic line/slot editing
-also remain.
+authority. It creates no topic or AngelScript; bulk translation, broader
+coverage and batch/team review queues, CSV/XLIFF, history, and general semantic
+line/slot editing also remain.
 
 ### Phase 2: unified browser, references, templates, and history
 
@@ -1807,7 +1866,15 @@ deployment, topic, runtime, game, or save authority.
    problem without opening Expert mode. Exact paths and `Add`/`Replace` remain
    inspectable only in the Advanced section of build details and are not user
    decisions.
-8. The sealed 35,000-entry/1-GiB voice fixture meets the indexing, lookup,
+8. The default Work list projects only absent authoring locales and intact
+   existing Voice slots. Tests cover every next-step precedence branch,
+   historical invalid selection, unreviewed alternatives after completion,
+   absence of a slot, unavailable Voice evidence, bounded/partial retention,
+   exact line/locale actions, same-revision head drift, root/project replacement,
+   late callbacks, global single-flight, keyboard/semantics, German copy, 200%
+   text scale, and compact/short layouts. “Production decisions complete” must
+   never render or behave as Ready/build/runtime authority.
+9. The sealed 35,000-entry/1-GiB voice fixture meets the indexing, lookup,
    preview-start, memory, progress, cancellation, and UI-thread budgets in §5.6.
    The test instruments bytes read and proves index/preview do not scan or copy
    every Ogg payload or import the source archive into the AssetStore.

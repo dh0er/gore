@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'revision3_content_index.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_production_queue.dart';
 
 /// Author-facing copy for [Revision3VoiceProductionCard].
 ///
@@ -40,7 +41,7 @@ final class Revision3VoiceProductionCardCopy {
     required this.nextSelectApprovedTake,
     required this.nextRepairSelection,
     required this.nextResolveTarget,
-    required this.nextReviewReadiness,
+    required this.nextProductionDecisionsComplete,
     required this.statusDraftLabel,
     required this.statusRecordedLabel,
     required this.statusReviewedLabel,
@@ -89,8 +90,8 @@ final class Revision3VoiceProductionCardCopy {
         'The selected recording is not Approved. Approve it or clear the selection in Manage takes.',
     nextResolveTarget:
         'Resolve the installed Voice target for this dialog line and language.',
-    nextReviewReadiness:
-        'Review exact Voice readiness in Validate & Test before building.',
+    nextProductionDecisionsComplete:
+        'Voice production decisions are complete. Validate & Test remains a separate project check.',
     statusDraftLabel: 'Draft',
     statusRecordedLabel: 'Recorded',
     statusReviewedLabel: 'Reviewed',
@@ -141,8 +142,8 @@ final class Revision3VoiceProductionCardCopy {
         'Die ausgewählte Aufnahme ist nicht freigegeben. Gib sie frei oder lösche die Auswahl unter „Aufnahmen verwalten“.',
     nextResolveTarget:
         'Löse das installierte Voice-Ziel für diese Dialogzeile und Sprache auf.',
-    nextReviewReadiness:
-        'Prüfe vor dem Build den genauen Voice-Status unter „Validieren & Testen“.',
+    nextProductionDecisionsComplete:
+        'Die Voice-Produktionsentscheidungen sind abgeschlossen. „Validieren & Testen“ bleibt eine separate Projektprüfung.',
     statusDraftLabel: 'Entwurf',
     statusRecordedLabel: 'Aufgenommen',
     statusReviewedLabel: 'Geprüft',
@@ -182,7 +183,7 @@ final class Revision3VoiceProductionCardCopy {
   final String nextSelectApprovedTake;
   final String nextRepairSelection;
   final String nextResolveTarget;
-  final String nextReviewReadiness;
+  final String nextProductionDecisionsComplete;
   final String statusDraftLabel;
   final String statusRecordedLabel;
   final String statusReviewedLabel;
@@ -427,18 +428,13 @@ class Revision3VoiceProductionCard extends StatelessWidget {
     Revision3VoiceExistingSlotSummary summary,
   ) {
     final theme = Theme.of(context);
-    final approvedCount = summary.candidates
-        .where((take) => take.isApproved)
-        .length;
+    final decision = revision3VoiceProductionDecisionFor(summary);
+    final approvedCount = decision.approvedCount;
     final selectedTake = summary.selectedTakeId == null
         ? null
         : summary.candidate(summary.selectedTakeId!);
     final targetLabel = _targetLabel(summary.targetResolution);
-    final nextStep = _nextStep(
-      summary: summary,
-      selectedTake: selectedTake,
-      approvedCount: approvedCount,
-    );
+    final nextStep = _nextStep(decision);
 
     return Column(
       key: const Key('revision3-voice-production-intact'),
@@ -546,24 +542,23 @@ class Revision3VoiceProductionCard extends StatelessWidget {
         Revision3ContentVoiceTakeStatus.approved => copy.statusApprovedLabel,
       };
 
-  String _nextStep({
-    required Revision3VoiceExistingSlotSummary summary,
-    required Revision3VoiceCandidateTake? selectedTake,
-    required int approvedCount,
-  }) {
-    if (summary.candidateCount == 0) return copy.nextNoTakes;
-    if (selectedTake == null) {
-      return approvedCount == 0
-          ? copy.nextApproveTake
-          : copy.nextSelectApprovedTake;
-    }
-    if (!selectedTake.isApproved) return copy.nextRepairSelection;
-    if (summary.targetResolution !=
-        Revision3ContentVoiceTargetResolution.resolved) {
-      return copy.nextResolveTarget;
-    }
-    return copy.nextReviewReadiness;
-  }
+  String _nextStep(
+    Revision3VoiceProductionDecision decision,
+  ) => switch (decision.nextStep) {
+    // This card only presents existing VoiceSlots. The language branch is
+    // unreachable, but remains exhaustive if the shared enum grows.
+    Revision3VoiceProductionNextStep.addLanguage => copy.nextSelectApprovedTake,
+    Revision3VoiceProductionNextStep.addRecording => copy.nextNoTakes,
+    Revision3VoiceProductionNextStep.reviewAndApprove => copy.nextApproveTake,
+    Revision3VoiceProductionNextStep.selectOrRepair =>
+      decision.selectionState ==
+              Revision3VoiceProductionSelectionState.selectedNotApproved
+          ? copy.nextRepairSelection
+          : copy.nextSelectApprovedTake,
+    Revision3VoiceProductionNextStep.resolveTarget => copy.nextResolveTarget,
+    Revision3VoiceProductionNextStep.productionDecisionsComplete =>
+      copy.nextProductionDecisionsComplete,
+  };
 }
 
 enum _VoiceProductionCardState {

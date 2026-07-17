@@ -8,6 +8,7 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_localization_voice_workspace.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_production_queue_view.dart';
 
 import '../support/revision3_voice_content_fixture.dart';
 
@@ -19,8 +20,189 @@ const _secondLocId = 'GORE_VIPER_GREETING';
 const _lineId = revision3VoiceContentLineId;
 const _secondLineId = revision3VoiceContentDuplicateLineId;
 const _copy = Revision3LocalizationVoiceWorkspaceCopy.english();
+const _queueCopy = Revision3VoiceProductionQueueCopy();
 
 void main() {
+  testWidgets(
+    'work list is primary and opens a missing language as a prefilled text draft',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de'],
+        authoringLocales: const <String>['de', 'en'],
+      );
+      final service = _serviceForIndex(
+        index,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: const <String, String>{'de': 'Bleib stehen!'},
+            ),
+      );
+
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        enableProductionQueue: true,
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-text-browser')),
+        findsNothing,
+      );
+      expect(find.text(_queueCopy.missingLanguageKindLabel), findsOneWidget);
+      expect(find.text(_queueCopy.addRecordingTitle), findsOneWidget);
+
+      final addLanguage = find.widgetWithText(
+        FilledButton,
+        _queueCopy.addLanguageActionLabel,
+      );
+      await tester.scrollUntilVisible(
+        addLanguage,
+        280,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('revision3-voice-production-queue')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(addLanguage);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-localization-text-editor')),
+        findsOneWidget,
+      );
+      final localeField = tester.widget<TextField>(
+        find.byKey(const Key('revision3-localization-new-locale-code')),
+      );
+      expect(localeField.controller!.text, 'en');
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-new-locale-text')),
+        'Stop right there!',
+      );
+      await tester.pump();
+      expect(_dialogAddButton(tester).onPressed, isNotNull);
+      await tester.tap(find.widgetWithText(FilledButton, _copy.addLabel));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-localization-new-locale-code')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-text-en')),
+        findsOneWidget,
+      );
+      expect(_textField(tester, 'en').controller!.text, 'Stop right there!');
+    },
+  );
+
+  testWidgets(
+    'work-list Voice action carries exact line and locale without editor navigation',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final calls = <String>[];
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        enableProductionQueue: true,
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+        onAddVoiceTakeFor:
+            ({required initialLineId, required initialLocale}) async {
+              calls.add('$initialLineId:$initialLocale');
+            },
+      );
+
+      final addRecording = find.widgetWithText(
+        FilledButton,
+        _queueCopy.addRecordingActionLabel,
+      );
+      await tester.ensureVisible(addRecording);
+      await tester.tap(addRecording);
+      await tester.pumpAndSettle();
+
+      expect(calls, <String>['$_lineId:de']);
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'old work-list action rejects a same-revision checkpoint replacement',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      var calls = 0;
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      Future<void> addVoice({
+        required String initialLineId,
+        required String initialLocale,
+      }) async {
+        calls++;
+      }
+
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        projectCheckpointIdentity: 'head-a',
+        enableProductionQueue: true,
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+        onAddVoiceTakeFor: addVoice,
+      );
+      final oldAction = tester
+          .widget<FilledButton>(
+            find.widgetWithText(
+              FilledButton,
+              _queueCopy.addRecordingActionLabel,
+            ),
+          )
+          .onPressed!;
+
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        projectCheckpointIdentity: 'head-b',
+        enableProductionQueue: true,
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+        onAddVoiceTakeFor: addVoice,
+      );
+      oldAction();
+      await tester.pumpAndSettle();
+
+      expect(calls, 0);
+    },
+  );
+
   testWidgets(
     'wide workspace loads exact full text, hides identities, and publishes edits',
     (tester) async {
@@ -3756,6 +3938,13 @@ void main() {
         service: service,
         controller: controller,
         projectCheckpointIdentity: 'head-7',
+        enableProductionQueue: true,
+        loadVoiceCatalog: () async =>
+            Revision3VoiceCatalog.fromContentIndex(index),
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
       );
 
       final opened = controller.openExactTarget(
@@ -3771,6 +3960,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(await opened, isTrue);
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsNothing,
+      );
       expect(_textField(tester, 'en').controller!.text, 'Welcome to the camp.');
       expect(
         tester
@@ -4157,8 +4350,12 @@ Future<void> _pumpWorkspace(
   Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor,
   Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor,
   Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor,
+  Revision3LocalizationVoiceContextAction? onReviewVoiceChecksFor,
   Revision3LocalizationVoiceCatalogLoader? loadVoiceCatalog,
   Revision3LocalizationVoiceWorkspaceController? controller,
+  bool enableProductionQueue = false,
+  Revision3VoiceProductionQueueCopy voiceProductionQueueCopy =
+      const Revision3VoiceProductionQueueCopy(),
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -4172,6 +4369,8 @@ Future<void> _pumpWorkspace(
           copy: _copy,
           controller: controller,
           loadVoiceCatalog: loadVoiceCatalog,
+          enableProductionQueue: enableProductionQueue,
+          voiceProductionQueueCopy: voiceProductionQueueCopy,
           onPublished: onPublished,
           onDirtyChanged: onDirtyChanged,
           onCreateDialogLine: onCreateDialogLine,
@@ -4181,6 +4380,7 @@ Future<void> _pumpWorkspace(
           onAddVoiceTakeFor: onAddVoiceTakeFor,
           onManageVoiceTakesFor: onManageVoiceTakesFor,
           onResolveVoiceTargetFor: onResolveVoiceTargetFor,
+          onReviewVoiceChecksFor: onReviewVoiceChecksFor,
         ),
       ),
     ),
@@ -4413,19 +4613,29 @@ Revision3ContentIndex _contentIndex({
   required String displayName,
   required List<String> locales,
   bool existingDeSlot = true,
+  int existingSlotCandidateCount = 0,
+  bool existingSlotHasSelectedTake = false,
+  String existingSlotTargetResolution = 'unresolved',
   bool duplicateLine = false,
   bool rejectPrimaryVoiceLine = false,
   String? secondDisplayName,
   String? duplicateLineDisplayName,
   String? duplicateLineSpeaker,
+  List<String>? authoringLocales,
 }) {
   var json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
     existingDeSlot: existingDeSlot,
+    existingSlotCandidateCount: existingSlotCandidateCount,
+    existingSlotHasSelectedTake: existingSlotHasSelectedTake,
+    existingSlotTargetResolution: existingSlotTargetResolution,
     duplicateLine: duplicateLine,
   );
   if (projectId != _projectId) {
     json = (_replaceProjectId(json, projectId)! as Map).cast<String, Object?>();
+  }
+  if (authoringLocales != null) {
+    json['authoring_locales'] = <Object?>[...authoringLocales];
   }
   final entities = (json['entities']! as List<Object?>)
       .map(

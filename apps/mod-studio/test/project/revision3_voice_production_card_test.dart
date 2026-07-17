@@ -143,7 +143,7 @@ void main() {
       expect(find.text('Approved'), findsWidgets);
       expect(
         find.text(
-          'Review exact Voice readiness in Validate & Test before building.',
+          'Voice production decisions are complete. Validate & Test remains a separate project check.',
         ),
         findsOneWidget,
       );
@@ -186,7 +186,7 @@ void main() {
     (
       'resolved',
       'Target: Resolved',
-      'Review exact Voice readiness in Validate & Test before building.',
+      'Voice production decisions are complete. Validate & Test remains a separate project check.',
     ),
   ]) {
     testWidgets('intact slot presents ${target.$1} target honestly', (

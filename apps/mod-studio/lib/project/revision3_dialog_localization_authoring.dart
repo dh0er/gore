@@ -151,6 +151,7 @@ final class Revision3DialogLocalizationEditCatalog {
   const Revision3DialogLocalizationEditCatalog._({
     required this.projectId,
     required this.projectRevision,
+    required this.authoringLocales,
     required this.choices,
     required this._checkpointFingerprint,
   });
@@ -158,6 +159,9 @@ final class Revision3DialogLocalizationEditCatalog {
   factory Revision3DialogLocalizationEditCatalog.fromContentIndex(
     Revision3ContentIndex index,
   ) {
+    final authoringLocales = index.authoringLocales.toSet().toList(
+      growable: false,
+    )..sort();
     final candidates = <_Revision3DialogLocalizationCandidate>[];
     for (final entity in index.entities) {
       if (entity.kind != Revision3ContentEntityKind.localizationEntry ||
@@ -234,6 +238,7 @@ final class Revision3DialogLocalizationEditCatalog {
             jsonEncode(<Object?>[
               index.projectId,
               index.projectRevision,
+              authoringLocales,
               for (final choice in choices)
                 <Object?>[
                   choice._localizationId,
@@ -250,6 +255,7 @@ final class Revision3DialogLocalizationEditCatalog {
     return Revision3DialogLocalizationEditCatalog._(
       projectId: index.projectId,
       projectRevision: index.projectRevision,
+      authoringLocales: List<String>.unmodifiable(authoringLocales),
       choices: List<Revision3DialogLocalizationChoice>.unmodifiable(choices),
       checkpointFingerprint: fingerprint,
     );
@@ -257,12 +263,24 @@ final class Revision3DialogLocalizationEditCatalog {
 
   final String projectId;
   final int projectRevision;
+  final List<String> authoringLocales;
   final List<Revision3DialogLocalizationChoice> choices;
   final String _checkpointFingerprint;
 
   Revision3DialogLocalizationChoice? choiceByStableKey(String stableKey) {
     for (final choice in choices) {
       if (choice.stableKey == stableKey) return choice;
+    }
+    return null;
+  }
+
+  /// Resolves hidden orchestration context without exposing the managed
+  /// localization identity to presentation code.
+  Revision3DialogLocalizationChoice? choiceForLocalizationId(
+    String localizationId,
+  ) {
+    for (final choice in choices) {
+      if (choice._localizationId == localizationId) return choice;
     }
     return null;
   }

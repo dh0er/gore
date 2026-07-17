@@ -4766,7 +4766,13 @@ void main() {
         find.byKey(const Key('revision3-voice-fixed-context')),
         findsOneWidget,
       );
-      expect(find.text('Asghan — Mine entrance warning'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-voice-wizard')),
+          matching: find.text('Asghan — Mine entrance warning'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Voice language: de'), findsOneWidget);
       expect(
         find.byKey(const Key('revision3-voice-line-search')),
@@ -5176,6 +5182,150 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Home opens Voice work list first and keeps missing-game recording visibly disabled',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-production-work-list'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            _voiceLocalizationWorkspaceIndex(revision: lease.projectRevision),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, locId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: locId,
+                  lineId: revision3VoiceContentLineId,
+                  lineDisplayName: 'Mine entrance question',
+                  speaker: 'Asghan',
+                  voiceSlotLocales: const <String>{'de'},
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+
+      expect(
+        find.byKey(const Key('revision3-localization-voice-mode')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-production-queue')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-text-browser')),
+        findsNothing,
+      );
+
+      const itemKey = 'voice:$revision3VoiceContentLineId:de';
+      final action = find.byKey(
+        const ValueKey('revision3-voice-production-queue-action-$itemKey'),
+      );
+      await _scrollManagedVoiceQueueUntilVisible(tester, action);
+      expect(tester.widget<FilledButton>(action).onPressed, isNull);
+      final l10n = AppLocalizations.of(tester.element(action));
+      final reason = l10n.managedDashboardMissingGameDescription;
+      final disabledReason = find.byKey(
+        const ValueKey('revision3-voice-production-queue-disabled-$itemKey'),
+      );
+      expect(disabledReason, findsOneWidget);
+      expect(tester.widget<Text>(disabledReason).data, reason);
+
+      await _switchManagedLocalizationVoiceToProjectTexts(tester);
+      expect(
+        find.byKey(const Key('revision3-localization-text-browser')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-text-editor')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-localization-voice-work-list')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('complete Voice work-list item opens Validate and Test checks', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-production-review-checks'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+        revision: lease.projectRevision,
+        existingSlotCandidateCount: 1,
+        existingSlotHasSelectedTake: true,
+        existingSlotTargetResolution: 'resolved',
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+
+    const itemKey = 'voice:$revision3VoiceContentLineId:de';
+    final action = find.byKey(
+      const ValueKey('revision3-voice-production-queue-action-$itemKey'),
+    );
+    await _scrollManagedVoiceQueueUntilVisible(tester, action);
+    expect(tester.widget<FilledButton>(action).onPressed, isNotNull);
+    expect(
+      find.descendant(of: action, matching: find.text('Review checks')),
+      findsOneWidget,
+    );
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-workspace-page-validate-test')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-problems-view')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-localization-voice-work-list')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('exact DialogLine enables Voice actions in their workspace', (
     tester,
   ) async {
@@ -5222,6 +5372,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await _tapManagedHomeTask(tester, const Key('managed-home-dialog-voice'));
+    await _switchManagedLocalizationVoiceToProjectTexts(tester);
 
     _expectLocalizationVoiceAction(
       tester,
@@ -7816,9 +7967,43 @@ Future<void> _navigateManagedLocalizationVoice(
   await tester.tap(destination);
   if (settle) {
     await tester.pumpAndSettle();
+    await _switchManagedLocalizationVoiceToProjectTexts(tester);
   } else {
     await tester.pump();
   }
+}
+
+Future<void> _switchManagedLocalizationVoiceToProjectTexts(
+  WidgetTester tester,
+) async {
+  final mode = find.byKey(const Key('revision3-localization-voice-mode'));
+  if (mode.evaluate().isEmpty) return;
+  final workspace = tester.widget<Revision3LocalizationVoiceWorkspace>(
+    find.byType(Revision3LocalizationVoiceWorkspace),
+  );
+  final projectTexts = find.descendant(
+    of: mode,
+    matching: find.text(workspace.copy.projectTextsLabel),
+  );
+  expect(projectTexts, findsOneWidget);
+  await tester.ensureVisible(projectTexts);
+  await tester.tap(projectTexts);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _scrollManagedVoiceQueueUntilVisible(
+  WidgetTester tester,
+  Finder target,
+) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const Key('revision3-voice-production-queue')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  await tester.scrollUntilVisible(target, 300, scrollable: scrollable);
+  await tester.pump();
+  expect(target.hitTestable(), findsOneWidget);
 }
 
 Future<void> _scrollManagedEditorUntilVisible(
@@ -9465,8 +9650,16 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
 Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
   required int revision,
   int localizationRevision = 0,
+  int existingSlotCandidateCount = 0,
+  bool existingSlotHasSelectedTake = false,
+  String existingSlotTargetResolution = 'unresolved',
 }) {
-  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingSlotCandidateCount: existingSlotCandidateCount,
+    existingSlotHasSelectedTake: existingSlotHasSelectedTake,
+    existingSlotTargetResolution: existingSlotTargetResolution,
+  );
   final entities = (json['entities']! as List<Object?>)
       .cast<Map<String, Object?>>();
   final localization = entities.singleWhere(

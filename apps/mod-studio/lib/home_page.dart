@@ -83,6 +83,7 @@ import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_production_card.dart';
+import 'project/revision3_voice_production_queue_view.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_build_readiness_panel.dart';
 import 'project/revision3_voice_folder_authoring.dart';
@@ -3520,6 +3521,7 @@ class _ManagedRevision3ProjectViewState
           projectId: project.projectId,
           projectRevision: project.projectRevision,
           projectCheckpointIdentity: project.head.canonicalJson,
+          enableProductionQueue: true,
           controller: _localizationVoiceWorkspaceController,
           service: Revision3DialogLocalizationEditAuthoringService(
             loadContentIndex: availability.loadContentIndex,
@@ -3532,6 +3534,9 @@ class _ManagedRevision3ProjectViewState
           voiceProductionCopy: l10n.localeName.startsWith('de')
               ? Revision3VoiceProductionCardCopy.german
               : Revision3VoiceProductionCardCopy.english,
+          voiceProductionQueueCopy: l10n.localeName.startsWith('de')
+              ? Revision3VoiceProductionQueueCopy.german
+              : const Revision3VoiceProductionQueueCopy(),
           copy: _localizationVoiceWorkspaceCopy(l10n),
           onDirtyChanged: widget.onDialogLocalizationDirtyChanged,
           notice: !gameConfigured
@@ -3588,6 +3593,28 @@ class _ManagedRevision3ProjectViewState
                       initialLocale: initialLocale,
                       fixedContext: true,
                     )
+              : null,
+          onReviewVoiceChecksFor: !project.requiresReopen
+              ? ({required initialLineId, required initialLocale}) =>
+                    Revision3ProjectWorkspace.navigate(
+                      context,
+                      const Revision3ProjectWorkspaceLocation(
+                        Revision3ProjectWorkspaceSection.validateTest,
+                      ),
+                    )
+              : null,
+          addVoiceDisabledReason: !gameConfigured
+              ? l10n.managedDashboardMissingGameDescription
+              : !intactVoiceLine
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
+              : null,
+          manageVoiceDisabledReason: !intactVoiceLine
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
+              : null,
+          resolveVoiceDisabledReason: !gameConfigured
+              ? l10n.managedDashboardMissingGameDescription
+              : !intactVoiceLine
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
               : null,
         );
       },
