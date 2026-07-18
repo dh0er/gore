@@ -559,7 +559,7 @@ void main() {
   );
 
   test(
-    'journal path traversal is rejected before touching any named file',
+    'unsupported format journal is rejected before touching any named file',
     () async {
       final victim = File(
         '${directory.parent.path}${Platform.pathSeparator}victim.bin',
@@ -597,7 +597,7 @@ void main() {
   );
 
   test(
-    'legacy journal preserves two different valid generations as ambiguous',
+    'format-1 journal is rejected without touching any generation',
     () async {
       await target.writeAsBytes(_oldBytes, flush: true);
       const operationId = '61000000000000000000000000000001';
@@ -606,7 +606,7 @@ void main() {
       await temp.writeAsBytes(_newBytes, flush: true);
       await journal.writeAsString(
         jsonEncode({
-          'format': AtomicByteReplacement.legacyJournalFormat,
+          'format': 1,
           'operation_id': operationId,
           'target_name': 'project.bin',
           'temp_name': 'project.bin.gore-swap-$operationId.tmp',
@@ -627,17 +627,18 @@ void main() {
       expect(await temp.readAsBytes(), _newBytes);
       expect(await journal.exists(), isTrue);
 
-      // A legacy journal has no byte binding. Once only one valid generation
-      // remains, conservative backward recovery can retain it.
+      // Removing one candidate does not turn an unsupported format into a
+      // recoverable one. Studio has one journal format and no migration path.
       await temp.delete();
-      expect(
-        await AtomicByteReplacement().repair(
+      await expectLater(
+        AtomicByteReplacement().repair(
           target: target,
           validate: _validGeneration,
         ),
-        AtomicRepairOutcome.keptTarget,
+        throwsA(isA<AtomicSwapRecoveryException>()),
       );
-      expect(await journal.exists(), isFalse);
+      expect(await target.readAsBytes(), _oldBytes);
+      expect(await journal.exists(), isTrue);
     },
   );
 
