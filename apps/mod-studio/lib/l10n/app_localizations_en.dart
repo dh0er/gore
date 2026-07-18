@@ -1641,6 +1641,20 @@ class AppLocalizationsEn extends AppLocalizations {
   String get managedContentWorkspaceVerifiedEditsLabel => 'Verified edits';
 
   @override
+  String get managedItemsBundledReferenceBadge => 'Bundled reference';
+
+  @override
+  String get managedItemsBundledReferenceBoundary =>
+      'Read-only reference shipped with Mod Studio. It has not been refreshed or generation-qualified against your configured game installation.';
+
+  @override
+  String get managedItemsNoKnownFields =>
+      'No modeled scalar fields are available for this item.';
+
+  @override
+  String get managedItemsCategorySpecial => 'Special';
+
+  @override
   String get managedContentScopeBaseGameLabel => 'Base game';
 
   @override

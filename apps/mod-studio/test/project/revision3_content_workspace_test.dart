@@ -4,7 +4,7 @@ import 'package:gore_mod/project/revision3_content_workspace.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
 
 void main() {
-  testWidgets('keeps DataAssets lazy and deep-links through parent location', (
+  testWidgets('keeps secondary tools lazy and retains them for one project', (
     tester,
   ) async {
     await tester.pumpWidget(const _Harness());
@@ -13,12 +13,21 @@ void main() {
     await tester.pump();
 
     expect(find.text('LIBRARY BODY'), findsOneWidget);
+    expect(find.text('ITEMS BODY'), findsNothing);
+    expect(find.text('DATAASSET BODY'), findsNothing);
+
+    await tester.tap(find.text('Items'));
+    await tester.pump();
+
+    expect(find.text('LIBRARY BODY'), findsNothing);
+    expect(find.text('ITEMS BODY'), findsOneWidget);
     expect(find.text('DATAASSET BODY'), findsNothing);
 
     await tester.tap(find.text('Verified edits'));
     await tester.pump();
 
     expect(find.text('LIBRARY BODY'), findsNothing);
+    expect(find.text('ITEMS BODY'), findsNothing);
     expect(find.text('DATAASSET BODY'), findsOneWidget);
     expect(
       find.byKey(
@@ -32,6 +41,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('LIBRARY BODY'), findsOneWidget);
+    expect(find.text('ITEMS BODY', skipOffstage: false), findsOneWidget);
     expect(find.text('DATAASSET BODY', skipOffstage: false), findsOneWidget);
   });
 
@@ -46,6 +56,20 @@ void main() {
     expect(find.text('DATAASSET BODY'), findsOneWidget);
     expect(find.text('LIBRARY BODY'), findsNothing);
     expect(find.text('LIBRARY BODY', skipOffstage: false), findsNothing);
+    expect(find.text('ITEMS BODY', skipOffstage: false), findsNothing);
+  });
+
+  testWidgets('accepts an explicit Items route before first build', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const _Harness(initialSecondary: 'items'));
+
+    await tester.tap(find.text('OPEN CONTENT'));
+    await tester.pump();
+
+    expect(find.text('ITEMS BODY'), findsOneWidget);
+    expect(find.text('LIBRARY BODY', skipOffstage: false), findsNothing);
+    expect(find.text('DATAASSET BODY', skipOffstage: false), findsNothing);
   });
 
   testWidgets('horizontal secondary navigation survives narrow width', (
@@ -66,6 +90,25 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'retains state for the same project and resets on identity change',
+    (tester) async {
+      await tester.pumpWidget(const _IdentityHarness());
+
+      await tester.tap(find.byKey(const Key('ITEM COUNTER')));
+      await tester.pump();
+      expect(find.text('ITEM COUNT 1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('REBUILD SAME')));
+      await tester.pump();
+      expect(find.text('ITEM COUNT 1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('CHANGE PROJECT')));
+      await tester.pump();
+      expect(find.text('ITEM COUNT 0'), findsOneWidget);
+    },
+  );
 }
 
 class _Harness extends StatelessWidget {
@@ -103,10 +146,13 @@ class _Harness extends StatelessWidget {
             icon: Icons.account_tree_outlined,
             selectedIcon: Icons.account_tree,
             pageBuilder: (context, location) => Revision3ContentWorkspace(
+              projectIdentity: 'project',
               location: location,
               libraryLabel: 'My mod',
+              itemsLabel: 'Items',
               dataAssetsLabel: 'Verified edits',
               library: const Text('LIBRARY BODY'),
+              items: const Text('ITEMS BODY'),
               dataAssets: const Text('DATAASSET BODY'),
             ),
           ),
@@ -162,5 +208,67 @@ class _Harness extends StatelessWidget {
         ],
       ),
     ),
+  );
+}
+
+class _IdentityHarness extends StatefulWidget {
+  const _IdentityHarness();
+
+  @override
+  State<_IdentityHarness> createState() => _IdentityHarnessState();
+}
+
+class _IdentityHarnessState extends State<_IdentityHarness> {
+  String _identity = 'project-a';
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    home: Scaffold(
+      appBar: AppBar(
+        actions: [
+          TextButton(
+            key: const Key('REBUILD SAME'),
+            onPressed: () => setState(() {}),
+            child: const Text('REBUILD'),
+          ),
+          TextButton(
+            key: const Key('CHANGE PROJECT'),
+            onPressed: () => setState(() => _identity = 'project-b'),
+            child: const Text('CHANGE'),
+          ),
+        ],
+      ),
+      body: Revision3ContentWorkspace(
+        projectIdentity: _identity,
+        location: const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.content,
+          secondary: 'items',
+        ),
+        libraryLabel: 'My mod',
+        itemsLabel: 'Items',
+        dataAssetsLabel: 'Verified edits',
+        library: const Text('LIBRARY BODY'),
+        items: const _CounterBody(),
+        dataAssets: const Text('DATAASSET BODY'),
+      ),
+    ),
+  );
+}
+
+class _CounterBody extends StatefulWidget {
+  const _CounterBody();
+
+  @override
+  State<_CounterBody> createState() => _CounterBodyState();
+}
+
+class _CounterBodyState extends State<_CounterBody> {
+  int _count = 0;
+
+  @override
+  Widget build(BuildContext context) => TextButton(
+    key: const Key('ITEM COUNTER'),
+    onPressed: () => setState(() => _count++),
+    child: Text('ITEM COUNT $_count'),
   );
 }

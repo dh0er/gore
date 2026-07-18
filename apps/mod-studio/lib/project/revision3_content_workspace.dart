@@ -5,10 +5,12 @@ import 'revision3_project_workspace.dart';
 /// Stable views hosted below the canonical managed-project Content section.
 enum Revision3ContentWorkspaceView {
   library,
+  items,
   dataAssets;
 
   String? get secondaryRoute => switch (this) {
     Revision3ContentWorkspaceView.library => null,
+    Revision3ContentWorkspaceView.items => 'items',
     Revision3ContentWorkspaceView.dataAssets => 'data-assets',
   };
 }
@@ -22,10 +24,13 @@ enum Revision3ContentWorkspaceView {
 /// also start DataAsset discovery.
 class Revision3ContentWorkspace extends StatefulWidget {
   Revision3ContentWorkspace({
+    required this.projectIdentity,
     required this.location,
     required this.libraryLabel,
+    required this.itemsLabel,
     required this.dataAssetsLabel,
     required this.library,
+    required this.items,
     required this.dataAssets,
     super.key,
   }) : assert(
@@ -33,10 +38,17 @@ class Revision3ContentWorkspace extends StatefulWidget {
          'Revision3ContentWorkspace requires the Content section location.',
        );
 
+  /// Stable project identity without the changing project revision.
+  ///
+  /// Lazily mounted pages retain their UI state while this stays equal and
+  /// restart when another project is adopted in the same workspace state.
+  final Object projectIdentity;
   final Revision3ProjectWorkspaceLocation location;
   final String libraryLabel;
+  final String itemsLabel;
   final String dataAssetsLabel;
   final Widget library;
+  final Widget items;
   final Widget dataAssets;
 
   @override
@@ -48,10 +60,11 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
   final Set<Revision3ContentWorkspaceView> _mounted = {};
 
   Revision3ContentWorkspaceView get _selected =>
-      widget.location.secondary ==
-          Revision3ContentWorkspaceView.dataAssets.secondaryRoute
-      ? Revision3ContentWorkspaceView.dataAssets
-      : Revision3ContentWorkspaceView.library;
+      switch (widget.location.secondary) {
+        'items' => Revision3ContentWorkspaceView.items,
+        'data-assets' => Revision3ContentWorkspaceView.dataAssets,
+        _ => Revision3ContentWorkspaceView.library,
+      };
 
   @override
   void initState() {
@@ -62,6 +75,9 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
   @override
   void didUpdateWidget(covariant Revision3ContentWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.projectIdentity != widget.projectIdentity) {
+      _mounted.clear();
+    }
     _mounted.add(_selected);
   }
 
@@ -99,6 +115,14 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
                 ),
               ),
               ButtonSegment(
+                value: Revision3ContentWorkspaceView.items,
+                icon: const Icon(Icons.inventory_2_outlined),
+                label: Text(
+                  widget.itemsLabel,
+                  key: const Key('revision3-content-workspace-nav-items'),
+                ),
+              ),
+              ButtonSegment(
                 value: Revision3ContentWorkspaceView.dataAssets,
                 icon: const Icon(Icons.data_object_outlined),
                 label: Text(
@@ -122,7 +146,19 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
             _mounted.contains(Revision3ContentWorkspaceView.library)
                 ? KeyedSubtree(
                     key: const Key('revision3-content-workspace-page-library'),
-                    child: widget.library,
+                    child: KeyedSubtree(
+                      key: ValueKey((widget.projectIdentity, 'library')),
+                      child: widget.library,
+                    ),
+                  )
+                : const SizedBox.shrink(),
+            _mounted.contains(Revision3ContentWorkspaceView.items)
+                ? KeyedSubtree(
+                    key: const Key('revision3-content-workspace-page-items'),
+                    child: KeyedSubtree(
+                      key: ValueKey((widget.projectIdentity, 'items')),
+                      child: widget.items,
+                    ),
                   )
                 : const SizedBox.shrink(),
             _mounted.contains(Revision3ContentWorkspaceView.dataAssets)
@@ -130,7 +166,10 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
                     key: const Key(
                       'revision3-content-workspace-page-data-assets',
                     ),
-                    child: widget.dataAssets,
+                    child: KeyedSubtree(
+                      key: ValueKey((widget.projectIdentity, 'data-assets')),
+                      child: widget.dataAssets,
+                    ),
                   )
                 : const SizedBox.shrink(),
           ],

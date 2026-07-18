@@ -2846,6 +2846,30 @@ abstract class AppLocalizations {
   /// **'Verified edits'**
   String get managedContentWorkspaceVerifiedEditsLabel;
 
+  /// No description provided for @managedItemsBundledReferenceBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundled reference'**
+  String get managedItemsBundledReferenceBadge;
+
+  /// No description provided for @managedItemsBundledReferenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only reference shipped with Mod Studio. It has not been refreshed or generation-qualified against your configured game installation.'**
+  String get managedItemsBundledReferenceBoundary;
+
+  /// No description provided for @managedItemsNoKnownFields.
+  ///
+  /// In en, this message translates to:
+  /// **'No modeled scalar fields are available for this item.'**
+  String get managedItemsNoKnownFields;
+
+  /// No description provided for @managedItemsCategorySpecial.
+  ///
+  /// In en, this message translates to:
+  /// **'Special'**
+  String get managedItemsCategorySpecial;
+
   /// No description provided for @managedContentScopeBaseGameLabel.
   ///
   /// In en, this message translates to:

@@ -89,6 +89,7 @@ import 'project/revision3_project_workspace.dart';
 import 'project/revision3_scoped_content_browser.dart';
 import 'project/revision3_settings_expert_page.dart';
 import 'project/revision3_installed_content_browser.dart';
+import 'project/revision3_items_view.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_production_card.dart';
@@ -3593,8 +3594,10 @@ class _ManagedRevision3ProjectViewState
     Revision3ProjectWorkspaceLocation location,
     AppLocalizations l10n,
   ) => Revision3ContentWorkspace(
+    projectIdentity: (project.root.path, project.projectId),
     location: location,
     libraryLabel: l10n.managedContentWorkspaceBrowseLabel,
+    itemsLabel: l10n.tabItems,
     dataAssetsLabel: l10n.managedContentWorkspaceVerifiedEditsLabel,
     library: _ManagedRevision3GlobalContentHost(
       contentLibraryController: _contentLibraryController,
@@ -3855,6 +3858,7 @@ class _ManagedRevision3ProjectViewState
             ),
           ),
     ),
+    items: const Revision3ItemsView(),
     dataAssets: Revision3DataAssetStagePanel(
       controller: _dataAssetStagePanelController,
       projectRoot: project.root.path,

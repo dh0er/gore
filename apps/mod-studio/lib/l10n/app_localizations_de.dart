@@ -1670,6 +1670,20 @@ class AppLocalizationsDe extends AppLocalizations {
       'Verifizierte Änderungen';
 
   @override
+  String get managedItemsBundledReferenceBadge => 'Mitgelieferte Referenz';
+
+  @override
+  String get managedItemsBundledReferenceBoundary =>
+      'Schreibgeschützte, mit Mod Studio ausgelieferte Referenz. Sie wurde nicht frisch mit deiner konfigurierten Spielinstallation abgeglichen und ist nicht für deren Generation qualifiziert.';
+
+  @override
+  String get managedItemsNoKnownFields =>
+      'Für diesen Gegenstand sind keine modellierten Skalarfelder verfügbar.';
+
+  @override
+  String get managedItemsCategorySpecial => 'Spezial';
+
+  @override
   String get managedContentScopeBaseGameLabel => 'Basisspiel';
 
   @override

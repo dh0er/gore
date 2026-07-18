@@ -1613,6 +1613,20 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedContentWorkspaceVerifiedEditsLabel => '已验证编辑';
 
   @override
+  String get managedItemsBundledReferenceBadge => 'Bundled reference';
+
+  @override
+  String get managedItemsBundledReferenceBoundary =>
+      'Read-only reference shipped with Mod Studio. It has not been refreshed or generation-qualified against your configured game installation.';
+
+  @override
+  String get managedItemsNoKnownFields =>
+      'No modeled scalar fields are available for this item.';
+
+  @override
+  String get managedItemsCategorySpecial => 'Special';
+
+  @override
   String get managedContentScopeBaseGameLabel => '基础游戏';
 
   @override
