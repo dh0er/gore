@@ -153,9 +153,6 @@ class _Revision3ProjectImportDialogState
           _messageIsError = false;
         case Revision3ProjectImportPlanningOutcome.cancelled:
           _message = null;
-        case Revision3ProjectImportPlanningOutcome.unsupportedFormat:
-          _message = l10n.projectRestoreUnsupportedReviewCopy;
-          _messageIsError = true;
         case Revision3ProjectImportPlanningOutcome.invalidSource:
           _message = l10n.projectRestoreInvalidSource;
           _messageIsError = true;

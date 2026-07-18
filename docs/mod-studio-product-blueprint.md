@@ -466,7 +466,8 @@ deployment, playback, runtime, topic, or playable-dialog authority is granted.
 advertised operation is semantic, reversible, deterministic, inspectable, and
 qualified for the selected game version. Unknown game-source/property
 structures remain visible and preserved but read-only; unknown required project
-schema content follows the strict block-or-migrate contract in Section 5.
+schema content is blocked. Before first release, superseded internal project
+schemas are removed instead of migrated.
 
 ### 3.1 Planned optional Unreal Editor hybrid
 
@@ -495,27 +496,19 @@ Draft-only and build-blocked. The handoff is contextual in DataAsset, visual,
 and World workflows or Expert mode; it is not a new permanent top-level tab and
 is not required for ordinary supported Studio operations.
 
-### 3.2 Remaining legacy-session limits
+### 3.2 Single managed-project cleanup
 
-The current format-1 Flutter session must not be treated as the durable
-foundation for new authoring domains. Strict archive validation, atomic
-publication, current-path and workspace ownership, a serialized Open/Save/New
-lane, exact saved snapshots, metadata-aware dirty state, true **Save** versus
-**Save As**, and `Ctrl+S` make it a substantially safer compatibility/import
-bridge.
-
-The separate schema-revision-2 Story workspace already proves an exclusive
-lock, serialized derive/save, exact-head CAS publication, repair journal, and
-full reopen through the working store. A dedicated revision-3 session API
-reuses the same safety core for durable identity, exact-head reads, and bounded
-Quest/NPC/Voice/DataAsset mutations without inventing build or runtime
-authority.
+Managed revision 3 is the sole durable project/session foundation. The old
+format-1 Flutter session and separate schema-revision-2 Story workspace are
+unreleased implementation leftovers, not compatibility bridges. Their useful
+compact widgets must be retained or rebuilt over R3, while their storage,
+session, parser, and migration paths are deleted.
 The typed current-project coordinator is now adopted by Home, the Project menu,
 and `Ctrl+S`: a friendly form plus empty-directory picker can create a canonical
 generation-bound R3 project, and existing R3 directories can become the visible
 current project. Normal Legacy startup now shows a localized managed-project
 entry banner with direct Create/Open actions, labels the unchanged tabs as
-Legacy compatibility tools, and reuses the existing guarded transition/adoption
+classic tools, and reuses the existing guarded transition/adoption
 flows; the canonical nine-destination shell appears after managed adoption.
 Managed Studio Shell v1 exposes the canonical localized,
 responsive Home, Content, Story, World, Localization & Voice, Validate & Test,
@@ -537,8 +530,8 @@ uses the same absent-head publication, full reopen, recovery, and single-owner
 adoption rules rather than introducing another project format.
 Dirty transitions, failed candidate preservation, `requiresReopen`, and terminal
 cleanup diagnostics are handled outside the workspace at the shell boundary.
-Legacy editors, Build/Deploy, Save As, and Story actions cannot act on hidden
-compatibility state while R3 is current. Bounded Quest/NPC Draft, Voice import/
+Classic editors, Build/Deploy, Save As, and Story actions cannot act on obsolete
+hidden state while R3 is current. Bounded Quest/NPC Draft, Voice import/
 selection/target, exact-head/reference verification, the Voice-only offline
 build, Settings, verified DataAsset actions, and the bounded `Search all` view
 now share that R3 owner. World, runtime test, full managed build/deploy, and
@@ -549,22 +542,20 @@ deployment, general managed build, or runtime qualification.
 
 The remaining managed-authoring limits are:
 
-- the bounded format-1 encoder/reader is intentionally in-memory and capped; it
-  is not the streaming, sharded, content-addressed storage needed by large mods;
+- classic tab widgets still need current managed-R3 adapters before the old
+  provider/session backend can disappear without losing their practical UX;
 - provider replacement is still not one rollback-capable all-domain
   transaction, even though all represented keyed deployment targets now receive
   one duplicate-validation pass before mutation or publication;
-- format-1 embedded source paths are extraction derivatives rather than
-  immutable AssetStore refs, so they remain unsuitable as durable entity state;
 - autosave recovery, named checkpoints, semantic history diffs, revision
-  migration orchestration, and general managed AssetStore blob-ownership tools
-  are not implemented. The direct History timeline instead retains a sealed,
+  evolution, and general managed AssetStore blob-ownership tools are not
+  implemented. The direct History timeline instead retains a sealed,
   newest-first window of at most 256 exact project checkpoints and restores an
   older member append-only as a fresh revision; it is not an unlimited archive.
 
 These are release blockers for the managed authoring substrate, not reasons to
-hide user data or add another domain-specific save mechanism. New Voice, NPC,
-or Quest UX must not deepen this legacy state model.
+add another domain-specific save mechanism. New Voice, NPC, or Quest UX must
+not deepen the obsolete parallel state model.
 
 ## 4. The ideal information architecture
 
@@ -652,7 +643,7 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Managed working project** | The live editable source of truth | A Studio-owned directory with canonical V2 shards, immutable AssetStore blobs, session/current-path ownership, a serialized operation lane, and one transaction history |
 | **Autosave/recovery** | Recover unsaved work after a crash | A bounded journal/recovery snapshot tied to the exact base revision; it is automatic and is not a portable project export or release |
 | **Save / checkpoint** | Durably acknowledge the current revision | Target contract: `Ctrl+S` flushes current transaction state and creates/advances a recoverable checkpoint; **Save As** creates a separately validated identity/path. Current R3 shell: semantic transactions publish independently, `Ctrl+S` only fully verifies the exact head, and managed Save As stays disabled until native clone/fork exists. |
-| **Backup / Restore** | Portable restorable project checkpoint | The current Studio workflow emits V2: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **restorable project backup**, while explicitly denying playable-mod, build, deployment, and runtime authority. On Windows the visible Restore flow verifies the complete V2 archive, asks for an existing parent plus one new absent folder, materializes through exact archive CAS and atomic no-clobber publication, and adopts only a fully opened candidate whose destination, identity, revision, and head match the native receipt. Unix inspection/import fails closed. V1 is an unreleased superseded review-copy experiment, not a compatibility contract, and is never accepted as V2. Publication uncertainty carries no receipt, opens nothing, and is never retried automatically. The importer never edits ZIP members in place. Clone/Save As and deliberate uncertainty/staging recovery remain separate. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2](managed-project-import.md). |
+| **Backup / Restore** | Portable restorable project checkpoint | The current Studio workflow emits V2: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **restorable project backup**, while explicitly denying playable-mod, build, deployment, and runtime authority. On Windows the visible Restore flow verifies the complete V2 archive, asks for an existing parent plus one new absent folder, materializes through exact archive CAS and atomic no-clobber publication, and adopts only a fully opened candidate whose destination, identity, revision, and head match the native receipt. Unix inspection/import fails closed. V2 is the sole backup/restore format; no older snapshot reader or migration path exists. Publication uncertainty carries no receipt, opens nothing, and is never retried automatically. The importer never edits ZIP members in place. Clone/Save As and deliberate uncertainty/staging recovery remain separate. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2](managed-project-import.md). |
 | **Build** | Produce an inspectable mod artifact | Derived from an immutable project revision and named build root/profile; it does not deploy and cannot become editable source state |
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |
@@ -680,25 +671,20 @@ deploy/undeploy, an isolated test profile, audible runtime qualification, and a
 separately proven new-member path. The landed queue and offline foundation must
 not be presented as that complete workflow.
 
-V2 is a closed, versioned contract. Unknown required project formats, schema
-revisions, entity kinds, payload variants, or fields are never ignored or
-silently round-tripped through a partial model. If a reviewed migration exists,
-Studio imports into a new managed project, reports every transformation, saves,
-reopens, and leaves the source untouched. Otherwise it blocks editing and build
-with a version explanation and offers only operations that preserve the bytes.
-Optional forward data is allowed only inside an explicitly versioned extension
-envelope with declared preservation semantics; there is no generic catch-all
-map. Closed revision-1/2/3 parsers, revision-2-to-3 migration, working-store
-persistence, dedicated revision-3 read/prepare FFI/Studio DTOs, and a managed R3
-session with exclusive locking, serialized saves, verified fixed-head CAS
-publication, repair, and full reopen exist. The typed Legacy/R3 current-project
-coordinator is now app-shell adopted for existing-R3 Open, identity display, and
-exact-head Save verification, with stale Legacy actions blocked. Bounded
-Quest/NPC Draft, Voice import/selection/target, and DataAsset-stage editing now
-use the managed session. General semantic editing, migration orchestration into
-that session, clone/Save As, autosave/full history, and all-domain transactions
-remain integration work; the visible schema-revision-2 Story flow keeps its narrower
-scope.
+Managed R3 is the sole closed current-project contract. Unknown required entity
+kinds, payload variants, or fields are never ignored or silently round-tripped
+through a partial model. Before first release, a deliberate schema change lands
+atomically across model, parser, writer, tests, and UI; obsolete readers and
+parallel project states are deleted rather than preserved by migration. Optional
+forward data is allowed only inside an explicitly versioned extension envelope
+with declared preservation semantics; there is no generic catch-all map. The
+managed R3 session already provides exclusive locking, serialized saves,
+verified fixed-head CAS publication, repair, and full reopen. Its typed
+current-project coordinator owns existing-R3 Open, identity display, exact-head
+Save verification, and bounded Quest/NPC Draft, Voice, and DataAsset mutations.
+General semantic editing, classic-tab R3 adapters, clone/Save As, autosave/full
+history, and all-domain transactions remain integration work; the old
+format-1/schema-R2 paths are deletion work, not supported workflows.
 
 ## 6. Progressive disclosure without a toy mode
 
@@ -1171,13 +1157,13 @@ safe test, and return the machine to the recorded clean state.
   runtime registration from a similar display name.
 - Do not let Draft-only content disappear silently from a build.
 - Do not let a scoped build root masquerade as a closed-world release.
-- Do not ignore unknown required V2 fields or variants; migrate explicitly or
-  block editing/build while preserving the source.
+- Do not ignore unknown required current-project fields or variants; before
+  release, update the sole schema deliberately and remove obsolete readers.
 - Do not conflate the managed project, recovery journal, portable export,
   build artifact, deployment, or release.
-- Do not mistake a bounded format-1 compatibility bridge for the final
-  authoring state. New domain work must have a deterministic migration into the
-  managed substrate and must not invent another private save mechanism.
+- Do not retain the bounded format-1 backend as a compatibility bridge. Rebind
+  useful classic UI to managed R3 and do not invent another private save
+  mechanism.
 - Do not deploy as a side effect of Build or test against the normal save/loadout
   by default.
 - Do not make Git, a terminal, a cloud account, or an AI service prerequisites

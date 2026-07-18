@@ -170,13 +170,6 @@ void main() {
           visible: null,
           nativeCalls: 0,
         ),
-        'V1 review copy': (
-          picker: () async => _source,
-          inspector: (_) async =>
-              throw const Revision3ProjectImportUnsupportedFormatException(),
-          visible: 'older review-only project copy',
-          nativeCalls: 1,
-        ),
         'invalid source': (
           picker: () async => 'bad\u{0000}source.goremod',
           inspector: (_) async => throw StateError('must not inspect'),

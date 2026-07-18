@@ -1241,7 +1241,7 @@ void main() {
   );
 
   test(
-    'exact snapshot export is optional and unsupported stores stay narrow',
+    'V2 project backup export is optional and unsupported stores stay narrow',
     () async {
       final root = await _projectRoot(fixture, suffix: 'export_unsupported');
       final store = _FakeRevision3Store();
@@ -1252,14 +1252,7 @@ void main() {
       );
       final fixedHead = await session.headFile.readAsBytes();
 
-      expect(session.supportsExactSnapshotExport, isFalse);
       expect(session.supportsRestorableSnapshotExport, isFalse);
-      await expectLater(
-        session.exportExactSnapshotV1(
-          output: p.join(fixture.path, 'unsupported.goremod'),
-        ),
-        throwsUnsupportedError,
-      );
       await expectLater(
         session.exportExactSnapshotV2(
           output: p.join(fixture.path, 'unsupported-v2.goremod'),
@@ -1284,7 +1277,8 @@ void main() {
           fixture,
           suffix: 'export_${outcome.replaceAll('_', '-')}',
         );
-        final store = _FakeRevision3ExportStore()..nextOutcome = outcome;
+        final store = _FakeRevision3RestorableExportStore()
+          ..nextOutcome = outcome;
         final session = await ManagedRevision3AuthoringProjectSession.create(
           root: root,
           store: store,
@@ -1293,8 +1287,8 @@ void main() {
         final fixedHead = await session.headFile.readAsBytes();
         final output = p.join(fixture.path, '$outcome.goremod');
 
-        expect(session.supportsExactSnapshotExport, isTrue);
-        final result = await session.exportExactSnapshotV1(output: output);
+        expect(session.supportsRestorableSnapshotExport, isTrue);
+        final result = await session.exportExactSnapshotV2(output: output);
 
         expect(result.basisHead.canonicalJson, session.head.canonicalJson);
         expect(result.projectId, session.projectId);
@@ -1321,7 +1315,7 @@ void main() {
         fixture,
         suffix: 'export_mismatch',
       );
-      final mismatchStore = _FakeRevision3ExportStore()
+      final mismatchStore = _FakeRevision3RestorableExportStore()
         ..nextProjectRevisionOverride = 8;
       final mismatchSession =
           await ManagedRevision3AuthoringProjectSession.create(
@@ -1331,7 +1325,7 @@ void main() {
           );
 
       await expectLater(
-        mismatchSession.exportExactSnapshotV1(
+        mismatchSession.exportExactSnapshotV2(
           output: p.join(fixture.path, 'mismatch.goremod'),
         ),
         throwsA(isA<ManagedProjectVerificationException>()),
@@ -1343,9 +1337,9 @@ void main() {
         fixture,
         suffix: 'export_malformed',
       );
-      final malformedStore = _FakeRevision3ExportStore()
+      final malformedStore = _FakeRevision3RestorableExportStore()
         ..nextExportError = const ModFfiException(
-          command: 'authoring_store_export_revision3_exact_snapshot_v1',
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
           code: ModFfiException.malformedNativeResponseCode,
           message: 'fake malformed terminal response',
         );
@@ -1357,7 +1351,7 @@ void main() {
           );
 
       await expectLater(
-        malformedSession.exportExactSnapshotV1(
+        malformedSession.exportExactSnapshotV2(
           output: p.join(fixture.path, 'malformed.goremod'),
         ),
         throwsA(isA<ManagedProjectVerificationException>()),
@@ -1374,7 +1368,7 @@ void main() {
         fixture,
         suffix: 'export_retryable_failures',
       );
-      final retryStore = _FakeRevision3ExportStore();
+      final retryStore = _FakeRevision3RestorableExportStore();
       final retrySession = await ManagedRevision3AuthoringProjectSession.create(
         root: retryRoot,
         store: retryStore,
@@ -1387,12 +1381,12 @@ void main() {
         'AUTHORING_REVISION3_EXPORT_VERIFY_FAILED',
       ]) {
         retryStore.nextExportError = ModFfiException(
-          command: 'authoring_store_export_revision3_exact_snapshot_v1',
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
           code: code,
           message: 'fake bounded pre-publication export failure',
         );
         await expectLater(
-          retrySession.exportExactSnapshotV1(
+          retrySession.exportExactSnapshotV2(
             output: p.join(fixture.path, '$code.goremod'),
           ),
           throwsA(
@@ -1408,7 +1402,7 @@ void main() {
         );
       }
       expect(
-        (await retrySession.exportExactSnapshotV1(
+        (await retrySession.exportExactSnapshotV2(
           output: p.join(fixture.path, 'after-bounded-failure.goremod'),
         )).projectRevision,
         7,
@@ -1417,7 +1411,7 @@ void main() {
 
       for (final injected in <Object>[
         const ModFfiException(
-          command: 'authoring_store_export_revision3_exact_snapshot_v1',
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
           code: 'AUTHORING_REVISION3_EXPORT_ROOT_UNAVAILABLE',
           message: 'fake managed Store root became unavailable',
         ),
@@ -1427,7 +1421,7 @@ void main() {
           fixture,
           suffix: 'export_poison_${injected.runtimeType}',
         );
-        final poisonStore = _FakeRevision3ExportStore()
+        final poisonStore = _FakeRevision3RestorableExportStore()
           ..nextExportError = injected;
         final poisonSession =
             await ManagedRevision3AuthoringProjectSession.create(
@@ -1451,7 +1445,7 @@ void main() {
         }
 
         await expectLater(
-          poisonSession.exportExactSnapshotV1(
+          poisonSession.exportExactSnapshotV2(
             output: p.join(
               fixture.path,
               'poison-${injected.runtimeType}.goremod',
@@ -1469,7 +1463,7 @@ void main() {
     'exact snapshot export detects pre-call drift without invoking native',
     () async {
       final root = await _projectRoot(fixture, suffix: 'export_pre_drift');
-      final store = _FakeRevision3ExportStore();
+      final store = _FakeRevision3RestorableExportStore();
       final session = await ManagedRevision3AuthoringProjectSession.create(
         root: root,
         store: store,
@@ -1484,7 +1478,7 @@ void main() {
       );
 
       await expectLater(
-        session.exportExactSnapshotV1(
+        session.exportExactSnapshotV2(
           output: p.join(fixture.path, 'pre-drift.goremod'),
         ),
         throwsA(isA<ManagedProjectHeadConflictException>()),
@@ -1500,7 +1494,7 @@ void main() {
     'exact snapshot export preserves a valid receipt after post-call drift',
     () async {
       final root = await _projectRoot(fixture, suffix: 'export_post_drift');
-      final store = _FakeRevision3ExportStore();
+      final store = _FakeRevision3RestorableExportStore();
       final session = await ManagedRevision3AuthoringProjectSession.create(
         root: root,
         store: store,
@@ -1514,7 +1508,7 @@ void main() {
         p.join(rootPath, 'gore-project.json'),
       ).writeAsString(externalHead.canonicalJson, flush: true);
 
-      final result = await session.exportExactSnapshotV1(
+      final result = await session.exportExactSnapshotV2(
         output: p.join(fixture.path, 'post-drift.goremod'),
       );
 
@@ -1523,7 +1517,7 @@ void main() {
       expect(session.requiresReopen, isTrue);
       expect(await session.headFile.readAsString(), externalHead.canonicalJson);
       await expectLater(
-        session.exportExactSnapshotV1(
+        session.exportExactSnapshotV2(
           output: p.join(fixture.path, 'after-drift.goremod'),
         ),
         throwsA(isA<ManagedProjectVerificationException>()),
@@ -1536,7 +1530,7 @@ void main() {
     'exact snapshot export shares the serialized close and reentrant lane',
     () async {
       final root = await _projectRoot(fixture, suffix: 'export_queue');
-      final store = _FakeRevision3ExportStore();
+      final store = _FakeRevision3RestorableExportStore();
       final session = await ManagedRevision3AuthoringProjectSession.create(
         root: root,
         store: store,
@@ -1548,13 +1542,13 @@ void main() {
         entered.complete();
         await release.future;
       };
-      final export = session.exportExactSnapshotV1(
+      final export = session.exportExactSnapshotV2(
         output: p.join(fixture.path, 'queued.goremod'),
       );
       await entered.future;
       final close = session.close();
       await expectLater(
-        session.exportExactSnapshotV1(
+        session.exportExactSnapshotV2(
           output: p.join(fixture.path, 'too-late.goremod'),
         ),
         throwsA(isA<ManagedProjectSessionClosedException>()),
@@ -1568,7 +1562,7 @@ void main() {
         fixture,
         suffix: 'export_reentrant',
       );
-      final reentrantStore = _FakeRevision3ExportStore();
+      final reentrantStore = _FakeRevision3RestorableExportStore();
       final reentrantSession =
           await ManagedRevision3AuthoringProjectSession.create(
             root: reentrantRoot,
@@ -1577,7 +1571,7 @@ void main() {
           );
       await reentrantSession.deriveAndSave<void>((_) async {
         await expectLater(
-          reentrantSession.exportExactSnapshotV1(
+          reentrantSession.exportExactSnapshotV2(
             output: p.join(fixture.path, 'nested.goremod'),
           ),
           throwsA(isA<ManagedProjectReentrantOperationException>()),
@@ -1589,57 +1583,46 @@ void main() {
     },
   );
 
-  test(
-    'restorable V2 export stays separate from V1 and preserves every sealed terminal',
-    () async {
-      for (final outcome in <String>[
-        'exported',
-        'exported_with_cleanup_warning',
-        'publication_uncertain',
-      ]) {
-        final root = await _projectRoot(
-          fixture,
-          suffix: 'export_v2_${outcome.replaceAll('_', '-')}',
-        );
-        final store = _FakeRevision3RestorableExportStore()
-          ..nextOutcome = outcome;
-        final session = await ManagedRevision3AuthoringProjectSession.create(
-          root: root,
-          store: store,
-          projectJson: _projectJson(revision: 7, name: 'Restorable export'),
-        );
-        final fixedHead = await session.headFile.readAsBytes();
-        final output = p.join(fixture.path, 'v2-$outcome.goremod');
+  test('restorable V2 export preserves every sealed terminal', () async {
+    for (final outcome in <String>[
+      'exported',
+      'exported_with_cleanup_warning',
+      'publication_uncertain',
+    ]) {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_${outcome.replaceAll('_', '-')}',
+      );
+      final store = _FakeRevision3RestorableExportStore()
+        ..nextOutcome = outcome;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Restorable export'),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+      final output = p.join(fixture.path, 'v2-$outcome.goremod');
 
-        expect(session.supportsExactSnapshotExport, isFalse);
-        expect(session.supportsRestorableSnapshotExport, isTrue);
-        await expectLater(
-          session.exportExactSnapshotV1(
-            output: p.join(fixture.path, 'v1-not-inferred.goremod'),
-          ),
-          throwsUnsupportedError,
-        );
+      expect(session.supportsRestorableSnapshotExport, isTrue);
+      final result = await session.exportExactSnapshotV2(output: output);
 
-        final result = await session.exportExactSnapshotV2(output: output);
-
-        expect(result.basisHead.canonicalJson, session.head.canonicalJson);
-        expect(result.projectId, session.projectId);
-        expect(result.projectRevision, session.projectRevision);
-        expect(result.output, output);
-        expect(result.isRestorableProjectCopy, isTrue);
-        expect(result.hasCleanupWarning, outcome.contains('cleanup'));
-        expect(result.publicationIsUncertain, outcome.contains('uncertain'));
-        expect(store.exportCalls, 1);
-        expect(store.exportRoots, <String>[root.path]);
-        expect(store.exportExpectedHeads, <String>[session.head.canonicalJson]);
-        expect(store.exportOutputs, <String>[output]);
-        expect(session.projectRevision, 7);
-        expect(session.requiresReopen, isFalse);
-        expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
-        await session.close();
-      }
-    },
-  );
+      expect(result.basisHead.canonicalJson, session.head.canonicalJson);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.output, output);
+      expect(result.isRestorableProjectCopy, isTrue);
+      expect(result.hasCleanupWarning, outcome.contains('cleanup'));
+      expect(result.publicationIsUncertain, outcome.contains('uncertain'));
+      expect(store.exportCalls, 1);
+      expect(store.exportRoots, <String>[root.path]);
+      expect(store.exportExpectedHeads, <String>[session.head.canonicalJson]);
+      expect(store.exportOutputs, <String>[output]);
+      expect(session.projectRevision, 7);
+      expect(session.requiresReopen, isFalse);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    }
+  });
 
   test(
     'restorable V2 export separates safe failures from mismatched or malformed receipts',
@@ -8259,13 +8242,6 @@ typedef _AfterVoicePlan =
       AuthoringRevision3VoiceBuildPlanResult result,
     );
 
-typedef _AfterExactSnapshotExport =
-    FutureOr<void> Function(
-      String root,
-      AuthoringWorkingHead expectedHead,
-      AuthoringRevision3ExactSnapshotExportResult result,
-    );
-
 typedef _AfterExactSnapshotExportV2 =
     FutureOr<void> Function(
       String root,
@@ -11146,120 +11122,6 @@ final class _FakeRevision3DialogVoiceSlotCreationStore
       currentProjectJson: currentProjectJson,
       request: request,
     );
-  }
-}
-
-final class _FakeRevision3ExportStore extends _FakeRevision3Store
-    implements ManagedRevision3ExactSnapshotExportStore {
-  _FakeRevision3ExportStore();
-
-  int exportCalls = 0;
-  final List<String> exportRoots = <String>[];
-  final List<String> exportExpectedHeads = <String>[];
-  final List<String> exportOutputs = <String>[];
-  String nextOutcome = 'exported';
-  Object? nextExportError;
-  String? nextProjectIdOverride;
-  int? nextProjectRevisionOverride;
-  String? nextOutputOverride;
-  AuthoringWorkingHead? nextBasisHeadOverride;
-  _AfterExactSnapshotExport? afterExport;
-
-  @override
-  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
-    required String root,
-    required AuthoringWorkingHead expectedHead,
-    required String output,
-  }) async {
-    exportCalls++;
-    exportRoots.add(root);
-    exportExpectedHeads.add(expectedHead.canonicalJson);
-    exportOutputs.add(output);
-    final injectedError = nextExportError;
-    nextExportError = null;
-    if (injectedError != null) throw injectedError;
-
-    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
-    if (actual != expectedHead.canonicalJson) {
-      throw const ModFfiException(
-        command: 'authoring_store_export_revision3_exact_snapshot_v1',
-        code: 'AUTHORING_REVISION3_EXPORT_HEAD_CONFLICT',
-        message: 'fake native exact snapshot export basis CAS rejected',
-      );
-    }
-    final projectJson = _projectsByHead[actual];
-    if (projectJson == null) {
-      throw StateError('unknown exact snapshot export checkpoint head');
-    }
-    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
-    final responseHead = nextBasisHeadOverride ?? expectedHead;
-    nextBasisHeadOverride = null;
-    final responseOutput = nextOutputOverride ?? output;
-    nextOutputOverride = null;
-    final outcome = nextOutcome;
-    nextOutcome = 'exported';
-    final warning = switch (outcome) {
-      'exported' => null,
-      'exported_with_cleanup_warning' => <String, Object?>{
-        'code': 'AUTHORING_REVISION3_EXPORT_CLEANUP_WARNING',
-        'message':
-            'the verified snapshot was published, but private staging cleanup was incomplete',
-      },
-      'publication_uncertain' => <String, Object?>{
-        'code': 'AUTHORING_REVISION3_EXPORT_PUBLICATION_UNCERTAIN',
-        'message': 'publication may have completed; do not retry automatically',
-      },
-      _ => null,
-    };
-    final publicationStatus = switch (outcome) {
-      'exported' => 'published',
-      'exported_with_cleanup_warning' => 'published_with_cleanup_warning',
-      'publication_uncertain' => 'publication_uncertain',
-      _ => 'published',
-    };
-    final result = AuthoringRevision3ExactSnapshotExportResult.fromJson(
-      <String, Object?>{
-        'ok': true,
-        'outcome': outcome,
-        'format': 'managed_revision3_exact_snapshot_v1',
-        'artifact_kind': 'portable_snapshot_review_copy',
-        'restore_status': 'not_supported',
-        'basis_head_json': responseHead.canonicalJson,
-        'project_id': nextProjectIdOverride ?? project['project_id'],
-        'project_revision': nextProjectRevisionOverride ?? project['revision'],
-        'output': responseOutput,
-        'archive': <String, Object?>{'byte_len': 4096, 'sha256': 'c' * 64},
-        'manifest': <String, Object?>{
-          'relative_name': 'gore-export.json',
-          'byte_len': 512,
-          'sha256': 'd' * 64,
-        },
-        'closure': <String, Object?>{
-          'snapshot_objects': 1,
-          'entity_objects': 0,
-          'asset_objects': 0,
-          'archive_entries': 4,
-          'uncompressed_bytes': 8192,
-        },
-        'publication_status': publicationStatus,
-        'retry_safe': false,
-        'warning': warning,
-        'project_mutation': 'not_performed',
-        'game_mutation': 'not_performed',
-        'save_mutation': 'not_performed',
-        'build_status': 'not_performed',
-        'deployment_status': 'not_performed',
-        'runtime_status': 'runtime_unqualified',
-      },
-      expectedHead: responseHead,
-      expectedOutput: responseOutput,
-    );
-    nextProjectIdOverride = null;
-    nextProjectRevisionOverride = null;
-    final hook = afterExport;
-    afterExport = null;
-    await hook?.call(root, expectedHead, result);
-    return result;
   }
 }
 

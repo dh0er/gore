@@ -560,7 +560,7 @@ fn bounded_vector_truncates_at_255_priors_and_export_never_revives_dropped_histo
     ));
 
     let export = store
-        .export_current_revision3_exact_snapshot_v1(&current.head, root.export_path())
+        .export_current_revision3_exact_snapshot_v2(&current.head, root.export_path())
         .unwrap();
     assert_eq!(
         export.receipt().closure.snapshot_objects,
@@ -704,7 +704,7 @@ fn exact_export_includes_reachable_history_but_excludes_unpublished_children() {
         .prepare_revision3_checkpoint(Some(&current.head), &orphan_project)
         .unwrap();
     let export = store
-        .export_current_revision3_exact_snapshot_v1(&current.head, root.export_path())
+        .export_current_revision3_exact_snapshot_v2(&current.head, root.export_path())
         .unwrap();
     assert_eq!(export.receipt().closure.snapshot_objects, 2);
 

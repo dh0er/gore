@@ -4274,12 +4274,6 @@ abstract class AppLocalizations {
   /// **'Stored project objects'**
   String get projectRestoreStoreObjects;
 
-  /// No description provided for @projectRestoreUnsupportedReviewCopy.
-  ///
-  /// In en, this message translates to:
-  /// **'This is an older review-only project copy and cannot be restored. Choose a V2 backup created with Create project backup.'**
-  String get projectRestoreUnsupportedReviewCopy;
-
   /// No description provided for @projectRestoreInvalidSource.
   ///
   /// In en, this message translates to:

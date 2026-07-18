@@ -5,20 +5,16 @@ authority of the current managed revision-3 snapshot V2 inspection and
 destination materialization plus the visible receipt-bound Studio restore and
 session-adoption workflow.
 
-## Version boundary
+## Format boundary
 
-The two snapshot versions are separate, closed contracts:
-
-| Version | Manifest authority | Current meaning |
-|---|---|---|
-| V1 | `gore.managed-project-snapshot.v1`, schema `1`, `portable_snapshot_review_copy`, `restore_status: not_supported` | Unreleased superseded review-copy experiment. It is not a compatibility contract and will not become an importable artifact. While the temporary recognizer remains, a canonical V1 manifest receives a dedicated unsupported-review-copy result instead of being accepted as V2; this does not validate the V1 closure as restorable. |
-| V2 | `gore.managed-project-snapshot.v2`, schema `2`, `portable_snapshot_restorable_copy`, `restore_status: supported` | Exact restorable-copy format. Studio can export it, inspect it read-only, materialize it on Windows into one absent managed-project directory, and adopt only a fully opened candidate that exactly matches the native receipt. |
-
-V1 must not be relabelled, edited, migrated, or upgraded in place. Mod Studio
-has never been released and has no active legacy projects, so no old-project
-compatibility is required; the obsolete V1 path may be deleted outright. V2
-uses the same deterministic member layout and exact reachable Store closure as
-V1, but its closed manifest tuple declares the current restore contract.
+Snapshot V2 is the sole project backup/restore contract:
+`gore.managed-project-snapshot.v2`, schema `2`,
+`portable_snapshot_restorable_copy`, and `restore_status: supported`. Studio can
+export it, inspect it read-only, materialize it on Windows into one absent
+managed-project directory, and adopt only a fully opened candidate that exactly
+matches the native receipt. Mod Studio has never been released and has no active
+legacy projects, so it retains no older snapshot parser, compatibility result,
+upgrade, or migration path. Any non-V2 manifest is invalid input.
 
 `restore_status: supported` describes the V2 archive format. It means that a
 verified V2 archive carries the exact authenticated material consumed by the
@@ -146,7 +142,7 @@ same retained Windows file handle:
    Every declared payload is read within its bound and rehashed.
 6. The exact fixed head and complete reachable revision-3 Store closure are
    reopened from the archive. Missing, unreachable, extra, non-canonical, or
-   identity-inconsistent snapshots, entities, assets, or review material fail
+   identity-inconsistent snapshots, entities, assets, or project material fail
    inspection. Referenced Ogg assets receive their normal metadata validation.
 7. A second whole-file length and SHA-256 pass must equal the first pass.
 8. Import compares the resulting whole-archive seal with the caller's exact CAS
@@ -159,8 +155,8 @@ same retained Windows file handle:
    verification.
 10. Only authenticated Store snapshots, entities, and assets are streamed. Each
     output is bounded by its seal, hashed while writing, synchronized, rehashed,
-    and retained in the exact bounded ownership inventory. The review manifest
-    and review `project.json` are not installed into the working Store.
+    and retained in the exact bounded ownership inventory. The snapshot manifest
+    and canonical `project.json` member are not installed into the working Store.
 11. The canonical fixed head is written last. The planned tree must contain no
     missing or extra entry, every retained identity/seal is rechecked, the Store
     reopens to the exact inspected current project, and the retained source seal
@@ -198,12 +194,12 @@ ceilings before a receipt can be accepted:
 | Archive file | 70 GiB |
 | Total uncompressed archive bytes | 70 GiB |
 | `gore-export.json` | 128 MiB |
-| Materialized review `project.json` | 16 MiB |
+| Materialized `project.json` | 16 MiB |
 | Snapshot objects | 100,000 |
 | Entity objects | 100,000 |
 | Asset objects | 100,000 |
 | Total Store closure objects | 300,000 |
-| Archive entries | 300,003: manifest, review project, fixed head, and at most 300,000 Store objects |
+| Archive entries | 300,003: manifest, project copy, fixed head, and at most 300,000 Store objects |
 | Aggregate full-reopen work | 262,144 charged objects and 128 GiB charged bytes across all reachable snapshots |
 | Fixed-head JSON / response head JSON | 64 KiB |
 | Project revision on the response wire | `0..=2^63-1` |
@@ -240,7 +236,6 @@ Callers branch on the stable code, not on native error text:
 | `AUTHORING_REVISION3_IMPORT_LIMIT` | A closed wire, path, archive, member, object-count, byte-count, or Store safety ceiling was exceeded. |
 | `AUTHORING_REVISION3_IMPORT_SOURCE_INVALID` | The source spelling, extension, safe-path/file type, share lock, identity, length, or whole-file stability check failed. |
 | `AUTHORING_REVISION3_IMPORT_PLATFORM_UNSUPPORTED` | This platform cannot yet provide the required immutable inspection boundary. |
-| `AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY` | The canonical manifest identifies V1 review-only authority. It is deliberately not accepted as V2, and its closure is not validated as restorable. |
 | `AUTHORING_REVISION3_IMPORT_ARCHIVE_INVALID` | ZIP structure, exact dialect, member order/metadata, layout, or payload seal validation failed. |
 | `AUTHORING_REVISION3_IMPORT_MANIFEST_INVALID` | The canonical manifest, V2 authority tuple, member plan, path, basis, or declared seal is invalid or unsupported. |
 | `AUTHORING_REVISION3_IMPORT_CLOSURE_INVALID` | Full Store reopen, reachability, identity, canonical object, project materialization, or referenced-asset validation failed. |
@@ -260,9 +255,9 @@ surfaces should display the bounded filename label rather than parent paths.
 
 Inspection failures are non-mutating. An import error never authorizes a final
 destination; `CLEANUP_FAILED` may leave only the bounded importer-owned private
-staging inventory for a future recovery/cleanup surface. A recognized V1 result
-is not corruption, an unsupported-platform result is not archive invalidity,
-and an exact V2 inspection success is not an import success.
+staging inventory for a future recovery/cleanup surface. An
+unsupported-platform result is not archive invalidity, and an exact V2
+inspection success is not an import success.
 
 Confirmed publication uses either no warning or
 `AUTHORING_REVISION3_IMPORT_CLEANUP_WARNING`. An uncertain publication uses

@@ -2240,37 +2240,6 @@ class ModFfi {
     }
   }
 
-  /// Export the exact current managed revision-3 checkpoint as a portable,
-  /// immutable review snapshot.
-  ///
-  /// The native Store binds the archive to [expectedHead], never mutates the
-  /// project or game, and returns publication uncertainty as a sealed terminal
-  /// result so callers cannot accidentally retry an already-completed rename.
-  Future<AuthoringRevision3ExactSnapshotExportResult>
-  authoringStoreExportRevision3ExactSnapshotV1({
-    required String root,
-    required AuthoringWorkingHead expectedHead,
-    required String output,
-  }) async {
-    const command = 'authoring_store_export_revision3_exact_snapshot_v1';
-    _authoringRevision3Path(root, 'root');
-    _authoringRevision3Path(output, 'output');
-    final response = await _call(command, <String, Object?>{
-      'expected_head_json': expectedHead.canonicalJson,
-      'output': output,
-      'root': root,
-    });
-    try {
-      return AuthoringRevision3ExactSnapshotExportResult.fromJson(
-        response,
-        expectedHead: expectedHead,
-        expectedOutput: output,
-      );
-    } on FormatException catch (error) {
-      throw ModFfiException._malformed(command: command, reason: error.message);
-    }
-  }
-
   /// Inspect one restorable managed revision-3 V2 snapshot without importing
   /// or publishing it.
   ///

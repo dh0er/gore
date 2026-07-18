@@ -2521,10 +2521,6 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectRestoreStoreObjects => 'Gespeicherte Projektobjekte';
 
   @override
-  String get projectRestoreUnsupportedReviewCopy =>
-      'Dies ist eine ältere reine Prüfkopie und kann nicht wiederhergestellt werden. Wähle ein V2-Backup, das mit Projekt-Backup erstellen erzeugt wurde.';
-
-  @override
   String get projectRestoreInvalidSource =>
       'Die ausgewählte Datei ist kein gültiges exaktes Projekt-Backup. Nichts wurde erstellt.';
 

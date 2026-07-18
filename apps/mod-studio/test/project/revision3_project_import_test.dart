@@ -178,19 +178,7 @@ void main() {
       }
     });
 
-    test('rejects V1-shaped and unknown success responses as malformed', () {
-      final v1 = _response()
-        ..['format'] = revision3ProjectImportUnsupportedFormatV1
-        ..['artifact_kind'] = 'portable_snapshot_review_copy'
-        ..['restore_status'] = 'not_supported';
-
-      expect(
-        () => Revision3ProjectImportInspection.fromJson(
-          v1,
-          expectedSource: _source,
-        ),
-        throwsFormatException,
-      );
+    test('rejects unknown snapshot formats as malformed', () {
       expect(
         () => Revision3ProjectImportInspection.fromJson(
           _response()..['format'] = 'managed_revision3_exact_snapshot_v3',
@@ -346,7 +334,7 @@ void main() {
       },
     );
 
-    test('real native V1 error gets a distinct future-dialog outcome', () async {
+    test('unrecognized native inspection errors stay generic', () async {
       final owner = Object();
       const command = 'authoring_store_inspect_revision3_exact_snapshot_v2';
       final core = FakeGoreCoreFfiService(
@@ -354,9 +342,8 @@ void main() {
           command: <String, Object?>{
             'ok': false,
             'error': <String, Object?>{
-              'code': 'AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY',
-              'message':
-                  'the selected snapshot is a V1 review copy and is not restorable',
+              'code': 'AUTHORING_REVISION3_IMPORT_ARCHIVE_REJECTED',
+              'message': 'the selected archive was rejected',
             },
           },
         },
@@ -373,7 +360,7 @@ void main() {
 
       expect(
         (await coordinator.plan()).outcome,
-        Revision3ProjectImportPlanningOutcome.unsupportedFormat,
+        Revision3ProjectImportPlanningOutcome.inspectionFailed,
       );
       expect(core.calls.single.command, command);
     });
@@ -584,8 +571,7 @@ void main() {
         _destinationResponse()..['extra'] = true,
         uncertainWithReceipt,
         publishedWithoutReceipt,
-        _destinationResponse()
-          ..['format'] = revision3ProjectImportUnsupportedFormatV1,
+        _destinationResponse()..['format'] = 'foreign_snapshot_format',
         _destinationResponse()..['import_status'] = 'prepared',
         _destinationResponse()..['project_mutation'] = 'performed',
         _destinationResponse()..['session_adoption'] = 'performed',

@@ -766,7 +766,6 @@
   "projectRestoreProjectRevision": "Projektrevision",
   "projectRestoreArchiveBytes": "Archivgr\u00f6\u00dfe in Bytes",
   "projectRestoreStoreObjects": "Gespeicherte Projektobjekte",
-  "projectRestoreUnsupportedReviewCopy": "Dies ist eine \u00e4ltere reine Pr\u00fcfkopie und kann nicht wiederhergestellt werden. W\u00e4hle ein V2-Backup, das mit Projekt-Backup erstellen erzeugt wurde.",
   "projectRestoreInvalidSource": "Die ausgew\u00e4hlte Datei ist kein g\u00fcltiges exaktes Projekt-Backup. Nichts wurde erstellt.",
   "projectRestoreInspectionFailed": "Das Backup konnte nicht vollst\u00e4ndig verifiziert werden. Nichts wurde erstellt.",
   "projectRestoreUnavailable": "Die exakte Projektwiederherstellung ist auf diesem System nicht verf\u00fcgbar. Nichts wurde erstellt.",

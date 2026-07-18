@@ -32,16 +32,11 @@ mod revision3_history;
 mod revision3_import;
 
 pub use revision3_export::{
-    Revision3ExactSnapshotClosureV1, Revision3ExactSnapshotClosureV2,
-    Revision3ExactSnapshotExportErrorV1, Revision3ExactSnapshotExportErrorV2,
-    Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportPublicationV2,
-    Revision3ExactSnapshotExportV1, Revision3ExactSnapshotExportV2,
-    Revision3ExactSnapshotExportWarningV1, Revision3ExactSnapshotExportWarningV2,
-    REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V2,
-    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V2,
-    REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2,
-    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2,
-    REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2,
+    Revision3ExactSnapshotClosureV2, Revision3ExactSnapshotExportError,
+    Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotExportV2,
+    Revision3ExactSnapshotExportWarningV2, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V2,
+    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V2, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2,
+    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2,
 };
 pub use revision3_history::{
     PreparedRevision3HistoryRestoreV1, Revision3CheckpointHistoryV1, Revision3CheckpointParentV1,

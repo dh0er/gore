@@ -4,16 +4,14 @@ A managed revision-3 export is a portable copy of one exact published project
 snapshot. It is project management, not a mod build, deployment, Save As,
 working-directory move, runtime qualification, or save-game operation.
 
-The current Studio **Create project backup** workflow emits V2: an exact,
-restorable managed-project backup. V1 is an unreleased superseded review-copy
-experiment, not a compatibility contract. It remains temporarily recognizable
-only so the current parser can reject it explicitly; no product workflow emits,
-imports, upgrades, or promises to preserve it.
+The current Studio **Create project backup** workflow emits the sole supported
+format, Snapshot V2: an exact restorable managed-project backup. No earlier
+snapshot format, compatibility reader, or migration path is retained.
 
-V2 exports the same exact closure with a closed restorable-copy manifest. The
-visible Windows workflow can inspect it, materialize it into one absent managed
-destination, fully open the receipt-bound candidate, and adopt it only after an
-exact identity/head comparison. See
+V2 exports the exact reachable closure with a closed restorable-copy manifest.
+The visible Windows workflow can inspect it, materialize it into one absent
+managed destination, fully open the receipt-bound candidate, and adopt it only
+after an exact identity/head comparison. See
 [Managed project snapshot import V2](managed-project-import.md).
 
 ## Authority boundary
@@ -29,14 +27,9 @@ build profile, deploy target, or runtime claim. The managed session calls it
 inside the serialized exact-basis lane. Export neither publishes a new project
 head nor changes the current project path.
 
-## Versioned archive format
+## Archive format
 
-Every V1 archive has the closed marker `gore.managed-project-snapshot.v1` and
-schema `1` in `gore-export.json`. The marker binds the exact project identity,
-revision and head, declares `portable_snapshot_review_copy` authority and
-`restore_status: not_supported`, and seals every other member.
-
-V2 retains the same deterministic layout and member closure but uses
+The archive uses
 `gore.managed-project-snapshot.v2`, schema `2`,
 `portable_snapshot_restorable_copy`, and `restore_status: supported`.
 `supported` is the format property consumed by the separately reviewed Windows
@@ -55,7 +48,7 @@ store/entities/<id2>/<id30>/<sha256>.json
 store/assets/sha256/<2>/<62>
 ```
 
-`project.json` is the canonical materialized current project for review. The
+`project.json` is the canonical materialized current-project copy. The
 `store/` members preserve the exact immutable Store layout consumed by the
 separately reviewed importer. Absolute paths, directory entries, lock files,
 publication-repair journals, staging files, caches and unreachable immutable
@@ -64,8 +57,8 @@ orphans are excluded.
 ## Reachable closure
 
 Collection starts at the expected current head and recursively walks exact
-schema-revision-3 snapshots. For every snapshot both versions include and fully
-verify:
+schema-revision-3 snapshots. For every snapshot export includes and fully
+verifies:
 
 1. the canonical snapshot manifest;
 2. every entity shard named by that manifest;
@@ -149,22 +142,20 @@ Healthy managed projects expose **Create project backup** from the Project
 menu. The dialog emits only V2, asks for one new `.goremod` filename and an
 existing destination folder, and explains that the result is a restorable Mod
 Studio project backup but not a playable mod, build, deployment, or runtime
-qualification. Game and save files are untouched. V1 remains parser/test
-coverage and is not produced by this visible action. Because Mod Studio has not
-been released and has no active legacy projects, this temporary V1 surface is
-eligible for removal rather than migration.
+qualification. Game and save files are untouched. V2 is the only accepted or
+emitted backup format.
 
 **Restore project backup** is available from the Project menu in every project
 state and directly on the empty/Legacy landing surfaces. It verifies the V2
 archive first, asks for an existing parent plus a new absent project-folder
-name, materializes exactly once, and opens only a confirmed receipt. A canonical
-V1 archive receives a dedicated review-copy-not-restorable explanation rather
-than being cross-wired into V2.
+name, materializes exactly once, and opens only a confirmed receipt. Any archive
+without the exact V2 authority tuple is rejected as an invalid project backup.
 
 Export is unavailable while the managed session requires recovery or while a
 visible project-text draft has not been saved or discarded. It does not require
 a configured game installation and it remains independent of build/readiness
-blockers. Legacy project export and Save As behavior remain unchanged.
+blockers. The obsolete format-1 project export and Save As backend is not a
+supported product contract and is removed in a separate cleanup checkpoint.
 
 An initial or racing destination collision is a proven pre-publication failure:
 Studio keeps the dialog open and asks for a new filename or folder. Head drift,
@@ -174,7 +165,8 @@ terminal "output may exist" warning.
 
 ## Required proof
 
-The V1 gate requires native, FFI, session, coordinator and widget tests for:
+The Snapshot V2 gate requires native, FFI, session, coordinator and widget tests
+for:
 
 - byte-identical repeated exports;
 - recursive Quest-basis closure, bounded direct-history closure, truncation, and
@@ -190,13 +182,13 @@ The V1 gate requires native, FFI, session, coordinator and widget tests for:
 - proof that Store bytes, fixed head, current project path, game and saves are
   unchanged.
 
-The V2 gate additionally proves the distinct closed V2 authority tuple,
-byte-identical repeated exports, unchanged Store closure, strict V1 rejection by
-the V2 parser, exact reopen by the read-only inspector, and the same format-hard
-full-reopen work budget on producers and consumers even when their local Store
-limits differ. The companion import gate separately proves same-handle archive
-CAS, sealed streaming into retained no-clobber staging handles, fixed-head-last
-candidate verification, atomic absent-directory publication, and receipt-free
+It also proves the closed V2 authority tuple, unchanged Store closure, strict
+rejection of every non-V2 tuple, exact reopen by the read-only inspector, and
+the same format-hard full-reopen work budget on producers and consumers even
+when their local Store limits differ. The companion import gate separately
+proves same-handle archive CAS, sealed streaming into retained no-clobber
+staging handles, fixed-head-last candidate verification, atomic
+absent-directory publication, and receipt-free
 uncertainty. The visible gate additionally proves V2-only UI wiring, sanitized
 inspection and terminal copy, dirty/busy lifecycle gates, cleanup-warning
 retention, and exact receipt-bound candidate adoption without displacing the

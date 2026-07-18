@@ -110,7 +110,7 @@ been consolidated:
   revision, and non-Story references route to their exact Content owner. This
   is a UI projection over the existing managed session and grants no additional
   mutation, build, deploy, runtime, game, or save authority. The useful Legacy
-  tabs remain the migration baseline and are unchanged.
+  tabs remain the UX baseline and are unchanged.
 - A selected exact-current managed NPC or Quest Draft now exposes one direct
   **Remove Draft...** action in both wide and compact Story workbenches. The
   Studio derives the complete two-entity closure from the current content
@@ -480,10 +480,9 @@ embedded in retained checkpoints is deliberately not followed. The three
 sealed terminals distinguish published, published-with-cleanup-warning, and
 publication-uncertain outcomes; the latter is never retried automatically.
 This operation needs no configured game, writes neither game nor save data, and
-does not adopt a new working path. V1 is an unreleased superseded review-copy
-experiment, not a compatibility contract, and is not emitted by the visible
-backup action. With no released Studio or active legacy projects, it may be
-removed rather than migrated.
+does not adopt a new working path. Snapshot V2 is the sole backup/restore
+format; the unreleased V1 experiment and its compatibility paths are removed
+rather than migrated.
 
 **Restore project backup** is visible from the Project menu in every project
 state and on the empty/Legacy landing surfaces. One dialog owns exact V2
@@ -1100,7 +1099,8 @@ Expert source is an explicit escape hatch:
 
 The product keeps four version concepts visibly separate:
 
-- project format version, migrated by the Studio;
+- current project schema version, changed in lockstep before release without
+  legacy readers or migrations;
 - authored mod version and release channel;
 - target game version/edition and qualified compatibility range;
 - checkpoint, build, deployment, and release identities.
@@ -1538,41 +1538,7 @@ Expert source follows the same path. It can replace a generator output only
 after declaring its exact inputs/outputs and passing the same bounded parser,
 compiler, artifact reopen, target, and generation validation.
 
-## 8. Migration from format 1
-
-Migration is an import transaction, never an in-place reinterpretation:
-
-1. Bounded-read and fully validate the format-1 `.goremod` ZIP and
-   `project.json` using the existing safe embedded-path rules.
-2. Compute a source archive seal and derive a deterministic migration namespace
-   and `ProjectId`. Derive each initial `EntityId` from that namespace plus the
-   legacy domain, canonical legacy key, and occurrence. These IDs are stable for
-   repeated imports of the same file but are thereafter immutable and no longer
-   name-derived.
-3. Convert metadata, overrides, localization, FMOD audio, textures, scripts,
-   and dialog-topic registrations into typed V2 entities. Preserve legacy list
-   order only where it has deployment meaning.
-   Localization IDs become `LocalizationEntry` entities. Create a semantic
-   `DialogLine`/speaker/`VoiceSlot` relationship only when the sealed catalogs
-   provide a qualified mapping; otherwise preserve the text and emit an
-   actionable linking diagnostic rather than infer identity from an ID prefix.
-4. Stream every embedded authored payload into the AssetStore and replace
-   temporary/external paths with `AssetRef`s. A missing or unsafe required
-   payload becomes a blocking diagnostic; it is not silently discarded.
-5. Create `OriginRef::Catalog` only when format-1 data contains a sufficient
-   canonical target and the migration can pin its exact base-game or dependency
-   layer/seal. Otherwise use `Imported` and emit an origin-resolution diagnostic.
-6. Preserve the original `project.json` and archive SHA-256 as a read-only
-   migration provenance record.
-7. Validate, save, reopen, and byte/hash-check a new format-2 project beside the
-   original. Do not overwrite the format-1 project on first migration.
-
-Format 1 has no Studio voice domain, typed relationships, content hashes,
-history, game-generation anchor, or distinction between semantic ownership and
-deployment rows. Migration must not invent these facts. It should create
-actionable diagnostics and a migration report instead.
-
-## 9. Phased roadmap
+## 8. Phased roadmap
 
 Each phase requires its offline acceptance gates below. Runtime claims require
 additional targeted runtime proof; offline green tests alone never certify
@@ -1696,8 +1662,9 @@ editor, spreadsheet paste/import mapping, and transactional CSV. Complete the
 command palette, shortcuts, focus/accessibility audits, saved collections, and
 translation/voice coverage dashboard at this stage. Add isolated test profiles,
 the receipt-driven test lifecycle, dependency/loadout conflict validation, and
-the first deterministic release package. Keep the old domain editors as
-adapters during migration; do not maintain two independent project states.
+the first deterministic release package. Rebind useful old domain-editor
+widgets to managed R3, then delete their prior providers; do not maintain two
+independent project states.
 
 ### Phase 3: semantic existing content and early Draft authoring
 
@@ -1799,7 +1766,7 @@ source and CLI interoperability as supported escape hatches. Batch authoring,
 coverage dashboards, reusable story structures, keyboard operation, and
 accessibility must already be usable before this phase.
 
-## 10. Precise offline acceptance criteria
+## 9. Precise offline acceptance criteria
 
 These criteria run against fixtures and temporary directories. They must not
 launch the real game, write under a configured real game root, touch a real
@@ -1809,7 +1776,7 @@ saves. Tests install a filesystem-write sentinel around the fake normal game
 tree and assert its complete before/after file inventory and hashes are
 identical.
 
-### 10.1 V2 project core
+### 9.1 V2 project core
 
 1. A canonical V2 fixture containing every entity/ref/origin variant serializes
    to a working-directory snapshot, reopens, validates, and serializes to
@@ -1847,21 +1814,7 @@ identical.
    neither mutates the authored graph nor falls through to an identically named
    entity in another layer.
 
-### 10.2 Format-1 migration
-
-1. A fixture containing every format-1 domain migrates twice to the same IDs,
-   graph, AssetStore hashes, and report. Every legacy staged row appears exactly
-   once in V2 or has a blocking diagnostic naming why it cannot migrate.
-2. Embedded audio, texture, script source, and mini-cache bytes match their V2
-   blobs exactly. No V2 entity references the extraction temp directory or an
-   original external source path.
-3. Unsafe/missing payloads, duplicate legacy keys, malformed dialog identities,
-   and unknown required format versions fail or diagnose according to an
-   explicit golden report; none are silently dropped.
-4. Migration writes only a new V2 output. The input archive remains byte- and
-   timestamp-identical, and an existing output is never overwritten.
-
-### 10.3 Graph and diagnostics
+### 9.2 Graph and diagnostics
 
 1. Golden NPC/quest/dialog fixtures cover valid graphs plus every declared
    blocking diagnostic: missing refs, wrong ref kinds, unreachable quest state,
@@ -1885,7 +1838,7 @@ identical.
    Focus/lazy graph loading returns the same full-validation result as loading
    the entire graph.
 
-### 10.4 Deterministic lowering and bundle handoff
+### 9.3 Deterministic lowering and bundle handoff
 
 1. Two builds from the same canonical snapshot in different directories emit
    byte-identical generated sources, mini-cache inputs where compilation is not
@@ -1905,7 +1858,7 @@ identical.
    output, stale input fingerprint, parse/compile failure, target drift, and
    collision; every failure is non-publishing.
 
-### 10.5 Phase-1 voice-at-line slice
+### 9.4 Phase-1 voice-at-line slice
 
 The fresh-project prerequisite has its own bounded acceptance gate. From the
 guided V1 flow, a managed-R3 project can atomically create one new
@@ -2005,7 +1958,7 @@ deployment, topic, runtime, game, or save authority.
    The test instruments bytes read and proves index/preview do not scan or copy
    every Ogg payload or import the source archive into the AssetStore.
 
-### 10.6 NPC, quest, DataAsset, and spawn offline gates
+### 9.5 NPC, quest, DataAsset, and spawn offline gates
 
 These gates are necessary before runtime qualification, not a substitute for
 it:
@@ -2062,7 +2015,7 @@ then the corresponding Studio features remain Draft-only, Experimental, or
 Unavailable according to their exact operation, regardless of how plausible
 their generated files look.
 
-### 10.7 UX, scale, compatibility, test, and release gates
+### 9.6 UX, scale, compatibility, test, and release gates
 
 1. A widget/integration journey creates a project through installation/version,
    languages, author-facing project name, dependencies, isolated profile, and

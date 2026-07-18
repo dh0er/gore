@@ -2448,10 +2448,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get projectRestoreStoreObjects => 'Stored project objects';
 
   @override
-  String get projectRestoreUnsupportedReviewCopy =>
-      'This is an older review-only project copy and cannot be restored. Choose a V2 backup created with Create project backup.';
-
-  @override
   String get projectRestoreInvalidSource =>
       'The selected file is not a valid exact project backup. Nothing was created.';
 

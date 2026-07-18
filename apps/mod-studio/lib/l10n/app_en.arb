@@ -949,7 +949,6 @@
   "projectRestoreProjectRevision": "Project revision",
   "projectRestoreArchiveBytes": "Archive bytes",
   "projectRestoreStoreObjects": "Stored project objects",
-  "projectRestoreUnsupportedReviewCopy": "This is an older review-only project copy and cannot be restored. Choose a V2 backup created with Create project backup.",
   "projectRestoreInvalidSource": "The selected file is not a valid exact project backup. Nothing was created.",
   "projectRestoreInspectionFailed": "The backup could not be verified completely. Nothing was created.",
   "projectRestoreUnavailable": "Exact project restore is unavailable on this system. Nothing was created.",

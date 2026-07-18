@@ -86,36 +86,6 @@ void main() {
     }
   });
 
-  test('recognized V1 review copy retains its distinct native code', () async {
-    final core = FakeGoreCoreFfiService(
-      responses: <String, Map<String, Object?>>{
-        _command: <String, Object?>{
-          'ok': false,
-          'error': <String, Object?>{
-            'code': 'AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY',
-            'message':
-                'the selected snapshot is a V1 review copy and is not restorable',
-          },
-        },
-      },
-    );
-
-    await expectLater(
-      ModFfi(
-        core,
-      ).authoringStoreInspectRevision3ExactSnapshotV2(source: _source),
-      throwsA(
-        isA<ModFfiException>()
-            .having((error) => error.command, 'command', _command)
-            .having(
-              (error) => error.code,
-              'code',
-              'AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY',
-            ),
-      ),
-    );
-  });
-
   test('malformed native error schemas remain transport failures', () async {
     final malformed = <Map<String, Object?>>[
       <String, Object?>{'ok': null},

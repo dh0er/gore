@@ -42,7 +42,6 @@ const REQUEST_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_REQUEST_INVALID";
 const LIMIT_CODE: &str = "AUTHORING_REVISION3_IMPORT_LIMIT";
 const SOURCE_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_SOURCE_INVALID";
 const PLATFORM_UNSUPPORTED_CODE: &str = "AUTHORING_REVISION3_IMPORT_PLATFORM_UNSUPPORTED";
-const UNSUPPORTED_REVIEW_COPY_CODE: &str = "AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY";
 const ARCHIVE_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_ARCHIVE_INVALID";
 const MANIFEST_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_MANIFEST_INVALID";
 const CLOSURE_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_CLOSURE_INVALID";
@@ -438,10 +437,6 @@ fn map_inspection_error(error: Revision3ExactSnapshotInspectionErrorV2) -> Failu
             PLATFORM_UNSUPPORTED_CODE,
             "managed snapshot inspection is not supported safely on this platform",
         ),
-        Revision3ExactSnapshotInspectionErrorV2::UnsupportedReviewCopyV1 => Failure::new(
-            UNSUPPORTED_REVIEW_COPY_CODE,
-            "the selected snapshot declares the V1 review-copy format and is not restorable",
-        ),
         Revision3ExactSnapshotInspectionErrorV2::InvalidSource(_) => Failure::new(
             SOURCE_INVALID_CODE,
             "the selected snapshot source could not be inspected as one safe regular file",
@@ -548,9 +543,8 @@ mod tests {
     use gore_authoring::Revision3ExactSnapshotInspectionErrorV2;
     #[cfg(windows)]
     use gore_authoring::{
-        AssetVerification, ProjectRevision3, Revision3ExactSnapshotExportPublicationV1,
-        Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotInspectionV2, WorkingHead,
-        WorkingProjectStore, WorkingStoreLimits,
+        AssetVerification, ProjectRevision3, Revision3ExactSnapshotExportPublicationV2,
+        Revision3ExactSnapshotInspectionV2, WorkingHead, WorkingProjectStore, WorkingStoreLimits,
     };
     use serde_json::json;
     use tempfile::TempDir;
@@ -811,27 +805,6 @@ mod tests {
         ] {
             assert!(response.get(forbidden).is_none(), "{forbidden}");
         }
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn v1_review_copy_has_one_distinct_non_restorable_error() {
-        let (temp, store, head) = published_store();
-        let source = temp.path().join("Review Copy.goremod");
-        let publication = store
-            .export_current_revision3_exact_snapshot_v1(&head, &source)
-            .unwrap();
-        assert!(matches!(
-            publication,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
-        ));
-
-        let response = inspect_revision3_exact_snapshot_v2_raw(&request(&source.to_string_lossy()));
-        assert_eq!(response["error"]["code"], UNSUPPORTED_REVIEW_COPY_CODE);
-        assert!(!response["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains(&source.to_string_lossy().to_string()));
     }
 
     #[test]
@@ -1173,12 +1146,6 @@ mod tests {
             assert!(!failure.message.contains("private"));
             assert!(failure.message.len() <= MAX_ERROR_MESSAGE_BYTES);
         }
-        assert_eq!(
-            map_inspection_error(Revision3ExactSnapshotInspectionErrorV2::UnsupportedReviewCopyV1)
-                .code,
-            UNSUPPORTED_REVIEW_COPY_CODE
-        );
-
         let seal: ContentSeal = serde_json::from_value(json!({
             "byte_len": 1,
             "sha256": "4444444444444444444444444444444444444444444444444444444444444444",

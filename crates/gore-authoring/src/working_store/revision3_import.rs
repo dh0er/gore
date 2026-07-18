@@ -31,12 +31,12 @@ pub const REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2: &str =
 pub const REVISION3_EXACT_SNAPSHOT_IMPORT_RESTORE_STATUS_V2: &str = "supported";
 pub const REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2: &str = "gore-export.json";
 
-const REVIEW_PROJECT_FILE: &str = "project.json";
+const PROJECT_FILE: &str = "project.json";
 const STORE_HEAD_MEMBER: &str = "store/gore-project.json";
 const MAX_IMPORT_MANIFEST_BYTES_V2: usize = 128 * 1024 * 1024;
 const MAX_IMPORT_ARCHIVE_ENTRIES_V2: u64 = 300_003;
 // The closed format can contain at most 64 GiB of assets, 512 MiB each of snapshot and entity
-// objects, the bounded manifest/review/head, and deterministic ZIP metadata. This early hard cap
+// objects, the bounded manifest/project/head, and deterministic ZIP metadata. This early hard cap
 // rejects an absurd source before the central directory is parsed; tighter caller limits and the
 // exact member sums are enforced immediately after the first manifest is read.
 const MAX_IMPORT_ARCHIVE_BYTES_V2: u64 = 70 * 1024 * 1024 * 1024;
@@ -159,10 +159,6 @@ pub enum Revision3ExactSnapshotImportErrorV2 {
 /// Stable failure vocabulary for read-only inspection of an untrusted source archive.
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3ExactSnapshotInspectionErrorV2 {
-    #[error(
-        "managed snapshot declares the V1 review-copy format and is not accepted as restorable V2"
-    )]
-    UnsupportedReviewCopyV1,
     #[error("restorable snapshot inspection is not supported safely on this platform")]
     UnsupportedPlatform,
     #[error("invalid restorable snapshot source: {0}")]
@@ -271,77 +267,9 @@ struct ExactSnapshotManifestV2 {
     members: Vec<ImportMemberSealV2>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-enum ReviewManifestFormatV1 {
-    #[serde(rename = "gore.managed-project-snapshot.v1")]
-    ExactSnapshotV1,
-}
-
-impl<'de> Deserialize<'de> for ReviewManifestFormatV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        if value == "gore.managed-project-snapshot.v1" {
-            Ok(Self::ExactSnapshotV1)
-        } else {
-            Err(serde::de::Error::custom("not a managed V1 review copy"))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ReviewManifestSchemaV1;
-
-impl<'de> Deserialize<'de> for ReviewManifestSchemaV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if u32::deserialize(deserializer)? == 1 {
-            Ok(Self)
-        } else {
-            Err(serde::de::Error::custom("not schema 1"))
-        }
-    }
-}
-
-impl Serialize for ReviewManifestSchemaV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_u32(1)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ReviewArtifactKindV1 {
-    #[serde(rename = "portable_snapshot_review_copy")]
-    PortableSnapshotReviewCopy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ReviewRestoreStatusV1 {
-    #[serde(rename = "not_supported")]
-    NotSupported,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactSnapshotReviewManifestV1 {
-    format: ReviewManifestFormatV1,
-    schema: ReviewManifestSchemaV1,
-    artifact_kind: ReviewArtifactKindV1,
-    restore_status: ReviewRestoreStatusV1,
-    basis: ImportBasisV2,
-    members: Vec<ImportMemberSealV2>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ImportMemberKind {
-    ReviewProject,
+    Project,
     StoreHead,
     Snapshot(Sha256Digest),
     Entity(EntityId, Sha256Digest),
@@ -715,25 +643,11 @@ fn verify_revision3_exact_snapshot_archive_v2(
     let timestamp = fixed_zip_timestamp()?;
     let manifest_bytes = read_first_manifest(&mut archive, timestamp)?;
     let manifest_seal = seal_bytes(&manifest_bytes);
-    let manifest: ExactSnapshotManifestV2 = match parse_canonical_json(
+    let manifest: ExactSnapshotManifestV2 = parse_canonical_json(
         &manifest_bytes,
         "managed restorable exact snapshot import manifest",
-    ) {
-        Ok(manifest) => manifest,
-        Err(v2_error) => {
-            // This recognizes only the canonical V1 authority declaration. It intentionally does
-            // not claim that the remaining review-copy closure is complete or otherwise valid.
-            if parse_canonical_json::<ExactSnapshotReviewManifestV1>(
-                &manifest_bytes,
-                "managed exact snapshot V1 review manifest",
-            )
-            .is_ok()
-            {
-                return Err(Revision3ExactSnapshotInspectionErrorV2::UnsupportedReviewCopyV1);
-            }
-            return Err(manifest_model_error(v2_error));
-        }
-    };
+    )
+    .map_err(manifest_model_error)?;
     let plan = validate_manifest_plan(&manifest, &limits, manifest_seal.byte_len)?;
     if archive.len() != plan.archive_order.len() {
         return Err(Revision3ExactSnapshotInspectionErrorV2::InvalidArchive(
@@ -841,7 +755,7 @@ where
                 ImportMemberKind::Asset(digest) => {
                     import_store_relative(&asset_member_name(digest))?
                 }
-                ImportMemberKind::ReviewProject | ImportMemberKind::StoreHead => continue,
+                ImportMemberKind::Project | ImportMemberKind::StoreHead => continue,
             };
             materialize_archive_member(&mut archive, member, &relative, &mut staging)?;
         }
@@ -3428,10 +3342,10 @@ fn validate_manifest_plan(
         previous = Some(&member.relative_name);
         let kind = parse_member_name(&member.relative_name)?;
         match kind {
-            ImportMemberKind::ReviewProject => {
+            ImportMemberKind::Project => {
                 if project_seen || member.byte_len > MAX_PROJECT_JSON_BYTES as u64 {
                     return Err(member_limit_or_duplicate(
-                        "review project bytes",
+                        "project bytes",
                         member.byte_len,
                         MAX_PROJECT_JSON_BYTES as u64,
                         project_seen,
@@ -3542,13 +3456,13 @@ fn validate_manifest_plan(
     }
     if !project_seen || !head_seen {
         return Err(Revision3ExactSnapshotInspectionErrorV2::InvalidManifest(
-            "manifest must seal exactly one review project and one fixed Store head".to_owned(),
+            "manifest must seal exactly one project and one fixed Store head".to_owned(),
         ));
     }
 
     let mut archive_order = Vec::with_capacity(manifest.members.len() + 1);
     archive_order.push(REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2.to_owned());
-    archive_order.push(REVIEW_PROJECT_FILE.to_owned());
+    archive_order.push(PROJECT_FILE.to_owned());
     archive_order.push(STORE_HEAD_MEMBER.to_owned());
     archive_order.extend(snapshots.keys().cloned());
     archive_order.extend(entities.keys().cloned());
@@ -3642,8 +3556,8 @@ fn checked_import_sum(
 fn parse_member_name(
     name: &str,
 ) -> Result<ImportMemberKind, Revision3ExactSnapshotInspectionErrorV2> {
-    if name == REVIEW_PROJECT_FILE {
-        return Ok(ImportMemberKind::ReviewProject);
+    if name == PROJECT_FILE {
+        return Ok(ImportMemberKind::Project);
     }
     if name == STORE_HEAD_MEMBER {
         return Ok(ImportMemberKind::StoreHead);
@@ -3923,7 +3837,7 @@ fn reopen_store_closure(
     )?;
 
     let mut referenced_names =
-        BTreeSet::from([REVIEW_PROJECT_FILE.to_owned(), STORE_HEAD_MEMBER.to_owned()]);
+        BTreeSet::from([PROJECT_FILE.to_owned(), STORE_HEAD_MEMBER.to_owned()]);
     // Historical Projects can each contain a maximal entity map. Retaining every materialized
     // Project until the end would multiply heap use by the snapshot count, so only the current
     // Project survives its iteration; historical proof state is one compact identity tuple.
@@ -4084,26 +3998,24 @@ fn reopen_store_closure(
             "current snapshot is absent from its own closure".to_owned(),
         )
     })?;
-    let review_member = required_member(plan, REVIEW_PROJECT_FILE)?;
-    let review_bytes = read_sealed_member(
+    let project_member = required_member(plan, PROJECT_FILE)?;
+    let project_bytes = read_sealed_member(
         archive,
-        review_member,
+        project_member,
         MAX_PROJECT_JSON_BYTES as u64,
-        "review project bytes",
+        "project bytes",
     )?;
-    let review_text = std::str::from_utf8(&review_bytes).map_err(|_| {
-        Revision3ExactSnapshotInspectionErrorV2::InvalidClosure(
-            "review project is not UTF-8".to_owned(),
-        )
+    let project_text = std::str::from_utf8(&project_bytes).map_err(|_| {
+        Revision3ExactSnapshotInspectionErrorV2::InvalidClosure("project is not UTF-8".to_owned())
     })?;
-    let review = ProjectRevision3::from_json(review_text).map_err(|error| {
+    let project_copy = ProjectRevision3::from_json(project_text).map_err(|error| {
         Revision3ExactSnapshotInspectionErrorV2::InvalidClosure(format!(
-            "review project is invalid: {error}"
+            "project is invalid: {error}"
         ))
     })?;
-    if review != current_project {
+    if project_copy != current_project {
         return Err(Revision3ExactSnapshotInspectionErrorV2::InvalidClosure(
-            "review project differs from the fully reopened current Store project".to_owned(),
+            "project differs from the fully reopened current Store project".to_owned(),
         ));
     }
 
@@ -4895,7 +4807,7 @@ mod tests {
         let snapshot_name = snapshot_member_name(snapshot_seal.sha256);
         let mut member_seals = BTreeMap::new();
         for (name, bytes) in [
-            (REVIEW_PROJECT_FILE.to_owned(), project_bytes.clone()),
+            (PROJECT_FILE.to_owned(), project_bytes.clone()),
             (STORE_HEAD_MEMBER.to_owned(), head_bytes.clone()),
             (snapshot_name.clone(), snapshot_bytes.clone()),
         ] {
@@ -4926,7 +4838,7 @@ mod tests {
                 REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2.to_owned(),
                 canonical_json(&manifest).unwrap(),
             ),
-            (REVIEW_PROJECT_FILE.to_owned(), project_bytes),
+            (PROJECT_FILE.to_owned(), project_bytes),
             (STORE_HEAD_MEMBER.to_owned(), head_bytes),
             (snapshot_name, snapshot_bytes),
         ]
@@ -6223,25 +6135,22 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn manifest_rejects_v1_authority_and_unknown_fields() {
+    fn manifest_rejects_non_v2_authority_and_unknown_fields_generically() {
         let mut members = exact_archive_members();
-        let v2: ExactSnapshotManifestV2 =
-            parse_canonical_json(&members[0].1, "test V2 manifest").unwrap();
-        let v1 = ExactSnapshotReviewManifestV1 {
-            format: ReviewManifestFormatV1::ExactSnapshotV1,
-            schema: ReviewManifestSchemaV1,
-            artifact_kind: ReviewArtifactKindV1::PortableSnapshotReviewCopy,
-            restore_status: ReviewRestoreStatusV1::NotSupported,
-            basis: v2.basis,
-            members: v2.members,
-        };
-        members[0].1 = canonical_json(&v1).unwrap();
-        let area = TestArea::new("v1");
+        let mut unsupported: serde_json::Value = serde_json::from_slice(&members[0].1).unwrap();
+        unsupported["format"] =
+            serde_json::Value::String("gore.managed-project-snapshot.future".to_owned());
+        unsupported["schema"] = serde_json::Value::Number(999.into());
+        unsupported["artifact_kind"] =
+            serde_json::Value::String("unsupported_snapshot_kind".to_owned());
+        unsupported["restore_status"] = serde_json::Value::String("unsupported".to_owned());
+        members[0].1 = serde_json::to_vec(&unsupported).unwrap();
+        let area = TestArea::new("unsupported-authority");
         let path = area.archive();
         write_exact_archive(&path, &members);
         assert!(matches!(
             inspect_revision3_exact_snapshot_v2(&path),
-            Err(Revision3ExactSnapshotInspectionErrorV2::UnsupportedReviewCopyV1)
+            Err(Revision3ExactSnapshotInspectionErrorV2::InvalidManifest(_))
         ));
 
         let mut members = exact_archive_members();

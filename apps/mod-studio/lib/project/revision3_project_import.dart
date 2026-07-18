@@ -6,12 +6,6 @@ import '../core/mod_ffi.dart';
 const String revision3ProjectImportFormatV2 =
     'managed_revision3_exact_snapshot_v2';
 
-/// V1 is intentionally named so callers can distinguish a canonical manifest
-/// that declares review-copy authority. Its closure is not validated as V2 and
-/// it is never accepted as an importable artifact.
-const String revision3ProjectImportUnsupportedFormatV1 =
-    'managed_revision3_exact_snapshot_v1';
-
 const String revision3ProjectImportArtifactKindV2 =
     'portable_snapshot_restorable_copy';
 const String revision3ProjectImportRestoreStatusV2 = 'supported';
@@ -26,8 +20,6 @@ const String _revision3ProjectImportInspectCommand =
     'authoring_store_inspect_revision3_exact_snapshot_v2';
 const String _revision3ProjectImportDestinationCommand =
     'authoring_store_import_revision3_exact_snapshot_v2';
-const String _revision3ProjectImportUnsupportedReviewCopyCode =
-    'AUTHORING_REVISION3_IMPORT_UNSUPPORTED_REVIEW_COPY';
 const String _revision3ProjectImportPlatformUnsupportedCode =
     'AUTHORING_REVISION3_IMPORT_PLATFORM_UNSUPPORTED';
 const String _revision3ProjectImportSourceInvalidCode =
@@ -80,19 +72,6 @@ final RegExp _revision3ProjectImportWindowsReservedSegmentPattern = RegExp(
   r'^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)',
   caseSensitive: false,
 );
-
-/// A recognized canonical V1 manifest declares review-copy authority, but its
-/// closure is not validated as restorable and must never fall through to V2.
-final class Revision3ProjectImportUnsupportedFormatException
-    implements Exception {
-  const Revision3ProjectImportUnsupportedFormatException();
-
-  String get format => revision3ProjectImportUnsupportedFormatV1;
-
-  @override
-  String toString() =>
-      'The selected snapshot declares the V1 review-copy format and is not restorable.';
-}
 
 /// One bounded content seal returned by native archive inspection.
 final class Revision3ProjectImportArchiveSeal {
@@ -775,7 +754,6 @@ final class Revision3ProjectImportDestinationResult {
 enum Revision3ProjectImportPlanningOutcome {
   inspected,
   cancelled,
-  unsupportedFormat,
   invalidSource,
   inspectionFailed,
   stale,
@@ -795,9 +773,6 @@ final class Revision3ProjectImportPlanningResult {
 
   const Revision3ProjectImportPlanningResult.cancelled()
     : this._(Revision3ProjectImportPlanningOutcome.cancelled);
-
-  const Revision3ProjectImportPlanningResult.unsupportedFormat()
-    : this._(Revision3ProjectImportPlanningOutcome.unsupportedFormat);
 
   const Revision3ProjectImportPlanningResult.invalidSource()
     : this._(Revision3ProjectImportPlanningOutcome.invalidSource);
@@ -910,17 +885,9 @@ final class Revision3ProjectImportInspectionCoordinator {
       final Object? response;
       try {
         response = await _inspect(source);
-      } on Revision3ProjectImportUnsupportedFormatException {
-        final gate = _gateAfterAwait(epoch, lifecycle);
-        return gate ??
-            const Revision3ProjectImportPlanningResult.unsupportedFormat();
       } on ModFfiException catch (error) {
         final gate = _gateAfterAwait(epoch, lifecycle);
         if (gate != null) return gate;
-        if (error.command == _revision3ProjectImportInspectCommand &&
-            error.code == _revision3ProjectImportUnsupportedReviewCopyCode) {
-          return const Revision3ProjectImportPlanningResult.unsupportedFormat();
-        }
         if (error.command == _revision3ProjectImportInspectCommand &&
             error.code == _revision3ProjectImportPlatformUnsupportedCode) {
           return const Revision3ProjectImportPlanningResult.unavailable();
@@ -942,8 +909,6 @@ final class Revision3ProjectImportInspectionCoordinator {
           response,
           expectedSource: source,
         );
-      } on Revision3ProjectImportUnsupportedFormatException {
-        return const Revision3ProjectImportPlanningResult.unsupportedFormat();
       } on FormatException {
         return const Revision3ProjectImportPlanningResult.inspectionFailed();
       }

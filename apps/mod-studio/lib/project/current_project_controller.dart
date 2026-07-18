@@ -925,24 +925,7 @@ abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
   });
 }
 
-/// Optional exact-snapshot export authority. Keeping it separate ensures that
-/// test leases and alternate managed sessions do not accidentally claim
-/// portable-copy support merely by implementing ordinary project editing.
-abstract interface class ManagedRevision3ProjectExportLease {
-  bool get supportsExactSnapshotExport;
-
-  /// Permanently remove mutation/export authority after a post-call result
-  /// cannot be bound to the requested checkpoint or publication terminal.
-  void markRequiresReopenAfterPublicationUncertainty();
-
-  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
-    required String output,
-  });
-}
-
-/// Optional restorable V2 exact-snapshot export authority. This remains
-/// separate from the frozen V1 review-copy capability so neither authority can
-/// be inferred from the other.
+/// Optional restorable V2 exact-snapshot export authority.
 abstract interface class ManagedRevision3RestorableProjectExportLease {
   bool get supportsRestorableSnapshotExport;
 
@@ -1094,7 +1077,6 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3RecoveryLease,
         ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
-        ManagedRevision3ProjectExportLease,
         ManagedRevision3RestorableProjectExportLease,
         ManagedRevision3StoryDraftRemovalLease {
   const _ManagedRevision3SessionLease(this._session);
@@ -1153,9 +1135,6 @@ final class _ManagedRevision3SessionLease
   @override
   bool get supportsReviewedDataAssetBuild =>
       _session.supportsReviewedDataAssetBuild;
-
-  @override
-  bool get supportsExactSnapshotExport => _session.supportsExactSnapshotExport;
 
   @override
   bool get supportsRestorableSnapshotExport =>
@@ -1232,11 +1211,6 @@ final class _ManagedRevision3SessionLease
   @override
   void markRequiresReopenAfterNpcGreetingUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
-
-  @override
-  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
-    required String output,
-  }) => _session.exportExactSnapshotV1(output: output);
 
   @override
   Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
@@ -5539,146 +5513,9 @@ final class CurrentProjectCoordinator
     }
   });
 
-  /// Export one immutable portable copy from the exact visible managed
-  /// checkpoint. The current project remains open and unchanged; publication
-  /// uncertainty is a sealed terminal result and must not be retried.
-  Future<AuthoringRevision3ExactSnapshotExportResult>
-  exportCurrentRevision3ExactSnapshot({
-    required String expectedRoot,
-    required String expectedProjectId,
-    required int expectedProjectRevision,
-    required AuthoringWorkingHead expectedHead,
-    required String output,
-  }) => _enqueue(() async {
-    final current = _current;
-    if (current == null) throw const NoCurrentProjectException();
-    if (current is! _OwnedManagedRevision3CurrentProject) {
-      throw const Revision3ProjectExportUnsupportedException();
-    }
-    final lease = current.lease;
-    if (lease.requiresReopen) {
-      throw const Revision3ProjectExportRequiresReopenException();
-    }
-    if (lease.root.path != expectedRoot ||
-        lease.projectId != expectedProjectId ||
-        lease.projectRevision != expectedProjectRevision ||
-        lease.head.canonicalJson != expectedHead.canonicalJson) {
-      throw const Revision3ProjectExportStaleCheckpointException();
-    }
-    if (lease is! ManagedRevision3ProjectExportLease) {
-      throw const Revision3ProjectExportUnsupportedException();
-    }
-    final exportLease = lease as ManagedRevision3ProjectExportLease;
-    if (!exportLease.supportsExactSnapshotExport) {
-      throw const Revision3ProjectExportUnsupportedException();
-    }
-    try {
-      final result = await exportLease.exportExactSnapshotV1(output: output);
-      if (result.basisHead.canonicalJson != expectedHead.canonicalJson ||
-          result.projectId != expectedProjectId ||
-          result.projectId != lease.projectId ||
-          result.projectRevision != expectedProjectRevision ||
-          result.projectRevision != lease.projectRevision ||
-          result.output != output ||
-          lease.head.canonicalJson != expectedHead.canonicalJson) {
-        exportLease.markRequiresReopenAfterPublicationUncertainty();
-        throw const Revision3ProjectExportRequiresReopenException(
-          publicationMayExist: true,
-        );
-      }
-      return result;
-    } catch (error, stackTrace) {
-      if (error is Revision3ProjectExportRequiresReopenException) {
-        if (!lease.requiresReopen) {
-          exportLease.markRequiresReopenAfterPublicationUncertainty();
-        }
-        Error.throwWithStackTrace(error, stackTrace);
-      }
-      if (error is Revision3ProjectExportFailedException) {
-        if (!error.publicationMayExist) {
-          Error.throwWithStackTrace(error, stackTrace);
-        }
-        if (!lease.requiresReopen) {
-          exportLease.markRequiresReopenAfterPublicationUncertainty();
-        }
-        Error.throwWithStackTrace(
-          Revision3ProjectExportRequiresReopenException(
-            publicationMayExist: true,
-            code: error.code,
-            cause: error,
-          ),
-          stackTrace,
-        );
-      }
-      if (error is ManagedProjectHeadConflictException) {
-        Error.throwWithStackTrace(
-          Revision3ProjectExportRequiresReopenException(
-            publicationMayExist: false,
-            cause: error,
-          ),
-          stackTrace,
-        );
-      }
-      if (error is ManagedRevision3ExactSnapshotExportPrepublicationException) {
-        Error.throwWithStackTrace(
-          Revision3ProjectExportRequiresReopenException(
-            publicationMayExist: false,
-            code: error.code,
-            cause: error,
-          ),
-          stackTrace,
-        );
-      }
-      if (error is ModFfiException &&
-          _revision3ProjectExportSafePrepublicationCodes.contains(error.code)) {
-        Error.throwWithStackTrace(
-          Revision3ProjectExportFailedException(
-            cause: error,
-            code: error.code,
-            publicationMayExist: false,
-            retryWithNewDestination:
-                _revision3ProjectExportDestinationRetryCodes.contains(
-                  error.code,
-                ),
-          ),
-          stackTrace,
-        );
-      }
-      if (error is ArgumentError) {
-        Error.throwWithStackTrace(
-          Revision3ProjectExportFailedException(
-            cause: error,
-            publicationMayExist: false,
-          ),
-          stackTrace,
-        );
-      }
-      if (lease.requiresReopen) {
-        Error.throwWithStackTrace(
-          Revision3ProjectExportRequiresReopenException(
-            publicationMayExist: true,
-            cause: error,
-          ),
-          stackTrace,
-        );
-      }
-      exportLease.markRequiresReopenAfterPublicationUncertainty();
-      Error.throwWithStackTrace(
-        Revision3ProjectExportRequiresReopenException(
-          publicationMayExist: true,
-          cause: error,
-        ),
-        stackTrace,
-      );
-    } finally {
-      _refreshCurrentIfUnchanged(current);
-    }
-  });
-
   /// Export one immutable, restorable V2 copy from the exact visible managed
-  /// checkpoint. V1 review-copy authority is deliberately not accepted here.
-  /// The current project remains unchanged and uncertain publication is never
-  /// retried automatically.
+  /// checkpoint. The current project remains unchanged and uncertain
+  /// publication is never retried automatically.
   Future<AuthoringRevision3ExactSnapshotExportResultV2>
   exportCurrentRevision3ExactSnapshotV2({
     required String expectedRoot,

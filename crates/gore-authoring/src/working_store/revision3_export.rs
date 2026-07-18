@@ -1,8 +1,8 @@
 //! Deterministic, exact-snapshot export for one currently published managed revision-3 project.
 //!
-//! Export is deliberately not an importer, clone, Save As, build, or backup/restore operation.
-//! It copies the exact current Store closure into a portable, reviewable ZIP without changing the
-//! Store head or adopting the output path. Historical Quest basis snapshots are traversed
+//! Export creates the portable backup artifact; it is deliberately not an importer, restore,
+//! clone, Save As, or build operation. It copies the exact current Store closure without changing
+//! the Store head or adopting the output path. Historical Quest basis snapshots are traversed
 //! transitively. The current manifest's directly retained bounded-history checkpoints are also
 //! included, but history embedded in any queued snapshot is never followed. Unrelated immutable
 //! or staging objects are excluded.
@@ -28,22 +28,16 @@ use crate::{
     MAX_DATAASSET_STAGE_HISTORICAL_VERIFY_OBJECTS_V1,
 };
 
-pub const REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1: &str = "managed_revision3_exact_snapshot_v1";
-pub const REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1: &str = "gore.managed-project-snapshot.v1";
-pub const REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1: &str = "portable_snapshot_review_copy";
-pub const REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1: &str = "not_supported";
-pub const REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1: &str = "gore-export.json";
-
 pub const REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V2: &str = "managed_revision3_exact_snapshot_v2";
 pub const REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2: &str = "gore.managed-project-snapshot.v2";
 pub const REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V2: &str = "portable_snapshot_restorable_copy";
 pub const REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2: &str = "supported";
 pub const REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2: &str = "gore-export.json";
 
-const REVIEW_PROJECT_FILE: &str = "project.json";
+const PROJECT_FILE: &str = "project.json";
 const STORE_HEAD_MEMBER: &str = "store/gore-project.json";
-const MAX_EXPORT_MANIFEST_BYTES_V1: usize = 128 * 1024 * 1024;
-const MAX_EXPORT_ARCHIVE_ENTRIES_V1: u64 = 300_003;
+const MAX_EXPORT_MANIFEST_BYTES_V2: usize = 128 * 1024 * 1024;
+const MAX_EXPORT_ARCHIVE_ENTRIES_V2: u64 = 300_003;
 const ZIP_FILE_MODE: u32 = 0o644;
 const ZIP_VERSION_45: u16 = 45;
 const ZIP_UNIX_VERSION_45: u16 = (3 << 8) | ZIP_VERSION_45;
@@ -87,29 +81,6 @@ pub(super) fn revision3_exact_snapshot_v2_full_reopen_work(
     Some(Revision3ExactSnapshotV2FullReopenWork { objects, bytes })
 }
 
-/// Complete exact Store closure represented by a managed snapshot export.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Revision3ExactSnapshotClosureV1 {
-    pub snapshot_objects: u64,
-    pub entity_objects: u64,
-    pub asset_objects: u64,
-    pub archive_entries: u64,
-    pub uncompressed_bytes: u64,
-}
-
-/// Path-independent receipt prepared and bounded before publication begins.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Revision3ExactSnapshotExportV1 {
-    pub head: WorkingHead,
-    pub project_id: ProjectId,
-    pub project_revision: u64,
-    pub archive: ContentSeal,
-    pub manifest: ContentSeal,
-    pub closure: Revision3ExactSnapshotClosureV1,
-}
-
 /// Complete exact Store closure represented by a restorable managed snapshot export.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -131,44 +102,6 @@ pub struct Revision3ExactSnapshotExportV2 {
     pub archive: ContentSeal,
     pub manifest: ContentSeal,
     pub closure: Revision3ExactSnapshotClosureV2,
-}
-
-/// Stable warning class for the two successful-call terminals that need user attention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Revision3ExactSnapshotExportWarningV1 {
-    CleanupIncomplete,
-    PublicationUncertain,
-}
-
-/// Publication result. Every variant means the atomic publish boundary may have been crossed.
-/// Callers must never turn either warning terminal into an automatic retry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Revision3ExactSnapshotExportPublicationV1 {
-    Exported(Revision3ExactSnapshotExportV1),
-    ExportedWithCleanupWarning(Revision3ExactSnapshotExportV1),
-    PublicationUncertain(Revision3ExactSnapshotExportV1),
-}
-
-impl Revision3ExactSnapshotExportPublicationV1 {
-    pub const fn receipt(&self) -> &Revision3ExactSnapshotExportV1 {
-        match self {
-            Self::Exported(receipt)
-            | Self::ExportedWithCleanupWarning(receipt)
-            | Self::PublicationUncertain(receipt) => receipt,
-        }
-    }
-
-    pub const fn warning(&self) -> Option<Revision3ExactSnapshotExportWarningV1> {
-        match self {
-            Self::Exported(_) => None,
-            Self::ExportedWithCleanupWarning(_) => {
-                Some(Revision3ExactSnapshotExportWarningV1::CleanupIncomplete)
-            }
-            Self::PublicationUncertain(_) => {
-                Some(Revision3ExactSnapshotExportWarningV1::PublicationUncertain)
-            }
-        }
-    }
 }
 
 /// Stable warning class for successful V2 calls that still need user attention.
@@ -208,55 +141,9 @@ impl Revision3ExactSnapshotExportPublicationV2 {
     }
 }
 
-fn convert_receipt_v1_to_v2(
-    receipt: Revision3ExactSnapshotExportV1,
-) -> Revision3ExactSnapshotExportV2 {
-    let Revision3ExactSnapshotClosureV1 {
-        snapshot_objects,
-        entity_objects,
-        asset_objects,
-        archive_entries,
-        uncompressed_bytes,
-    } = receipt.closure;
-    Revision3ExactSnapshotExportV2 {
-        head: receipt.head,
-        project_id: receipt.project_id,
-        project_revision: receipt.project_revision,
-        archive: receipt.archive,
-        manifest: receipt.manifest,
-        closure: Revision3ExactSnapshotClosureV2 {
-            snapshot_objects,
-            entity_objects,
-            asset_objects,
-            archive_entries,
-            uncompressed_bytes,
-        },
-    }
-}
-
-fn convert_publication_v1_to_v2(
-    publication: Revision3ExactSnapshotExportPublicationV1,
-) -> Revision3ExactSnapshotExportPublicationV2 {
-    match publication {
-        Revision3ExactSnapshotExportPublicationV1::Exported(receipt) => {
-            Revision3ExactSnapshotExportPublicationV2::Exported(convert_receipt_v1_to_v2(receipt))
-        }
-        Revision3ExactSnapshotExportPublicationV1::ExportedWithCleanupWarning(receipt) => {
-            Revision3ExactSnapshotExportPublicationV2::ExportedWithCleanupWarning(
-                convert_receipt_v1_to_v2(receipt),
-            )
-        }
-        Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(receipt) => {
-            Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(
-                convert_receipt_v1_to_v2(receipt),
-            )
-        }
-    }
-}
-
 /// Failures returned only while native code still knows that it has not published an output.
 #[derive(Debug, thiserror::Error)]
-pub enum Revision3ExactSnapshotExportErrorV1 {
+pub enum Revision3ExactSnapshotExportError {
     #[error(transparent)]
     Store(#[from] WorkingStoreError),
     #[error("invalid managed snapshot export output: {0}")]
@@ -279,85 +166,20 @@ pub enum Revision3ExactSnapshotExportErrorV1 {
     Publication(String),
     #[error("{primary}; managed snapshot private staging cleanup also failed: {cleanup}")]
     StagingCleanup {
-        primary: Box<Revision3ExactSnapshotExportErrorV1>,
+        primary: Box<Revision3ExactSnapshotExportError>,
         cleanup: String,
     },
 }
 
-/// V2 keeps the closed pre-publication failure vocabulary used by V1.
-pub type Revision3ExactSnapshotExportErrorV2 = Revision3ExactSnapshotExportErrorV1;
-
-impl From<io::Error> for Revision3ExactSnapshotExportErrorV1 {
+impl From<io::Error> for Revision3ExactSnapshotExportError {
     fn from(error: io::Error) -> Self {
         Self::Store(WorkingStoreError::Io(error))
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-enum ExportManifestFormatV1 {
-    #[serde(rename = "gore.managed-project-snapshot.v1")]
-    ExactSnapshotV1,
-}
-
-impl<'de> Deserialize<'de> for ExportManifestFormatV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        if value == REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1 {
-            Ok(Self::ExactSnapshotV1)
-        } else {
-            Err(serde::de::Error::custom(
-                "unsupported managed project snapshot format",
-            ))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ExportManifestSchemaV1;
-
-impl<'de> Deserialize<'de> for ExportManifestSchemaV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = u32::deserialize(deserializer)?;
-        if value == 1 {
-            Ok(Self)
-        } else {
-            Err(serde::de::Error::custom(
-                "unsupported managed project snapshot schema",
-            ))
-        }
-    }
-}
-
-impl Serialize for ExportManifestSchemaV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_u32(1)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ExportArtifactKindV1 {
-    #[serde(rename = "portable_snapshot_review_copy")]
-    PortableSnapshotReviewCopy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum ExportRestoreStatusV1 {
-    #[serde(rename = "not_supported")]
-    NotSupported,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExportBasisV1 {
+struct ExportBasisV2 {
     head: WorkingHead,
     project_id: ProjectId,
     project_revision: u64,
@@ -365,21 +187,10 @@ struct ExportBasisV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExportMemberSealV1 {
+struct ExportMemberSealV2 {
     relative_name: String,
     byte_len: u64,
     sha256: Sha256Digest,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExactSnapshotManifestV1 {
-    format: ExportManifestFormatV1,
-    schema: ExportManifestSchemaV1,
-    artifact_kind: ExportArtifactKindV1,
-    restore_status: ExportRestoreStatusV1,
-    basis: ExportBasisV1,
-    members: Vec<ExportMemberSealV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -451,36 +262,8 @@ struct ExactSnapshotManifestV2 {
     schema: ExportManifestSchemaV2,
     artifact_kind: ExportArtifactKindV2,
     restore_status: ExportRestoreStatusV2,
-    basis: ExportBasisV1,
-    members: Vec<ExportMemberSealV1>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExactSnapshotExportVersion {
-    V1,
-    V2,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PreparedExactSnapshotManifest {
-    V1(ExactSnapshotManifestV1),
-    V2(ExactSnapshotManifestV2),
-}
-
-impl PreparedExactSnapshotManifest {
-    fn canonical_bytes(&self) -> Result<Vec<u8>, Revision3ExactSnapshotExportErrorV1> {
-        Ok(match self {
-            Self::V1(manifest) => canonical_json(manifest),
-            Self::V2(manifest) => canonical_json(manifest),
-        }?)
-    }
-
-    fn basis(&self) -> &ExportBasisV1 {
-        match self {
-            Self::V1(manifest) => &manifest.basis,
-            Self::V2(manifest) => &manifest.basis,
-        }
-    }
+    basis: ExportBasisV2,
+    members: Vec<ExportMemberSealV2>,
 }
 
 #[derive(Debug)]
@@ -507,9 +290,9 @@ struct ClosureObjects {
 }
 
 struct ExportPlan {
-    receipt: Revision3ExactSnapshotExportV1,
+    receipt: Revision3ExactSnapshotExportV2,
     members: Vec<PlannedMember>,
-    manifest: PreparedExactSnapshotManifest,
+    manifest: ExactSnapshotManifestV2,
     project: ProjectRevision3,
 }
 
@@ -554,69 +337,33 @@ struct StagedArchive {
 }
 
 impl WorkingProjectStore {
-    /// Export the exact currently published managed revision-3 snapshot without adopting or
-    /// mutating either the Store head or output path.
-    pub fn export_current_revision3_exact_snapshot_v1(
-        &self,
-        expected_head: &WorkingHead,
-        output: impl AsRef<Path>,
-    ) -> Result<Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportErrorV1>
-    {
-        self.export_current_revision3_exact_snapshot_v1_guarded(
-            expected_head,
-            output.as_ref(),
-            |_, _| Ok(()),
-        )
-    }
-
-    /// Export the same exact Store closure and deterministic ZIP dialect as V1, with the closed
-    /// restorable V2 manifest marker. This operation still does not mutate or adopt either path.
+    /// Export the exact currently published managed revision-3 Store closure as the deterministic,
+    /// restorable V2 archive without mutating or adopting either path.
     pub fn export_current_revision3_exact_snapshot_v2(
         &self,
         expected_head: &WorkingHead,
         output: impl AsRef<Path>,
-    ) -> Result<Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotExportErrorV2>
-    {
-        self.export_current_revision3_exact_snapshot_guarded(
+    ) -> Result<Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotExportError> {
+        self.export_current_revision3_exact_snapshot_v2_guarded(
             expected_head,
             output.as_ref(),
-            ExactSnapshotExportVersion::V2,
             |_, _| Ok(()),
         )
-        .map(convert_publication_v1_to_v2)
     }
 
-    fn export_current_revision3_exact_snapshot_v1_guarded<F>(
+    fn export_current_revision3_exact_snapshot_v2_guarded<F>(
         &self,
         expected_head: &WorkingHead,
         output: &Path,
-        external_guard: F,
-    ) -> Result<Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportErrorV1>
-    where
-        F: FnMut(ExportGuardPhase, &Path) -> Result<(), WorkingStoreError>,
-    {
-        self.export_current_revision3_exact_snapshot_guarded(
-            expected_head,
-            output,
-            ExactSnapshotExportVersion::V1,
-            external_guard,
-        )
-    }
-
-    fn export_current_revision3_exact_snapshot_guarded<F>(
-        &self,
-        expected_head: &WorkingHead,
-        output: &Path,
-        version: ExactSnapshotExportVersion,
         mut external_guard: F,
-    ) -> Result<Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportErrorV1>
+    ) -> Result<Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotExportError>
     where
         F: FnMut(ExportGuardPhase, &Path) -> Result<(), WorkingStoreError>,
     {
         self.ensure_root_safe()?;
         self.check_expected_head(Some(expected_head))?;
         let output_guard = self.prepare_export_output(output)?;
-        let mut plan = self.plan_revision3_exact_snapshot_export(expected_head, version)?;
+        let mut plan = self.plan_revision3_exact_snapshot_export(expected_head)?;
         external_guard(ExportGuardPhase::BeforeStagingCreate, &output_guard.target)?;
         revalidate_export_output(&output_guard)?;
         let mut staged_archive = create_staged_archive(&output_guard)?;
@@ -634,7 +381,7 @@ impl WorkingProjectStore {
                 &plan.project,
             )?;
             plan.receipt.archive = archive;
-            Ok::<(), Revision3ExactSnapshotExportErrorV1>(())
+            Ok::<(), Revision3ExactSnapshotExportError>(())
         })();
         if let Err(primary) = staged_result {
             return Err(abort_staged_archive(&mut staged_archive, primary));
@@ -660,18 +407,18 @@ impl WorkingProjectStore {
 
         match publish_staged_archive_no_clobber(&mut staged_archive, &output_guard) {
             Err(NoClobberInstallError::AlreadyExists) => {
-                let primary = Revision3ExactSnapshotExportErrorV1::OutputAlreadyExists;
+                let primary = Revision3ExactSnapshotExportError::OutputAlreadyExists;
                 Err(abort_staged_archive(&mut staged_archive, primary))
             }
             Err(NoClobberInstallError::Failed(error)) if !staged_archive.published => {
-                let primary = Revision3ExactSnapshotExportErrorV1::Publication(error.to_string());
+                let primary = Revision3ExactSnapshotExportError::Publication(error.to_string());
                 Err(abort_staged_archive(&mut staged_archive, primary))
             }
             Err(NoClobberInstallError::Failed(_)) => {
                 // The platform primitive may have made the target visible before returning its
                 // durability/cleanup error. From this point onward, never report a normal error.
                 let _ = cleanup_staged_archive(&mut staged_archive);
-                Ok(Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(plan.receipt))
+                Ok(Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(plan.receipt))
             }
             Ok(()) => {
                 // All remaining fallible work is folded into typed terminals. The caller must not
@@ -681,7 +428,7 @@ impl WorkingProjectStore {
                 {
                     let _ = cleanup_staged_archive(&mut staged_archive);
                     return Ok(
-                        Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(
+                        Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(
                             plan.receipt,
                         ),
                     );
@@ -701,18 +448,18 @@ impl WorkingProjectStore {
                 .is_ok();
                 if !final_verified {
                     Ok(
-                        Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(
+                        Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(
                             plan.receipt,
                         ),
                     )
                 } else if cleanup_warning {
                     Ok(
-                        Revision3ExactSnapshotExportPublicationV1::ExportedWithCleanupWarning(
+                        Revision3ExactSnapshotExportPublicationV2::ExportedWithCleanupWarning(
                             plan.receipt,
                         ),
                     )
                 } else {
-                    Ok(Revision3ExactSnapshotExportPublicationV1::Exported(
+                    Ok(Revision3ExactSnapshotExportPublicationV2::Exported(
                         plan.receipt,
                     ))
                 }
@@ -723,9 +470,9 @@ impl WorkingProjectStore {
     fn prepare_export_output(
         &self,
         output: &Path,
-    ) -> Result<OutputGuard, Revision3ExactSnapshotExportErrorV1> {
+    ) -> Result<OutputGuard, Revision3ExactSnapshotExportError> {
         if !output.is_absolute() {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+            return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                 "output must be an absolute path".to_owned(),
             ));
         }
@@ -734,28 +481,25 @@ impl WorkingProjectStore {
             .and_then(|value| value.to_str())
             .is_none_or(|value| !value.eq_ignore_ascii_case("goremod"))
         {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+            return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                 "output must use the .goremod extension".to_owned(),
             ));
         }
-        let normalized = normalize_absolute(output).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
-        })?;
+        let normalized = normalize_absolute(output)
+            .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
         let parent = normalized.parent().ok_or_else(|| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+            Revision3ExactSnapshotExportError::InvalidOutput(
                 "output has no parent directory".to_owned(),
             )
         })?;
-        ensure_safe_directory_chain(parent).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
-        })?;
-        let parent = fs::canonicalize(parent).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
-        })?;
+        ensure_safe_directory_chain(parent)
+            .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
+        let parent = fs::canonicalize(parent)
+            .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
         let filename = normalized
             .file_name()
             .ok_or_else(|| {
-                Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+                Revision3ExactSnapshotExportError::InvalidOutput(
                     "output has no filename".to_owned(),
                 )
             })?
@@ -770,29 +514,27 @@ impl WorkingProjectStore {
             }
             .into());
         }
-        let parent_dir = Dir::open_ambient_dir(&parent, ambient_authority()).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
-        })?;
-        let parent_identity = directory_identity(&parent_dir).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
-        })?;
+        let parent_dir = Dir::open_ambient_dir(&parent, ambient_authority())
+            .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
+        let parent_identity = directory_identity(&parent_dir)
+            .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
         if !ambient_directory_matches(&parent, parent_identity) {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+            return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                 "output parent changed while its capability was pinned".to_owned(),
             ));
         }
         #[cfg(target_os = "linux")]
         let publication_parent = {
             let publication_parent = open_syncable_directory(&parent_dir).map_err(|error| {
-                Revision3ExactSnapshotExportErrorV1::InvalidOutput(format!(
+                Revision3ExactSnapshotExportError::InvalidOutput(format!(
                     "output parent cannot be opened for durable publication: {error}"
                 ))
             })?;
             let publication_identity = file_identity(&publication_parent).map_err(|error| {
-                Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string())
+                Revision3ExactSnapshotExportError::InvalidOutput(error.to_string())
             })?;
             if publication_identity != parent_identity {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+                return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                     "output parent changed while its durable publication handle was opened"
                         .to_owned(),
                 ));
@@ -800,19 +542,19 @@ impl WorkingProjectStore {
             publication_parent
         };
         if directory_is_at_or_below(&parent_dir, store_root_identity).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidOutput(format!(
+            Revision3ExactSnapshotExportError::InvalidOutput(format!(
                 "output ancestry could not be validated from its pinned directory: {error}"
             ))
         })? {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+            return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                 "output must be outside the managed Store root".to_owned(),
             ));
         }
         match parent_dir.symlink_metadata(&filename) {
-            Ok(_) => return Err(Revision3ExactSnapshotExportErrorV1::OutputAlreadyExists),
+            Ok(_) => return Err(Revision3ExactSnapshotExportError::OutputAlreadyExists),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+                return Err(Revision3ExactSnapshotExportError::InvalidOutput(
                     error.to_string(),
                 ));
             }
@@ -832,8 +574,7 @@ impl WorkingProjectStore {
     fn plan_revision3_exact_snapshot_export(
         &self,
         expected_head: &WorkingHead,
-        version: ExactSnapshotExportVersion,
-    ) -> Result<ExportPlan, Revision3ExactSnapshotExportErrorV1> {
+    ) -> Result<ExportPlan, Revision3ExactSnapshotExportError> {
         let head_bytes = read_required_regular_bounded(
             &self.head_path(),
             self.limits.max_head_bytes,
@@ -868,30 +609,20 @@ impl WorkingProjectStore {
             // Hash and parse the unique manifest first, then conservatively charge every object
             // and byte the later Full reopen may touch. Shared assets repeated across historical
             // bases are deliberately charged repeatedly, so work is bounded even without a
-            // cross-open verification cache. V1 retains its producer-local legacy charge; V2 uses
-            // the format-hard charge shared with its reader, independent of stricter Store limits.
+            // cross-open verification cache. The format-hard charge is shared with the V2 reader,
+            // independent of stricter Store limits.
             let preflight = self.inspect_revision3_dataasset_basis(&seal)?;
-            let (additional_objects, additional_bytes) = match version {
-                ExactSnapshotExportVersion::V1 => {
-                    (preflight.verification_objects, preflight.verification_bytes)
-                }
-                ExactSnapshotExportVersion::V2 => {
-                    let work =
-                        revision3_exact_snapshot_v2_full_reopen_work(&seal, &preflight.manifest)
-                            .ok_or_else(|| {
-                                Revision3ExactSnapshotExportErrorV1::InvalidClosure(
-                                    "V2 full-reopen work overflowed the closed u64 range"
-                                        .to_owned(),
-                                )
-                            })?;
-                    (work.objects, work.bytes)
-                }
-            };
+            let work = revision3_exact_snapshot_v2_full_reopen_work(&seal, &preflight.manifest)
+                .ok_or_else(|| {
+                    Revision3ExactSnapshotExportError::InvalidClosure(
+                        "V2 full-reopen work overflowed the closed u64 range".to_owned(),
+                    )
+                })?;
             charge_full_verification_work(
                 &mut verification_objects,
                 &mut verification_bytes,
-                additional_objects,
-                additional_bytes,
+                work.objects,
+                work.bytes,
             )?;
             let opened = self.open_revision3_snapshot(&seal, AssetVerification::Full)?;
             if opened.head != preflight.head
@@ -899,7 +630,7 @@ impl WorkingProjectStore {
                 || opened.project.target != preflight.target
                 || opened.project.revision != preflight.revision
             {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+                return Err(Revision3ExactSnapshotExportError::InvalidClosure(
                     "snapshot identity changed between bounded preflight and full reopen"
                         .to_owned(),
                 ));
@@ -928,7 +659,7 @@ impl WorkingProjectStore {
                 if !closure.entities.contains_key(&relative_name)
                     && closure.entities.len() as u64 >= self.limits.max_entities as u64
                 {
-                    return Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+                    return Err(Revision3ExactSnapshotExportError::ClosureLimit {
                         kind: "entity object count",
                         actual: closure.entities.len() as u64 + 1,
                         limit: self.limits.max_entities as u64,
@@ -960,7 +691,7 @@ impl WorkingProjectStore {
                 if !closure.assets.contains_key(&relative_name)
                     && closure.assets.len() as u64 >= self.limits.max_assets as u64
                 {
-                    return Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+                    return Err(Revision3ExactSnapshotExportError::ClosureLimit {
                         kind: "asset object count",
                         actual: closure.assets.len() as u64 + 1,
                         limit: self.limits.max_assets as u64,
@@ -1020,7 +751,7 @@ impl WorkingProjectStore {
                             || retained_preflight.revision != retained.project_revision
                             || retained_preflight.target != retained.target
                         {
-                            return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+                            return Err(Revision3ExactSnapshotExportError::InvalidClosure(
                                 "retained history record disagrees with its sealed snapshot"
                                     .to_owned(),
                             ));
@@ -1039,7 +770,7 @@ impl WorkingProjectStore {
             if digest == expected_head.snapshot.sha256
                 && current_project.replace(opened.project).is_some()
             {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+                return Err(Revision3ExactSnapshotExportError::InvalidClosure(
                     "current snapshot appeared twice in the export closure".to_owned(),
                 ));
             }
@@ -1047,24 +778,24 @@ impl WorkingProjectStore {
 
         debug_assert_eq!(closure.snapshot_bytes, known_snapshot_bytes);
         let project = current_project.ok_or_else(|| {
-            Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+            Revision3ExactSnapshotExportError::InvalidClosure(
                 "current snapshot was absent from its own export closure".to_owned(),
             )
         })?;
         let project_json = project.to_canonical_json().map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::InvalidClosure(format!(
+            Revision3ExactSnapshotExportError::InvalidClosure(format!(
                 "current project could not be serialized canonically: {error}"
             ))
         })?;
         if project.revision > i64::MAX as u64 {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+            return Err(Revision3ExactSnapshotExportError::InvalidClosure(
                 "project revision exceeds the closed signed response range".to_owned(),
             ));
         }
         let project_bytes = project_json.into_bytes();
 
         let project_member = PlannedMember {
-            relative_name: REVIEW_PROJECT_FILE.to_owned(),
+            relative_name: PROJECT_FILE.to_owned(),
             seal: seal_bytes(&project_bytes),
             source: MemberSource::Bytes(project_bytes),
         };
@@ -1074,14 +805,14 @@ impl WorkingProjectStore {
             source: MemberSource::Bytes(head_bytes),
         };
 
-        let mut sorted_member_seals = BTreeMap::<String, ExportMemberSealV1>::new();
+        let mut sorted_member_seals = BTreeMap::<String, ExportMemberSealV2>::new();
         for member in std::iter::once(&project_member)
             .chain(std::iter::once(&head_member))
             .chain(closure.snapshots.values())
             .chain(closure.entities.values())
             .chain(closure.assets.values())
         {
-            let seal = ExportMemberSealV1 {
+            let seal = ExportMemberSealV2 {
                 relative_name: member.relative_name.clone(),
                 byte_len: member.seal.byte_len,
                 sha256: member.seal.sha256,
@@ -1090,55 +821,38 @@ impl WorkingProjectStore {
                 .insert(member.relative_name.clone(), seal)
                 .is_some()
             {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+                return Err(Revision3ExactSnapshotExportError::InvalidClosure(
                     "two export members have the same relative name".to_owned(),
                 ));
             }
         }
 
-        let basis = ExportBasisV1 {
+        let basis = ExportBasisV2 {
             head: expected_head.clone(),
             project_id: project.project_id,
             project_revision: project.revision,
         };
         let members = sorted_member_seals.into_values().collect();
-        let manifest = match version {
-            ExactSnapshotExportVersion::V1 => {
-                let manifest = ExactSnapshotManifestV1 {
-                    format: ExportManifestFormatV1::ExactSnapshotV1,
-                    schema: ExportManifestSchemaV1,
-                    artifact_kind: ExportArtifactKindV1::PortableSnapshotReviewCopy,
-                    restore_status: ExportRestoreStatusV1::NotSupported,
-                    basis,
-                    members,
-                };
-                validate_manifest_members(&manifest)?;
-                PreparedExactSnapshotManifest::V1(manifest)
-            }
-            ExactSnapshotExportVersion::V2 => {
-                let manifest = ExactSnapshotManifestV2 {
-                    format: ExportManifestFormatV2::ExactSnapshotV2,
-                    schema: ExportManifestSchemaV2,
-                    artifact_kind: ExportArtifactKindV2::PortableSnapshotRestorableCopy,
-                    restore_status: ExportRestoreStatusV2::Supported,
-                    basis,
-                    members,
-                };
-                validate_manifest_members_v2(&manifest)?;
-                PreparedExactSnapshotManifest::V2(manifest)
-            }
+        let manifest = ExactSnapshotManifestV2 {
+            format: ExportManifestFormatV2::ExactSnapshotV2,
+            schema: ExportManifestSchemaV2,
+            artifact_kind: ExportArtifactKindV2::PortableSnapshotRestorableCopy,
+            restore_status: ExportRestoreStatusV2::Supported,
+            basis,
+            members,
         };
-        let manifest_bytes = manifest.canonical_bytes()?;
-        if manifest_bytes.len() > MAX_EXPORT_MANIFEST_BYTES_V1 {
-            return Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+        validate_manifest_members(&manifest)?;
+        let manifest_bytes = canonical_json(&manifest)?;
+        if manifest_bytes.len() > MAX_EXPORT_MANIFEST_BYTES_V2 {
+            return Err(Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "export manifest bytes",
                 actual: manifest_bytes.len() as u64,
-                limit: MAX_EXPORT_MANIFEST_BYTES_V1 as u64,
+                limit: MAX_EXPORT_MANIFEST_BYTES_V2 as u64,
             });
         }
         let manifest_seal = seal_bytes(&manifest_bytes);
         let manifest_member = PlannedMember {
-            relative_name: REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1.to_owned(),
+            relative_name: REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2.to_owned(),
             seal: manifest_seal.clone(),
             source: MemberSource::Bytes(manifest_bytes),
         };
@@ -1150,16 +864,16 @@ impl WorkingProjectStore {
             .checked_add(snapshot_objects)
             .and_then(|value| value.checked_add(entity_objects))
             .and_then(|value| value.checked_add(asset_objects))
-            .ok_or(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+            .ok_or(Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "archive entry count",
                 actual: u64::MAX,
-                limit: MAX_EXPORT_ARCHIVE_ENTRIES_V1,
+                limit: MAX_EXPORT_ARCHIVE_ENTRIES_V2,
             })?;
-        if archive_entries > MAX_EXPORT_ARCHIVE_ENTRIES_V1 {
-            return Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+        if archive_entries > MAX_EXPORT_ARCHIVE_ENTRIES_V2 {
+            return Err(Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "archive entry count",
                 actual: archive_entries,
-                limit: MAX_EXPORT_ARCHIVE_ENTRIES_V1,
+                limit: MAX_EXPORT_ARCHIVE_ENTRIES_V2,
             });
         }
         let mut uncompressed_bytes = manifest_seal.byte_len;
@@ -1170,7 +884,7 @@ impl WorkingProjectStore {
             .chain(closure.assets.values())
         {
             uncompressed_bytes = uncompressed_bytes.checked_add(member.seal.byte_len).ok_or(
-                Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+                Revision3ExactSnapshotExportError::ClosureLimit {
                     kind: "archive uncompressed bytes",
                     actual: u64::MAX,
                     limit: u64::MAX - 1,
@@ -1179,7 +893,7 @@ impl WorkingProjectStore {
         }
 
         let mut members = Vec::with_capacity(usize::try_from(archive_entries).map_err(|_| {
-            Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+            Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "archive entry count",
                 actual: archive_entries,
                 limit: usize::MAX as u64,
@@ -1193,7 +907,7 @@ impl WorkingProjectStore {
         members.extend(closure.assets.into_values());
 
         Ok(ExportPlan {
-            receipt: Revision3ExactSnapshotExportV1 {
+            receipt: Revision3ExactSnapshotExportV2 {
                 head: expected_head.clone(),
                 project_id: project.project_id,
                 project_revision: project.revision,
@@ -1203,7 +917,7 @@ impl WorkingProjectStore {
                     sha256: Sha256Digest::from_bytes([0; 32]),
                 },
                 manifest: manifest_seal,
-                closure: Revision3ExactSnapshotClosureV1 {
+                closure: Revision3ExactSnapshotClosureV2 {
                     snapshot_objects,
                     entity_objects,
                     asset_objects,
@@ -1225,21 +939,19 @@ fn enqueue_snapshot(
     seal: ContentSeal,
     max_count: u64,
     max_bytes: u64,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     if let Some(existing) = known_lengths.get(&seal.sha256) {
         if *existing != seal.byte_len {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
-                format!(
-                    "snapshot {} has conflicting lengths {existing} and {}",
-                    seal.sha256, seal.byte_len
-                ),
-            ));
+            return Err(Revision3ExactSnapshotExportError::InvalidClosure(format!(
+                "snapshot {} has conflicting lengths {existing} and {}",
+                seal.sha256, seal.byte_len
+            )));
         }
         return Ok(());
     }
     let actual_count = known_lengths.len() as u64 + 1;
     if actual_count > max_count {
-        return Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+        return Err(Revision3ExactSnapshotExportError::ClosureLimit {
             kind: "snapshot object count",
             actual: actual_count,
             limit: max_count,
@@ -1261,12 +973,13 @@ fn insert_closure_member(
     members: &mut BTreeMap<String, PlannedMember>,
     member: PlannedMember,
     kind: &'static str,
-) -> Result<bool, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<bool, Revision3ExactSnapshotExportError> {
     if let Some(existing) = members.get(&member.relative_name) {
         if existing.seal != member.seal {
-            return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
-                format!("{kind} {} has conflicting seals", member.relative_name),
-            ));
+            return Err(Revision3ExactSnapshotExportError::InvalidClosure(format!(
+                "{kind} {} has conflicting seals",
+                member.relative_name
+            )));
         }
         return Ok(false);
     }
@@ -1279,10 +992,10 @@ fn checked_export_sum(
     current: u64,
     addition: u64,
     limit: u64,
-) -> Result<u64, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<u64, Revision3ExactSnapshotExportError> {
     let actual = current.checked_add(addition).unwrap_or(u64::MAX);
     if actual > limit {
-        Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+        Err(Revision3ExactSnapshotExportError::ClosureLimit {
             kind,
             actual,
             limit,
@@ -1297,7 +1010,7 @@ fn charge_full_verification_work(
     bytes: &mut u64,
     additional_objects: u64,
     additional_bytes: u64,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     let next_objects = checked_export_sum(
         "full-verification objects",
         *objects,
@@ -1331,54 +1044,15 @@ fn asset_member_name(digest: Sha256Digest) -> String {
 }
 
 fn validate_manifest_members(
-    manifest: &ExactSnapshotManifestV1,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
-    if manifest.format != ExportManifestFormatV1::ExactSnapshotV1
-        || manifest.schema != ExportManifestSchemaV1
-        || manifest.artifact_kind != ExportArtifactKindV1::PortableSnapshotReviewCopy
-        || manifest.restore_status != ExportRestoreStatusV1::NotSupported
-        || manifest.basis.head.snapshot.byte_len == 0
-    {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-            "export manifest marker or basis is invalid".to_owned(),
-        ));
-    }
-    let mut previous: Option<&str> = None;
-    let mut folded = BTreeSet::new();
-    for member in &manifest.members {
-        if member.relative_name == REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1
-            || member.relative_name.is_empty()
-            || member.byte_len == 0
-        {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-                "export manifest contains an invalid or self member".to_owned(),
-            ));
-        }
-        if previous.is_some_and(|value| value >= member.relative_name.as_str()) {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-                "export manifest members are not strictly sorted".to_owned(),
-            ));
-        }
-        if !folded.insert(member.relative_name.to_ascii_lowercase()) {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-                "export manifest members collide case-insensitively".to_owned(),
-            ));
-        }
-        previous = Some(&member.relative_name);
-    }
-    Ok(())
-}
-
-fn validate_manifest_members_v2(
     manifest: &ExactSnapshotManifestV2,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     if manifest.format != ExportManifestFormatV2::ExactSnapshotV2
         || manifest.schema != ExportManifestSchemaV2
         || manifest.artifact_kind != ExportArtifactKindV2::PortableSnapshotRestorableCopy
         || manifest.restore_status != ExportRestoreStatusV2::Supported
         || manifest.basis.head.snapshot.byte_len == 0
     {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+        return Err(Revision3ExactSnapshotExportError::Verification(
             "export manifest marker or basis is invalid".to_owned(),
         ));
     }
@@ -1389,17 +1063,17 @@ fn validate_manifest_members_v2(
             || member.relative_name.is_empty()
             || member.byte_len == 0
         {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+            return Err(Revision3ExactSnapshotExportError::Verification(
                 "export manifest contains an invalid or self member".to_owned(),
             ));
         }
         if previous.is_some_and(|value| value >= member.relative_name.as_str()) {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+            return Err(Revision3ExactSnapshotExportError::Verification(
                 "export manifest members are not strictly sorted".to_owned(),
             ));
         }
         if !folded.insert(member.relative_name.to_ascii_lowercase()) {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+            return Err(Revision3ExactSnapshotExportError::Verification(
                 "export manifest members collide case-insensitively".to_owned(),
             ));
         }
@@ -1411,21 +1085,21 @@ fn validate_manifest_members_v2(
 fn write_deterministic_archive(
     file: &mut File,
     members: &[PlannedMember],
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     let timestamp = DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).map_err(|error| {
-        Revision3ExactSnapshotExportErrorV1::Archive(format!(
+        Revision3ExactSnapshotExportError::Archive(format!(
             "fixed ZIP timestamp is invalid: {error:?}"
         ))
     })?;
     file.set_len(0)
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     file.seek(SeekFrom::Start(0))
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     let writer_file = file
         .try_clone()
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     let mut writer = ZipWriter::new(writer_file);
-    // Force the closed v1 artifact to ZIP64 even for small projects. This keeps the container
+    // Force the closed V2 artifact to ZIP64 even for small projects. This keeps the container
     // dialect invariant instead of making it depend on one project's object sizes/counts.
     writer.set_zip64_comment(Some(""));
     for member in members {
@@ -1436,16 +1110,17 @@ fn write_deterministic_archive(
             .large_file(true);
         writer
             .start_file(&member.relative_name, options)
-            .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+            .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
         match &member.source {
             MemberSource::Bytes(bytes) => {
                 if seal_bytes(bytes) != member.seal {
-                    return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
-                        format!("in-memory member {} changed", member.relative_name),
-                    ));
+                    return Err(Revision3ExactSnapshotExportError::InvalidClosure(format!(
+                        "in-memory member {} changed",
+                        member.relative_name
+                    )));
                 }
                 writer.write_all(bytes).map_err(|error| {
-                    Revision3ExactSnapshotExportErrorV1::Archive(error.to_string())
+                    Revision3ExactSnapshotExportError::Archive(error.to_string())
                 })?;
             }
             MemberSource::StoreObject(path) => {
@@ -1455,13 +1130,13 @@ fn write_deterministic_archive(
     }
     let mut file = writer
         .finish()
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     file.flush()
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     file.sync_all()
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     file.seek(SeekFrom::Start(0))
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     Ok(())
 }
 
@@ -1469,7 +1144,7 @@ fn copy_sealed_store_object<W: Write>(
     path: &Path,
     seal: &ContentSeal,
     output: &mut W,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     ensure_safe_existing_chain(path)?;
     let metadata = fs::symlink_metadata(path)?;
     ensure_regular_no_link(path, &metadata)?;
@@ -1502,7 +1177,7 @@ fn copy_sealed_store_object<W: Write>(
             break;
         }
         total = total.checked_add(count as u64).ok_or_else(|| {
-            Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+            Revision3ExactSnapshotExportError::InvalidClosure(
                 "object length overflow while streaming export".to_owned(),
             )
         })?;
@@ -1516,7 +1191,7 @@ fn copy_sealed_store_object<W: Write>(
         hasher.update(&buffer[..count]);
         output
             .write_all(&buffer[..count])
-            .map_err(|error| Revision3ExactSnapshotExportErrorV1::Archive(error.to_string()))?;
+            .map_err(|error| Revision3ExactSnapshotExportError::Archive(error.to_string()))?;
     }
     let actual = Sha256Digest::from_bytes(hasher.finalize().into());
     if total != seal.byte_len || actual != seal.sha256 {
@@ -1535,17 +1210,17 @@ fn copy_sealed_store_object<W: Write>(
 fn verify_staged_archive(
     file: &mut File,
     expected: &[PlannedMember],
-    expected_manifest: &PreparedExactSnapshotManifest,
+    expected_manifest: &ExactSnapshotManifestV2,
     expected_project: &ProjectRevision3,
-) -> Result<ContentSeal, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<ContentSeal, Revision3ExactSnapshotExportError> {
     let metadata = file.metadata().map_err(staged_verification_error)?;
     if !metadata.is_file() {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+        return Err(Revision3ExactSnapshotExportError::Verification(
             "staged ZIP handle is not a regular file".to_owned(),
         ));
     }
     if metadata.len() == 0 {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+        return Err(Revision3ExactSnapshotExportError::Verification(
             "staged ZIP is empty".to_owned(),
         ));
     }
@@ -1554,14 +1229,14 @@ fn verify_staged_archive(
         .seek(SeekFrom::Start(0))
         .map_err(staged_verification_error)?;
     let mut archive = ZipArchive::new(reader)
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::Verification(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::Verification(error.to_string()))?;
     if archive.len() != expected.len() || !archive.comment().is_empty() {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+        return Err(Revision3ExactSnapshotExportError::Verification(
             "staged ZIP entry count or comment differs".to_owned(),
         ));
     }
     let timestamp = DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).map_err(|error| {
-        Revision3ExactSnapshotExportErrorV1::Verification(format!(
+        Revision3ExactSnapshotExportError::Verification(format!(
             "fixed ZIP timestamp is invalid: {error:?}"
         ))
     })?;
@@ -1572,7 +1247,7 @@ fn verify_staged_archive(
     for (index, member) in expected.iter().enumerate() {
         {
             let entry = archive.by_index_raw(index).map_err(|error| {
-                Revision3ExactSnapshotExportErrorV1::Verification(error.to_string())
+                Revision3ExactSnapshotExportError::Verification(error.to_string())
             })?;
             if entry.name() != member.relative_name
                 || entry.name_raw() != member.relative_name.as_bytes()
@@ -1585,7 +1260,7 @@ fn verify_staged_archive(
                 || entry.last_modified() != Some(timestamp)
                 || entry.unix_mode().map(|mode| mode & 0o777) != Some(ZIP_FILE_MODE)
             {
-                return Err(Revision3ExactSnapshotExportErrorV1::Verification(format!(
+                return Err(Revision3ExactSnapshotExportError::Verification(format!(
                     "staged ZIP metadata differs at entry {index}"
                 )));
             }
@@ -1595,9 +1270,9 @@ fn verify_staged_archive(
                 crc32: entry.crc32(),
             });
         }
-        let mut entry = archive.by_index(index).map_err(|error| {
-            Revision3ExactSnapshotExportErrorV1::Verification(error.to_string())
-        })?;
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| Revision3ExactSnapshotExportError::Verification(error.to_string()))?;
         let collect = index <= 2;
         let mut bytes = collect.then(|| Vec::with_capacity(member.seal.byte_len as usize));
         let mut hasher = Sha256::new();
@@ -1605,18 +1280,18 @@ fn verify_staged_archive(
         let mut buffer = [0u8; COPY_BUFFER_BYTES];
         loop {
             let count = entry.read(&mut buffer).map_err(|error| {
-                Revision3ExactSnapshotExportErrorV1::Verification(error.to_string())
+                Revision3ExactSnapshotExportError::Verification(error.to_string())
             })?;
             if count == 0 {
                 break;
             }
             total = total.checked_add(count as u64).ok_or_else(|| {
-                Revision3ExactSnapshotExportErrorV1::Verification(
+                Revision3ExactSnapshotExportError::Verification(
                     "staged ZIP payload length overflow".to_owned(),
                 )
             })?;
             if total > member.seal.byte_len {
-                return Err(Revision3ExactSnapshotExportErrorV1::Verification(format!(
+                return Err(Revision3ExactSnapshotExportError::Verification(format!(
                     "staged ZIP payload grew at entry {index}"
                 )));
             }
@@ -1628,7 +1303,7 @@ fn verify_staged_archive(
         if total != member.seal.byte_len
             || Sha256Digest::from_bytes(hasher.finalize().into()) != member.seal.sha256
         {
-            return Err(Revision3ExactSnapshotExportErrorV1::Verification(format!(
+            return Err(Revision3ExactSnapshotExportError::Verification(format!(
                 "staged ZIP payload seal differs at entry {index}"
             )));
         }
@@ -1643,61 +1318,44 @@ fn verify_staged_archive(
     verify_exact_zip_layout(file, metadata.len(), &raw_members)?;
 
     let manifest_bytes = manifest_bytes.as_deref().ok_or_else(|| {
-        Revision3ExactSnapshotExportErrorV1::Verification(
+        Revision3ExactSnapshotExportError::Verification(
             "staged ZIP has no manifest payload".to_owned(),
         )
     })?;
-    match expected_manifest {
-        PreparedExactSnapshotManifest::V1(expected) => {
-            let manifest: ExactSnapshotManifestV1 =
-                parse_canonical_json(manifest_bytes, "managed exact snapshot export manifest")
-                    .map_err(staged_verification_error)?;
-            validate_manifest_members(&manifest)?;
-            if &manifest != expected {
-                return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-                    "staged ZIP manifest differs from its prepared marker".to_owned(),
-                ));
-            }
-        }
-        PreparedExactSnapshotManifest::V2(expected) => {
-            let manifest: ExactSnapshotManifestV2 =
-                parse_canonical_json(manifest_bytes, "managed exact snapshot export manifest")
-                    .map_err(staged_verification_error)?;
-            validate_manifest_members_v2(&manifest)?;
-            if &manifest != expected {
-                return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-                    "staged ZIP manifest differs from its prepared marker".to_owned(),
-                ));
-            }
-        }
+    let manifest: ExactSnapshotManifestV2 =
+        parse_canonical_json(manifest_bytes, "managed exact snapshot export manifest")
+            .map_err(staged_verification_error)?;
+    validate_manifest_members(&manifest)?;
+    if &manifest != expected_manifest {
+        return Err(Revision3ExactSnapshotExportError::Verification(
+            "staged ZIP manifest differs from its prepared marker".to_owned(),
+        ));
     }
-    let manifest_basis = expected_manifest.basis();
+    let manifest_basis = &expected_manifest.basis;
     let project_text = std::str::from_utf8(project_bytes.as_deref().ok_or_else(|| {
-        Revision3ExactSnapshotExportErrorV1::Verification(
-            "staged ZIP has no review project payload".to_owned(),
+        Revision3ExactSnapshotExportError::Verification(
+            "staged ZIP has no project payload".to_owned(),
         )
     })?)
     .map_err(|_| {
-        Revision3ExactSnapshotExportErrorV1::Verification(
-            "staged review project is not UTF-8".to_owned(),
-        )
+        Revision3ExactSnapshotExportError::Verification("staged project is not UTF-8".to_owned())
     })?;
     let project = ProjectRevision3::from_json(project_text).map_err(|error| {
-        Revision3ExactSnapshotExportErrorV1::Verification(format!(
-            "staged review project is invalid: {error}"
+        Revision3ExactSnapshotExportError::Verification(format!(
+            "staged project is invalid: {error}"
         ))
     })?;
     if &project != expected_project
         || project.project_id != manifest_basis.project_id
         || project.revision != manifest_basis.project_revision
     {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
-            "staged review project differs from the exact manifest basis".to_owned(),
+        return Err(Revision3ExactSnapshotExportError::Verification(
+            "staged project differs from the exact manifest basis".to_owned(),
         ));
     }
     let head: WorkingHead = parse_canonical_json(
         head_bytes.as_deref().ok_or_else(|| {
-            Revision3ExactSnapshotExportErrorV1::Verification(
+            Revision3ExactSnapshotExportError::Verification(
                 "staged ZIP has no Store head payload".to_owned(),
             )
         })?,
@@ -1705,7 +1363,7 @@ fn verify_staged_archive(
     )
     .map_err(staged_verification_error)?;
     if head != manifest_basis.head {
-        return Err(Revision3ExactSnapshotExportErrorV1::Verification(
+        return Err(Revision3ExactSnapshotExportError::Verification(
             "staged Store head differs from the exact manifest basis".to_owned(),
         ));
     }
@@ -1719,7 +1377,7 @@ fn verify_exact_zip_layout(
     file: &File,
     byte_len: u64,
     members: &[RawZipMemberExpectation],
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     const LOCAL_FIXED_BYTES: u64 = 30;
     const CENTRAL_FIXED_BYTES: u64 = 46;
     const FOOTER_BYTES: u64 = 98;
@@ -1831,7 +1489,7 @@ fn verify_exact_zip64_footer(
     central_offset: u64,
     central_size: u64,
     entry_count: u64,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+) -> Result<(), Revision3ExactSnapshotExportError> {
     const ZIP64_EOCD_BYTES: usize = 56;
     const ZIP64_LOCATOR_BYTES: usize = 20;
     const LEGACY_EOCD_BYTES: usize = 22;
@@ -1887,14 +1545,14 @@ fn checked_layout_add(
     current: u64,
     addition: u64,
     kind: &str,
-) -> Result<u64, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<u64, Revision3ExactSnapshotExportError> {
     current
         .checked_add(addition)
         .ok_or_else(|| layout_error(format!("{kind} offset overflowed")))
 }
 
-fn layout_error(reason: String) -> Revision3ExactSnapshotExportErrorV1 {
-    Revision3ExactSnapshotExportErrorV1::Verification(reason)
+fn layout_error(reason: String) -> Revision3ExactSnapshotExportError {
+    Revision3ExactSnapshotExportError::Verification(reason)
 }
 
 fn le_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -1945,8 +1603,8 @@ fn read_exact_file_at(file: &File, mut buffer: &mut [u8], mut offset: u64) -> io
     Ok(())
 }
 
-fn staged_verification_error(error: impl std::fmt::Display) -> Revision3ExactSnapshotExportErrorV1 {
-    Revision3ExactSnapshotExportErrorV1::Verification(error.to_string())
+fn staged_verification_error(error: impl std::fmt::Display) -> Revision3ExactSnapshotExportError {
+    Revision3ExactSnapshotExportError::Verification(error.to_string())
 }
 
 fn hash_open_file(file: &File, expected_len: u64) -> io::Result<Sha256Digest> {
@@ -2102,29 +1760,27 @@ fn ambient_directory_matches(path: &Path, expected: DirectoryIdentity) -> bool {
         .is_ok_and(|actual| actual == expected)
 }
 
-fn revalidate_export_output(
-    guard: &OutputGuard,
-) -> Result<(), Revision3ExactSnapshotExportErrorV1> {
+fn revalidate_export_output(guard: &OutputGuard) -> Result<(), Revision3ExactSnapshotExportError> {
     if directory_is_at_or_below(&guard.parent, guard.store_root_identity).map_err(|error| {
-        Revision3ExactSnapshotExportErrorV1::InvalidOutput(format!(
+        Revision3ExactSnapshotExportError::InvalidOutput(format!(
             "output ancestry could not be revalidated from its pinned directory: {error}"
         ))
     })? {
-        return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+        return Err(Revision3ExactSnapshotExportError::InvalidOutput(
             "output parent moved inside the managed Store root during export".to_owned(),
         ));
     }
     ensure_safe_directory_chain(&guard.parent_path)
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string()))?;
+        .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?;
     if !ambient_directory_matches(&guard.parent_path, guard.parent_identity) {
-        return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+        return Err(Revision3ExactSnapshotExportError::InvalidOutput(
             "output parent identity changed during export".to_owned(),
         ));
     }
     match guard.parent.symlink_metadata(&guard.filename) {
-        Ok(_) => Err(Revision3ExactSnapshotExportErrorV1::OutputAlreadyExists),
+        Ok(_) => Err(Revision3ExactSnapshotExportError::OutputAlreadyExists),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+        Err(error) => Err(Revision3ExactSnapshotExportError::InvalidOutput(
             error.to_string(),
         )),
     }
@@ -2133,18 +1789,18 @@ fn revalidate_export_output(
 #[cfg(target_os = "linux")]
 fn create_staged_archive(
     guard: &OutputGuard,
-) -> Result<StagedArchive, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<StagedArchive, Revision3ExactSnapshotExportError> {
     use std::os::fd::{AsRawFd, FromRawFd};
 
     if !ambient_directory_matches(&guard.parent_path, guard.parent_identity) {
-        return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+        return Err(Revision3ExactSnapshotExportError::InvalidOutput(
             "output parent identity changed before staging creation".to_owned(),
         ));
     }
     let parent = guard
         .parent
         .try_clone()
-        .map_err(|error| Revision3ExactSnapshotExportErrorV1::InvalidOutput(error.to_string()))?
+        .map_err(|error| Revision3ExactSnapshotExportError::InvalidOutput(error.to_string()))?
         .into_std_file();
     // SAFETY: parent is a live directory descriptor, the C string is terminated, and a successful
     // descriptor is immediately owned by File. O_TMPFILE creates no directory entry to clean up.
@@ -2157,7 +1813,7 @@ fn create_staged_archive(
         )
     };
     if fd < 0 {
-        return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(format!(
+        return Err(Revision3ExactSnapshotExportError::InvalidOutput(format!(
             "output parent cannot host an anonymous private staging file: {}",
             io::Error::last_os_error()
         )));
@@ -2174,7 +1830,7 @@ fn create_staged_archive(
 #[cfg(windows)]
 fn create_staged_archive(
     guard: &OutputGuard,
-) -> Result<StagedArchive, Revision3ExactSnapshotExportErrorV1> {
+) -> Result<StagedArchive, Revision3ExactSnapshotExportError> {
     use cap_std::fs::OpenOptionsExt as _;
     use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -2182,7 +1838,7 @@ fn create_staged_archive(
     };
 
     if !ambient_directory_matches(&guard.parent_path, guard.parent_identity) {
-        return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+        return Err(Revision3ExactSnapshotExportError::InvalidOutput(
             "output parent identity changed before staging creation".to_owned(),
         ));
     }
@@ -2210,13 +1866,13 @@ fn create_staged_archive(
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(format!(
+                return Err(Revision3ExactSnapshotExportError::InvalidOutput(format!(
                     "output parent cannot host a private staging file: {error}"
                 )));
             }
         }
     }
-    Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(
+    Err(Revision3ExactSnapshotExportError::InvalidOutput(
         "could not allocate a unique handle-locked staging file".to_owned(),
     ))
 }
@@ -2224,8 +1880,8 @@ fn create_staged_archive(
 #[cfg(all(unix, not(target_os = "linux")))]
 fn create_staged_archive(
     _guard: &OutputGuard,
-) -> Result<StagedArchive, Revision3ExactSnapshotExportErrorV1> {
-    Err(Revision3ExactSnapshotExportErrorV1::Archive(
+) -> Result<StagedArchive, Revision3ExactSnapshotExportError> {
+    Err(Revision3ExactSnapshotExportError::Archive(
         "this Unix target lacks the required anonymous handle-relative publication primitive"
             .to_owned(),
     ))
@@ -2507,18 +2163,18 @@ fn verify_named_archive_handle(
 
 fn abort_staged_archive(
     staged: &mut StagedArchive,
-    primary: Revision3ExactSnapshotExportErrorV1,
-) -> Revision3ExactSnapshotExportErrorV1 {
+    primary: Revision3ExactSnapshotExportError,
+) -> Revision3ExactSnapshotExportError {
     preserve_primary_through_cleanup(primary, cleanup_staged_archive(staged))
 }
 
 fn preserve_primary_through_cleanup(
-    primary: Revision3ExactSnapshotExportErrorV1,
+    primary: Revision3ExactSnapshotExportError,
     cleanup: io::Result<()>,
-) -> Revision3ExactSnapshotExportErrorV1 {
+) -> Revision3ExactSnapshotExportError {
     match cleanup {
         Ok(()) => primary,
-        Err(error) => Revision3ExactSnapshotExportErrorV1::StagingCleanup {
+        Err(error) => Revision3ExactSnapshotExportError::StagingCleanup {
             primary: Box::new(primary),
             cleanup: error.to_string(),
         },
@@ -2909,18 +2565,18 @@ mod tests {
         let second_path = area.output("second.goremod");
 
         let first = store
-            .export_current_revision3_exact_snapshot_v1(&prepared.head, &first_path)
+            .export_current_revision3_exact_snapshot_v2(&prepared.head, &first_path)
             .unwrap();
         let second = store
-            .export_current_revision3_exact_snapshot_v1(&prepared.head, &second_path)
+            .export_current_revision3_exact_snapshot_v2(&prepared.head, &second_path)
             .unwrap();
         assert!(matches!(
             first,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert!(matches!(
             second,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert_eq!(
             fs::read(&first_path).unwrap(),
@@ -2932,8 +2588,8 @@ mod tests {
         assert_eq!(
             archive_names(&first_path),
             vec![
-                REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1.to_owned(),
-                REVIEW_PROJECT_FILE.to_owned(),
+                REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2.to_owned(),
+                PROJECT_FILE.to_owned(),
                 STORE_HEAD_MEMBER.to_owned(),
                 snapshot_name.clone(),
             ]
@@ -2954,16 +2610,16 @@ mod tests {
         let manifest: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(
             manifest["format"],
-            REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1
+            REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2
         );
-        assert_eq!(manifest["schema"], 1);
+        assert_eq!(manifest["schema"], 2);
         assert_eq!(
             manifest["artifact_kind"],
-            REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1
+            REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V2
         );
         assert_eq!(
             manifest["restore_status"],
-            REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1
+            REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2
         );
         assert_eq!(
             manifest["basis"]["head"],
@@ -2976,11 +2632,7 @@ mod tests {
                 .iter()
                 .map(|member| member["relative_name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec![
-                REVIEW_PROJECT_FILE,
-                STORE_HEAD_MEMBER,
-                snapshot_name.as_str()
-            ]
+            vec![PROJECT_FILE, STORE_HEAD_MEMBER, snapshot_name.as_str()]
         );
 
         let fixed_timestamp = DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0).unwrap();
@@ -2989,13 +2641,6 @@ mod tests {
         drop(archive);
         let archive_bytes = fs::read(&first_path).unwrap();
         let archive_seal = seal_bytes(&archive_bytes);
-        // Byte-exact V1 golden. Any writer, ordering, canonical-JSON, metadata, or fixture drift
-        // must be an explicit compatibility decision rather than an unnoticed refactor effect.
-        assert_eq!(archive_seal.byte_len, 2523);
-        assert_eq!(
-            archive_seal.sha256.to_string(),
-            "b6cb50cd97d24e03f98350b2f71ffbb8970dc931decd4e63b2d4f0f22f427cd7"
-        );
         assert_eq!(archive_seal, first.receipt().archive);
         assert!(archive_bytes
             .windows(4)
@@ -3035,20 +2680,15 @@ mod tests {
     }
 
     #[test]
-    fn v2_changes_only_the_closed_restorable_manifest_contract() {
+    fn v2_restorable_manifest_contract_is_closed_and_byte_exact() {
         assert_eq!(
             REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V2,
             "managed_revision3_exact_snapshot_v2"
         );
-        let fixture = published_quest_store("v2-manifest-delta");
-        let v1_path = fixture.area.output("v1.goremod");
+        let fixture = published_quest_store("v2-manifest");
         let v2_path = fixture.area.output("v2.goremod");
         let v2_repeat_path = fixture.area.output("v2-repeat.goremod");
 
-        let v1 = fixture
-            .store
-            .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &v1_path)
-            .unwrap();
         let v2 = fixture
             .store
             .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &v2_path)
@@ -3078,59 +2718,21 @@ mod tests {
                 "737338770096675a2582ae36ef2978e969170a37e9dd76717add6a5a44fa6ca8".to_owned()
             )
         );
-        assert_eq!(v1.receipt().head, v2.receipt().head);
-        assert_eq!(v1.receipt().project_id, v2.receipt().project_id);
-        assert_eq!(v1.receipt().project_revision, v2.receipt().project_revision);
-        assert_eq!(
-            v1.receipt().closure.snapshot_objects,
-            v2.receipt().closure.snapshot_objects
-        );
-        assert_eq!(
-            v1.receipt().closure.entity_objects,
-            v2.receipt().closure.entity_objects
-        );
-        assert_eq!(
-            v1.receipt().closure.asset_objects,
-            v2.receipt().closure.asset_objects
-        );
-        assert_eq!(
-            v1.receipt().closure.archive_entries,
-            v2.receipt().closure.archive_entries
-        );
         assert!(v2.receipt().closure.snapshot_objects > 1);
         assert!(v2.receipt().closure.entity_objects > 0);
         assert!(v2.receipt().closure.asset_objects > 0);
-        assert_eq!(archive_names(&v1_path), archive_names(&v2_path));
 
-        let read_members = |path: &Path| {
-            let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
-            (0..archive.len())
-                .map(|index| {
-                    let mut entry = archive.by_index(index).unwrap();
-                    let name = entry.name().to_owned();
-                    let mut bytes = Vec::new();
-                    entry.read_to_end(&mut bytes).unwrap();
-                    (name, bytes)
-                })
-                .collect::<Vec<_>>()
-        };
-        let v1_members = read_members(&v1_path);
-        let v2_members = read_members(&v2_path);
-        assert_eq!(v1_members.len(), v2_members.len());
-        for ((v1_name, v1_bytes), (v2_name, v2_bytes)) in
-            v1_members.iter().zip(v2_members.iter()).skip(1)
-        {
-            assert_eq!(v1_name, v2_name);
-            assert_eq!(v1_bytes, v2_bytes);
-        }
-
-        let v1_manifest: ExactSnapshotManifestV1 =
-            parse_canonical_json(&v1_members[0].1, "test V1 exact snapshot export manifest")
-                .unwrap();
+        let mut archive = ZipArchive::new(File::open(&v2_path).unwrap()).unwrap();
+        let mut manifest_bytes = Vec::new();
+        archive
+            .by_index(0)
+            .unwrap()
+            .read_to_end(&mut manifest_bytes)
+            .unwrap();
         let manifest: ExactSnapshotManifestV2 =
-            parse_canonical_json(&v2_members[0].1, "test V2 exact snapshot export manifest")
+            parse_canonical_json(&manifest_bytes, "test V2 exact snapshot export manifest")
                 .unwrap();
-        validate_manifest_members_v2(&manifest).unwrap();
+        validate_manifest_members(&manifest).unwrap();
         assert_eq!(manifest.format, ExportManifestFormatV2::ExactSnapshotV2);
         assert_eq!(manifest.schema, ExportManifestSchemaV2);
         assert_eq!(
@@ -3145,7 +2747,6 @@ mod tests {
             manifest.members.len() as u64 + 1,
             v2.receipt().closure.archive_entries
         );
-        assert_eq!(&manifest.members, &v1_manifest.members);
         assert_eq!(
             serde_json::to_value(&manifest).unwrap()["format"],
             REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2
@@ -3158,17 +2759,7 @@ mod tests {
             serde_json::to_value(&manifest).unwrap()["restore_status"],
             REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2
         );
-        assert!(parse_canonical_json::<ExactSnapshotManifestV1>(
-            &v2_members[0].1,
-            "V2 through V1 parser"
-        )
-        .is_err());
-        assert!(parse_canonical_json::<ExactSnapshotManifestV2>(
-            &v1_members[0].1,
-            "V1 through V2 parser"
-        )
-        .is_err());
-        assert_eq!(seal_bytes(&v2_members[0].1), v2.receipt().manifest);
+        assert_eq!(seal_bytes(&manifest_bytes), v2.receipt().manifest);
         assert_eq!(
             seal_bytes(&fs::read(v2_path).unwrap()),
             v2.receipt().archive
@@ -3180,7 +2771,7 @@ mod tests {
         let (area, store, prepared) = published_empty_store("raw-zip-mutations");
         let output = area.output("source.goremod");
         store
-            .export_current_revision3_exact_snapshot_v1(&prepared.head, &output)
+            .export_current_revision3_exact_snapshot_v2(&prepared.head, &output)
             .unwrap();
         let original = fs::read(&output).unwrap();
         let members = raw_zip_members(&output);
@@ -3218,7 +2809,7 @@ mod tests {
             assert!(
                 matches!(
                     verify_exact_zip_layout(&file, changed.len() as u64, &members),
-                    Err(Revision3ExactSnapshotExportErrorV1::Verification(_))
+                    Err(Revision3ExactSnapshotExportError::Verification(_))
                 ),
                 "raw mutation {label} was accepted"
             );
@@ -3230,7 +2821,7 @@ mod tests {
         let (area, store, prepared) = published_empty_store("closed-manifest");
         let output = area.output("closed.goremod");
         store
-            .export_current_revision3_exact_snapshot_v1(&prepared.head, &output)
+            .export_current_revision3_exact_snapshot_v2(&prepared.head, &output)
             .unwrap();
         let mut archive = ZipArchive::new(File::open(output).unwrap()).unwrap();
         let mut bytes = Vec::new();
@@ -3243,24 +2834,24 @@ mod tests {
 
         let unknown =
             canonical.replacen("\"artifact_kind\"", "\"future\":true,\"artifact_kind\"", 1);
-        assert!(serde_json::from_str::<ExactSnapshotManifestV1>(&unknown).is_err());
+        assert!(serde_json::from_str::<ExactSnapshotManifestV2>(&unknown).is_err());
         let wrong_marker = canonical.replacen(
-            REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1,
-            "gore.managed-project-snapshot.v2",
+            REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2,
+            "gore.managed-project-snapshot.unsupported",
             1,
         );
-        assert!(serde_json::from_str::<ExactSnapshotManifestV1>(&wrong_marker).is_err());
+        assert!(serde_json::from_str::<ExactSnapshotManifestV2>(&wrong_marker).is_err());
 
-        let mut manifest: ExactSnapshotManifestV1 = serde_json::from_str(&canonical).unwrap();
-        manifest.members[0].relative_name = REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1.to_owned();
+        let mut manifest: ExactSnapshotManifestV2 = serde_json::from_str(&canonical).unwrap();
+        manifest.members[0].relative_name = REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2.to_owned();
         assert!(matches!(
             validate_manifest_members(&manifest),
-            Err(Revision3ExactSnapshotExportErrorV1::Verification(_))
+            Err(Revision3ExactSnapshotExportError::Verification(_))
         ));
         manifest.members[0].relative_name = "z-last".to_owned();
         assert!(matches!(
             validate_manifest_members(&manifest),
-            Err(Revision3ExactSnapshotExportErrorV1::Verification(_))
+            Err(Revision3ExactSnapshotExportError::Verification(_))
         ));
     }
 
@@ -3286,7 +2877,7 @@ mod tests {
         };
         assert!(matches!(
             insert_closure_member(&mut members, conflict, "entity"),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(_))
+            Err(Revision3ExactSnapshotExportError::InvalidClosure(_))
         ));
 
         let mut pending = BTreeMap::new();
@@ -3320,7 +2911,7 @@ mod tests {
                 1,
                 10,
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(_))
+            Err(Revision3ExactSnapshotExportError::InvalidClosure(_))
         ));
         assert!(matches!(
             enqueue_snapshot(
@@ -3331,7 +2922,7 @@ mod tests {
                 1,
                 10,
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+            Err(Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "snapshot object count",
                 ..
             })
@@ -3339,11 +2930,11 @@ mod tests {
         assert_eq!(checked_export_sum("bytes", 7, 3, 10).unwrap(), 10);
         assert!(matches!(
             checked_export_sum("bytes", 7, 4, 10),
-            Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit { .. })
+            Err(Revision3ExactSnapshotExportError::ClosureLimit { .. })
         ));
         assert!(matches!(
             checked_export_sum("bytes", u64::MAX, 1, u64::MAX - 1),
-            Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit { .. })
+            Err(Revision3ExactSnapshotExportError::ClosureLimit { .. })
         ));
 
         // Reopening the same large shared asset through multiple bases is conservatively charged
@@ -3371,7 +2962,7 @@ mod tests {
                 1,
                 64 * 1024 * 1024 * 1024,
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::ClosureLimit {
+            Err(Revision3ExactSnapshotExportError::ClosureLimit {
                 kind: "full-verification bytes",
                 ..
             })
@@ -3434,11 +3025,11 @@ mod tests {
         let before = tree_bytes(&area.store_root());
         let output = area.output("recursive.goremod");
         let exported = store
-            .export_current_revision3_exact_snapshot_v1(&current.head, &output)
+            .export_current_revision3_exact_snapshot_v2(&current.head, &output)
             .unwrap();
         assert!(matches!(
             exported,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert_eq!(tree_bytes(&area.store_root()), before);
         assert_eq!(exported.receipt().closure.snapshot_objects, 3);
@@ -3480,25 +3071,25 @@ mod tests {
     fn rejects_relative_store_local_stale_and_existing_outputs_without_clobber() {
         let (area, store, prepared) = published_empty_store("reject");
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(
+            store.export_current_revision3_exact_snapshot_v2(
                 &prepared.head,
                 Path::new("relative.goremod")
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(
+            store.export_current_revision3_exact_snapshot_v2(
                 &prepared.head,
                 area.store_root().join("inside.goremod")
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
 
         let mut stale = prepared.head.clone();
         stale.snapshot.sha256 = Sha256Digest::from_bytes([9; 32]);
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(&stale, area.output("stale.goremod")),
-            Err(Revision3ExactSnapshotExportErrorV1::Store(
+            store.export_current_revision3_exact_snapshot_v2(&stale, area.output("stale.goremod")),
+            Err(Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::HeadConflict { .. }
             ))
         ));
@@ -3506,8 +3097,8 @@ mod tests {
         let existing = area.output("existing.goremod");
         fs::write(&existing, b"untouched").unwrap();
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(&prepared.head, &existing),
-            Err(Revision3ExactSnapshotExportErrorV1::OutputAlreadyExists)
+            store.export_current_revision3_exact_snapshot_v2(&prepared.head, &existing),
+            Err(Revision3ExactSnapshotExportError::OutputAlreadyExists)
         ));
         assert_eq!(fs::read(existing).unwrap(), b"untouched");
     }
@@ -3516,22 +3107,22 @@ mod tests {
     fn rejects_wrong_extension_missing_parent_and_output_race_without_clobber() {
         let (area, store, prepared) = published_empty_store("output-boundaries");
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(
+            store.export_current_revision3_exact_snapshot_v2(
                 &prepared.head,
                 area.output("review.zip")
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(
+            store.export_current_revision3_exact_snapshot_v2(
                 &prepared.head,
                 area.output("missing-parent").join("review.goremod")
             ),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
 
         let raced = area.output("raced.goremod");
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &raced,
             |phase, target| {
@@ -3543,7 +3134,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::OutputAlreadyExists)
+            Err(Revision3ExactSnapshotExportError::OutputAlreadyExists)
         ));
         assert_eq!(fs::read(raced).unwrap(), b"racing publisher");
     }
@@ -3562,8 +3153,8 @@ mod tests {
             assert!(matches!(
                 fixture
                     .store
-                    .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &output),
-                Err(Revision3ExactSnapshotExportErrorV1::Store(
+                    .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &output),
+                Err(Revision3ExactSnapshotExportError::Store(
                     WorkingStoreError::SealMismatch { .. }
                 ))
             ));
@@ -3579,8 +3170,8 @@ mod tests {
             assert!(matches!(
                 fixture
                     .store
-                    .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &output),
-                Err(Revision3ExactSnapshotExportErrorV1::Store(
+                    .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &output),
+                Err(Revision3ExactSnapshotExportError::Store(
                     WorkingStoreError::MissingObject(_)
                 ))
             ));
@@ -3597,8 +3188,8 @@ mod tests {
             assert!(matches!(
                 fixture
                     .store
-                    .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &output),
-                Err(Revision3ExactSnapshotExportErrorV1::Store(
+                    .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &output),
+                Err(Revision3ExactSnapshotExportError::Store(
                     WorkingStoreError::SealMismatch { .. }
                 ))
             ));
@@ -3617,8 +3208,8 @@ mod tests {
             assert!(matches!(
                 fixture
                     .store
-                    .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &output),
-                Err(Revision3ExactSnapshotExportErrorV1::Store(
+                    .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &output),
+                Err(Revision3ExactSnapshotExportError::Store(
                     WorkingStoreError::MissingObject(_)
                 ))
             ));
@@ -3639,8 +3230,8 @@ mod tests {
         assert!(matches!(
             fixture
                 .store
-                .export_current_revision3_exact_snapshot_v1(&fixture.current.head, &output),
-            Err(Revision3ExactSnapshotExportErrorV1::Store(
+                .export_current_revision3_exact_snapshot_v2(&fixture.current.head, &output),
+            Err(Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::UnsafePath { .. }
             ))
         ));
@@ -3660,8 +3251,8 @@ mod tests {
         }
         let output = linked_output.join("review.goremod");
         assert!(matches!(
-            store.export_current_revision3_exact_snapshot_v1(&prepared.head, &output),
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            store.export_current_revision3_exact_snapshot_v2(&prepared.head, &output),
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(!real_output.join("review.goremod").exists());
         remove_directory_symlink(&linked_output).unwrap();
@@ -3673,13 +3264,13 @@ mod tests {
             fs::rename(&moved_root, &root).unwrap();
             return;
         }
-        let linked_root_result = store.export_current_revision3_exact_snapshot_v1(
+        let linked_root_result = store.export_current_revision3_exact_snapshot_v2(
             &prepared.head,
             area.output("linked-root.goremod"),
         );
         assert!(matches!(
             linked_root_result,
-            Err(Revision3ExactSnapshotExportErrorV1::Store(
+            Err(Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::UnsafePath { .. }
             ))
         ));
@@ -3696,7 +3287,7 @@ mod tests {
         let output = area.output("blocked.goremod");
         let fixed_head = area.store_root().join(HEAD_FILE_NAME);
 
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &output,
             |phase, _| {
@@ -3708,7 +3299,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::Store(
+            Err(Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::HeadConflict { .. }
             ))
         ));
@@ -3724,7 +3315,7 @@ mod tests {
         fs::create_dir(&original_parent).unwrap();
         let output = original_parent.join("review.goremod");
 
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &output,
             |phase, _| {
@@ -3737,7 +3328,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(!original_parent.join("review.goremod").exists());
         assert!(!moved_parent.join("review.goremod").exists());
@@ -3752,7 +3343,7 @@ mod tests {
         fs::create_dir(&original_parent).unwrap();
         let output = original_parent.join("review.goremod");
 
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &output,
             |phase, _| {
@@ -3765,7 +3356,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(!original_parent.join("review.goremod").exists());
         assert!(!moved_parent.join("review.goremod").exists());
@@ -3780,7 +3371,7 @@ mod tests {
         fs::create_dir(&original_parent).unwrap();
         let output = original_parent.join("review.goremod");
 
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &output,
             |phase, _| {
@@ -3793,7 +3384,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::InvalidOutput(_))
+            Err(Revision3ExactSnapshotExportError::InvalidOutput(_))
         ));
         assert!(!output.exists());
         assert!(!moved_parent.join("review.goremod").exists());
@@ -3810,7 +3401,7 @@ mod tests {
         let mut replacement_denied = false;
 
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3827,7 +3418,7 @@ mod tests {
         assert!(replacement_denied);
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert!(output.is_file());
         assert!(!moved_parent.exists());
@@ -3838,7 +3429,7 @@ mod tests {
         let (area, store, prepared) = published_empty_store("uncertain");
         let output = area.output("uncertain.goremod");
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3853,7 +3444,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(_)
+            Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(_)
         ));
         assert!(output.is_file());
     }
@@ -3865,7 +3456,7 @@ mod tests {
         let output = area.output("review.goremod");
         let displaced = area.output("verified-but-displaced.goremod");
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3879,7 +3470,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::PublicationUncertain(_)
+            Revision3ExactSnapshotExportPublicationV2::PublicationUncertain(_)
         ));
         assert_eq!(fs::read(&output).unwrap(), b"foreign replacement");
         assert!(ZipArchive::new(File::open(displaced).unwrap()).is_ok());
@@ -3893,7 +3484,7 @@ mod tests {
         let displaced = area.output("displaced.goremod");
         let mut replacement_denied = false;
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3907,7 +3498,7 @@ mod tests {
         assert!(replacement_denied);
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert!(output.is_file());
         assert!(!displaced.exists());
@@ -3922,7 +3513,7 @@ mod tests {
         let fixed_head = area.store_root().join(HEAD_FILE_NAME);
         let output = area.output("verified.goremod");
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3935,7 +3526,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::Exported(_)
+            Revision3ExactSnapshotExportPublicationV2::Exported(_)
         ));
         assert!(output.is_file());
     }
@@ -3945,7 +3536,7 @@ mod tests {
         let (area, store, prepared) = published_empty_store("cleanup-warning");
         let output = area.output("cleanup-warning.goremod");
         let result = store
-            .export_current_revision3_exact_snapshot_v1_guarded(
+            .export_current_revision3_exact_snapshot_v2_guarded(
                 &prepared.head,
                 &output,
                 |phase, _| {
@@ -3960,14 +3551,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportPublicationV1::ExportedWithCleanupWarning(_)
+            Revision3ExactSnapshotExportPublicationV2::ExportedWithCleanupWarning(_)
         ));
         assert!(output.is_file());
     }
 
     #[test]
     fn prepublication_cleanup_failure_preserves_store_integrity_primary() {
-        let primary = Revision3ExactSnapshotExportErrorV1::Store(WorkingStoreError::SealMismatch {
+        let primary = Revision3ExactSnapshotExportError::Store(WorkingStoreError::SealMismatch {
             path: PathBuf::from("source-object"),
             reason: "injected source drift".to_owned(),
         });
@@ -3980,10 +3571,10 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Revision3ExactSnapshotExportErrorV1::StagingCleanup {
+            Revision3ExactSnapshotExportError::StagingCleanup {
                 primary,
                 ..
-            } if matches!(*primary, Revision3ExactSnapshotExportErrorV1::Store(
+            } if matches!(*primary, Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::SealMismatch { .. }
             ))
         ));
@@ -3998,7 +3589,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         let mut injected_display_path = None;
 
-        let result = store.export_current_revision3_exact_snapshot_v1_guarded(
+        let result = store.export_current_revision3_exact_snapshot_v2_guarded(
             &prepared.head,
             &output,
             |phase, path| {
@@ -4024,7 +3615,7 @@ mod tests {
         );
         assert!(matches!(
             result,
-            Err(Revision3ExactSnapshotExportErrorV1::Store(
+            Err(Revision3ExactSnapshotExportError::Store(
                 WorkingStoreError::Invariant(_)
             ))
         ));
