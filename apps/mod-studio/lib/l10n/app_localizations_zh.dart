@@ -553,21 +553,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedWorkspaceStoryLabel => '剧情';
 
   @override
-  String get managedWorkspaceWorldLabel => '世界';
-
-  @override
-  String get managedWorkspaceLocalizationVoiceLabel => '本地化与配音';
-
-  @override
-  String get managedWorkspaceValidateTestLabel => '验证与测试';
-
-  @override
-  String get managedWorkspaceBuildReleaseLabel => '构建与发布';
-
-  @override
-  String get managedWorkspaceHistoryLabel => 'History';
-
-  @override
   String get managedWorkspaceSettingsExpertLabel => '设置与专家工具';
 
   @override
@@ -851,9 +836,6 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
-
-  @override
   String get managedSectionLocalizationVoiceDescription =>
       '在同一处编写和翻译项目对话，然后继续处理语音。';
 
@@ -1050,13 +1032,6 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get managedLocalizationVoiceActionFailed =>
       'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
-
-  @override
-  String get managedSectionValidateTestDescription =>
-      '验证项目及检查点的精确完整性；不代表已完成运行时测试。';
-
-  @override
-  String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
 
   @override
   String get managedSectionSettingsExpertDescription =>
@@ -3226,6 +3201,173 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedTextureUnknownFormat => 'Unknown source format';
+
+  @override
+  String get managedWorkspaceTextVoiceLabel => '文本与配音';
+
+  @override
+  String get managedWorkspaceTestReleaseLabel => '测试与发布';
+
+  @override
+  String get managedTestReleaseTitle => '测试与发布';
+
+  @override
+  String get managedTestReleaseDescription => '创建或安装可游玩文件前，请检查模组的每个部分。';
+
+  @override
+  String get managedTestReleaseEvidenceBoundary =>
+      '系统不会自动认定任何内容已就绪。检查结果仅适用于当前这一确切的已保存项目版本。';
+
+  @override
+  String get managedTestReleaseChecksHeading => '项目检查';
+
+  @override
+  String get managedTestReleaseReleaseHeading => '可游玩输出';
+
+  @override
+  String get managedTestReleaseStatusNotChecked => '未检查';
+
+  @override
+  String get managedTestReleaseStatusChecking => '检查中';
+
+  @override
+  String get managedTestReleaseStatusChecked => '已检查';
+
+  @override
+  String get managedTestReleaseStatusNeedsAttention => '需要注意';
+
+  @override
+  String get managedTestReleaseStatusBlocked => '已阻止';
+
+  @override
+  String get managedTestReleaseStatusNotAvailable => '不可用';
+
+  @override
+  String get managedTestReleaseStatusAvailable => '可用';
+
+  @override
+  String get managedTestReleaseEvidenceLabel => '证据';
+
+  @override
+  String get managedTestReleaseStaleEvidenceDescription =>
+      '此结果属于其他项目版本。请重新运行检查。';
+
+  @override
+  String get managedTestReleaseActionNotConnectedDescription =>
+      '已有证据，但此操作尚未连接到当前工作区。';
+
+  @override
+  String get managedTestReleaseProblemsHeading => '需要解决的问题';
+
+  @override
+  String get managedTestReleaseVoiceHeading => '配音构建检查';
+
+  @override
+  String get managedTestReleaseProjectStructureTitle => '项目结构';
+
+  @override
+  String get managedTestReleaseProjectStructureDescription =>
+      '请在下方的当前问题列表中检查引用和托管项目结构。';
+
+  @override
+  String get managedTestReleaseProjectStructureAction => '查看问题';
+
+  @override
+  String get managedTestReleaseScriptsTitle => '脚本';
+
+  @override
+  String get managedTestReleaseScriptsDescription =>
+      '尚未连接全项目编译器结果。因此脚本检查明确保持未评估状态。';
+
+  @override
+  String get managedTestReleaseScriptsAction => '查看脚本';
+
+  @override
+  String get managedTestReleaseVoiceTitle => '文本与配音';
+
+  @override
+  String get managedTestReleaseVoiceDescription => '请使用下方的配音构建检查来检查当前保存的项目版本。';
+
+  @override
+  String get managedTestReleaseVoiceAction => '检查配音';
+
+  @override
+  String get managedTestReleaseDataAssetsTitle => 'DataAssets';
+
+  @override
+  String get managedTestReleaseDataAssetsDescription =>
+      '已准备的 DataAsset 会显示在问题列表中，但尚无完整的全项目构建证据。';
+
+  @override
+  String get managedTestReleaseDataAssetsAction => '查看 DataAsset';
+
+  @override
+  String get managedTestReleasePlayableBuildTitle => '可游玩文件';
+
+  @override
+  String get managedTestReleasePlayableBuildDescription =>
+      '从当前这一确切的已保存项目版本创建经过检查的可游玩构建。';
+
+  @override
+  String get managedTestReleasePlayableBuildBlockedReason =>
+      '当前已保存版本尚无确切、完整的项目构建证据。';
+
+  @override
+  String get managedTestReleaseCreatePlayableFilesAction => '创建可游玩文件';
+
+  @override
+  String get managedTestReleaseDeploymentTitle => '安装';
+
+  @override
+  String get managedTestReleaseDeploymentDescription =>
+      '将经过精确检查的可游玩构建安装到已配置的游戏中。';
+
+  @override
+  String get managedTestReleaseDeploymentBlockedReason =>
+      '当前已保存项目版本尚无可部署构建的确切证据。';
+
+  @override
+  String get managedTestReleaseInstallAction => '安装';
+
+  @override
+  String managedProjectCommandBarCurrentSection(String section) {
+    return '当前部分：$section';
+  }
+
+  @override
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  ) {
+    return '项目 $project。当前部分：$section。';
+  }
+
+  @override
+  String get managedProjectCommandBarUndoLabel => '撤销';
+
+  @override
+  String get managedProjectCommandBarSearchLabel => '搜索';
+
+  @override
+  String get managedProjectCommandBarCreateLabel => '创建';
+
+  @override
+  String get managedProjectCommandBarProblemsLabel => '问题';
+
+  @override
+  String get managedProjectCommandBarHistoryLabel => '历史记录';
+
+  @override
+  String get managedProjectCommandBarSettingsLabel => '设置';
+
+  @override
+  String get managedProjectCommandBarMoreActionsTooltip => '更多项目操作';
+
+  @override
+  String get managedProjectCommandBarBusyLabel => '正在完成当前项目操作…';
+
+  @override
+  String get managedProjectCommandBarBusyDisabledReason => '请等待当前项目操作完成。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -3690,36 +3832,14 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedWorkspaceStoryLabel => '剧情';
 
   @override
-  String get managedWorkspaceWorldLabel => '世界';
-
-  @override
-  String get managedWorkspaceLocalizationVoiceLabel => '本地化与配音';
-
-  @override
-  String get managedWorkspaceValidateTestLabel => '验证与测试';
-
-  @override
-  String get managedWorkspaceBuildReleaseLabel => '构建与发布';
-
-  @override
   String get managedWorkspaceSettingsExpertLabel => '设置与专家工具';
 
   @override
   String get managedSectionStoryDescription => 'NPC、任务与对话。';
 
   @override
-  String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
-
-  @override
   String get managedSectionLocalizationVoiceDescription =>
       '在同一处编写和翻译项目对话，然后继续处理语音。';
-
-  @override
-  String get managedSectionValidateTestDescription =>
-      '验证项目及检查点的精确完整性；不代表已完成运行时测试。';
-
-  @override
-  String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
 
   @override
   String get managedSectionSettingsExpertDescription =>
@@ -4430,4 +4550,171 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedStoryWorkbenchReferenceUnresolvedLabel => '引用未解析';
+
+  @override
+  String get managedWorkspaceTextVoiceLabel => '文本与配音';
+
+  @override
+  String get managedWorkspaceTestReleaseLabel => '测试与发布';
+
+  @override
+  String get managedTestReleaseTitle => '测试与发布';
+
+  @override
+  String get managedTestReleaseDescription => '创建或安装可游玩文件前，请检查模组的每个部分。';
+
+  @override
+  String get managedTestReleaseEvidenceBoundary =>
+      '系统不会自动认定任何内容已就绪。检查结果仅适用于当前这一确切的已保存项目版本。';
+
+  @override
+  String get managedTestReleaseChecksHeading => '项目检查';
+
+  @override
+  String get managedTestReleaseReleaseHeading => '可游玩输出';
+
+  @override
+  String get managedTestReleaseStatusNotChecked => '未检查';
+
+  @override
+  String get managedTestReleaseStatusChecking => '检查中';
+
+  @override
+  String get managedTestReleaseStatusChecked => '已检查';
+
+  @override
+  String get managedTestReleaseStatusNeedsAttention => '需要注意';
+
+  @override
+  String get managedTestReleaseStatusBlocked => '已阻止';
+
+  @override
+  String get managedTestReleaseStatusNotAvailable => '不可用';
+
+  @override
+  String get managedTestReleaseStatusAvailable => '可用';
+
+  @override
+  String get managedTestReleaseEvidenceLabel => '证据';
+
+  @override
+  String get managedTestReleaseStaleEvidenceDescription =>
+      '此结果属于其他项目版本。请重新运行检查。';
+
+  @override
+  String get managedTestReleaseActionNotConnectedDescription =>
+      '已有证据，但此操作尚未连接到当前工作区。';
+
+  @override
+  String get managedTestReleaseProblemsHeading => '需要解决的问题';
+
+  @override
+  String get managedTestReleaseVoiceHeading => '配音构建检查';
+
+  @override
+  String get managedTestReleaseProjectStructureTitle => '项目结构';
+
+  @override
+  String get managedTestReleaseProjectStructureDescription =>
+      '请在下方的当前问题列表中检查引用和托管项目结构。';
+
+  @override
+  String get managedTestReleaseProjectStructureAction => '查看问题';
+
+  @override
+  String get managedTestReleaseScriptsTitle => '脚本';
+
+  @override
+  String get managedTestReleaseScriptsDescription =>
+      '尚未连接全项目编译器结果。因此脚本检查明确保持未评估状态。';
+
+  @override
+  String get managedTestReleaseScriptsAction => '查看脚本';
+
+  @override
+  String get managedTestReleaseVoiceTitle => '文本与配音';
+
+  @override
+  String get managedTestReleaseVoiceDescription => '请使用下方的配音构建检查来检查当前保存的项目版本。';
+
+  @override
+  String get managedTestReleaseVoiceAction => '检查配音';
+
+  @override
+  String get managedTestReleaseDataAssetsTitle => 'DataAssets';
+
+  @override
+  String get managedTestReleaseDataAssetsDescription =>
+      '已准备的 DataAsset 会显示在问题列表中，但尚无完整的全项目构建证据。';
+
+  @override
+  String get managedTestReleaseDataAssetsAction => '查看 DataAsset';
+
+  @override
+  String get managedTestReleasePlayableBuildTitle => '可游玩文件';
+
+  @override
+  String get managedTestReleasePlayableBuildDescription =>
+      '从当前这一确切的已保存项目版本创建经过检查的可游玩构建。';
+
+  @override
+  String get managedTestReleasePlayableBuildBlockedReason =>
+      '当前已保存版本尚无确切、完整的项目构建证据。';
+
+  @override
+  String get managedTestReleaseCreatePlayableFilesAction => '创建可游玩文件';
+
+  @override
+  String get managedTestReleaseDeploymentTitle => '安装';
+
+  @override
+  String get managedTestReleaseDeploymentDescription =>
+      '将经过精确检查的可游玩构建安装到已配置的游戏中。';
+
+  @override
+  String get managedTestReleaseDeploymentBlockedReason =>
+      '当前已保存项目版本尚无可部署构建的确切证据。';
+
+  @override
+  String get managedTestReleaseInstallAction => '安装';
+
+  @override
+  String managedProjectCommandBarCurrentSection(String section) {
+    return '当前部分：$section';
+  }
+
+  @override
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  ) {
+    return '项目 $project。当前部分：$section。';
+  }
+
+  @override
+  String get managedProjectCommandBarUndoLabel => '撤销';
+
+  @override
+  String get managedProjectCommandBarSearchLabel => '搜索';
+
+  @override
+  String get managedProjectCommandBarCreateLabel => '创建';
+
+  @override
+  String get managedProjectCommandBarProblemsLabel => '问题';
+
+  @override
+  String get managedProjectCommandBarHistoryLabel => '历史记录';
+
+  @override
+  String get managedProjectCommandBarSettingsLabel => '设置';
+
+  @override
+  String get managedProjectCommandBarMoreActionsTooltip => '更多项目操作';
+
+  @override
+  String get managedProjectCommandBarBusyLabel => '正在完成当前项目操作…';
+
+  @override
+  String get managedProjectCommandBarBusyDisabledReason => '请等待当前项目操作完成。';
 }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gore_mod/project/revision3_project_workspace.dart';
 import 'package:gore_mod/project/revision3_settings_expert_page.dart';
 
 const _settingsLabel = 'Project settings fixture';
@@ -40,11 +39,11 @@ void main() {
     expect(find.byType(Dialog), findsNothing);
   });
 
-  testWidgets('exact Lab deep link mounts only the Lab page', (tester) async {
+  testWidgets('explicit Lab entry mounts only the Lab page', (tester) async {
     _setSurface(tester, const Size(900, 600));
     await _pumpPage(
       tester,
-      secondary: Revision3SettingsExpertView.dataAssetLab.secondaryRoute,
+      initialView: Revision3SettingsExpertView.dataAssetLab,
     );
 
     expect(_selectedView(tester), Revision3SettingsExpertView.dataAssetLab);
@@ -69,68 +68,41 @@ void main() {
     );
   });
 
-  testWidgets('null and unknown secondary routes fail closed to Settings', (
+  testWidgets('segmented navigation is local and retains both lazy pages', (
     tester,
   ) async {
-    _setSurface(tester, const Size(900, 600));
-    await _pumpPage(tester, secondary: 'future-unknown-route');
+    _setSurface(tester, const Size(1000, 700));
+    await tester.pumpWidget(const _WorkspaceHarness());
 
-    expect(_selectedView(tester), Revision3SettingsExpertView.settings);
-    expect(find.byKey(const Key('settings-fixture-child')), findsOneWidget);
-    expect(
+    expect(find.text('SETTINGS STATE:0'), findsOneWidget);
+    expect(find.text('LAB STATE:0', skipOffstage: false), findsNothing);
+
+    await tester.tap(find.byKey(const Key('settings-state-increment')));
+    await tester.pump();
+    expect(find.text('SETTINGS STATE:1'), findsOneWidget);
+
+    await tester.tap(
       find.byKey(
-        const Key('data-asset-lab-fixture-child'),
-        skipOffstage: false,
+        const Key('revision3-settings-expert-page-nav-data-asset-lab'),
       ),
-      findsNothing,
     );
+    await tester.pumpAndSettle();
+    expect(_selectedView(tester), Revision3SettingsExpertView.dataAssetLab);
+    expect(find.text('LAB STATE:0'), findsOneWidget);
+    expect(find.text('SETTINGS STATE:1', skipOffstage: false), findsOneWidget);
 
-    await _pumpPage(tester);
+    await tester.tap(find.byKey(const Key('lab-state-increment')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const Key('revision3-settings-expert-page-nav-settings')),
+    );
+    await tester.pumpAndSettle();
+
     expect(_selectedView(tester), Revision3SettingsExpertView.settings);
-    expect(find.byKey(const Key('settings-fixture-child')), findsOneWidget);
+    expect(find.text('SETTINGS STATE:1'), findsOneWidget);
+    expect(find.text('LAB STATE:1', skipOffstage: false), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
-
-  testWidgets(
-    'segmented navigation owns the parent route and retains both lazy pages',
-    (tester) async {
-      _setSurface(tester, const Size(1000, 700));
-      await tester.pumpWidget(const _WorkspaceHarness());
-
-      await tester.tap(find.byKey(const Key('open-settings-expert')));
-      await tester.pumpAndSettle();
-      expect(find.text('SETTINGS STATE:0'), findsOneWidget);
-      expect(find.text('LAB STATE:0', skipOffstage: false), findsNothing);
-
-      await tester.tap(find.byKey(const Key('settings-state-increment')));
-      await tester.pump();
-      expect(find.text('SETTINGS STATE:1'), findsOneWidget);
-
-      await tester.tap(
-        find.byKey(
-          const Key('revision3-settings-expert-page-nav-data-asset-lab'),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(_selectedView(tester), Revision3SettingsExpertView.dataAssetLab);
-      expect(find.text('LAB STATE:0'), findsOneWidget);
-      expect(
-        find.text('SETTINGS STATE:1', skipOffstage: false),
-        findsOneWidget,
-      );
-
-      await tester.tap(find.byKey(const Key('lab-state-increment')));
-      await tester.pump();
-      await tester.tap(
-        find.byKey(const Key('revision3-settings-expert-page-nav-settings')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(_selectedView(tester), Revision3SettingsExpertView.settings);
-      expect(find.text('SETTINGS STATE:1'), findsOneWidget);
-      expect(find.text('LAB STATE:1', skipOffstage: false), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
 
   testWidgets('compact 200 percent text scrolls navigation without overflow', (
     tester,
@@ -195,7 +167,8 @@ void _setSurface(WidgetTester tester, Size size) {
 
 Future<void> _pumpPage(
   WidgetTester tester, {
-  String? secondary,
+  Revision3SettingsExpertView initialView =
+      Revision3SettingsExpertView.settings,
   String settingsLabel = _settingsLabel,
   String dataAssetLabLabel = _dataAssetLabLabel,
   TextScaler textScaler = TextScaler.noScaling,
@@ -205,10 +178,7 @@ Future<void> _pumpPage(
       data: MediaQueryData(textScaler: textScaler),
       child: Scaffold(
         body: Revision3SettingsExpertPage(
-          location: Revision3ProjectWorkspaceLocation(
-            Revision3ProjectWorkspaceSection.settingsExpert,
-            secondary: secondary,
-          ),
+          initialView: initialView,
           settingsLabel: settingsLabel,
           dataAssetLabLabel: dataAssetLabLabel,
           settings: ListView(
@@ -253,46 +223,17 @@ class _WorkspaceHarness extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp(
     home: Scaffold(
-      body: Revision3ProjectWorkspace(
-        projectIdentity: 'settings-expert-project',
-        destinations: [
-          for (final section in Revision3ProjectWorkspaceSection.values)
-            Revision3ProjectWorkspaceDestination(
-              section: section,
-              label: section.name,
-              icon: Icons.circle_outlined,
-              selectedIcon: Icons.circle,
-              pageBuilder: (context, location) => switch (section) {
-                Revision3ProjectWorkspaceSection.home => Center(
-                  child: FilledButton(
-                    key: const Key('open-settings-expert'),
-                    onPressed: () => Revision3ProjectWorkspace.navigate(
-                      context,
-                      const Revision3ProjectWorkspaceLocation(
-                        Revision3ProjectWorkspaceSection.settingsExpert,
-                      ),
-                    ),
-                    child: const Text('OPEN SETTINGS EXPERT'),
-                  ),
-                ),
-                Revision3ProjectWorkspaceSection.settingsExpert =>
-                  Revision3SettingsExpertPage(
-                    location: location,
-                    settingsLabel: 'SETTINGS VIEW',
-                    dataAssetLabLabel: 'DATAASSET LAB VIEW',
-                    settings: const _CounterSurface(
-                      label: 'SETTINGS',
-                      buttonKey: Key('settings-state-increment'),
-                    ),
-                    dataAssetLab: const _CounterSurface(
-                      label: 'LAB',
-                      buttonKey: Key('lab-state-increment'),
-                    ),
-                  ),
-                _ => const SizedBox.shrink(),
-              },
-            ),
-        ],
+      body: Revision3SettingsExpertPage(
+        settingsLabel: 'SETTINGS VIEW',
+        dataAssetLabLabel: 'DATAASSET LAB VIEW',
+        settings: const _CounterSurface(
+          label: 'SETTINGS',
+          buttonKey: Key('settings-state-increment'),
+        ),
+        dataAssetLab: const _CounterSurface(
+          label: 'LAB',
+          buttonKey: Key('lab-state-increment'),
+        ),
       ),
     ),
   );

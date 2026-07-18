@@ -1,42 +1,28 @@
 import 'package:flutter/material.dart';
 
-import 'revision3_project_workspace.dart';
+/// Stable views hosted in the secondary managed-project tools surface.
+enum Revision3SettingsExpertView { settings, dataAssetLab }
 
-/// Stable views hosted below the managed Settings / Expert destination.
-enum Revision3SettingsExpertView {
-  settings,
-  dataAssetLab;
-
-  String? get secondaryRoute => switch (this) {
-    Revision3SettingsExpertView.settings => null,
-    Revision3SettingsExpertView.dataAssetLab => 'data-asset-lab',
-  };
-}
-
-/// Presentation-only Settings / Expert destination for managed projects.
+/// Presentation-only Settings / Expert tools for managed projects.
 ///
 /// Labels and both tool surfaces are injected by the owning shell. This widget
-/// owns only route projection and lazy presentation lifetime; it owns no
-/// settings data or dialog and grants no project-mutation or expert authority.
+/// owns only local view selection and lazy presentation lifetime; it owns no
+/// settings data and grants no project-mutation or expert authority.
 class Revision3SettingsExpertPage extends StatefulWidget {
-  Revision3SettingsExpertPage({
-    required this.location,
+  const Revision3SettingsExpertPage({
     required this.settingsLabel,
     required this.dataAssetLabLabel,
     required this.settings,
     required this.dataAssetLab,
+    this.initialView = Revision3SettingsExpertView.settings,
     super.key,
-  }) : assert(
-         location.section == Revision3ProjectWorkspaceSection.settingsExpert,
-         'Revision3SettingsExpertPage requires the Settings / Expert section '
-         'location.',
-       );
+  });
 
-  final Revision3ProjectWorkspaceLocation location;
   final String settingsLabel;
   final String dataAssetLabLabel;
   final Widget settings;
   final Widget dataAssetLab;
+  final Revision3SettingsExpertView initialView;
 
   @override
   State<Revision3SettingsExpertPage> createState() =>
@@ -46,33 +32,30 @@ class Revision3SettingsExpertPage extends StatefulWidget {
 class _Revision3SettingsExpertPageState
     extends State<Revision3SettingsExpertPage> {
   final Set<Revision3SettingsExpertView> _mounted = {};
-
-  Revision3SettingsExpertView get _selected =>
-      widget.location.secondary ==
-          Revision3SettingsExpertView.dataAssetLab.secondaryRoute
-      ? Revision3SettingsExpertView.dataAssetLab
-      : Revision3SettingsExpertView.settings;
+  late Revision3SettingsExpertView _selected;
 
   @override
   void initState() {
     super.initState();
+    _selected = widget.initialView;
     _mounted.add(_selected);
   }
 
   @override
   void didUpdateWidget(covariant Revision3SettingsExpertPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _mounted.add(_selected);
+    if (oldWidget.initialView != widget.initialView) {
+      _selected = widget.initialView;
+      _mounted.add(_selected);
+    }
   }
 
   void _select(Revision3SettingsExpertView view) {
-    Revision3ProjectWorkspace.navigate(
-      context,
-      Revision3ProjectWorkspaceLocation(
-        Revision3ProjectWorkspaceSection.settingsExpert,
-        secondary: view.secondaryRoute,
-      ),
-    );
+    if (_selected == view) return;
+    setState(() {
+      _selected = view;
+      _mounted.add(view);
+    });
   }
 
   @override

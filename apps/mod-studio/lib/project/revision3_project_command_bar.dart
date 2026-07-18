@@ -4,7 +4,14 @@ import 'package:flutter/material.dart';
 
 typedef Revision3ProjectCommandCallback = FutureOr<void> Function();
 
-enum Revision3ProjectCommandKind { undo, search, create, problems, settings }
+enum Revision3ProjectCommandKind {
+  undo,
+  search,
+  create,
+  problems,
+  history,
+  settings,
+}
 
 /// One command exposed by [Revision3ProjectCommandBar].
 ///
@@ -50,33 +57,18 @@ final class Revision3ProjectCommandBarBusyState {
 @immutable
 final class Revision3ProjectCommandBarCopy {
   const Revision3ProjectCommandBarCopy({
-    this.currentSectionTemplate = 'Current section: {section}',
-    this.orientationSemanticsTemplate =
-        'Project {project}. Current section: {section}.',
-    this.undoLabel = 'Undo',
-    this.searchLabel = 'Search',
-    this.createLabel = 'Create',
-    this.problemsLabel = 'Problems',
-    this.settingsLabel = 'Settings',
-    this.moreActionsTooltip = 'More project actions',
-    this.busyLabel = 'Finishing the current project action…',
-    this.busyDisabledReason = 'Wait for the current project action to finish.',
+    required this.currentSectionTemplate,
+    required this.orientationSemanticsTemplate,
+    required this.undoLabel,
+    required this.searchLabel,
+    required this.createLabel,
+    required this.problemsLabel,
+    required this.historyLabel,
+    required this.settingsLabel,
+    required this.moreActionsTooltip,
+    required this.busyLabel,
+    required this.busyDisabledReason,
   });
-
-  static const german = Revision3ProjectCommandBarCopy(
-    currentSectionTemplate: 'Aktueller Bereich: {section}',
-    orientationSemanticsTemplate:
-        'Projekt {project}. Aktueller Bereich: {section}.',
-    undoLabel: 'R\u00fcckg\u00e4ngig',
-    searchLabel: 'Suchen',
-    createLabel: 'Erstellen',
-    problemsLabel: 'Probleme',
-    settingsLabel: 'Einstellungen',
-    moreActionsTooltip: 'Weitere Projektaktionen',
-    busyLabel: 'Die aktuelle Projektaktion wird abgeschlossen…',
-    busyDisabledReason:
-        'Warte, bis die aktuelle Projektaktion abgeschlossen ist.',
-  );
 
   final String currentSectionTemplate;
   final String orientationSemanticsTemplate;
@@ -84,6 +76,7 @@ final class Revision3ProjectCommandBarCopy {
   final String searchLabel;
   final String createLabel;
   final String problemsLabel;
+  final String historyLabel;
   final String settingsLabel;
   final String moreActionsTooltip;
   final String busyLabel;
@@ -113,9 +106,10 @@ class Revision3ProjectCommandBar extends StatefulWidget {
     required this.searchCommand,
     required this.createCommand,
     required this.problemsCommand,
+    this.historyCommand,
     this.settingsCommand,
     this.busy,
-    this.copy = const Revision3ProjectCommandBarCopy(),
+    required this.copy,
   }) : assert(projectDisplayName.length > 0),
        assert(currentSectionLabel.length > 0);
 
@@ -131,6 +125,7 @@ class Revision3ProjectCommandBar extends StatefulWidget {
   static const searchKey = Key('revision3-project-command-bar-search');
   static const createKey = Key('revision3-project-command-bar-create');
   static const problemsKey = Key('revision3-project-command-bar-problems');
+  static const historyKey = Key('managed-open-history');
   static const settingsKey = Key('managed-open-settings');
   static const moreKey = Key('revision3-project-command-bar-more');
   static const compactCreateKey = Key(
@@ -141,6 +136,9 @@ class Revision3ProjectCommandBar extends StatefulWidget {
   );
   static const compactProblemsKey = Key(
     'revision3-project-command-bar-compact-problems',
+  );
+  static const compactHistoryKey = Key(
+    'revision3-project-command-bar-compact-history',
   );
   static const compactSettingsKey = Key(
     'revision3-project-command-bar-compact-settings',
@@ -153,6 +151,7 @@ class Revision3ProjectCommandBar extends StatefulWidget {
   final Revision3ProjectCommand searchCommand;
   final Revision3ProjectCommand createCommand;
   final Revision3ProjectCommand problemsCommand;
+  final Revision3ProjectCommand? historyCommand;
   final Revision3ProjectCommand? settingsCommand;
   final Revision3ProjectCommandBarBusyState? busy;
   final Revision3ProjectCommandBarCopy copy;
@@ -175,6 +174,7 @@ class _Revision3ProjectCommandBarState
         Revision3ProjectCommandKind.search => widget.searchCommand,
         Revision3ProjectCommandKind.create => widget.createCommand,
         Revision3ProjectCommandKind.problems => widget.problemsCommand,
+        Revision3ProjectCommandKind.history => widget.historyCommand!,
         Revision3ProjectCommandKind.settings => widget.settingsCommand!,
       };
 
@@ -183,6 +183,7 @@ class _Revision3ProjectCommandBarState
     Revision3ProjectCommandKind.search => widget.copy.searchLabel,
     Revision3ProjectCommandKind.create => widget.copy.createLabel,
     Revision3ProjectCommandKind.problems => widget.copy.problemsLabel,
+    Revision3ProjectCommandKind.history => widget.copy.historyLabel,
     Revision3ProjectCommandKind.settings => widget.copy.settingsLabel,
   };
 
@@ -191,6 +192,7 @@ class _Revision3ProjectCommandBarState
     Revision3ProjectCommandKind.search => Icons.search,
     Revision3ProjectCommandKind.create => Icons.add,
     Revision3ProjectCommandKind.problems => Icons.warning_amber_outlined,
+    Revision3ProjectCommandKind.history => Icons.history,
     Revision3ProjectCommandKind.settings => Icons.settings_outlined,
   };
 
@@ -200,6 +202,8 @@ class _Revision3ProjectCommandBarState
     Revision3ProjectCommandKind.create => Revision3ProjectCommandBar.createKey,
     Revision3ProjectCommandKind.problems =>
       Revision3ProjectCommandBar.problemsKey,
+    Revision3ProjectCommandKind.history =>
+      Revision3ProjectCommandBar.historyKey,
     Revision3ProjectCommandKind.settings =>
       Revision3ProjectCommandBar.settingsKey,
   };
@@ -247,9 +251,7 @@ class _Revision3ProjectCommandBarState
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final textScale = MediaQuery.textScalerOf(context).scale(1);
-            final useWideLayout =
-                constraints.maxWidth >= 720 && textScale < 1.6;
+            final useWideLayout = _fitsWideLayout(context, constraints);
             final content = useWideLayout
                 ? _buildWide(context)
                 : _buildCompact(context);
@@ -271,6 +273,53 @@ class _Revision3ProjectCommandBarState
     );
   }
 
+  bool _fitsWideLayout(BuildContext context, BoxConstraints constraints) {
+    if (!constraints.maxWidth.isFinite) return true;
+
+    final textScaler = MediaQuery.textScalerOf(context);
+    final textScale = textScaler.scale(1);
+    final labelStyle = Theme.of(context).textTheme.labelLarge;
+    final textDirection = Directionality.of(context);
+    final kinds = <Revision3ProjectCommandKind>[
+      if (widget.undoCommand != null) Revision3ProjectCommandKind.undo,
+      Revision3ProjectCommandKind.search,
+      Revision3ProjectCommandKind.create,
+      Revision3ProjectCommandKind.problems,
+    ];
+
+    double measuredLabelWidth(Revision3ProjectCommandKind kind) {
+      final painter = TextPainter(
+        text: TextSpan(text: _labelFor(kind), style: labelStyle),
+        textDirection: textDirection,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      return painter.width;
+    }
+
+    // Include icon/label gaps and Material button padding conservatively. The
+    // orientation still receives a useful readable width, so long translations
+    // and large text switch to compact before the Row can overflow.
+    final labeledCommandWidth = kinds.fold<double>(
+      0,
+      (width, kind) => width + measuredLabelWidth(kind) + 80,
+    );
+    final secondaryCount =
+        (widget.historyCommand == null ? 0 : 1) +
+        (widget.settingsCommand == null ? 0 : 1);
+    final commandCount = kinds.length + secondaryCount;
+    final commandSpacing = commandCount <= 1 ? 0 : (commandCount - 1) * 8;
+    final secondaryWidth = secondaryCount * 48;
+    final orientationWidth = 220 * textScale.clamp(1, 2);
+    final requiredWidth =
+        orientationWidth +
+        20 +
+        labeledCommandWidth +
+        secondaryWidth +
+        commandSpacing;
+    return constraints.maxWidth >= requiredWidth;
+  }
+
   Widget _buildWide(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
@@ -286,7 +335,10 @@ class _Revision3ProjectCommandBarState
           _buildWideCommand(Revision3ProjectCommandKind.search),
           _buildWideCommand(Revision3ProjectCommandKind.create),
           _buildWideCommand(Revision3ProjectCommandKind.problems),
-          if (widget.settingsCommand != null) _buildWideSettingsCommand(),
+          if (widget.historyCommand != null)
+            _buildWideSecondaryCommand(Revision3ProjectCommandKind.history),
+          if (widget.settingsCommand != null)
+            _buildWideSecondaryCommand(Revision3ProjectCommandKind.settings),
         ],
       ),
     ],
@@ -400,13 +452,14 @@ class _Revision3ProjectCommandBarState
             _buildCompactMenuItem(Revision3ProjectCommandKind.undo),
           _buildCompactMenuItem(Revision3ProjectCommandKind.create),
           _buildCompactMenuItem(Revision3ProjectCommandKind.problems),
+          if (widget.historyCommand != null)
+            _buildCompactMenuItem(Revision3ProjectCommandKind.history),
           if (widget.settingsCommand != null)
             _buildCompactMenuItem(Revision3ProjectCommandKind.settings),
         ],
       );
 
-  Widget _buildWideSettingsCommand() {
-    const kind = Revision3ProjectCommandKind.settings;
+  Widget _buildWideSecondaryCommand(Revision3ProjectCommandKind kind) {
     final enabled = _isEnabled(kind);
     final disabledReason = _disabledReasonFor(kind);
     final label = _labelFor(kind);
@@ -422,7 +475,7 @@ class _Revision3ProjectCommandBarState
         child: Tooltip(
           message: disabledReason ?? label,
           child: IconButton.outlined(
-            key: Revision3ProjectCommandBar.settingsKey,
+            key: _wideKeyFor(kind),
             onPressed: enabled ? () => _invoke(kind) : null,
             icon: Icon(icon),
           ),
@@ -444,6 +497,8 @@ class _Revision3ProjectCommandBarState
         Revision3ProjectCommandBar.compactCreateKey,
       Revision3ProjectCommandKind.problems =>
         Revision3ProjectCommandBar.compactProblemsKey,
+      Revision3ProjectCommandKind.history =>
+        Revision3ProjectCommandBar.compactHistoryKey,
       Revision3ProjectCommandKind.settings =>
         Revision3ProjectCommandBar.compactSettingsKey,
       Revision3ProjectCommandKind.search => throw StateError(

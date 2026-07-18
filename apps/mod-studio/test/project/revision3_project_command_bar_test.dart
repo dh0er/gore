@@ -48,6 +48,7 @@ void main() {
     var searches = 0;
     var creates = 0;
     var problems = 0;
+    var history = 0;
     var settings = 0;
 
     await _pumpBar(
@@ -55,6 +56,7 @@ void main() {
       search: Revision3ProjectCommand.enabled(() => searches++),
       create: Revision3ProjectCommand.enabled(() => creates++),
       problems: Revision3ProjectCommand.enabled(() => problems++),
+      history: Revision3ProjectCommand.enabled(() => history++),
       settings: Revision3ProjectCommand.enabled(() => settings++),
     );
 
@@ -63,6 +65,7 @@ void main() {
     expect(find.byKey(Revision3ProjectCommandBar.searchKey), findsOneWidget);
     expect(find.byKey(Revision3ProjectCommandBar.createKey), findsOneWidget);
     expect(find.byKey(Revision3ProjectCommandBar.problemsKey), findsOneWidget);
+    expect(find.byKey(Revision3ProjectCommandBar.historyKey), findsOneWidget);
     expect(find.byKey(Revision3ProjectCommandBar.settingsKey), findsOneWidget);
     expect(find.byKey(Revision3ProjectCommandBar.moreKey), findsNothing);
 
@@ -72,11 +75,55 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(Revision3ProjectCommandBar.problemsKey));
     await tester.pump();
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.historyKey));
+    await tester.pump();
     await tester.tap(find.byKey(Revision3ProjectCommandBar.settingsKey));
     await tester.pump();
-    expect((searches, creates, problems, settings), (1, 1, 1, 1));
+    expect((searches, creates, problems, history, settings), (1, 1, 1, 1, 1));
     expect(find.textContaining('Ready'), findsNothing);
     expect(find.textContaining('runtime'), findsNothing);
+  });
+
+  testWidgets('disabled secondary actions expose their exact gate reasons', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(1100, 700));
+    const historyReason = 'History is unavailable while checks are running.';
+    const settingsReason = 'Settings are locked by the current project task.';
+    await _pumpBar(
+      tester,
+      search: Revision3ProjectCommand.enabled(() {}),
+      create: Revision3ProjectCommand.enabled(() {}),
+      problems: Revision3ProjectCommand.enabled(() {}),
+      history: const Revision3ProjectCommand.disabled(historyReason),
+      settings: const Revision3ProjectCommand.disabled(settingsReason),
+    );
+
+    expect(find.byTooltip(historyReason), findsOneWidget);
+    expect(find.byTooltip(settingsReason), findsOneWidget);
+
+    final semantics = tester.ensureSemantics();
+    expect(
+      tester.getSemantics(find.byKey(Revision3ProjectCommandBar.historyKey)),
+      matchesSemantics(
+        label: 'History',
+        hint: historyReason,
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: false,
+      ),
+    );
+    expect(
+      tester.getSemantics(find.byKey(Revision3ProjectCommandBar.settingsKey)),
+      matchesSemantics(
+        label: 'Settings',
+        hint: settingsReason,
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: false,
+      ),
+    );
+    semantics.dispose();
   });
 
   testWidgets('disabled commands expose the exact gate reason', (tester) async {
@@ -180,9 +227,11 @@ void main() {
     (tester) async {
       await _setSurface(tester, const Size(360, 480));
       var creates = 0;
+      var history = 0;
+      var settings = 0;
       await _pumpBar(
         tester,
-        copy: Revision3ProjectCommandBarCopy.german,
+        copy: _germanCopy,
         textScaler: const TextScaler.linear(2),
         section: 'Dialoge und Sprachausgabe',
         undo: Revision3ProjectCommand.enabled(() {}),
@@ -191,6 +240,8 @@ void main() {
         problems: const Revision3ProjectCommand.disabled(
           'Prüfe zuerst den aktuellen Projektstand.',
         ),
+        history: Revision3ProjectCommand.enabled(() => history++),
+        settings: Revision3ProjectCommand.enabled(() => settings++),
       );
 
       expect(find.text('My Story Mod'), findsOneWidget);
@@ -209,6 +260,8 @@ void main() {
       expect(find.text('R\u00fcckg\u00e4ngig'), findsOneWidget);
       expect(find.text('Erstellen'), findsOneWidget);
       expect(find.text('Probleme'), findsOneWidget);
+      expect(find.text('Verlauf'), findsOneWidget);
+      expect(find.text('Einstellungen'), findsOneWidget);
       expect(
         find.byTooltip('Prüfe zuerst den aktuellen Projektstand.'),
         findsOneWidget,
@@ -218,6 +271,23 @@ void main() {
       await tester.tap(find.byKey(Revision3ProjectCommandBar.compactCreateKey));
       await tester.pumpAndSettle();
       expect(creates, 1);
+
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.moreKey));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(Revision3ProjectCommandBar.compactHistoryKey),
+      );
+      await tester.pumpAndSettle();
+      expect(history, 1);
+
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.moreKey));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(Revision3ProjectCommandBar.compactSettingsKey),
+      );
+      await tester.pumpAndSettle();
+      expect(settings, 1);
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -228,7 +298,7 @@ void main() {
     final pending = Completer<void>();
     await _pumpBar(
       tester,
-      copy: Revision3ProjectCommandBarCopy.german,
+      copy: _germanCopy,
       textScaler: const TextScaler.linear(2),
       section: 'Einstellungen & Expertenmodus',
       search: Revision3ProjectCommand.enabled(() => pending.future),
@@ -299,7 +369,80 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'long copy at 720px and 159% switches to compact without overflow',
+    (tester) async {
+      await _setSurface(tester, const Size(720, 600));
+      await _pumpBar(
+        tester,
+        copy: _longCopy,
+        textScaler: const TextScaler.linear(1.59),
+        section: 'Localized authoring and recording workflows',
+        undo: Revision3ProjectCommand.enabled(() {}),
+        search: Revision3ProjectCommand.enabled(() {}),
+        create: Revision3ProjectCommand.enabled(() {}),
+        problems: Revision3ProjectCommand.enabled(() {}),
+        history: Revision3ProjectCommand.enabled(() {}),
+        settings: Revision3ProjectCommand.enabled(() {}),
+      );
+
+      expect(find.byKey(Revision3ProjectCommandBar.searchKey), findsOneWidget);
+      expect(find.byKey(Revision3ProjectCommandBar.undoKey), findsNothing);
+      expect(find.byKey(Revision3ProjectCommandBar.createKey), findsNothing);
+      expect(find.byKey(Revision3ProjectCommandBar.moreKey), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
+
+const _germanCopy = Revision3ProjectCommandBarCopy(
+  currentSectionTemplate: 'Aktueller Bereich: {section}',
+  orientationSemanticsTemplate:
+      'Projekt {project}. Aktueller Bereich: {section}.',
+  undoLabel: 'R\u00fcckg\u00e4ngig',
+  searchLabel: 'Suchen',
+  createLabel: 'Erstellen',
+  problemsLabel: 'Probleme',
+  historyLabel: 'Verlauf',
+  settingsLabel: 'Einstellungen',
+  moreActionsTooltip: 'Weitere Projektaktionen',
+  busyLabel: 'Die aktuelle Projektaktion wird abgeschlossen\u2026',
+  busyDisabledReason:
+      'Warte, bis die aktuelle Projektaktion abgeschlossen ist.',
+);
+
+const _englishCopy = Revision3ProjectCommandBarCopy(
+  currentSectionTemplate: 'Current section: {section}',
+  orientationSemanticsTemplate:
+      'Project {project}. Current section: {section}.',
+  undoLabel: 'Undo',
+  searchLabel: 'Search',
+  createLabel: 'Create',
+  problemsLabel: 'Problems',
+  historyLabel: 'History',
+  settingsLabel: 'Settings',
+  moreActionsTooltip: 'More project actions',
+  busyLabel: 'Finishing the current project action\u2026',
+  busyDisabledReason: 'Wait for the current project action to finish.',
+);
+
+const _longCopy = Revision3ProjectCommandBarCopy(
+  currentSectionTemplate: 'Current localized workspace area: {section}',
+  orientationSemanticsTemplate:
+      'Authoring project {project}. Current localized workspace area: '
+      '{section}.',
+  undoLabel: 'Reverse the latest project change',
+  searchLabel: 'Search throughout the entire project',
+  createLabel: 'Create new project content',
+  problemsLabel: 'Review every unresolved project problem',
+  historyLabel: 'Project change history',
+  settingsLabel: 'Project configuration settings',
+  moreActionsTooltip: 'Open additional project authoring actions',
+  busyLabel: 'Finishing the current project authoring action\u2026',
+  busyDisabledReason:
+      'Wait for the current project authoring action to finish.',
+);
 
 Future<void> _pumpBar(
   WidgetTester tester, {
@@ -308,8 +451,9 @@ Future<void> _pumpBar(
   required Revision3ProjectCommand create,
   required Revision3ProjectCommand problems,
   Revision3ProjectCommandBarBusyState? busy,
+  Revision3ProjectCommand? history,
   Revision3ProjectCommand? settings,
-  Revision3ProjectCommandBarCopy copy = const Revision3ProjectCommandBarCopy(),
+  Revision3ProjectCommandBarCopy copy = _englishCopy,
   TextScaler textScaler = TextScaler.noScaling,
   String section = 'Story',
 }) async {
@@ -327,6 +471,7 @@ Future<void> _pumpBar(
               searchCommand: search,
               createCommand: create,
               problemsCommand: problems,
+              historyCommand: history,
               settingsCommand: settings,
               busy: busy,
               copy: copy,

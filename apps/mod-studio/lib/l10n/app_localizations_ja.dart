@@ -554,21 +554,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String get managedWorkspaceStoryLabel => 'ストーリー';
 
   @override
-  String get managedWorkspaceWorldLabel => 'ワールド';
-
-  @override
-  String get managedWorkspaceLocalizationVoiceLabel => 'ローカライズと音声';
-
-  @override
-  String get managedWorkspaceValidateTestLabel => '検証とテスト';
-
-  @override
-  String get managedWorkspaceBuildReleaseLabel => 'ビルドとリリース';
-
-  @override
-  String get managedWorkspaceHistoryLabel => 'History';
-
-  @override
   String get managedWorkspaceSettingsExpertLabel => '設定とエキスパート';
 
   @override
@@ -852,9 +837,6 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get managedSectionWorldDescription => 'ワールドへの配置と関連ワークフローは今後対応予定です。';
-
-  @override
   String get managedSectionLocalizationVoiceDescription =>
       'プロジェクトの台詞の作成と翻訳を一か所で行い、そのまま音声作業へ進めます。';
 
@@ -1051,14 +1033,6 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get managedLocalizationVoiceActionFailed =>
       'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
-
-  @override
-  String get managedSectionValidateTestDescription =>
-      'プロジェクトの完全性とチェックポイントを厳密に検証します。実行時テストを保証するものではありません。';
-
-  @override
-  String get managedSectionBuildReleaseDescription =>
-      '音声バンドルは利用できますが、完全にプレイ可能なビルドとデプロイは利用できません。';
 
   @override
   String get managedSectionSettingsExpertDescription =>
@@ -3250,4 +3224,174 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get managedTextureUnknownFormat => 'Unknown source format';
+
+  @override
+  String get managedWorkspaceTextVoiceLabel => 'テキストと音声';
+
+  @override
+  String get managedWorkspaceTestReleaseLabel => 'テストとリリース';
+
+  @override
+  String get managedTestReleaseTitle => 'テストとリリース';
+
+  @override
+  String get managedTestReleaseDescription =>
+      'プレイ可能なファイルを作成またはインストールする前に、Mod のすべての部分を確認します。';
+
+  @override
+  String get managedTestReleaseEvidenceBoundary =>
+      '準備完了とは自動的に判断されません。確認結果は、この保存済みプロジェクトバージョンにのみ適用されます。';
+
+  @override
+  String get managedTestReleaseChecksHeading => 'プロジェクトの確認';
+
+  @override
+  String get managedTestReleaseReleaseHeading => 'プレイ可能な出力';
+
+  @override
+  String get managedTestReleaseStatusNotChecked => '未確認';
+
+  @override
+  String get managedTestReleaseStatusChecking => '確認中';
+
+  @override
+  String get managedTestReleaseStatusChecked => '確認済み';
+
+  @override
+  String get managedTestReleaseStatusNeedsAttention => '要確認';
+
+  @override
+  String get managedTestReleaseStatusBlocked => 'ブロック中';
+
+  @override
+  String get managedTestReleaseStatusNotAvailable => '利用不可';
+
+  @override
+  String get managedTestReleaseStatusAvailable => '利用可能';
+
+  @override
+  String get managedTestReleaseEvidenceLabel => '根拠';
+
+  @override
+  String get managedTestReleaseStaleEvidenceDescription =>
+      'この結果は別のプロジェクトバージョンに属します。もう一度確認してください。';
+
+  @override
+  String get managedTestReleaseActionNotConnectedDescription =>
+      '根拠はありますが、この操作は現在のワークスペースにまだ接続されていません。';
+
+  @override
+  String get managedTestReleaseProblemsHeading => '解決が必要な問題';
+
+  @override
+  String get managedTestReleaseVoiceHeading => '音声ビルドの確認';
+
+  @override
+  String get managedTestReleaseProjectStructureTitle => 'プロジェクト構造';
+
+  @override
+  String get managedTestReleaseProjectStructureDescription =>
+      '下の最新の問題一覧で、参照と管理対象プロジェクトの構造を確認します。';
+
+  @override
+  String get managedTestReleaseProjectStructureAction => '問題を確認';
+
+  @override
+  String get managedTestReleaseScriptsTitle => 'スクリプト';
+
+  @override
+  String get managedTestReleaseScriptsDescription =>
+      'プロジェクト全体のコンパイラー結果はまだ接続されていません。そのため、スクリプトの確認は明示的に未評価のままです。';
+
+  @override
+  String get managedTestReleaseScriptsAction => 'スクリプトを確認';
+
+  @override
+  String get managedTestReleaseVoiceTitle => 'テキストと音声';
+
+  @override
+  String get managedTestReleaseVoiceDescription =>
+      '下の音声ビルド確認を使用して、現在保存されているプロジェクトバージョンを確認します。';
+
+  @override
+  String get managedTestReleaseVoiceAction => '音声を確認';
+
+  @override
+  String get managedTestReleaseDataAssetsTitle => 'DataAssets';
+
+  @override
+  String get managedTestReleaseDataAssetsDescription =>
+      '準備された DataAsset は問題一覧に表示されますが、プロジェクト全体の完全なビルド根拠はまだありません。';
+
+  @override
+  String get managedTestReleaseDataAssetsAction => 'DataAsset を確認';
+
+  @override
+  String get managedTestReleasePlayableBuildTitle => 'プレイ可能なファイル';
+
+  @override
+  String get managedTestReleasePlayableBuildDescription =>
+      'この保存済みプロジェクトバージョンから、確認済みのプレイ可能なビルドを作成します。';
+
+  @override
+  String get managedTestReleasePlayableBuildBlockedReason =>
+      'この保存済みバージョンには、プロジェクト全体の正確なビルド根拠がまだありません。';
+
+  @override
+  String get managedTestReleaseCreatePlayableFilesAction => 'プレイ可能なファイルを作成';
+
+  @override
+  String get managedTestReleaseDeploymentTitle => 'インストール';
+
+  @override
+  String get managedTestReleaseDeploymentDescription =>
+      '厳密に確認済みのプレイ可能なビルドを、設定済みのゲームにインストールします。';
+
+  @override
+  String get managedTestReleaseDeploymentBlockedReason =>
+      'この保存済みプロジェクトバージョンには、配置可能なビルドの正確な根拠がまだありません。';
+
+  @override
+  String get managedTestReleaseInstallAction => 'インストール';
+
+  @override
+  String managedProjectCommandBarCurrentSection(String section) {
+    return '現在のセクション: $section';
+  }
+
+  @override
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  ) {
+    return 'プロジェクト $project。現在のセクション: $section。';
+  }
+
+  @override
+  String get managedProjectCommandBarUndoLabel => '元に戻す';
+
+  @override
+  String get managedProjectCommandBarSearchLabel => '検索';
+
+  @override
+  String get managedProjectCommandBarCreateLabel => '作成';
+
+  @override
+  String get managedProjectCommandBarProblemsLabel => '問題';
+
+  @override
+  String get managedProjectCommandBarHistoryLabel => '履歴';
+
+  @override
+  String get managedProjectCommandBarSettingsLabel => '設定';
+
+  @override
+  String get managedProjectCommandBarMoreActionsTooltip => 'その他のプロジェクト操作';
+
+  @override
+  String get managedProjectCommandBarBusyLabel => '現在のプロジェクト操作を完了しています…';
+
+  @override
+  String get managedProjectCommandBarBusyDisabledReason =>
+      '現在のプロジェクト操作が完了するまでお待ちください。';
 }

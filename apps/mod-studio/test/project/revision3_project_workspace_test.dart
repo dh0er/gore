@@ -7,6 +7,13 @@ import 'package:gore_mod/project/revision3_project_workspace.dart';
 
 void main() {
   test('requires every destination once in canonical order', () {
+    expect(Revision3ProjectWorkspaceSection.values, const [
+      Revision3ProjectWorkspaceSection.home,
+      Revision3ProjectWorkspaceSection.content,
+      Revision3ProjectWorkspaceSection.story,
+      Revision3ProjectWorkspaceSection.textVoice,
+      Revision3ProjectWorkspaceSection.testRelease,
+    ]);
     final canonical = _destinations();
 
     expect(
@@ -96,11 +103,11 @@ void main() {
                         onPressed: () => Revision3ProjectWorkspace.navigate(
                           context,
                           const Revision3ProjectWorkspaceLocation(
-                            Revision3ProjectWorkspaceSection.settingsExpert,
-                            secondary: 'advanced',
+                            Revision3ProjectWorkspaceSection.testRelease,
+                            secondary: 'release',
                           ),
                         ),
-                        child: const Text('Open expert settings fixture'),
+                        child: const Text('Open test and release fixture'),
                       )
                     : Text(
                         '${section.name} page / '
@@ -119,25 +126,22 @@ void main() {
       }
 
       final lastTab = find.byKey(
-        _tabKey(Revision3ProjectWorkspaceSection.settingsExpert),
+        _tabKey(Revision3ProjectWorkspaceSection.testRelease),
       );
       expect(lastTab.hitTestable(), findsNothing);
 
       await tester.tap(find.byKey(const Key('navigate-to-last-tab')));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('settingsExpert page / secondary:advanced'),
-        findsOneWidget,
-      );
+      expect(find.text('testRelease page / secondary:release'), findsOneWidget);
       expect(
         _selectedTabIndex(tester),
-        Revision3ProjectWorkspaceSection.settingsExpert.index,
+        Revision3ProjectWorkspaceSection.testRelease.index,
       );
       expect(lastTab.hitTestable(), findsOneWidget);
       _expectTabSemantics(
         tester,
-        Revision3ProjectWorkspaceSection.settingsExpert,
+        Revision3ProjectWorkspaceSection.testRelease,
         selected: true,
       );
       _expectTabSemantics(
@@ -249,12 +253,12 @@ void main() {
     );
 
     expect(find.text('compact chrome:home'), findsOneWidget);
-    await _tapTab(tester, Revision3ProjectWorkspaceSection.history);
+    await _tapTab(tester, Revision3ProjectWorkspaceSection.testRelease);
 
-    expect(find.text('compact chrome:history'), findsOneWidget);
+    expect(find.text('compact chrome:testRelease'), findsOneWidget);
     expect(
       _selectedTabIndex(tester),
-      Revision3ProjectWorkspaceSection.history.index,
+      Revision3ProjectWorkspaceSection.testRelease.index,
     );
     expect(tester.takeException(), isNull);
   });
@@ -590,40 +594,24 @@ String _sectionKey(Revision3ProjectWorkspaceSection section) =>
       Revision3ProjectWorkspaceSection.home => 'home',
       Revision3ProjectWorkspaceSection.content => 'content',
       Revision3ProjectWorkspaceSection.story => 'story',
-      Revision3ProjectWorkspaceSection.world => 'world',
-      Revision3ProjectWorkspaceSection.localizationVoice =>
-        'localization-voice',
-      Revision3ProjectWorkspaceSection.validateTest => 'validate-test',
-      Revision3ProjectWorkspaceSection.buildRelease => 'build-release',
-      Revision3ProjectWorkspaceSection.history => 'history',
-      Revision3ProjectWorkspaceSection.settingsExpert => 'settings-expert',
+      Revision3ProjectWorkspaceSection.textVoice => 'text-voice',
+      Revision3ProjectWorkspaceSection.testRelease => 'test-release',
     };
 
 String _label(Revision3ProjectWorkspaceSection section) => switch (section) {
   Revision3ProjectWorkspaceSection.home => 'Home fixture',
   Revision3ProjectWorkspaceSection.content => 'Content Library fixture',
   Revision3ProjectWorkspaceSection.story => 'Story fixture',
-  Revision3ProjectWorkspaceSection.world => 'World fixture',
-  Revision3ProjectWorkspaceSection.localizationVoice =>
-    'Localization & Voice fixture',
-  Revision3ProjectWorkspaceSection.validateTest => 'Validate & Test fixture',
-  Revision3ProjectWorkspaceSection.buildRelease => 'Build & Release fixture',
-  Revision3ProjectWorkspaceSection.history => 'History fixture',
-  Revision3ProjectWorkspaceSection.settingsExpert =>
-    'Settings / Expert fixture',
+  Revision3ProjectWorkspaceSection.textVoice => 'Text & Voice fixture',
+  Revision3ProjectWorkspaceSection.testRelease => 'Test & Release fixture',
 };
 
 IconData _icon(Revision3ProjectWorkspaceSection section) => switch (section) {
   Revision3ProjectWorkspaceSection.home => Icons.home_outlined,
   Revision3ProjectWorkspaceSection.content => Icons.account_tree_outlined,
   Revision3ProjectWorkspaceSection.story => Icons.auto_stories_outlined,
-  Revision3ProjectWorkspaceSection.world => Icons.public_outlined,
-  Revision3ProjectWorkspaceSection.localizationVoice =>
-    Icons.translate_outlined,
-  Revision3ProjectWorkspaceSection.validateTest => Icons.fact_check_outlined,
-  Revision3ProjectWorkspaceSection.buildRelease => Icons.inventory_2_outlined,
-  Revision3ProjectWorkspaceSection.history => Icons.history_outlined,
-  Revision3ProjectWorkspaceSection.settingsExpert => Icons.settings_outlined,
+  Revision3ProjectWorkspaceSection.textVoice => Icons.translate_outlined,
+  Revision3ProjectWorkspaceSection.testRelease => Icons.fact_check_outlined,
 };
 
 IconData _selectedIcon(Revision3ProjectWorkspaceSection section) =>
@@ -631,12 +619,8 @@ IconData _selectedIcon(Revision3ProjectWorkspaceSection section) =>
       Revision3ProjectWorkspaceSection.home => Icons.home,
       Revision3ProjectWorkspaceSection.content => Icons.account_tree,
       Revision3ProjectWorkspaceSection.story => Icons.auto_stories,
-      Revision3ProjectWorkspaceSection.world => Icons.public,
-      Revision3ProjectWorkspaceSection.localizationVoice => Icons.translate,
-      Revision3ProjectWorkspaceSection.validateTest => Icons.fact_check,
-      Revision3ProjectWorkspaceSection.buildRelease => Icons.inventory_2,
-      Revision3ProjectWorkspaceSection.history => Icons.history,
-      Revision3ProjectWorkspaceSection.settingsExpert => Icons.settings,
+      Revision3ProjectWorkspaceSection.textVoice => Icons.translate,
+      Revision3ProjectWorkspaceSection.testRelease => Icons.fact_check,
     };
 
 class _LifecyclePage extends StatefulWidget {

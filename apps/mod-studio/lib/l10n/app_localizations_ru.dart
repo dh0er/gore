@@ -564,21 +564,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedWorkspaceStoryLabel => 'Сюжет';
 
   @override
-  String get managedWorkspaceWorldLabel => 'Мир';
-
-  @override
-  String get managedWorkspaceLocalizationVoiceLabel => 'Локализация и озвучка';
-
-  @override
-  String get managedWorkspaceValidateTestLabel => 'Проверка и тестирование';
-
-  @override
-  String get managedWorkspaceBuildReleaseLabel => 'Сборка и выпуск';
-
-  @override
-  String get managedWorkspaceHistoryLabel => 'History';
-
-  @override
   String get managedWorkspaceSettingsExpertLabel =>
       'Настройки и экспертный режим';
 
@@ -863,10 +848,6 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get managedSectionWorldDescription =>
-      'Размещение в мире и связанные рабочие процессы запланированы.';
-
-  @override
   String get managedSectionLocalizationVoiceDescription =>
       'Пишите и переводите диалоги проекта в одном месте, а затем переходите к озвучке.';
 
@@ -1063,14 +1044,6 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedLocalizationVoiceActionFailed =>
       'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
-
-  @override
-  String get managedSectionValidateTestDescription =>
-      'Проверяет точную целостность проекта и контрольные точки; тестирование в игре не подтверждается.';
-
-  @override
-  String get managedSectionBuildReleaseDescription =>
-      'Пакеты озвучки доступны; полноценные игровые сборки и развёртывание недоступны.';
 
   @override
   String get managedSectionSettingsExpertDescription =>
@@ -3300,4 +3273,177 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedTextureUnknownFormat => 'Unknown source format';
+
+  @override
+  String get managedWorkspaceTextVoiceLabel => 'Текст и озвучка';
+
+  @override
+  String get managedWorkspaceTestReleaseLabel => 'Тестирование и выпуск';
+
+  @override
+  String get managedTestReleaseTitle => 'Тестирование и выпуск';
+
+  @override
+  String get managedTestReleaseDescription =>
+      'Проверьте все части мода перед созданием игровых файлов или их установкой.';
+
+  @override
+  String get managedTestReleaseEvidenceBoundary =>
+      'Ничто не считается готовым автоматически. Результат проверки относится только к этой точной сохранённой версии проекта.';
+
+  @override
+  String get managedTestReleaseChecksHeading => 'Проверки проекта';
+
+  @override
+  String get managedTestReleaseReleaseHeading => 'Игровые файлы';
+
+  @override
+  String get managedTestReleaseStatusNotChecked => 'Не проверено';
+
+  @override
+  String get managedTestReleaseStatusChecking => 'Идёт проверка';
+
+  @override
+  String get managedTestReleaseStatusChecked => 'Проверено';
+
+  @override
+  String get managedTestReleaseStatusNeedsAttention => 'Требует внимания';
+
+  @override
+  String get managedTestReleaseStatusBlocked => 'Заблокировано';
+
+  @override
+  String get managedTestReleaseStatusNotAvailable => 'Недоступно';
+
+  @override
+  String get managedTestReleaseStatusAvailable => 'Доступно';
+
+  @override
+  String get managedTestReleaseEvidenceLabel => 'Подтверждение';
+
+  @override
+  String get managedTestReleaseStaleEvidenceDescription =>
+      'Этот результат относится к другой версии проекта. Запустите проверку снова.';
+
+  @override
+  String get managedTestReleaseActionNotConnectedDescription =>
+      'Подтверждение существует, но это действие ещё не подключено в текущей рабочей области.';
+
+  @override
+  String get managedTestReleaseProblemsHeading => 'Проблемы для решения';
+
+  @override
+  String get managedTestReleaseVoiceHeading => 'Проверка сборки озвучки';
+
+  @override
+  String get managedTestReleaseProjectStructureTitle => 'Структура проекта';
+
+  @override
+  String get managedTestReleaseProjectStructureDescription =>
+      'Просмотрите ниже актуальный список проблем, чтобы проверить ссылки и структуру управляемого проекта.';
+
+  @override
+  String get managedTestReleaseProjectStructureAction => 'Просмотреть проблемы';
+
+  @override
+  String get managedTestReleaseScriptsTitle => 'Скрипты';
+
+  @override
+  String get managedTestReleaseScriptsDescription =>
+      'Результат компилятора для всего проекта ещё не подключён. Проверка скриптов явно остаётся без оценки.';
+
+  @override
+  String get managedTestReleaseScriptsAction => 'Просмотреть скрипты';
+
+  @override
+  String get managedTestReleaseVoiceTitle => 'Текст и озвучка';
+
+  @override
+  String get managedTestReleaseVoiceDescription =>
+      'Используйте ниже проверку сборки озвучки для текущей сохранённой версии проекта.';
+
+  @override
+  String get managedTestReleaseVoiceAction => 'Проверить озвучку';
+
+  @override
+  String get managedTestReleaseDataAssetsTitle => 'DataAssets';
+
+  @override
+  String get managedTestReleaseDataAssetsDescription =>
+      'Подготовленные DataAsset отображаются в списке проблем, но полного подтверждения сборки всего проекта ещё нет.';
+
+  @override
+  String get managedTestReleaseDataAssetsAction => 'Просмотреть DataAsset';
+
+  @override
+  String get managedTestReleasePlayableBuildTitle => 'Игровые файлы';
+
+  @override
+  String get managedTestReleasePlayableBuildDescription =>
+      'Создайте проверенную игровую сборку из этой точной сохранённой версии проекта.';
+
+  @override
+  String get managedTestReleasePlayableBuildBlockedReason =>
+      'Для этой сохранённой версии ещё нет точного подтверждения полной сборки проекта.';
+
+  @override
+  String get managedTestReleaseCreatePlayableFilesAction =>
+      'Создать игровые файлы';
+
+  @override
+  String get managedTestReleaseDeploymentTitle => 'Установка';
+
+  @override
+  String get managedTestReleaseDeploymentDescription =>
+      'Установите точно проверенную игровую сборку в настроенную игру.';
+
+  @override
+  String get managedTestReleaseDeploymentBlockedReason =>
+      'Для этой сохранённой версии проекта ещё нет точного подтверждения сборки, готовой к установке.';
+
+  @override
+  String get managedTestReleaseInstallAction => 'Установить';
+
+  @override
+  String managedProjectCommandBarCurrentSection(String section) {
+    return 'Текущий раздел: $section';
+  }
+
+  @override
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  ) {
+    return 'Проект $project. Текущий раздел: $section.';
+  }
+
+  @override
+  String get managedProjectCommandBarUndoLabel => 'Отменить';
+
+  @override
+  String get managedProjectCommandBarSearchLabel => 'Поиск';
+
+  @override
+  String get managedProjectCommandBarCreateLabel => 'Создать';
+
+  @override
+  String get managedProjectCommandBarProblemsLabel => 'Проблемы';
+
+  @override
+  String get managedProjectCommandBarHistoryLabel => 'История';
+
+  @override
+  String get managedProjectCommandBarSettingsLabel => 'Настройки';
+
+  @override
+  String get managedProjectCommandBarMoreActionsTooltip =>
+      'Другие действия проекта';
+
+  @override
+  String get managedProjectCommandBarBusyLabel =>
+      'Завершение текущего действия проекта…';
+
+  @override
+  String get managedProjectCommandBarBusyDisabledReason =>
+      'Дождитесь завершения текущего действия проекта.';
 }

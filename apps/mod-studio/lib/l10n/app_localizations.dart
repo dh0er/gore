@@ -1088,36 +1088,6 @@ abstract class AppLocalizations {
   /// **'Story'**
   String get managedWorkspaceStoryLabel;
 
-  /// No description provided for @managedWorkspaceWorldLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'World'**
-  String get managedWorkspaceWorldLabel;
-
-  /// No description provided for @managedWorkspaceLocalizationVoiceLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Localization & Voice'**
-  String get managedWorkspaceLocalizationVoiceLabel;
-
-  /// No description provided for @managedWorkspaceValidateTestLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Validate & Test'**
-  String get managedWorkspaceValidateTestLabel;
-
-  /// No description provided for @managedWorkspaceBuildReleaseLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Build & Release'**
-  String get managedWorkspaceBuildReleaseLabel;
-
-  /// No description provided for @managedWorkspaceHistoryLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'History'**
-  String get managedWorkspaceHistoryLabel;
-
   /// No description provided for @managedWorkspaceSettingsExpertLabel.
   ///
   /// In en, this message translates to:
@@ -1544,12 +1514,6 @@ abstract class AppLocalizations {
   /// **'The draft was not removed. The Story view was refreshed without retrying automatically: {error}'**
   String managedStoryWorkspaceRemoveError(String error);
 
-  /// No description provided for @managedSectionWorldDescription.
-  ///
-  /// In en, this message translates to:
-  /// **'World placement and workflows are planned.'**
-  String get managedSectionWorldDescription;
-
   /// No description provided for @managedSectionLocalizationVoiceDescription.
   ///
   /// In en, this message translates to:
@@ -1873,18 +1837,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.'**
   String get managedLocalizationVoiceActionFailed;
-
-  /// No description provided for @managedSectionValidateTestDescription.
-  ///
-  /// In en, this message translates to:
-  /// **'Verify exact project integrity and checkpoints; no runtime test is claimed.'**
-  String get managedSectionValidateTestDescription;
-
-  /// No description provided for @managedSectionBuildReleaseDescription.
-  ///
-  /// In en, this message translates to:
-  /// **'Voice bundles are available; full playable builds and deployment are unavailable.'**
-  String get managedSectionBuildReleaseDescription;
 
   /// No description provided for @managedSectionSettingsExpertDescription.
   ///
@@ -5549,6 +5501,309 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Unknown source format'**
   String get managedTextureUnknownFormat;
+
+  /// No description provided for @managedWorkspaceTextVoiceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Text & Voice'**
+  String get managedWorkspaceTextVoiceLabel;
+
+  /// No description provided for @managedWorkspaceTestReleaseLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Test & Release'**
+  String get managedWorkspaceTestReleaseLabel;
+
+  /// No description provided for @managedTestReleaseTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Test & Release'**
+  String get managedTestReleaseTitle;
+
+  /// No description provided for @managedTestReleaseDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Check every part of your mod before creating playable files or installing them.'**
+  String get managedTestReleaseDescription;
+
+  /// No description provided for @managedTestReleaseEvidenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing is assumed ready. A checked result applies only to this exact saved project version.'**
+  String get managedTestReleaseEvidenceBoundary;
+
+  /// No description provided for @managedTestReleaseChecksHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Project checks'**
+  String get managedTestReleaseChecksHeading;
+
+  /// No description provided for @managedTestReleaseReleaseHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Playable output'**
+  String get managedTestReleaseReleaseHeading;
+
+  /// No description provided for @managedTestReleaseStatusNotChecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Not checked'**
+  String get managedTestReleaseStatusNotChecked;
+
+  /// No description provided for @managedTestReleaseStatusChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking'**
+  String get managedTestReleaseStatusChecking;
+
+  /// No description provided for @managedTestReleaseStatusChecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Checked'**
+  String get managedTestReleaseStatusChecked;
+
+  /// No description provided for @managedTestReleaseStatusNeedsAttention.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedTestReleaseStatusNeedsAttention;
+
+  /// No description provided for @managedTestReleaseStatusBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked'**
+  String get managedTestReleaseStatusBlocked;
+
+  /// No description provided for @managedTestReleaseStatusNotAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Not available'**
+  String get managedTestReleaseStatusNotAvailable;
+
+  /// No description provided for @managedTestReleaseStatusAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Available'**
+  String get managedTestReleaseStatusAvailable;
+
+  /// No description provided for @managedTestReleaseEvidenceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence'**
+  String get managedTestReleaseEvidenceLabel;
+
+  /// No description provided for @managedTestReleaseStaleEvidenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This result belongs to a different project version. Run the check again.'**
+  String get managedTestReleaseStaleEvidenceDescription;
+
+  /// No description provided for @managedTestReleaseActionNotConnectedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence exists, but this action is not connected in the current workspace.'**
+  String get managedTestReleaseActionNotConnectedDescription;
+
+  /// No description provided for @managedTestReleaseProblemsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems to resolve'**
+  String get managedTestReleaseProblemsHeading;
+
+  /// No description provided for @managedTestReleaseVoiceHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice build check'**
+  String get managedTestReleaseVoiceHeading;
+
+  /// No description provided for @managedTestReleaseProjectStructureTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Project structure'**
+  String get managedTestReleaseProjectStructureTitle;
+
+  /// No description provided for @managedTestReleaseProjectStructureDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the live Problems list below for references and managed-project structure checks.'**
+  String get managedTestReleaseProjectStructureDescription;
+
+  /// No description provided for @managedTestReleaseProjectStructureAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review problems'**
+  String get managedTestReleaseProjectStructureAction;
+
+  /// No description provided for @managedTestReleaseScriptsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Scripts'**
+  String get managedTestReleaseScriptsTitle;
+
+  /// No description provided for @managedTestReleaseScriptsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'A project-wide compiler result is not connected yet. Script checks stay explicitly unevaluated.'**
+  String get managedTestReleaseScriptsDescription;
+
+  /// No description provided for @managedTestReleaseScriptsAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review scripts'**
+  String get managedTestReleaseScriptsAction;
+
+  /// No description provided for @managedTestReleaseVoiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Text & Voice'**
+  String get managedTestReleaseVoiceTitle;
+
+  /// No description provided for @managedTestReleaseVoiceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the Voice build check below for the current saved project version.'**
+  String get managedTestReleaseVoiceDescription;
+
+  /// No description provided for @managedTestReleaseVoiceAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Check Voice'**
+  String get managedTestReleaseVoiceAction;
+
+  /// No description provided for @managedTestReleaseDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedTestReleaseDataAssetsTitle;
+
+  /// No description provided for @managedTestReleaseDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Staged DataAssets are visible in Problems, but no complete project-wide build evidence exists yet.'**
+  String get managedTestReleaseDataAssetsDescription;
+
+  /// No description provided for @managedTestReleaseDataAssetsAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review DataAssets'**
+  String get managedTestReleaseDataAssetsAction;
+
+  /// No description provided for @managedTestReleasePlayableBuildTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Playable files'**
+  String get managedTestReleasePlayableBuildTitle;
+
+  /// No description provided for @managedTestReleasePlayableBuildDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a checked playable build from this exact saved project version.'**
+  String get managedTestReleasePlayableBuildDescription;
+
+  /// No description provided for @managedTestReleasePlayableBuildBlockedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'No exact complete project-build evidence exists for this saved version yet.'**
+  String get managedTestReleasePlayableBuildBlockedReason;
+
+  /// No description provided for @managedTestReleaseCreatePlayableFilesAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Create playable files'**
+  String get managedTestReleaseCreatePlayableFilesAction;
+
+  /// No description provided for @managedTestReleaseDeploymentTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation'**
+  String get managedTestReleaseDeploymentTitle;
+
+  /// No description provided for @managedTestReleaseDeploymentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Install an exactly checked playable build into the configured game.'**
+  String get managedTestReleaseDeploymentDescription;
+
+  /// No description provided for @managedTestReleaseDeploymentBlockedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'No exact deployable-build evidence exists for this saved project version yet.'**
+  String get managedTestReleaseDeploymentBlockedReason;
+
+  /// No description provided for @managedTestReleaseInstallAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get managedTestReleaseInstallAction;
+
+  /// No description provided for @managedProjectCommandBarCurrentSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Current section: {section}'**
+  String managedProjectCommandBarCurrentSection(String section);
+
+  /// No description provided for @managedProjectCommandBarOrientationSemantics.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {project}. Current section: {section}.'**
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  );
+
+  /// No description provided for @managedProjectCommandBarUndoLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get managedProjectCommandBarUndoLabel;
+
+  /// No description provided for @managedProjectCommandBarSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get managedProjectCommandBarSearchLabel;
+
+  /// No description provided for @managedProjectCommandBarCreateLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get managedProjectCommandBarCreateLabel;
+
+  /// No description provided for @managedProjectCommandBarProblemsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems'**
+  String get managedProjectCommandBarProblemsLabel;
+
+  /// No description provided for @managedProjectCommandBarHistoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'History'**
+  String get managedProjectCommandBarHistoryLabel;
+
+  /// No description provided for @managedProjectCommandBarSettingsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get managedProjectCommandBarSettingsLabel;
+
+  /// No description provided for @managedProjectCommandBarMoreActionsTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'More project actions'**
+  String get managedProjectCommandBarMoreActionsTooltip;
+
+  /// No description provided for @managedProjectCommandBarBusyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Finishing the current project action…'**
+  String get managedProjectCommandBarBusyLabel;
+
+  /// No description provided for @managedProjectCommandBarBusyDisabledReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Wait for the current project action to finish.'**
+  String get managedProjectCommandBarBusyDisabledReason;
 }
 
 class _AppLocalizationsDelegate

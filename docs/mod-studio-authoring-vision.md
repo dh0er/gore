@@ -20,30 +20,33 @@ Related evidence and operating boundaries:
 
 ### Current implementation delta (2026-07-18)
 
-**Unreleased format policy:** Mod Studio has never been released and there are
-no active pre-R3 projects. Managed revision 3 is the sole product project and
-session model, and Snapshot V2 is the sole backup/restore wire format. Project
-schema changes land in lockstep across the current model, reader, writer, tests,
-and UI. The classic standalone-tool surface is retained only for its useful
-compact workflows while those jobs are rehosted directly on R3; it owns no
-project, session, persistence, build, or deployment authority.
+**Unreleased format policy:** Mod Studio has never been released. Managed
+revision 3 is the sole product project and session model, and Snapshot V2 is the
+sole backup/restore wire format. Project schema changes land in lockstep across
+the current model, reader, writer, tests, and UI. The standalone-tool surface is
+retained only for its useful compact workflows while those jobs are rehosted
+directly on R3; it owns no project, session, persistence, build, or deployment
+authority.
 
 The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
 been consolidated:
 
-- The managed shell now presents all nine canonical destinations as direct,
-  horizontally scrollable classic top tabs. Desktop and compact layouts share
-  one navigation model; programmatic routes reveal an off-screen selection,
-  while lazy mounting, same-project state, secondary-route memory, keyboard
-  activation, and project-identity reset remain intact. This is presentation
-  only and grants no format, mutation, build, deployment, or runtime authority.
-- Managed **Settings & Expert** now opens directly on compact
-  **Settings | DataAsset Lab** secondary navigation. Both views mount lazily and
-  retain same-project state; the global Settings command selects the embedded
-  Settings view, while recovery/no-project states retain a dialog fallback.
-  The responsive Lab has one scroll surface and remains read-only local snapshot
-  inspection, separate from project-owned verified DataAsset edits.
+- The managed shell now has exactly five primary author jobs: **Home**,
+  **Content**, **Story**, **Text & Voice**, and **Test & Release**. Desktop and
+  compact layouts share this task-based navigation, with lazy mounting,
+  same-project state, keyboard activation, and project-identity reset intact.
+  World is not shown until World work is explicitly approved and begins.
+  History and Settings are secondary command-bar actions that open focused
+  dialogs instead of competing primary destinations. This is presentation only
+  and grants no format, mutation, build, deployment, or runtime authority.
+- **Test & Release** now presents six independently truthful areas: project
+  structure, scripts, Voice, DataAssets, playable build, and deployment. It
+  embeds the existing Problems surface and the current Voice readiness/build
+  continuation. Evaluated results are usable only when their project ID,
+  revision, and canonical head match the visible project. Playable build and
+  deployment remain separately blocked unless each has both its own matching
+  evidence and an executable action; one cannot authorize the other.
 - **Name & objectives** is no longer disabled after a Quest receives generator-
   V4 behavior. A native/Dart managed Outline V2 transaction keeps the active
   objective-slot set, next ordinal, conditions, effects, identities, and all
@@ -150,7 +153,7 @@ been consolidated:
   reopen. This is project-only authoring: the configured installation supplies
   read-only catalog evidence, and the operation performs no build, deployment,
   game/save write, spawn, or runtime qualification.
-- Managed R3 **Validate & Test** now hosts bounded **Problems & Readiness V1**.
+- Managed R3 **Test & Release** now hosts bounded **Problems & Readiness V1**.
   It derives unresolved entity and asset references from the exact-current
   content index, loads the managed DataAsset-stage registry independently, and
   retains usable content diagnostics when that registry is unavailable. Search,
@@ -174,14 +177,14 @@ been consolidated:
   no topic, AngelScript, build, runtime, deployment, or native publication
   authority. The unsealed global localization catalog remains excluded: this is
   project-local creation/exact reuse, not vanilla adoption.
-- **Localization & Voice** now defaults to a bounded **Work list**, with the
+- **Text & Voice** now defaults to a bounded **Work list**, with the
   existing **Project texts** editor one switch away. It derives only two
   evidence-backed item kinds: a project authoring locale absent from one safely
   editable localization, and one intact already-existing `VoiceSlot` for an
   exact line/locale. It never treats absence of a slot as missing-recording
   intent. Existing slots receive one next step in strict order: add recording,
   review/approve, select/repair, resolve target, or production decisions
-  complete. The final state opens **Validate & Test** and grants no Ready,
+  complete. The final state opens **Test & Release** and grants no Ready,
   build, deployment, audibility, or runtime authority. Actions reuse the exact
   project-text/Add/Manage/Resolve flows and recheck root/project/revision/head,
   catalog identity, line/locale, and the derived next step around asynchronous
@@ -303,20 +306,18 @@ than revealing it only at build time.
 The Studio shell is organized by authoring task, not by backend or file format:
 
 ```text
-Global bar
-  Project | Back/Forward | Search/Commands | Undo/Redo
-  Autosave + compatibility status | Validate | Test | Build
+Project command bar
+  Project | Undo | Search | Create | Problems | History | Settings
 
 Primary navigation
   Home
-  Content Library
+  Content
   Story
-  World
-  Localization & Voice
-  Validate & Test
-  Build & Release
-  History
-  Settings / Expert mode
+  Text & Voice
+  Test & Release
+
+Secondary dialogs
+  History | Settings
 
 Persistent workspace
   Left: scope, outline, collections, and saved searches
@@ -326,39 +327,37 @@ Persistent workspace
 ```
 
 No-project startup shows a localized managed-project entry banner with direct
-Create/Open actions beside the classic standalone tools. Those tools own no
-project or session state; only adoption of a managed-R3 project opens the
-canonical workspace. Managed Studio Shell v1 implements its nine-destination
-shell
-for managed R3 projects: **Home**, **Content**, **Story**, **World**,
-**Localization & Voice**, **Validate & Test**, **Build & Release**, **History**,
-and **Settings & Expert** remain visible at every support level. **DataAssets** is a
-secondary view inside Content rather than a top-level format destination. The
-workspace lazily mounts pages, preserves the selected primary destination,
-per-section secondary route, and mounted page state across revisions of the
-same project, and resets to Home when project identity changes.
+Create/Open actions beside the standalone tools. Those tools own no project or
+session state; only adoption of a managed-R3 project opens the canonical
+workspace. Managed Studio Shell v1 implements exactly five primary jobs:
+**Home**, **Content**, **Story**, **Text & Voice**, and **Test & Release**.
+**DataAssets** is a secondary view inside Content. History and Settings open as
+focused command-bar dialogs. World has no primary placeholder and stays hidden
+until its separately approved implementation begins. The workspace lazily
+mounts pages, preserves the selected primary job and mounted page state across
+revisions of the same project, and resets to Home when project identity changes.
 
 This shell remains an evolving product surface, but Home now follows the compact
 task-router direction. The compact standalone tools remain the minimum
 discoverability and task-efficiency baseline for workflows that already work
 there. Rehost each useful workflow directly on managed R3 before retiring its
-standalone presentation. The destinations above define stable product
+standalone presentation. The jobs above define stable product
 responsibilities; related responsibilities may be presented together in one
 productive workspace through progressive disclosure instead of multiplying
 dashboards, cards, and modal launchers. Major changes to that presentation
 require user review before they become the product direction.
 
 Home loads the exact-current `Revision3ContentIndex` and leads with **Story**,
-**Dialog & Voice**, **Problems**, **Content**, and **Build & Release** before
+**Text & Voice**, **Problems**, **Content**, and **Test & Release** before
 compact counts and readiness. It no longer duplicates low-level authoring,
 import, build, or export launchers: Story owns NPC/Quest creation, the domain
 workspaces own their operations, and Project owns export. Story opens a direct
 exact-current NPC/Quest search, filter, list, creation, and Workbench surface;
-Localization & Voice exposes the bounded take, selection, and target actions;
-Validate & Test can verify the exact current head and inspect references; Build
-& Release exposes only the bounded Voice bundle; and Settings is available.
-World authoring, runtime testing, full managed build/deploy, and Expert tooling
-remain visibly unavailable instead of disappearing. Root, project ID, revision,
+Text & Voice exposes the bounded take, selection, and target actions. Test &
+Release combines honest project checks with the bounded Voice continuation but
+does not infer project-wide readiness. History and Settings remain available
+from the command bar. World authoring, runtime testing, and full managed
+build/deploy remain unavailable. Root, project ID, revision,
 and head stay collapsed as technical details, while the `requiresReopen`
 recovery gate remains outside the workspace. This shell grants no new game/save
 writes, deployment, project-wide build, or runtime authority.
@@ -452,7 +451,7 @@ proof. It does not widen that evidence to adjacent use cases.
 
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
-| Managed R3 workspace shell | **Canonical nine-destination shell and Project Work Bar V1 implemented; direct Story workspace landed; domain depth remains partial** | Managed R3 exposes Home, Content, Story, World, Localization & Voice, Validate & Test, Build & Release, History, and Settings & Expert through one responsive shell. DataAssets is a Content secondary view. A persistent Work Bar above every destination shows the friendly project name and current primary area and exposes global **Search**, **Create**, and **Problems** continuations. Search opens the existing Content `Search all` scope and focuses its existing query without loading any source before a nonempty submission. Create reuses the existing NPC Draft, recommended Quest plus opening-line, and new dialog-line flows with their exact configured-game, clean-workspace, recovery, checkpoint, and post-dialog revalidation gates. Problems routes to the existing Validate & Test owner. Compact/high-scale layouts keep Search direct and place Create/Problems in an accessible overflow with visible disabled reasons; callbacks are single-flight and late project/checkpoint/disposal continuations fail closed. Lazy-mounted pages preserve primary selection, per-section secondary routes, and page state across same-project revisions; a different project resets Home, the Work Bar state, and its project-bound Search handoff. Story is no longer a card/link landing page: it directly loads the exact current index, lists only NPC/Quest Drafts with friendly search and All/NPC/Quest filters, offers the bounded create actions, and opens the existing responsive Workbench in place or in a compact/short-host details sheet. Exact-revision selection after creation and same-project state retention fail closed on drift or deletion; non-Story references route to Content. Localization & Voice exposes the guided dialog-line prerequisite V1 plus take/selection/target actions; Validate hosts bounded Problems & Readiness V1 plus exact-head verification while keeping compiler, managed-build, and runtime evidence explicitly separate; Build exposes only the sealed Voice bundle; History exposes the sealed bounded project timeline and append-only restore; and Settings is available. The Work Bar adds orientation and routing only—no read, mutation, publication, build, deployment, game/save-write, or runtime authority. World authoring was not started; runtime test, full managed build/deploy, full command palette/undo/build/test chrome, and Expert tools remain visible but unavailable. Explicit exact-current Quest/NPC compiler checks temporarily stage the exact generated source and mutate the authenticated compiler/cache paths in the selected installation under the shared install guard, while restoring every touched install path or retaining recovery evidence. They discard output and grant no save write, deployment, general managed build, or runtime qualification. The classic standalone-tool surface remains temporarily available only as a UX baseline; it has no project or session authority and is not a second product mode. |
+| Managed R3 workspace shell | **Five-job primary shell and Project Work Bar implemented; domain depth remains partial** | Managed R3 exposes exactly **Home**, **Content**, **Story**, **Text & Voice**, and **Test & Release** as the responsive primary navigation. World is absent until World work is explicitly approved and begins; History and Settings are secondary command-bar actions that open focused dialogs outside those five jobs. The persistent Work Bar keeps the friendly project name and current job visible and reuses the existing Undo, Search, Create, and Problems continuations without introducing another state or permission path. Lazy pages retain same-project state and reset on project identity change. Story directly owns exact-current NPC/Quest Draft discovery and its responsive Workbench; Content owns current/base/installed discovery and verified DataAsset edits; Text & Voice owns project text and the bounded Voice workflow. Test & Release presents six independent, honest areas: project structure, scripts, Voice, DataAssets, playable build, and deployment. It embeds the current Problems surface and Voice readiness/build continuation. Checked results are accepted only for the exact project ID, revision, and canonical head; playable build and deployment remain blocked unless their own matching evidence and executable action are both present, and evidence for one never authorizes the other. The shell and Work Bar add presentation and routing only—no project mutation, build, deployment, game/save write, or runtime authority. Exact-current Quest/NPC compiler checks retain their separate bounded install-guard and restoration evidence. The useful standalone tools remain a UX baseline while their jobs are rehosted on R3; they have no project or session authority. |
 | Project save/load | **Partial Studio paths; managed revision-3 create/open/close and bounded History/Undo proven** | Managed R3 is the only project and session path. The Project menu can now create a new managed R3 project from friendly name/version/author/locales plus an existing empty real directory. Creation authenticates one exact registered V1 or current Steam-build-`24169431` executable/Shipping/Binds triple, generates a secure nonzero project ID, builds canonical empty revision-3 JSON, publishes by absent-head CAS, fully reopens it, and adopts it only after exact identity/project-byte checks. Unknown or cross-paired generations fail closed. A valid head produced before a late create failure is reopened and recovered; a mismatched candidate is closed, while every nonempty or game-overlapping destination—including a prior lock-only scaffold—is rejected before generation hashing or native creation. A live current-install test created, read, closed, and reopened the empty project while proving the executable and both caches unchanged by length and SHA-256. The same coordinator opens existing R3 directories, drives Home and `Ctrl+S`, verifies exact-current heads, preserves the current R3 session on failed transitions, and surfaces `requiresReopen` and cleanup failures. **Project > Close** releases the current session through the guarded close flow; bounded same-lock `requiresReopen` recovery is available. History lists only the exact current snapshot's sealed newest-first window (at most 256 entries) and restores a retained older member as a fresh current+1 revision through the same crash-recoverable publication lane; it never scans CAS or moves the head backwards. Project deletion, Save As, named checkpoints, semantic diffs, unlimited archival history, and general recovery remain missing. No alternate project editor or old Build/Deploy backend is exposed. Home exposes the strict semantic index and bounded Quest/NPC/Voice/DataAsset mutations through the same lease. NPC/Quest and generic DataAsset work remain outside a production build; the separately labelled Voice bundle and exact reviewed Footstep stage can each emit a bounded offline artifact without deployment/runtime authority. General semantic editors, clone/Save As, named checkpoints/semantic history diffs/general recovery UI, dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
 | Unified content browser | **Bounded global cross-source search and canonical Story handoff integrated; semantic breadth remains partial** | Content keeps the exact-current project Library and verified DataAsset stages under one responsive, lazy scope host that resets on a different project. `Base game` exposes curated NPC/Quest starting points plus search-gated inspect-only experimental NPC evidence; missing setup performs no load and routes to Settings. `Installed` reads exact package-index metadata and opens the existing inspector by canonical path. `Search all` runs only after an explicit nonempty query, scans the three source projections independently in memory, and retains at most 100 rows per source with independent loading/complete/partial/error state. Results are case/accent tolerant and expose only exact same-source actions: open a current mod identity, create a Draft from one exact Base catalog identity, or inspect one exact installed target. Selected current-project Quest/NPC Drafts show a friendly discovery summary and one exact **Open in Story** continuation; Content contains no duplicate Quest/NPC Workbench, edit, or source-check actions, and preserves the disabled continuation with a recovery reason while reopening is required. The screen is not one atomic combined snapshot and grants no dependency, package/build/deploy/runtime/game-write, or cross-source mutation authority. No fake `Dependencies` scope exists. Items, complete dialog/localization, FMOD audio, textures, scripts, several classic standalone tools, indexed/virtualized large-scale search, complete semantic NPC/Quest browsing, source-aware clone, collections, complete incremental semantic validation, transactional quick fixes, profile-specific build/runtime readiness, and a complete cross-domain editing workspace remain missing. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
@@ -463,8 +462,8 @@ proof. It does not widen that evidence to adjacent use cases.
 | Managed-R3 dialog-line prerequisite | **Guided V1 project-local creation/exact reuse integrated; dialog runtime missing** | A fresh managed-R3 project can create one new `LocalizationEntry` and `DialogLine` plus an optional empty unresolved locale `VoiceSlot`, or create the line against one exact existing, currently unused managed localization bound by entity revision and localization identity. The pure transaction binds the exact head/project/revision/target, preserves an exact-reused entry byte-for-byte, and emits only a build-blocked/runtime-unqualified candidate with topic authority not granted. The prepare-only FFI accepts no game root, fully reopens the immutable candidate with asset verification, checks the fixed head after preparation and response construction, and never publishes it; only the serialized managed session may use guarded fixed-head CAS, repair, and full published reopen. This path reads or writes neither the game nor a save. It does not trust the unsealed global localization catalog, adopt vanilla identity or speaker evidence, create a topic or AngelScript, register runtime behavior, or produce playable dialog. |
 | New dialog topic insertion/rendering | **Earlier narrow render proof; version-3 candidate offline-qualified, one controlled live visual run remains** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration previously reached the natural choice UI and was visually confirmed. The current version-3 candidate is deterministic, passes the strengthened forbidden-operation and preflight-order verifier, and deploys/undeploys to exact sandbox tree identity. That is offline/sandbox evidence, not a live version-3 result. Requalification requires exactly one natural Viper-menu run with no selection and no save; automatic discovery and selection effects remain unproven. See [dialog authoring](dialog-authoring.md). |
 | Dialog selection effects | **Unproven** | Topic selection, quest/knowledge changes, `ActedTopics`, and selection-side save effects are outside the render proof. The safe proof intentionally selected nothing. |
-| Quest inspection/edit/create | **Managed revision-3 creation, Story Workbench V1, outline/context, bounded V4 states-and-transitions, and ordered transcript editing proven; build/runtime missing** | Managed R3 Home exposes the friendly one-to-eight-objective Quest Draft wizard. A selected Quest opens four canonical Story tabs: **Journey**, **Dialog & Voice**, **References**, and **Problems & Checks**. Journey presents the objective-centered behavior projection and owns the contextual **Name & objectives**, **Description & connections**, and **States & transitions** handoffs. Dialog & Voice owns the bounded ordered transcript, References projects exact-current links without claiming readiness, and Problems & Checks owns source/compiler inspection. The transcript presents friendly speaker/text/locale/Voice coverage, attaches, reorders, groups by stable V4 objective slot, detaches without deleting shared lines, atomically creates and inserts one DialogLine/localization/optional empty Voice slot, and hands one exact line/locale to **Localization & Voice**. The V4 behavior dialog presents the main Quest/objectives against Available/Start/Success/Failure, a sequential template, independent direct-engine triggers and typed conditions, bounded Start/Succeed/Fail follow-up actions, and objective-parent completion. Conditions use the six reviewed lifecycle tests with optional negation and are capped at 8 DNF alternatives x 8 atoms; each transition has at most 8 effects. The closed native validator enforces canonical order, stable active objective slots, drivers, required availability/start and objective terminal edges, valid references, contradiction rules, same-handler terminal conflicts, same-kind cycles, and at most 256 unique same-project transcript lines. It accepts no raw AngelScript, runtime topic, selection effect, journal, reward, item, or arbitrary effect. Every managed Quest is V4-native and carries a required canonical plan with stable slots; non-V4 Quest data is invalid input. Outline/context/transitions/source inspection preserve transcript metadata. Transcript edits increment project/Quest only and leave the owned module/source/revision unchanged; the compound create-and-insert path still publishes exactly one project revision. The prepare-only transition and transcript FFI routes accept no `game_root`, prepare and fully reopen only immutable candidates, and never replace the fixed head. Native status remains `blocked`, `runtime_unqualified`, topic authority `not_granted`, and publication `not_supported`; the managed session is the only publisher through guarded exact-head byte CAS, repair journal, and full published reopen. An isolated 1.0.3 qualifier compiled the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes twice and produced the same reopened 7,306-module composed cache (123,406,626 bytes, SHA-256 `FB041B3DF1CBD5A0AFC1D87F47BFCA6392AA19CE6475CE9DBD61A6D099D9C41A`). It did not compile one renderer-produced fixture spanning every state-test expression, and it is compiler/cache evidence rather than gameplay. Runtime transition order/effects, transcript-driven dialog selection, journal/rewards/items, persistence/save/reload/uninstall, production build/deploy, and a synchronized general Quest/dialog graph remain missing. Quest authoring transactions write neither the game installation nor a save; the separate explicit exact-current compiler check temporarily stages the exact generated source and mutates the authenticated compiler/cache paths under guarded restoration of every touched install path or retained recovery, then discards its output. See [quest authoring](quest-authoring.md). |
-| Voice archive editing | **Existing-member archive slice proven; managed revision-3 Work list, entry, import, exact preview/QA, status, selection, safe removal, installed-target, and sealed offline-build foundation proven; production workflow incomplete** | The standalone line-first browser remains an evidence source while its useful jobs are rehosted; it is not another project path. Managed R3 **Localization & Voice** defaults to a bounded Work list and keeps Project texts one switch away. It projects only absent authoring-locale membership and intact existing `VoiceSlot`s; absence of a slot never invents recording intent. Exact slot precedence is zero takes → add, no Approved take → review/approve, no valid Approved selection → select/repair, unresolved/ambiguous target → resolve, otherwise production decisions complete. Unreviewed alternatives do not regress that final decision, and completion opens checks without claiming Ready/build/runtime. Rows reuse the existing exact Add/Manage/Resolve or locale-edit flows. The list retains 500 normal rows, reports omitted work, preserves known language work when Voice evidence is unavailable, and fails closed on root/project/revision/head/catalog/next-step drift. Existing bounded take import, status, selection, preview/media QA, slot/take removal, target resolution, and deterministic sealed Vorbis existing-member offline build retain their independent exact prepare/full-reopen/session-publication contracts. | Line/localization/take project mutations write neither game nor save; offline output and desktop playback are not runtime evidence. Managed Voice still lacks deploy/undeploy, isolated runtime testing, audible-game qualification, ambiguous-member choice, recording/transcode, complete coverage and broader batch/team review, CSV/XLIFF, qualified Opus lowering, sealed vanilla adoption, and new-member lookup proof. “Production decisions complete” is intentionally narrower than any of those claims. See [Voice authoring](voice-authoring.md). |
+| Quest inspection/edit/create | **Managed revision-3 creation, Story Workbench V1, outline/context, bounded V4 states-and-transitions, and ordered transcript editing proven; build/runtime missing** | Managed R3 Home exposes the friendly one-to-eight-objective Quest Draft wizard. A selected Quest opens four canonical Story tabs: **Journey**, **Dialog & Voice**, **References**, and **Problems & Checks**. Journey presents the objective-centered behavior projection and owns the contextual **Name & objectives**, **Description & connections**, and **States & transitions** handoffs. Dialog & Voice owns the bounded ordered transcript, References projects exact-current links without claiming readiness, and Problems & Checks owns source/compiler inspection. The transcript presents friendly speaker/text/locale/Voice coverage, attaches, reorders, groups by stable V4 objective slot, detaches without deleting shared lines, atomically creates and inserts one DialogLine/localization/optional empty Voice slot, and hands one exact line/locale to **Text & Voice**. The V4 behavior dialog presents the main Quest/objectives against Available/Start/Success/Failure, a sequential template, independent direct-engine triggers and typed conditions, bounded Start/Succeed/Fail follow-up actions, and objective-parent completion. Conditions use the six reviewed lifecycle tests with optional negation and are capped at 8 DNF alternatives x 8 atoms; each transition has at most 8 effects. The closed native validator enforces canonical order, stable active objective slots, drivers, required availability/start and objective terminal edges, valid references, contradiction rules, same-handler terminal conflicts, same-kind cycles, and at most 256 unique same-project transcript lines. It accepts no raw AngelScript, runtime topic, selection effect, journal, reward, item, or arbitrary effect. Every managed Quest is V4-native and carries a required canonical plan with stable slots; non-V4 Quest data is invalid input. Outline/context/transitions/source inspection preserve transcript metadata. Transcript edits increment project/Quest only and leave the owned module/source/revision unchanged; the compound create-and-insert path still publishes exactly one project revision. The prepare-only transition and transcript FFI routes accept no `game_root`, prepare and fully reopen only immutable candidates, and never replace the fixed head. Native status remains `blocked`, `runtime_unqualified`, topic authority `not_granted`, and publication `not_supported`; the managed session is the only publisher through guarded exact-head byte CAS, repair journal, and full published reopen. An isolated 1.0.3 qualifier compiled the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes twice and produced the same reopened 7,306-module composed cache (123,406,626 bytes, SHA-256 `FB041B3DF1CBD5A0AFC1D87F47BFCA6392AA19CE6475CE9DBD61A6D099D9C41A`). It did not compile one renderer-produced fixture spanning every state-test expression, and it is compiler/cache evidence rather than gameplay. Runtime transition order/effects, transcript-driven dialog selection, journal/rewards/items, persistence/save/reload/uninstall, production build/deploy, and a synchronized general Quest/dialog graph remain missing. Quest authoring transactions write neither the game installation nor a save; the separate explicit exact-current compiler check temporarily stages the exact generated source and mutates the authenticated compiler/cache paths under guarded restoration of every touched install path or retained recovery, then discards its output. See [quest authoring](quest-authoring.md). |
+| Voice archive editing | **Existing-member archive slice proven; managed revision-3 Work list, entry, import, exact preview/QA, status, selection, safe removal, installed-target, and sealed offline-build foundation proven; production workflow incomplete** | The standalone line-first browser remains an evidence source while its useful jobs are rehosted; it is not another project path. Managed R3 **Text & Voice** defaults to a bounded Work list and keeps Project texts one switch away. It projects only absent authoring-locale membership and intact existing `VoiceSlot`s; absence of a slot never invents recording intent. Exact slot precedence is zero takes → add, no Approved take → review/approve, no valid Approved selection → select/repair, unresolved/ambiguous target → resolve, otherwise production decisions complete. Unreviewed alternatives do not regress that final decision, and completion opens checks without claiming Ready/build/runtime. Rows reuse the existing exact Add/Manage/Resolve or locale-edit flows. The list retains 500 normal rows, reports omitted work, preserves known language work when Voice evidence is unavailable, and fails closed on root/project/revision/head/catalog/next-step drift. Existing bounded take import, status, selection, preview/media QA, slot/take removal, target resolution, and deterministic sealed Vorbis existing-member offline build retain their independent exact prepare/full-reopen/session-publication contracts. | Line/localization/take project mutations write neither game nor save; offline output and desktop playback are not runtime evidence. Managed Voice still lacks deploy/undeploy, isolated runtime testing, audible-game qualification, ambiguous-member choice, recording/transcode, complete coverage and broader batch/team review, CSV/XLIFF, qualified Opus lowering, sealed vanilla adoption, and new-member lookup proof. “Production decisions complete” is intentionally narrower than any of those claims. See [Voice authoring](voice-authoring.md). |
 | FMOD sound/music replacement | **Proven** | Studio browses samples, previews originals or staged WAVs, and stages replacements for the bundle engine. This is sound-bank replacement, not spoken-dialog voice authoring. |
 | Texture replacement | **Proven subset** | Existing texture assets can be browsed and replaced with additive IoStore output. This is not general cooked-asset creation, visual-media round trip, or an Unreal Editor bridge. |
 | Existing cooked DataAsset fixed leaves | **Managed revision-3 typed editor, reviewed Footstep quick start, verified registry, and one offline build proven** | Receipt-bound extract/patch/re-inspect/offline-pack and the generic inspector-proven Bool/integer/float/color/vector editor remain available under **Expert tools**. The normal quick start names the exact Human, Scavenger, and Wolf `FootstepTag` targets and opens installed data as the primary path to the reviewed `BoneData/BoneFeetData/FeetTextureSize` Vector4 form. Studio exposes X/Y scale presets, Before/After preview, and preserved Z/W; values are explicitly raw asset units. A successful typed publication is returned to the registry, accepted only as the next revision, reloaded, and expanded only when target plus staged revision match. The separate exact-current **Build files...** action can emit the reviewed offline package triplet. Neither editing nor build grants deployment, gameplay, runtime, structural/new-asset, or Unreal-bridge authority. Broader reviewed schemas, gameplay-qualified units, multi-edit/undo, structural editing, new assets, and the sealed Unreal handoff remain missing. Neither path writes the game installation or a save file. See [DataAsset authoring](dataasset-authoring.md). |
@@ -474,7 +473,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Items/world/spawns | **Partial/missing** | Existing item scalar overrides are present. New item identity, placed world actors, spawn points, routines, level edits, and world-partition integration have no semantic Studio workflow or production proof. An optional sealed Unreal handoff is planned only for explicitly supported future operations; no bridge or compatible world writer exists today. |
 | Localization | **Proven** | Multi-language edits and explicit new IDs lower to `BuildSpec.loc_edits`; deploy is backup/restore aware. Referential completeness across quests, dialog, and voices is not yet validated as one graph. |
 | Build/deploy/undeploy | **Bounded managed-R3 Voice and reviewed-DataAsset offline lowerers proven; managed deployment and project-wide build missing** | The safe bundle/deployment engine exists underneath the Studio, but no alternate project backend owns it. Existing-member spoken-line replacement remains bounded evidence until it is driven from the managed project. R3 NPC/Quest Drafts and generic DataAsset stages remain outside a production build. Managed Voice has an explicitly labelled all-or-nothing offline builder for verified selected Vorbis existing-member replacements; one exact-current reviewed Human/Scavenger/Wolf `FeetTextureSize` stage can separately emit a strictly reopened offline package triplet. Neither path deploys or grants project-wide pack/gameplay authority. Project-wide semantic roots, dependency/risk review, managed deploy/undeploy, rollback, and isolated runtime qualification remain missing. |
-| Validation | **Bounded Problems & Readiness V1 integrated; full validator missing** | `Validate & Test` derives exact-current unresolved entity/asset references, game-configuration state, managed DataAsset-registry availability, and offline-only stage limitations. It supports search/filter/detail, exact source navigation, relevant-workspace actions, partial-source handling, and exact-head verification. Quest/NPC findings open the exact Draft in Story **Problems & Checks**; other entities and project assets use revision-and-head-bound Content navigation; DataAsset findings filter, select, and expand the exact staged edit. The report intentionally has no overall readiness value: compiler evidence remains `not evaluated`, general managed build remains `blocked`, and runtime remains `unqualified`. Existing scalar, codec, DataAsset, Quest-V4, build, and explicit Quest/NPC compiler checks retain separate evidence boundaries; Problems neither invokes nor records those compiler checks. Project-wide incremental semantic validation, quick fixes, reachability simulation, a general build plan, deployment, and runtime qualification remain missing. |
+| Validation | **Bounded Test & Release workspace integrated; full validator missing** | Test & Release exposes six separate areas: project structure, scripts, Voice, DataAssets, playable build, and deployment. It rehosts the current Problems & Readiness V1 view and Voice readiness/build continuation without collapsing them into an overall Ready result. Reference findings retain their exact Story, Content, DataAsset, or Text & Voice continuation. Every evaluated result must carry evidence matching the current project ID, revision, and canonical head; drift returns it to an unevaluated state. Playable build and deployment each require matching evidence plus their own connected action, and neither capability authorizes the other. Project-wide incremental semantic validation, transactional quick fixes, general build planning, managed deployment, and runtime qualification remain missing. |
 | Undo/redo/history | **Bounded snapshot History/Undo and publication-repair journal proven; command-level undo/redo missing** | Managed R3 retains an authenticated newest-first window of at most 256 exact project checkpoints and restores a retained version append-only as a fresh revision through the guarded publication lane. Fixed-head replacement uses an exact old/new-generation recovery journal with conservative ambiguity handling. There is still no shared inverse-command log, redo, named checkpoints, semantic diffs, unlimited archive, or general multi-domain recovery UI. |
 | Templates/clone/batch/CSV | **First Empty/NPC Draft/Quest Draft starters integrated; reusable templates and batch tools missing** | New-project creation now offers **Empty**, **NPC Draft**, and **Quest Draft** before metadata entry. Every choice first creates and adopts the same canonical empty revision-0 project through absent-head CAS; an NPC or Quest choice then opens the existing guided exact-head wizard and may publish a separate revision 1. Cancel before publication leaves the exact empty project. If publication outcome cannot be verified, Studio requires reopening instead of claiming that the project stayed empty. Copy states this two-stage boundary before creation and never calls it one atomic template transaction. Multi-domain/playable-slice templates still require a native compound prepare/publication transaction. Dependency-aware templates, clone modes, transactional bulk editing, and CSV round trip remain missing. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
@@ -514,28 +513,27 @@ V2](managed-project-import.md).
 
 The implemented managed-project Home is a compact task router, not a second
 editor or a collection of modal launch cards. It has exactly five continuations:
-**Story**, **Dialog & Voice**, **Problems**, **Content**, and **Build & Release**.
+**Story**, **Text & Voice**, **Problems**, **Content**, and **Test & Release**.
 Each opens the canonical workspace that owns the job. Story owns the recommended
 **Character + first greeting** and **Quest + opening line** flows plus the
-advanced NPC-only and Quest-only Drafts. Localization & Voice owns project text,
+advanced NPC-only and Quest-only Drafts. Text & Voice owns project text,
 dialog-line, and Voice actions;
-Validate owns Problems; Content owns discovery and DataAsset work; Build &
-Release owns output actions. Export stays in the Project menu. Normal chrome
+Test & Release owns Problems and output checks; Content owns discovery and
+DataAsset work. Export stays in the Project menu. Normal chrome
 calls this a **Mod Studio project** and keeps schema/head vocabulary in technical
-details. The nine stable shell destinations now use direct, horizontally
-scrollable classic top tabs instead of the managed rail/compact popup. The
-useful classic standalone layout remains a UX reference only and grants no
-project or session authority.
+details. The five stable primary jobs use direct, horizontally scrollable tabs.
+The useful standalone layout remains a UX reference only and grants no project
+or session authority.
 
-Project Work Bar V1 is the first persistent project-level chrome shared by all
-nine destinations. It keeps the index-derived friendly project name (using only
+Project Work Bar V1 is the persistent project-level chrome shared by all five
+primary jobs. It keeps the index-derived friendly project name (using only
 the directory name while that exact read is pending) and current primary area
 visible above the lazy page stack. Its three commands are deliberately thin:
 **Search** opens Content's existing `Search all` scope and focuses the existing
 query; **Create** offers the recommended Character plus first greeting and Quest
 plus opening line recipes, the advanced NPC-only Draft, and the new
-dialog-line journey; **Problems** opens the existing
-Validate & Test report. The chooser preserves each flow's truthful gates: NPC
+dialog-line journey; **Problems** opens the existing Test & Release report. The
+chooser preserves each flow's truthful gates: NPC
 and Quest require a configured game, and all creation remains disabled for a
 dirty managed workspace, recovery, or `requiresReopen` and revalidates the exact
 checkpoint after the chooser. Search mounting and focus perform zero source
@@ -682,7 +680,7 @@ module/source identities. **Problems & Checks** retains the separate exact-
 current profile/source inspection and evidence-only compiler check. **Dialog &
 Voice** now owns the ordered project-only greeting list: authors can attach,
 create, reorder, or detach exact managed lines, preview localized text and Voice
-coverage, continue into the existing Localization & Voice workspace, and
+coverage, continue into the existing Text & Voice workspace, and
 explicitly plan an empty Voice setup for one selected nonblank line/language.
 That plan records production intent only; it creates no audio, topic, runtime
 speaker binding, playable conversation, or spawn. Story, Routine, and Inventory
@@ -751,7 +749,7 @@ current ordered Quest transcript: friendly project lines can be attached,
 reordered, grouped by stable V4 objective slot, detached without deletion,
 previewed lazily, or
 created and inserted atomically; one exact row/language can open in
-Localization & Voice. Transcript mutations remain gated while localization
+Text & Voice. Transcript mutations remain gated while localization
 text is dirty or the managed checkpoint is busy/stale. Story exposes a
 recommended two-checkpoint **Quest + opening line** recipe: the existing Quest
 transaction publishes N+1, Studio rebinds to that exact checkpoint, and the
@@ -791,7 +789,7 @@ sanitized copy without technical exception details.
 ### 4.6 Voice at the line
 
 The first bounded managed-R3 transaction/import slice is now connected to the
-canonical **Localization & Voice** workspace.
+canonical **Text & Voice** workspace.
 It searches exact-current `DialogLine` content by speaker, line name, or
 localization identity, limits each visible result set to 50, and requires an
 explicit line choice. It can import a validated Ogg into the managed AssetStore,
@@ -1495,7 +1493,7 @@ cannot mutate the released payload in place.
 The compiler pipeline is:
 
 ```text
-canonical V2 snapshot
+canonical managed-R3 snapshot
   -> resolve typed refs and origins
   -> project-wide semantic validation
   -> domain generators in dependency order
@@ -1537,12 +1535,12 @@ all maps and sets serialize canonically. The provenance map links every
 generator version, and input fingerprint, enabling meaningful build errors.
 
 The existing `BuildSpec` has no general cooked-DataAsset or world-content input.
-V2 lowering therefore must **block** a project that requires such output today.
-Once a verified cooked-package generator exists, add a backwards-compatible,
-typed `BuildSpec` component (or another explicit gore-mod deployment IR field)
-rather than smuggling a triplet through texture or script fields. The high-level
-contract remains V2 -> deployment IR -> gore-mod; V2 must not deploy files
-directly.
+Current R3 lowering therefore must **block** a project that requires such output
+today. Once a verified cooked-package generator exists, change the current typed
+`BuildSpec` component (or another explicit gore-mod deployment IR field) in
+lockstep rather than smuggling a triplet through texture or script fields. The
+high-level contract remains managed R3 -> deployment IR -> gore-mod; the project
+model must not deploy files directly.
 
 Expert source follows the same path. It can replace a generator output only
 after declaring its exact inputs/outputs and passing the same bounded parser,
@@ -1572,13 +1570,14 @@ preserves project identity and returns no adoptable receipt on publication
 uncertainty. Clone/Save As and deliberate uncertainty/staging recovery remain
 missing. The first Voice production
 Work list is also landed:
-Localization & Voice defaults to bounded missing-language and existing-slot
-next steps while Project texts stays one switch away. Project Work Bar V1 is
-also landed across every destination: persistent project/current-area
+Text & Voice defaults to bounded missing-language and existing-slot next steps
+while Project texts stays one switch away. Project Work Bar V1 is also landed
+across every primary job: persistent project/current-area
 orientation plus Search/Create/Problems routes into the existing owners,
 including exact Search-all focus with zero pre-query source loads and compact
-accessible overflow. It adds no new authority; full command-palette,
-undo/redo, compatibility, build/test, and broader workspace chrome remain.
+accessible overflow. History and Settings now open as focused command-bar
+dialogs. It adds no new authority; full command-palette, undo/redo,
+project-wide build/test, and broader workspace chrome remain.
 The recommended **Character + first greeting** recipe now also removes the NPC
 creation-to-writing dead end by composing the existing Character and greeting
 transactions across two explicit exact checkpoints. Its partial NPC-only result
@@ -1592,11 +1591,11 @@ semantic dialog/NPC/topic relationships and localization/Voice production
 tools; (2) finish semantic/project
 deletion, shared undo/history, and broader recovery, with Close and bounded
 same-lock recovery already landed; (3) deepen the existing NPC and Quest
-journeys beyond their direct workspace; and (4) complete honest managed
-build/release and qualified test paths. Broad World or level authoring remains frozen
-until these workflows are usable end to end. World may stay visible as an
-unavailable destination, but research or a placeholder must not displace this
-queue.
+journeys beyond their direct workspace; and (4) complete honest managed Test &
+Release and qualified test paths. Broad World or level authoring remains frozen
+until these workflows are usable end to end. World stays out of the primary
+navigation until that work is explicitly approved and begins; research or a
+placeholder must not displace this queue.
 
 ### Phase 0: cross-cutting authoring contract
 
@@ -1640,7 +1639,7 @@ reuse one exact currently unused managed localization. Reuse now includes a
 bounded, read-only, exact-head localization preview and permits only locales
 with non-whitespace text; publication rechecks the same exact entity. The
 optional speaker value remains a label and grants no NPC binding. This closes
-the former fresh-project dead end. Localization & Voice also now provides a
+the former fresh-project dead end. Text & Voice also now provides a
 direct search/list/editor workspace for the complete bounded text map of intact
 project-owned localizations. It hides technical identity, shows shared-line
 backlinks, preserves VoiceSlot locales, locks candidate-backed transcripts, and
@@ -1786,9 +1785,9 @@ saves. Tests install a filesystem-write sentinel around the fake normal game
 tree and assert its complete before/after file inventory and hashes are
 identical.
 
-### 9.1 V2 project core
+### 9.1 Managed-R3 project core
 
-1. A canonical V2 fixture containing every entity/ref/origin variant serializes
+1. A canonical managed-R3 fixture containing every entity/ref/origin variant serializes
    to a working-directory snapshot, reopens, validates, and serializes to
    byte-identical canonical manifest/entity shards and an identical AssetStore
    index. Deterministic archive export is byte-identical across directories.

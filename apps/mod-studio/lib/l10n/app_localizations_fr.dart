@@ -566,21 +566,6 @@ class AppLocalizationsFr extends AppLocalizations {
   String get managedWorkspaceStoryLabel => 'Scénario';
 
   @override
-  String get managedWorkspaceWorldLabel => 'Monde';
-
-  @override
-  String get managedWorkspaceLocalizationVoiceLabel => 'Localisation et voix';
-
-  @override
-  String get managedWorkspaceValidateTestLabel => 'Valider et tester';
-
-  @override
-  String get managedWorkspaceBuildReleaseLabel => 'Compiler et publier';
-
-  @override
-  String get managedWorkspaceHistoryLabel => 'History';
-
-  @override
   String get managedWorkspaceSettingsExpertLabel => 'Paramètres et mode expert';
 
   @override
@@ -864,10 +849,6 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
-  String get managedSectionWorldDescription =>
-      'Le placement dans le monde et les flux associés sont planifiés.';
-
-  @override
   String get managedSectionLocalizationVoiceDescription =>
       'Écrivez et traduisez les dialogues du projet au même endroit, puis poursuivez avec les voix.';
 
@@ -1064,14 +1045,6 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get managedLocalizationVoiceActionFailed =>
       'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
-
-  @override
-  String get managedSectionValidateTestDescription =>
-      'Vérifie l’intégrité exacte du projet et ses points de contrôle ; aucun test en jeu n’est revendiqué.';
-
-  @override
-  String get managedSectionBuildReleaseDescription =>
-      'Les bundles vocaux sont disponibles ; les builds jouables complets et le déploiement ne le sont pas.';
 
   @override
   String get managedSectionSettingsExpertDescription =>
@@ -3312,4 +3285,178 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get managedTextureUnknownFormat => 'Unknown source format';
+
+  @override
+  String get managedWorkspaceTextVoiceLabel => 'Texte et voix';
+
+  @override
+  String get managedWorkspaceTestReleaseLabel => 'Tester et publier';
+
+  @override
+  String get managedTestReleaseTitle => 'Tester et publier';
+
+  @override
+  String get managedTestReleaseDescription =>
+      'Vérifiez chaque partie de votre mod avant de créer des fichiers jouables ou de les installer.';
+
+  @override
+  String get managedTestReleaseEvidenceBoundary =>
+      'Rien n’est considéré comme prêt par défaut. Un résultat vérifié ne vaut que pour cette version enregistrée précise du projet.';
+
+  @override
+  String get managedTestReleaseChecksHeading => 'Vérifications du projet';
+
+  @override
+  String get managedTestReleaseReleaseHeading => 'Sortie jouable';
+
+  @override
+  String get managedTestReleaseStatusNotChecked => 'Non vérifié';
+
+  @override
+  String get managedTestReleaseStatusChecking => 'Vérification en cours';
+
+  @override
+  String get managedTestReleaseStatusChecked => 'Vérifié';
+
+  @override
+  String get managedTestReleaseStatusNeedsAttention => 'À examiner';
+
+  @override
+  String get managedTestReleaseStatusBlocked => 'Bloqué';
+
+  @override
+  String get managedTestReleaseStatusNotAvailable => 'Indisponible';
+
+  @override
+  String get managedTestReleaseStatusAvailable => 'Disponible';
+
+  @override
+  String get managedTestReleaseEvidenceLabel => 'Preuve';
+
+  @override
+  String get managedTestReleaseStaleEvidenceDescription =>
+      'Ce résultat appartient à une autre version du projet. Relancez la vérification.';
+
+  @override
+  String get managedTestReleaseActionNotConnectedDescription =>
+      'Une preuve existe, mais cette action n’est pas encore reliée dans l’espace de travail actuel.';
+
+  @override
+  String get managedTestReleaseProblemsHeading => 'Problèmes à résoudre';
+
+  @override
+  String get managedTestReleaseVoiceHeading => 'Vérification des voix';
+
+  @override
+  String get managedTestReleaseProjectStructureTitle => 'Structure du projet';
+
+  @override
+  String get managedTestReleaseProjectStructureDescription =>
+      'Consultez ci-dessous la liste active des problèmes pour vérifier les références et la structure du projet géré.';
+
+  @override
+  String get managedTestReleaseProjectStructureAction =>
+      'Examiner les problèmes';
+
+  @override
+  String get managedTestReleaseScriptsTitle => 'Scripts';
+
+  @override
+  String get managedTestReleaseScriptsDescription =>
+      'Aucun résultat de compilation pour l’ensemble du projet n’est encore relié. La vérification des scripts reste explicitement non évaluée.';
+
+  @override
+  String get managedTestReleaseScriptsAction => 'Examiner les scripts';
+
+  @override
+  String get managedTestReleaseVoiceTitle => 'Texte et voix';
+
+  @override
+  String get managedTestReleaseVoiceDescription =>
+      'Utilisez ci-dessous la vérification des voix pour la version actuellement enregistrée du projet.';
+
+  @override
+  String get managedTestReleaseVoiceAction => 'Vérifier les voix';
+
+  @override
+  String get managedTestReleaseDataAssetsTitle => 'DataAssets';
+
+  @override
+  String get managedTestReleaseDataAssetsDescription =>
+      'Les DataAssets préparés apparaissent dans les problèmes, mais aucune preuve de build complet du projet n’existe encore.';
+
+  @override
+  String get managedTestReleaseDataAssetsAction => 'Examiner les DataAssets';
+
+  @override
+  String get managedTestReleasePlayableBuildTitle => 'Fichiers jouables';
+
+  @override
+  String get managedTestReleasePlayableBuildDescription =>
+      'Créez un build jouable vérifié à partir de cette version enregistrée précise du projet.';
+
+  @override
+  String get managedTestReleasePlayableBuildBlockedReason =>
+      'Aucune preuve exacte de build complet du projet n’existe encore pour cette version enregistrée.';
+
+  @override
+  String get managedTestReleaseCreatePlayableFilesAction =>
+      'Créer les fichiers jouables';
+
+  @override
+  String get managedTestReleaseDeploymentTitle => 'Installation';
+
+  @override
+  String get managedTestReleaseDeploymentDescription =>
+      'Installez dans le jeu configuré un build jouable vérifié avec exactitude.';
+
+  @override
+  String get managedTestReleaseDeploymentBlockedReason =>
+      'Aucune preuve exacte de build déployable n’existe encore pour cette version enregistrée du projet.';
+
+  @override
+  String get managedTestReleaseInstallAction => 'Installer';
+
+  @override
+  String managedProjectCommandBarCurrentSection(String section) {
+    return 'Section actuelle : $section';
+  }
+
+  @override
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  ) {
+    return 'Projet $project. Section actuelle : $section.';
+  }
+
+  @override
+  String get managedProjectCommandBarUndoLabel => 'Annuler';
+
+  @override
+  String get managedProjectCommandBarSearchLabel => 'Rechercher';
+
+  @override
+  String get managedProjectCommandBarCreateLabel => 'Créer';
+
+  @override
+  String get managedProjectCommandBarProblemsLabel => 'Problèmes';
+
+  @override
+  String get managedProjectCommandBarHistoryLabel => 'Historique';
+
+  @override
+  String get managedProjectCommandBarSettingsLabel => 'Paramètres';
+
+  @override
+  String get managedProjectCommandBarMoreActionsTooltip =>
+      'Autres actions du projet';
+
+  @override
+  String get managedProjectCommandBarBusyLabel =>
+      'Finalisation de l’action de projet en cours…';
+
+  @override
+  String get managedProjectCommandBarBusyDisabledReason =>
+      'Attendez que l’action de projet en cours se termine.';
 }

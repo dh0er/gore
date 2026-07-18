@@ -45,6 +45,7 @@ import 'package:gore_mod/project/revision3_quest_transcript_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_localization_voice_workspace.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_build_readiness_panel.dart';
 import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_folder_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_production_card.dart';
@@ -618,6 +619,10 @@ void main() {
       expect(find.text(managed.projectId), findsOneWidget);
       expect(find.text('${managed.projectRevision}'), findsOneWidget);
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-project-workspace-tabbar')),
         findsOneWidget,
@@ -626,6 +631,13 @@ void main() {
       for (final key in _managedPrimaryNavigationKeys) {
         expect(find.byKey(key), findsOneWidget);
       }
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-project-workspace-tabbar')),
+          matching: find.byType(Tab),
+        ),
+        findsNWidgets(5),
+      );
       await _navigateManagedDataAssets(tester);
       expect(
         find.byKey(const Key('revision3-dataasset-stage-panel')),
@@ -639,9 +651,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
       expect(
+        find.byKey(const Key('managed-project-settings-dialog')),
+        findsOneWidget,
+      );
+      expect(
         find.byKey(const Key('revision3-settings-expert-page-settings')),
         findsOneWidget,
       );
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
+      await tester.pumpAndSettle();
 
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
       final close = menu
@@ -2535,22 +2555,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-world'),
-      );
-      expect(
-        find.byKey(const Key('revision3-project-section-world-page')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(
-          const Key('revision3-project-section-world-status-world-authoring'),
-        ),
-        findsOneWidget,
-      );
-
-      await _navigateManagedWorkspace(
-        tester,
-        const Key('revision3-project-workspace-tab-localization-voice'),
+        const Key('revision3-project-workspace-tab-text-voice'),
       );
       expect(
         find.byKey(const Key('revision3-localization-voice-workspace')),
@@ -2574,7 +2579,11 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      expect(
+        find.byKey(const Key('revision3-test-release-workspace')),
+        findsOneWidget,
       );
       expect(
         find.byKey(const Key('revision3-project-problems-view')),
@@ -2588,31 +2597,24 @@ void main() {
       await tester.tap(verifyAssessment);
       await tester.pump(const Duration(milliseconds: 300));
       expect(managed.verifyCalls, 1);
-
-      await _navigateManagedWorkspace(
-        tester,
-        const Key('revision3-project-workspace-tab-build-release'),
-      );
       expect(
-        find.byKey(const Key('revision3-project-section-build-release-page')),
+        find.byKey(const Key('revision3-test-release-playable-build-action')),
         findsOneWidget,
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'build-release',
-        actionId: 'build-voice-bundle',
-        enabled: false,
-      );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'build-release',
-        actionId: 'build-playable-mod',
-        enabled: false,
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(
+                const Key('revision3-test-release-playable-build-action'),
+              ),
+            )
+            .onPressed,
+        isNull,
       );
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-history'),
+        Revision3ProjectCommandBar.historyKey,
       );
       expect(
         find.byKey(const Key('revision3-project-history-page')),
@@ -2627,10 +2629,14 @@ void main() {
         findsOneWidget,
       );
       expect(managed.historyReadCalls, 1);
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
+      await tester.pumpAndSettle();
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-settings-expert'),
+        Revision3ProjectCommandBar.settingsKey,
       );
       expect(
         find.byKey(const Key('revision3-settings-expert-page')),
@@ -2640,6 +2646,10 @@ void main() {
         find.byKey(const Key('revision3-settings-expert-page-settings')),
         findsOneWidget,
       );
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
+      await tester.pumpAndSettle();
 
       await _navigateManagedHome(tester);
       expect(
@@ -2650,7 +2660,7 @@ void main() {
   );
 
   testWidgets(
-    'managed Settings hosts a lazy retained read-only DataAsset Lab and Settings command resets its route',
+    'secondary Settings dialog hosts a lazy read-only DataAsset Lab',
     (tester) async {
       await _setDesktopTestSurface(tester);
       var uassetPickerCalls = 0;
@@ -2694,7 +2704,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-settings-expert'),
+        Revision3ProjectCommandBar.settingsKey,
       );
 
       expect(
@@ -2768,23 +2778,184 @@ void main() {
       );
       expect(inspectorCalls, 1);
 
-      await tester.tap(find.byKey(Revision3ProjectCommandBar.settingsKey));
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
+      expect(
+        find.byKey(const Key('managed-project-settings-dialog')),
+        findsNothing,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        Revision3ProjectCommandBar.settingsKey,
+      );
       expect(
         find.byKey(const Key('revision3-settings-expert-page-settings')),
         findsOneWidget,
-        reason: 'the explicit Settings command clears the remembered Lab route',
+        reason: 'each explicit Settings action starts with project settings',
       );
       expect(
         find.byKey(
           const Key('dataasset-inspection-report'),
           skipOffstage: false,
         ),
-        findsOneWidget,
-        reason:
-            'route reset does not destroy the lazy page within this project',
+        findsNothing,
+        reason: 'closing the secondary tool releases its transient UI state',
       );
+    },
+  );
+
+  testWidgets(
+    'History restore closes stale modal and reopening loads the new head',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const currentRevision = 7;
+      const restoredFromRevision = 6;
+      const nextRevision = 8;
+      final currentProjectJson = revision3VoiceFixtureProjectJson(
+        revision: currentRevision,
+      );
+      final currentHead = revision3DataAssetHeadForProject(currentProjectJson);
+      final restoredFromHead = revision3DataAssetHeadForProject(
+        revision3VoiceFixtureProjectJson(revision: restoredFromRevision),
+      );
+      final initialHistory = Revision3ProjectHistorySnapshot(
+        basisHead: currentHead,
+        projectId: revision3VoiceFixtureProjectId,
+        currentRevision: currentRevision,
+        entries: <Revision3ProjectHistoryEntry>[
+          Revision3ProjectHistoryEntry(
+            head: currentHead,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: currentRevision,
+            isCurrent: true,
+          ),
+          Revision3ProjectHistoryEntry(
+            head: restoredFromHead,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: restoredFromRevision,
+            isCurrent: false,
+          ),
+        ],
+        historyTruncated: false,
+      );
+      late final _FakeHistoryManagedLease managed;
+      managed = _FakeHistoryManagedLease(
+        root: Directory(r'C:\mods\history-modal-refresh'),
+        projectId: revision3VoiceFixtureProjectId,
+        projectRevision: currentRevision,
+        head: currentHead,
+        canonicalProjectJsonValue: currentProjectJson,
+        history: initialHistory,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onRestore: (lease, expectedHistory, target) {
+          expect(identical(expectedHistory, initialHistory), isTrue);
+          expect(target.projectRevision, restoredFromRevision);
+          final nextProjectJson = revision3VoiceFixtureProjectJson(
+            revision: nextRevision,
+          );
+          final nextHead = revision3DataAssetHeadForProject(nextProjectJson);
+          lease
+            ..projectRevision = nextRevision
+            ..head = nextHead
+            ..canonicalProjectJsonValue = nextProjectJson
+            ..history = Revision3ProjectHistorySnapshot(
+              basisHead: nextHead,
+              projectId: revision3VoiceFixtureProjectId,
+              currentRevision: nextRevision,
+              entries: <Revision3ProjectHistoryEntry>[
+                Revision3ProjectHistoryEntry(
+                  head: nextHead,
+                  projectId: revision3VoiceFixtureProjectId,
+                  projectRevision: nextRevision,
+                  isCurrent: true,
+                ),
+                Revision3ProjectHistoryEntry(
+                  head: currentHead,
+                  projectId: revision3VoiceFixtureProjectId,
+                  projectRevision: currentRevision,
+                  isCurrent: false,
+                ),
+              ],
+              historyTruncated: false,
+            );
+          return ManagedRevision3ProjectHistoryRestoreCheckpoint(
+            previousHead: currentHead,
+            head: nextHead,
+            projectJson: nextProjectJson,
+            projectId: revision3VoiceFixtureProjectId,
+            previousProjectRevision: currentRevision,
+            projectRevision: nextRevision,
+            restoredFromHead: target.head,
+            restoredFromRevision: target.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        Revision3ProjectCommandBar.historyKey,
+      );
+      expect(managed.historyReadCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-history-entry-7')),
+        findsOneWidget,
+      );
+
+      final restore = find.byKey(const Key('revision3-history-restore-6'));
+      await tester.ensureVisible(restore);
+      await tester.tap(restore);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-history-confirm-restore')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.historyRestoreCalls, 1);
+      expect(
+        find.byKey(const Key('managed-project-history-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.text('Revision 6 was restored as a new project version.'),
+        findsOneWidget,
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        nextRevision,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        Revision3ProjectCommandBar.historyKey,
+      );
+      expect(managed.historyReadCalls, 2);
+      expect(
+        find.byKey(const Key('revision3-history-entry-8')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-history-entry-7')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -2992,7 +3163,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-localization-voice'),
+        const Key('revision3-project-workspace-tab-text-voice'),
       );
       expect(managed.historyReadCalls, 0);
       final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
@@ -4216,7 +4387,7 @@ void main() {
     await tester.pumpAndSettle();
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-tab-validate-test'),
+      const Key('revision3-project-workspace-tab-test-release'),
     );
 
     final openEntity = find.byKey(
@@ -4292,7 +4463,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
       );
 
       final openEntity = find.byKey(
@@ -4364,7 +4535,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
       );
 
       final openEntity = find.byKey(
@@ -4444,7 +4615,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
       );
       expect(reads, 2);
       final openEntity = find.byKey(
@@ -4530,11 +4701,14 @@ void main() {
     await tester.pumpAndSettle();
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-tab-validate-test'),
+      const Key('revision3-project-workspace-tab-test-release'),
     );
-    await tester.tap(
-      find.byKey(Key('revision3-project-problem-${stageProblem.id}')),
+    final problem = find.byKey(
+      Key('revision3-project-problem-${stageProblem.id}'),
     );
+    await tester.ensureVisible(problem);
+    await tester.pump();
+    await tester.tap(problem);
     await tester.pump();
     final openStage = find.byKey(
       Key(
@@ -4572,7 +4746,7 @@ void main() {
   });
 
   testWidgets(
-    'Validate Voice blocker opens the exact line and locale workflow',
+    'Test and Release Voice blocker opens the exact line and locale workflow',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final gameRoot = Directory.systemTemp.createTempSync(
@@ -4606,7 +4780,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
       );
 
       expect(
@@ -4615,9 +4789,12 @@ void main() {
       );
       expect(find.text('0 of 1 Voice slots are ready.'), findsOneWidget);
       expect(find.text(revision3VoiceContentLineId), findsNothing);
-      await tester.tap(
-        find.byKey(const Key('revision3-voice-readiness-toggle-blockers')),
+      final toggle = find.byKey(
+        const Key('revision3-voice-readiness-toggle-blockers'),
       );
+      await tester.ensureVisible(toggle);
+      await tester.pump();
+      await tester.tap(toggle);
       await tester.pumpAndSettle();
       final resolve = find.byKey(
         const ValueKey('revision3-voice-readiness-blocker-action-0'),
@@ -4644,6 +4821,65 @@ void main() {
       expect(managed.voicePlanCalls, 2);
     },
   );
+
+  testWidgets('Test and Release focus changes preserve Voice plan state', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\test-release-focus'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) =>
+          revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+      onVoicePlan: _readyVoicePlan,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedWorkspace(
+      tester,
+      const Key('revision3-project-workspace-tab-test-release'),
+    );
+    expect(managed.voicePlanCalls, 1);
+    final readinessState = tester.state(
+      find.byType(Revision3VoiceBuildReadinessPanel),
+    );
+
+    await _navigateManagedHome(tester);
+    await _tapManagedHomeTask(tester, const Key('managed-home-build'));
+    expect(managed.voicePlanCalls, 1);
+    expect(
+      identical(
+        tester.state(find.byType(Revision3VoiceBuildReadinessPanel)),
+        readinessState,
+      ),
+      isTrue,
+    );
+
+    await _navigateManagedHome(tester);
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.problemsKey));
+    await tester.pumpAndSettle();
+    expect(managed.voicePlanCalls, 1);
+    expect(
+      identical(
+        tester.state(find.byType(Revision3VoiceBuildReadinessPanel)),
+        readinessState,
+      ),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'German managed Home localizes Voice readiness and the plan-first build',
@@ -4685,7 +4921,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-tab-validate-test'),
+        const Key('revision3-project-workspace-tab-test-release'),
       );
 
       expect(find.text('Voice-Bereitschaft'), findsOneWidget);
@@ -7956,7 +8192,7 @@ void main() {
     },
   );
 
-  testWidgets('complete Voice work-list item opens Validate and Test checks', (
+  testWidgets('complete Voice work-list item opens Test and Release checks', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -8000,7 +8236,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const Key('revision3-project-workspace-page-validate-test')),
+      find.byKey(const Key('revision3-project-workspace-page-test-release')),
       findsOneWidget,
     );
     expect(
@@ -8462,6 +8698,52 @@ void main() {
   );
 
   testWidgets(
+    'Spanish managed Home localizes primary and secondary project actions',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\command-bar-es'),
+        projectId: '12121212121212121212121212121212',
+        projectRevision: 0,
+        head: _head(0),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      container.read(localeProvider.notifier).setLocale('es');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-project-workspace-tab-home')),
+          matching: find.text('Inicio'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(Revision3ProjectCommandBar.problemsKey),
+          matching: find.text('Problemas'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Historial'), findsOneWidget);
+      expect(find.byTooltip('Ajustes'), findsOneWidget);
+      expect(find.text('History'), findsNothing);
+      expect(find.text('Settings'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Spanish Localization and Voice keeps translated global Voice actions',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -8857,6 +9139,10 @@ void main() {
         ),
         findsOneWidget,
       );
+      await tester.tap(
+        find.byKey(const Key('managed-project-tool-dialog-close')),
+      );
+      await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       final reloadedLibraryLine = find.byKey(
         const Key('revision3-content-entity-$revision3VoiceContentLineId'),
@@ -9137,16 +9423,10 @@ void main() {
 
       await _navigateManagedHome(tester);
       await _tapManagedHomeTask(tester, const Key('managed-home-build'));
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'build-release',
-        actionId: 'build-voice-bundle',
-        enabled: true,
+      final buildBundle = find.byKey(
+        const Key('revision3-voice-readiness-build'),
       );
-      final buildBundle = _managedSectionAction(
-        sectionId: 'build-release',
-        actionId: 'build-voice-bundle',
-      );
+      expect(buildBundle, findsOneWidget);
       await tester.ensureVisible(buildBundle);
       await tester.tap(buildBundle);
       await tester.pumpAndSettle();
@@ -9226,11 +9506,9 @@ void main() {
     );
     await _navigateManagedHome(tester);
     await _tapManagedHomeTask(tester, const Key('managed-home-build'));
-    _expectManagedSectionAction(
-      tester,
-      sectionId: 'build-release',
-      actionId: 'build-voice-bundle',
-      enabled: false,
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-build')),
+      findsNothing,
     );
     expect(managed.voicePublishCalls, 0);
     expect(managed.voiceTargetPublishCalls, 0);
@@ -10504,7 +10782,7 @@ void main() {
     },
   );
 
-  testWidgets('project command Problems opens Validate and Test', (
+  testWidgets('project command Problems opens Test and Release problems', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -10534,7 +10812,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const Key('revision3-project-workspace-page-validate-test')),
+      find.byKey(const Key('revision3-project-workspace-page-test-release')),
       findsOneWidget,
     );
     expect(
@@ -10545,7 +10823,7 @@ void main() {
       tester
           .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
           .data,
-      'Current section: Validate & Test',
+      'Current section: Test & Release',
     );
     expect(tester.takeException(), isNull);
   });
@@ -10676,7 +10954,7 @@ void main() {
         tester
             .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))
             .data,
-        'Aktueller Bereich: Einstellungen & Expertenmodus',
+        'Aktueller Bereich: Start',
       );
       await _expandManagedTechnicalDetails(tester);
       expect(
@@ -10860,7 +11138,7 @@ Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
   if (details.evaluate().isEmpty) {
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-tab-settings-expert'),
+      Revision3ProjectCommandBar.settingsKey,
     );
     details = find.byKey(const Key('managed-project-technical-details'));
   }
@@ -10885,12 +11163,8 @@ const _managedPrimaryNavigationKeys = <Key>[
   Key('revision3-project-workspace-tab-home'),
   Key('revision3-project-workspace-tab-content'),
   Key('revision3-project-workspace-tab-story'),
-  Key('revision3-project-workspace-tab-world'),
-  Key('revision3-project-workspace-tab-localization-voice'),
-  Key('revision3-project-workspace-tab-validate-test'),
-  Key('revision3-project-workspace-tab-build-release'),
-  Key('revision3-project-workspace-tab-history'),
-  Key('revision3-project-workspace-tab-settings-expert'),
+  Key('revision3-project-workspace-tab-text-voice'),
+  Key('revision3-project-workspace-tab-test-release'),
 ];
 
 void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
@@ -11092,9 +11366,7 @@ Future<void> _navigateManagedLocalizationVoice(
   WidgetTester tester, {
   bool settle = true,
 }) async {
-  const destinationKey = Key(
-    'revision3-project-workspace-tab-localization-voice',
-  );
+  const destinationKey = Key('revision3-project-workspace-tab-text-voice');
   final destination = find.byKey(destinationKey);
   expect(destination, findsOneWidget);
   await tester.ensureVisible(destination);
@@ -11222,27 +11494,6 @@ Future<void> _tapWorkbenchAction(WidgetTester tester, Finder action) async {
   final visible = tester.getRect(tile).intersect(tester.getRect(scrollable));
   expect(visible.isEmpty, isFalse);
   await tester.tapAt(visible.center);
-}
-
-Finder _managedSectionAction({
-  required String sectionId,
-  required String actionId,
-}) => find.byKey(Key('revision3-project-section-$sectionId-action-$actionId'));
-
-void _expectManagedSectionAction(
-  WidgetTester tester, {
-  required String sectionId,
-  required String actionId,
-  required bool enabled,
-}) {
-  final action = _managedSectionAction(
-    sectionId: sectionId,
-    actionId: actionId,
-  );
-  expect(action, findsOneWidget);
-  final inkWell = find.descendant(of: action, matching: find.byType(InkWell));
-  expect(inkWell, findsOneWidget);
-  expect(tester.widget<InkWell>(inkWell).onTap, enabled ? isNotNull : isNull);
 }
 
 void _expectLocalizationVoiceAction(
@@ -12264,7 +12515,7 @@ final class _FakeHistoryManagedLease extends _FakeManagedLease
     this.onRestore,
   });
 
-  final Revision3ProjectHistorySnapshot history;
+  Revision3ProjectHistorySnapshot history;
   final _HistoryRestoreCallback? onRestore;
   int historyReadCalls = 0;
   int historyRestoreCalls = 0;

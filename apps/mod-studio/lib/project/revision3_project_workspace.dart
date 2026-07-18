@@ -8,12 +8,8 @@ enum Revision3ProjectWorkspaceSection {
   home,
   content,
   story,
-  world,
-  localizationVoice,
-  validateTest,
-  buildRelease,
-  history,
-  settingsExpert,
+  textVoice,
+  testRelease,
 }
 
 /// One exact workspace route.
@@ -385,11 +381,6 @@ String _sectionKey(Revision3ProjectWorkspaceSection section) =>
       Revision3ProjectWorkspaceSection.home => 'home',
       Revision3ProjectWorkspaceSection.content => 'content',
       Revision3ProjectWorkspaceSection.story => 'story',
-      Revision3ProjectWorkspaceSection.world => 'world',
-      Revision3ProjectWorkspaceSection.localizationVoice =>
-        'localization-voice',
-      Revision3ProjectWorkspaceSection.validateTest => 'validate-test',
-      Revision3ProjectWorkspaceSection.buildRelease => 'build-release',
-      Revision3ProjectWorkspaceSection.history => 'history',
-      Revision3ProjectWorkspaceSection.settingsExpert => 'settings-expert',
+      Revision3ProjectWorkspaceSection.textVoice => 'text-voice',
+      Revision3ProjectWorkspaceSection.testRelease => 'test-release',
     };
