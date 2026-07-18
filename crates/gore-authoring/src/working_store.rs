@@ -50,7 +50,10 @@ pub use revision3_history::{
     MAX_REVISION3_HISTORY_PARENT_RECORDS_V1, REVISION3_HISTORY_AUTHORITY_V1,
 };
 pub use revision3_import::{
+    import_revision3_exact_snapshot_v2, import_revision3_exact_snapshot_v2_with_limits,
     inspect_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2_with_limits,
+    Revision3ExactSnapshotImportErrorV2, Revision3ExactSnapshotImportPublicationV2,
+    Revision3ExactSnapshotImportV2, Revision3ExactSnapshotImportWarningV2,
     Revision3ExactSnapshotInspectionClosureV2, Revision3ExactSnapshotInspectionErrorV2,
     Revision3ExactSnapshotInspectionV2, REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2,
     REVISION3_EXACT_SNAPSHOT_IMPORT_FORMAT_V2, REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2,

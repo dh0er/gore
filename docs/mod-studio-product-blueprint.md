@@ -647,7 +647,7 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Managed working project** | The live editable source of truth | A Studio-owned directory with canonical V2 shards, immutable AssetStore blobs, session/current-path ownership, a serialized operation lane, and one transaction history |
 | **Autosave/recovery** | Recover unsaved work after a crash | A bounded journal/recovery snapshot tied to the exact base revision; it is automatic and is not a portable project export or release |
 | **Save / checkpoint** | Durably acknowledge the current revision | Target contract: `Ctrl+S` flushes current transaction state and creates/advances a recoverable checkpoint; **Save As** creates a separately validated identity/path. Current R3 shell: semantic transactions publish independently, `Ctrl+S` only fully verifies the exact head, and managed Save As stays disabled until native clone/fork exists. |
-| **Export** | Portable snapshot, review copy, or future-restorable copy | The current Studio workflow emits frozen review-only V1: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **project copy**, explicitly says it is not a restorable backup or playable mod, and tells the author to keep the original directory. A separate V2 backend/bridge emits the same exact closure as `portable_snapshot_restorable_copy` and can inspect it read-only on Windows; Unix inspection fails closed. `restore_status: supported` is only the V2 format contract. Destination import, materialization, adoption, and V2 UI are not implemented, and a future importer must never edit ZIP members in place. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2 foundation](managed-project-import.md). |
+| **Export** | Portable snapshot, review copy, or future-restorable copy | The current Studio workflow emits frozen review-only V1: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **project copy**, explicitly says it is not a restorable backup or playable mod, and tells the author to keep the original directory. A separate V2 backend/bridge emits the same exact closure as `portable_snapshot_restorable_copy`, inspects it read-only, and on Windows can materialize it into one absent managed directory through exact archive CAS and atomic no-clobber publication; Unix inspection/import fails closed. Confirmed materialization preserves project identity, while publication uncertainty carries no adoptable receipt. Destination selection UI, current-session adoption/recovery, and visible V2 export/import remain missing; the importer never edits ZIP members in place. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2 foundation](managed-project-import.md). |
 | **Build** | Produce an inspectable mod artifact | Derived from an immutable project revision and named build root/profile; it does not deploy and cannot become editable source state |
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |
@@ -1047,8 +1047,9 @@ managed DataAsset stage: it derives from the exact-current project, creates only
 a new receipt-owned output, then reopens and re-inspects that output. The first
 managed project-copy export is also integrated as a deterministic V1
 exact-snapshot review artifact. A separate V2 backend/bridge can export the same
-closure as a restorable-copy format and inspect it read-only on Windows, but has
-no destination import, adoption, or UI. Exact-current managed-CAS
+closure as a restorable-copy format, inspect it read-only, and materialize it on
+Windows into one absent exact managed directory, but has no current-session
+adoption/recovery or visible V2 UI. Exact-current managed-CAS
 Voice take preview is integrated as a read-only in-app capability. The first
 Voice production Work list is also integrated: it defaults Localization & Voice
 to evidence-backed missing-language and existing-slot next steps while keeping
@@ -1069,8 +1070,9 @@ clean pushed checkpoint and requires explicit user approval before World work.
 1. **Finish the managed phase-one substrate:** the owned R3 working directory,
    serialized session, strict bounded open/import, Ogg AssetStore I/O, exact
    revision/head publication, repair, full reopen, first Voice transaction,
-   deterministic exact-snapshot export, and the read-only V2 inspection
-   foundation are integrated. Complete destination import/adoption, general
+   deterministic exact-snapshot export, read-only V2 inspection, and exact
+   absent-directory V2 materialization foundations are integrated. Complete
+   visible destination import plus current-session adoption/recovery, general
    recovery/history, cross-domain undo, and production lowering without creating
    a parallel project state.
 2. **Complete the first non-technical Voice slice:** extend the landed Work

@@ -1570,8 +1570,12 @@ buildable or runtime-qualified. One reviewed managed DataAsset stage can now be
 built, reopened, and re-inspected in a receipt-owned offline output, and one
 exact R3 checkpoint can be exported through the current V1 Studio workflow as a
 deterministic review copy. A separate V2 backend can export the same closure as
-a restorable-copy artifact and inspect it read-only on Windows, while destination
-import, restore, adoption, and V2 UI remain missing. The first Voice production
+a restorable-copy artifact, inspect it read-only, and materialize it on Windows
+into one absent exact managed-project directory through archive CAS, private
+staging, head-last verification, and atomic no-clobber promotion. It preserves
+project identity and returns no adoptable receipt on publication uncertainty.
+Visible destination selection, current-session adoption/recovery, and V2 UI
+remain missing. The first Voice production
 Work list is also landed:
 Localization & Voice defaults to bounded missing-language and existing-slot
 next steps while Project texts stays one switch away. Project Work Bar V1 is

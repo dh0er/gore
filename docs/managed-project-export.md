@@ -10,8 +10,9 @@ review-only artifact and deliberately has no importer: it must be called a
 The original managed project directory remains authoritative and must be kept.
 
 The V2 backend/bridge foundation exports the same exact closure with a closed
-restorable-copy manifest and can inspect that result read-only. It is not wired
-to the Studio export or import UI and cannot restore or adopt a destination. See
+restorable-copy manifest, can inspect that result read-only, and can materialize
+it on Windows into one absent managed destination. It is not wired to the Studio
+export/import UI and cannot adopt a restored session. See
 [Managed project snapshot import V2 foundation](managed-project-import.md).
 
 ## Authority boundary
@@ -37,8 +38,9 @@ revision and head, declares `portable_snapshot_review_copy` authority and
 V2 retains the same deterministic layout and member closure but uses
 `gore.managed-project-snapshot.v2`, schema `2`,
 `portable_snapshot_restorable_copy`, and `restore_status: supported`.
-`supported` is a format property for a future separately reviewed destination
-importer; the current checkpoint performs export and read-only inspection only.
+`supported` is the format property consumed by the separately reviewed Windows
+destination materializer. Current-session adoption and visible V2 UI remain
+separate work.
 
 The fixed layout is:
 
@@ -52,7 +54,7 @@ store/assets/sha256/<2>/<62>
 ```
 
 `project.json` is the canonical materialized current project for review. The
-`store/` members preserve the exact immutable Store layout required by a future
+`store/` members preserve the exact immutable Store layout consumed by the
 separately reviewed importer. Absolute paths, directory entries, lock files,
 publication-repair journals, staging files, caches and unreachable immutable
 orphans are excluded.
@@ -180,5 +182,8 @@ The V2 backend gate additionally proves the distinct closed V2 authority tuple,
 byte-identical repeated exports, unchanged Store closure, strict V1 rejection by
 the V2 parser, exact reopen by the read-only inspector, and the same format-hard
 full-reopen work budget on producers and consumers even when their local Store
-limits differ. These checks are not evidence of a destination importer or
-Studio workflow.
+limits differ. The companion import gate separately proves same-handle archive
+CAS, sealed streaming into retained no-clobber staging handles, fixed-head-last
+candidate verification, atomic absent-directory publication, and receipt-free
+uncertainty. None of these backend checks is evidence of a visible Studio
+export/import or current-session adoption workflow.

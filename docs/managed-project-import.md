@@ -1,8 +1,9 @@
 # Managed project snapshot import V2 foundation
 
 Status: implementation checkpoint, July 2026. This document defines the exact
-authority of the current managed revision-3 snapshot V2 foundation. It is not a
-claim that Mod Studio can import or restore a project.
+authority of the current managed revision-3 snapshot V2 inspection and
+destination-materialization foundation. It is not yet a claim that the visible
+Mod Studio UI can import, open, or adopt a restored project.
 
 ## Version boundary
 
@@ -11,7 +12,7 @@ The two snapshot versions are separate, closed contracts:
 | Version | Manifest authority | Current meaning |
 |---|---|---|
 | V1 | `gore.managed-project-snapshot.v1`, schema `1`, `portable_snapshot_review_copy`, `restore_status: not_supported` | Frozen review-only project copy. It remains useful for inspection by a person, but is not and will not become an importable artifact. A recognized canonical V1 manifest receives a dedicated unsupported-review-copy result instead of being accepted as V2; this does not validate the V1 closure as restorable. |
-| V2 | `gore.managed-project-snapshot.v2`, schema `2`, `portable_snapshot_restorable_copy`, `restore_status: supported` | Exact restorable-copy format. The current checkpoint can export it through the backend contract and inspect it read-only; it cannot restore it into a destination. |
+| V2 | `gore.managed-project-snapshot.v2`, schema `2`, `portable_snapshot_restorable_copy`, `restore_status: supported` | Exact restorable-copy format. The backend can export it, inspect it read-only, and materialize it on Windows into one absent managed-project directory. No Studio session adoption or visible import UI exists yet. |
 
 V1 must not be relabelled, edited, or upgraded in place. Its original managed
 project directory remains authoritative. V2 uses the same deterministic member
@@ -20,9 +21,9 @@ explicitly declares a future restore contract.
 
 `restore_status: supported` describes the V2 archive format, not a completed
 product operation. It means that a verified V2 archive carries the exact
-authenticated material required by a separately reviewed future importer. It
-does not mean that a destination has been selected, materialized, published, or
-adopted.
+authenticated material consumed by the reviewed destination importer. It does
+not mean that Mod Studio selected the destination, adopted the restored path as
+its current session, or made the project build- or runtime-ready.
 
 See [Managed project snapshot export](managed-project-export.md) for the shared
 closure, deterministic ZIP dialect, and export publication lifecycle.
@@ -50,14 +51,51 @@ The success receipt therefore states `inspection_status: verified_exact`, while
 read-only inspection. It grants no import authority and does not make a prior
 receipt safe to use after the source may have changed.
 
-The Dart planning coordinator is likewise inspect-only and is not connected to
-a Studio screen, menu, file picker, session transition, or publication callback.
-The current **Export project copy** UI still emits V1. The V2 exporter and
-inspector are backend/bridge foundations only.
+The separate destination command accepts exactly:
+
+- the same bounded absolute `.goremod` source spelling;
+- one bounded absolute destination spelling whose final directory is absent;
+  no `.goreproj` or other destination suffix is required; and
+- the exact inspected archive byte length and SHA-256 as a compare-and-swap
+  token.
+
+Native code reinspects the source and consumes that same retained handle. Only
+after its archive seal equals the supplied token may it create a private sibling
+staging directory, stream the sealed Store members, publish the fixed head last,
+fully verify the candidate, and atomically rename the whole directory without
+clobbering an existing destination. A confirmed terminal returns the same
+path-independent head, project, archive, manifest, and closure receipt as the
+inspection. `imported_with_cleanup_warning` still has a confirmed receipt.
+`publication_uncertain` deliberately has no archive, head, project, manifest,
+closure, or adoptable receipt fields.
+
+Destination materialization has no authority to:
+
+- replace, merge into, or clean an existing destination;
+- clone or mint a project identity, advance a revision, or change project
+  contents;
+- adopt, close, replace, or recover a Mod Studio session;
+- read or write a game installation or save; or
+- build, deploy, undeploy, launch, or qualify runtime behavior.
+
+Every destination terminal is `retry_safe: false`, including confirmed success,
+cleanup warning, cancellation/staleness in the Dart coordinator, and publication
+uncertainty. A retry requires a new explicit user operation and, after source
+drift, a new inspection. Publication uncertainty must go through a future
+recovery operation; callers may not infer that the requested path is safe to
+open.
+
+The pure Dart inspection and destination coordinators bind the plan to one
+owner/generation lifecycle, enforce single flight and post-await stale/cancel
+guards, and carry no session-adoption callback or game path. They are not yet
+connected to a Studio screen, menu, or current-project transition. The current
+**Export project copy** UI still emits V1. V2 export, inspection, and destination
+materialization remain backend/bridge foundations.
 
 ## Platform boundary
 
-Safe V2 inspection is currently implemented on Windows only.
+Safe V2 inspection and destination materialization are currently implemented on
+Windows only.
 
 On Windows, the inspector pins the source parent, opens the final file without
 following a reparse point, and retains that exact handle for every read. The
@@ -65,16 +103,17 @@ open share mode permits other readers but excludes concurrent write or delete
 sharing. The source must be one regular non-reparse file with exactly one hard
 link, and the parent/path identities are revalidated around the open.
 
-On Unix, inspection fails closed before source I/O with
+On Unix, inspection and import fail closed before source I/O or destination
+filesystem access with
 `AUTHORING_REVISION3_IMPORT_PLATFORM_UNSUPPORTED`. `O_NOFOLLOW` alone cannot
 exclude an already-open writer from swapping same-length contents during
 structured reads. Unix support requires a separately designed sealed private
 snapshot boundary; hash bracketing alone is not treated as sufficient.
 
-This platform restriction applies to V2 inspection, not to the existing
+This platform restriction applies to V2 inspection/import, not to the existing
 platform-specific safe publication paths of snapshot export.
 
-## Read-only security model
+## Source and destination security model
 
 The V2 source is untrusted. Acceptance requires all of the following through the
 same retained Windows file handle:
@@ -96,20 +135,52 @@ same retained Windows file handle:
    identity-inconsistent snapshots, entities, assets, or review material fail
    inspection. Referenced Ogg assets receive their normal metadata validation.
 7. A second whole-file length and SHA-256 pass must equal the first pass.
+8. Import compares the resulting whole-archive seal with the caller's exact CAS
+   before any destination operation. A prior receipt alone is not a
+   time-of-check/time-of-use capability.
+9. The absolute destination resolves to a pinned safe existing parent and one
+   absent nonempty final component. A private sibling staging root and all
+   planned child directories/files are created no-clobber relative to retained
+   exact handles; write/delete replacement remains excluded throughout staged
+   verification.
+10. Only authenticated Store snapshots, entities, and assets are streamed. Each
+    output is bounded by its seal, hashed while writing, synchronized, rehashed,
+    and retained in the exact bounded ownership inventory. The review manifest
+    and review `project.json` are not installed into the working Store.
+11. The canonical fixed head is written last. The planned tree must contain no
+    missing or extra entry, every retained identity/seal is rechecked, the Store
+    reopens to the exact inspected current project, and the retained source seal
+    is revalidated immediately before publication.
+12. The whole staging directory is atomically promoted relative to the pinned
+    parent with no replacement authority. Windows requires descendant handles
+    to be released immediately before a parent-directory rename, so the
+    published directory identity, exact tree, every recorded member identity and
+    seal, current Store reopen, and source seal are checked again after
+    promotion. A recursive overlapped directory-change watch is armed before
+    those final checks. A still-pending watch after the last exact pass is the
+    receipt linearization point; any reported change, notification overflow, or
+    indeterminate watcher state becomes non-adoptable publication uncertainty
+    rather than an ordinary error.
 
-Nothing is extracted during these checks. A future destination importer must
-either repeat inspection immediately before materialization or retain and
-consume the same authenticated open source. The current receipt alone is not a
-time-of-check/time-of-use capability.
+The receipt linearizes the exact managed tree, bytes, and recorded identities
+inside the published destination. Both final passes and the full Store reopen
+also require every member to have one hard link. Windows can nevertheless add a
+new hard-link name outside the watched destination without producing an in-tree
+directory notification, so this checkpoint does not claim one atomic global
+no-external-alias snapshot. A later Studio session open must independently
+revalidate the destination and rejects an alias or any other drift before
+adoption. Per-file oplocks or volume-journal accounting would be a separate,
+broader alias-linearization contract.
 
 ## Closed limits
 
-The public bridge and native inspector enforce these hard ceilings before a
-receipt can be accepted:
+The public bridge, native inspector, and native importer enforce these hard
+ceilings before a receipt can be accepted:
 
 | Resource | Ceiling |
 |---|---:|
 | Source spelling | 32 KiB UTF-8 |
+| Destination spelling | 32 KiB UTF-8 |
 | Archive file | 70 GiB |
 | Total uncompressed archive bytes | 70 GiB |
 | `gore-export.json` | 128 MiB |
@@ -159,6 +230,12 @@ Callers branch on the stable code, not on native error text:
 | `AUTHORING_REVISION3_IMPORT_ARCHIVE_INVALID` | ZIP structure, exact dialect, member order/metadata, layout, or payload seal validation failed. |
 | `AUTHORING_REVISION3_IMPORT_MANIFEST_INVALID` | The canonical manifest, V2 authority tuple, member plan, path, basis, or declared seal is invalid or unsupported. |
 | `AUTHORING_REVISION3_IMPORT_CLOSURE_INVALID` | Full Store reopen, reachability, identity, canonical object, project materialization, or referenced-asset validation failed. |
+| `AUTHORING_REVISION3_IMPORT_SOURCE_CHANGED` | During destination import, the source no longer verifies as the exact inspected archive CAS. All post-inspection source/archive/manifest/closure drift is collapsed into this code. |
+| `AUTHORING_REVISION3_IMPORT_DESTINATION_INVALID` | The destination spelling, parent chain, absent-final-name policy, pinned identity, or no-clobber requirement failed. |
+| `AUTHORING_REVISION3_IMPORT_MATERIALIZATION_FAILED` | Exact private staging or sealed streaming failed before final publication. |
+| `AUTHORING_REVISION3_IMPORT_VERIFICATION_FAILED` | The staged Store, fixed-head order, exact planned tree, seal, or full candidate reopen failed before final publication. |
+| `AUTHORING_REVISION3_IMPORT_PUBLICATION_FAILED` | Atomic destination publication provably did not complete. |
+| `AUTHORING_REVISION3_IMPORT_CLEANUP_FAILED` | Import failed before publication and bounded cleanup of importer-owned private staging was incomplete. |
 | `AUTHORING_REVISION3_IMPORT_INVARIANT` | A native success receipt violated the closed response contract and was suppressed. |
 
 Native validation details are intentionally collapsed into these categories
@@ -167,18 +244,30 @@ not include the internal native reason or source path. A success response echoes
 the caller's exact source spelling only to bind request and receipt; user-facing
 surfaces should display the bounded filename label rather than parent paths.
 
-Every failure is non-mutating. A recognized V1 result is not corruption, an
-unsupported-platform result is not archive invalidity, and an exact V2
-inspection success is not an import success.
+Inspection failures are non-mutating. An import error never authorizes a final
+destination; `CLEANUP_FAILED` may leave only the bounded importer-owned private
+staging inventory for a future recovery/cleanup surface. A recognized V1 result
+is not corruption, an unsupported-platform result is not archive invalidity,
+and an exact V2 inspection success is not an import success.
+
+Confirmed publication uses either no warning or
+`AUTHORING_REVISION3_IMPORT_CLEANUP_WARNING`. An uncertain publication uses
+`AUTHORING_REVISION3_IMPORT_PUBLICATION_UNCERTAIN`, contains no receipt fields,
+and must never be retried or adopted automatically. These are successful wire
+terminals with `retry_safe: false`, not ordinary error responses.
 
 ## Explicitly missing next checkpoint
 
-A real import still needs a separately reviewed contract for destination
-selection and collision policy, safe materialization into an absent or proven
-empty managed directory, crash-safe publication, fresh source authentication,
-post-materialization full reopen, and deliberate session adoption. Recovery and
-cleanup terminals, user confirmation, UI copy, and cancellation behavior also
-remain undefined.
+A usable Studio import still needs the visible source review and destination
+choice, explicit confirmation, progress/result copy, and integration with the
+single app-wide current-project transition lane. A confirmed receipt must be
+locked and fully opened as a candidate before it can displace the prior session;
+candidate-open or prior-session cleanup failure must preserve one unambiguous
+owner. Publication uncertainty and importer-owned staging cleanup also need a
+deliberate recovery surface rather than path guessing.
 
-Until those pieces exist, there is no V2 Destination Import, Restore, Adopt,
-Import/Clone/Save As UI, build, deployment, save/game mutation, or runtime claim.
+The current operation preserves project identity and revision: it is Restore /
+Relocate, not Clone or Save As. Clone/fork identity policy remains separate.
+Until the adoption checkpoint lands, there is no visible V2 Import/Restore UI,
+current-session adoption, Import/Clone/Save As product claim, build, deployment,
+save/game mutation, or runtime claim.

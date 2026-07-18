@@ -414,6 +414,7 @@ pub use story_transaction_revision3_voice_target::{
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
+    import_revision3_exact_snapshot_v2, import_revision3_exact_snapshot_v2_with_limits,
     inspect_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2_with_limits,
     AssetVerification, CheckpointPreparation, ImportedOgg, ImportedQuestCollisionArtifactV1,
     ImportedQuestCollisionArtifactV2, OggImportError, OggImportFailureContext, OpenedCheckpoint,
@@ -424,7 +425,9 @@ pub use working_store::{
     Revision3ExactSnapshotExportErrorV2, Revision3ExactSnapshotExportPublicationV1,
     Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotExportV1,
     Revision3ExactSnapshotExportV2, Revision3ExactSnapshotExportWarningV1,
-    Revision3ExactSnapshotExportWarningV2, Revision3ExactSnapshotInspectionClosureV2,
+    Revision3ExactSnapshotExportWarningV2, Revision3ExactSnapshotImportErrorV2,
+    Revision3ExactSnapshotImportPublicationV2, Revision3ExactSnapshotImportV2,
+    Revision3ExactSnapshotImportWarningV2, Revision3ExactSnapshotInspectionClosureV2,
     Revision3ExactSnapshotInspectionErrorV2, Revision3ExactSnapshotInspectionV2,
     Revision3HistoryEntryV1, Revision3HistoryErrorV1, Revision3HistoryV1,
     Revision3SnapshotManifest, WorkingHead, WorkingProjectStore, WorkingStoreError,

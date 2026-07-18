@@ -2286,6 +2286,35 @@ class ModFfi {
     return _call(command, <String, Object?>{'source': source});
   }
 
+  /// Materialize one previously inspected managed revision-3 V2 snapshot into
+  /// an absent destination directory without adopting it into a Studio session.
+  ///
+  /// The native boundary receives only the exact source and destination
+  /// spellings plus the inspected whole-archive seal. Strict project receipt
+  /// parsing and any later session adoption remain owned by the project layer.
+  Future<Map<String, Object?>> authoringStoreImportRevision3ExactSnapshotV2({
+    required String source,
+    required String destination,
+    required int expectedArchiveByteLength,
+    required String expectedArchiveSha256,
+  }) async {
+    const command = 'authoring_store_import_revision3_exact_snapshot_v2';
+    _authoringRevision3Path(source, 'source');
+    _authoringRevision3Path(destination, 'destination');
+    _authoringRevision3ExactSnapshotArchiveSealPreflight(
+      byteLength: expectedArchiveByteLength,
+      sha256: expectedArchiveSha256,
+    );
+    return _call(command, <String, Object?>{
+      'source': source,
+      'destination': destination,
+      'expected_archive': <String, Object?>{
+        'byte_len': expectedArchiveByteLength,
+        'sha256': expectedArchiveSha256,
+      },
+    });
+  }
+
   /// Build one exact-basis reviewed revision-3 DataAsset stage into a new,
   /// receipt-bound PAK/UCAS/UTOC triplet.
   ///
@@ -2945,6 +2974,28 @@ void _authoringRevision3Path(String value, String field) {
       '<${value.length} characters>',
       field,
       'must not contain NUL',
+    );
+  }
+}
+
+void _authoringRevision3ExactSnapshotArchiveSealPreflight({
+  required int byteLength,
+  required String sha256,
+}) {
+  if (byteLength < 1 ||
+      byteLength > _maxAuthoringRevision3ExactSnapshotArchiveBytesV2) {
+    throw ArgumentError.value(
+      byteLength,
+      'expectedArchiveByteLength',
+      'must be 1..=$_maxAuthoringRevision3ExactSnapshotArchiveBytesV2',
+    );
+  }
+  _authoringRevision3RequestString(sha256, 'expectedArchiveSha256', 64);
+  if (!_authoringSha256Pattern.hasMatch(sha256)) {
+    throw ArgumentError.value(
+      '<redacted>',
+      'expectedArchiveSha256',
+      'must be one canonical lowercase SHA-256 digest',
     );
   }
 }

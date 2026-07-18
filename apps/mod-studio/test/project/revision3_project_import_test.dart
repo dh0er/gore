@@ -7,8 +7,18 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_project_import.dart';
 
 const _source = r'C:\portable\story-copy.goremod';
+const _destination = r'C:\projects\restored-story';
 const _projectId = '11111111111111111111111111111111';
 const _sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _otherSha =
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const _cleanupWarningCode = 'AUTHORING_REVISION3_IMPORT_CLEANUP_WARNING';
+const _cleanupWarningMessage =
+    'the verified project was materialized, but private staging cleanup was incomplete';
+const _uncertainWarningCode =
+    'AUTHORING_REVISION3_IMPORT_PUBLICATION_UNCERTAIN';
+const _uncertainWarningMessage =
+    'project publication may have completed; do not retry automatically';
 
 void main() {
   group('strict V2 inspection DTO', () {
@@ -446,6 +456,509 @@ void main() {
       }
     });
   });
+
+  group('strict destination materialization contract', () {
+    test(
+      'request authority is exactly source, destination, and archive seal',
+      () {
+        final plan = _destinationPlan();
+
+        expect(plan.source, _source);
+        expect(plan.destination, _destination);
+        expect(plan.destinationLabel, 'restored-story');
+        expect(plan.request.toJson(), <String, Object?>{
+          'source': _source,
+          'destination': _destination,
+          'expected_archive': <String, Object?>{
+            'byte_len': 8192,
+            'sha256': _sha,
+          },
+        });
+        expect(plan.request.toJson().keys, <String>{
+          'source',
+          'destination',
+          'expected_archive',
+        });
+      },
+    );
+
+    test('published terminals carry receipts and are never retry-safe', () {
+      final plan = _destinationPlan();
+      final imported = Revision3ProjectImportDestinationResult.fromJson(
+        _destinationResponse(),
+        expectedPlan: plan,
+      );
+      final cleanup = Revision3ProjectImportDestinationResult.fromJson(
+        _destinationResponse(outcome: 'imported_with_cleanup_warning'),
+        expectedPlan: plan,
+      );
+
+      expect(
+        imported.outcome,
+        Revision3ProjectImportMaterializationOutcome.imported,
+      );
+      expect(imported.receipt, isNotNull);
+      expect(imported.receipt?.source, _source);
+      expect(imported.receipt?.destination, _destination);
+      expect(imported.receipt?.projectId, _projectId);
+      expect(imported.receipt?.head.canonicalJson, _headJson());
+      expect(imported.retrySafe, isFalse);
+      expect(cleanup.hasCleanupWarning, isTrue);
+      expect(cleanup.receipt, isNotNull);
+      expect(cleanup.retrySafe, isFalse);
+    });
+
+    test('uncertainty has its own minimal schema and no receipt', () {
+      final response = _destinationResponse(outcome: 'publication_uncertain');
+      for (final forbidden in <String>{
+        'archive',
+        'manifest',
+        'project_id',
+        'project_revision',
+        'head_json',
+        'closure',
+      }) {
+        expect(response, isNot(contains(forbidden)));
+      }
+
+      final result = Revision3ProjectImportDestinationResult.fromJson(
+        response,
+        expectedPlan: _destinationPlan(),
+      );
+
+      expect(
+        result.outcome,
+        Revision3ProjectImportMaterializationOutcome.publicationUncertain,
+      );
+      expect(result.publicationIsUncertain, isTrue);
+      expect(result.receipt, isNull);
+      expect(result.retrySafe, isFalse);
+    });
+
+    test('binds every returned receipt field to the prior inspection', () {
+      final mismatches = <Map<String, Object?>>[
+        _destinationResponse()..['source'] = r'c:\portable\story-copy.goremod',
+        _destinationResponse()..['destination'] = r'c:\projects\restored-story',
+        _destinationResponse()
+          ..['archive'] = <String, Object?>{
+            'byte_len': 8192,
+            'sha256': _otherSha,
+          },
+        _destinationResponse()
+          ..['manifest'] = <String, Object?>{
+            'relative_name': revision3ProjectImportManifestName,
+            'byte_len': 512,
+            'sha256': _otherSha,
+          },
+        _destinationResponse()
+          ..['project_id'] = '22222222222222222222222222222222',
+        _destinationResponse()..['project_revision'] = 8,
+        _destinationResponse()..['head_json'] = _headJson(sha256: _otherSha),
+        _destinationResponse()
+          ..['closure'] = <String, Object?>{
+            'snapshot_objects': 2,
+            'entity_objects': 1,
+            'asset_objects': 1,
+            'archive_entries': 7,
+            'uncompressed_bytes': 4096,
+          },
+      ];
+
+      for (final response in mismatches) {
+        expect(
+          () => Revision3ProjectImportDestinationResult.fromJson(
+            response,
+            expectedPlan: _destinationPlan(),
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('rejects cross-wired schemas, status tuples, and warnings', () {
+      final uncertainWithReceipt = _destinationResponse(
+        outcome: 'publication_uncertain',
+      )..['archive'] = <String, Object?>{'byte_len': 8192, 'sha256': _sha};
+      final publishedWithoutReceipt = _destinationResponse()..remove('archive');
+      final malformed = <Map<String, Object?>>[
+        _destinationResponse()..['extra'] = true,
+        uncertainWithReceipt,
+        publishedWithoutReceipt,
+        _destinationResponse()
+          ..['format'] = revision3ProjectImportUnsupportedFormatV1,
+        _destinationResponse()..['import_status'] = 'prepared',
+        _destinationResponse()..['project_mutation'] = 'performed',
+        _destinationResponse()..['session_adoption'] = 'performed',
+        _destinationResponse()..['game_mutation'] = 'performed',
+        _destinationResponse()..['runtime_status'] = 'qualified',
+        _destinationResponse()..['retry_safe'] = true,
+        _destinationResponse()
+          ..['publication_status'] = 'publication_uncertain',
+        _destinationResponse()
+          ..['warning'] = <String, Object?>{
+            'code': _cleanupWarningCode,
+            'message': _cleanupWarningMessage,
+          },
+        _destinationResponse(outcome: 'imported_with_cleanup_warning')
+          ..['warning'] = null,
+        _destinationResponse(outcome: 'publication_uncertain')
+          ..['publication_status'] = 'published',
+      ];
+
+      for (final response in malformed) {
+        expect(
+          () => Revision3ProjectImportDestinationResult.fromJson(
+            response,
+            expectedPlan: _destinationPlan(),
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test(
+      'accepts drive-rooted and UNC project directories without a suffix',
+      () {
+        final inspection = _inspection();
+        for (final destination in <String>[
+          _destination,
+          r'D:/mods/story project',
+          r'\\studio-nas\mods\story-copy',
+        ]) {
+          final plan = Revision3ProjectImportDestinationPlan.fromInspection(
+            inspection: inspection,
+            destination: destination,
+          );
+          expect(plan.destination, destination);
+          expect(plan.destination, isNot(endsWith('.goreproj')));
+        }
+      },
+    );
+
+    test('rejects relative, malformed, and source-equal destinations', () {
+      final inspection = _inspection();
+      for (final destination in <String>[
+        '',
+        'C:\\',
+        '.',
+        '..',
+        'restored-story',
+        r'.\restored-story',
+        r'C:restored-story',
+        r'\restored-story',
+        r'\\server\share',
+        r'\\server\\restored-story',
+        r'\\?\C:\restored-story',
+        r'\\.\C:\restored-story',
+        r'C:\projects\..\restored-story',
+        'C:\\projects\\restored-story\\',
+        r'C:\projects\bad:name',
+        r'C:\projects\story.',
+        'C:\\projects\\story ',
+        r'C:\projects\CON',
+        r'C:\projects\com1.txt',
+        r'C:\projects\COM9',
+        'C:\\projects\\COM¹.txt',
+        'C:\\projects\\COM²',
+        'C:\\projects\\COM³',
+        r'C:\projects\lpt1.txt',
+        r'C:\projects\LPT9',
+        'C:\\projects\\LPT¹.txt',
+        'C:\\projects\\LPT²',
+        'C:\\projects\\LPT³',
+        _source,
+      ]) {
+        expect(
+          () => Revision3ProjectImportDestinationPlan.fromInspection(
+            inspection: inspection,
+            destination: destination,
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+  });
+
+  group('destination materialization coordinator', () {
+    test(
+      'rejects owner and generation drift since inspection before picker',
+      () async {
+        for (final changeOwner in <bool>[false, true]) {
+          var owner = Object();
+          var generation = 0;
+          final inspectionCoordinator =
+              Revision3ProjectImportInspectionCoordinator(
+                readLifecycle: () => Revision3ProjectImportLifecycle(
+                  owner: owner,
+                  generation: generation,
+                ),
+                pickSource: () async => _source,
+                inspect: (_) async => _response(),
+              );
+          final inspected = await inspectionCoordinator.plan();
+          expect(
+            inspected.outcome,
+            Revision3ProjectImportPlanningOutcome.inspected,
+          );
+
+          if (changeOwner) {
+            owner = Object();
+          } else {
+            generation++;
+          }
+          var pickerCalls = 0;
+          var nativeCalls = 0;
+          final destinationCoordinator =
+              Revision3ProjectImportDestinationCoordinator(
+                readLifecycle: () => Revision3ProjectImportLifecycle(
+                  owner: owner,
+                  generation: generation,
+                ),
+                pickDestination: () async {
+                  pickerCalls++;
+                  return _destination;
+                },
+                importProject: (_) async {
+                  nativeCalls++;
+                  return _destinationResponse();
+                },
+              );
+
+          final result = await destinationCoordinator.materialize(
+            inspected.plan!,
+          );
+
+          expect(
+            result.outcome,
+            Revision3ProjectImportDestinationExecutionOutcome.stale,
+          );
+          expect(result.receipt, isNull);
+          expect(pickerCalls, 0);
+          expect(nativeCalls, 0);
+          destinationCoordinator.dispose();
+          inspectionCoordinator.dispose();
+        }
+      },
+    );
+
+    test('picker cancellation is terminal and never invokes native', () async {
+      final owner = Object();
+      var calls = 0;
+      final coordinator = Revision3ProjectImportDestinationCoordinator(
+        readLifecycle: () =>
+            Revision3ProjectImportLifecycle(owner: owner, generation: 0),
+        pickDestination: () async => null,
+        importProject: (_) async {
+          calls++;
+          return _destinationResponse();
+        },
+      );
+      addTearDown(coordinator.dispose);
+
+      final result = await coordinator.materialize(
+        await _inspectionPlan(owner),
+      );
+
+      expect(
+        result.outcome,
+        Revision3ProjectImportDestinationExecutionOutcome.cancelled,
+      );
+      expect(result.receipt, isNull);
+      expect(result.retrySafe, isFalse);
+      expect(calls, 0);
+    });
+
+    test(
+      'passes only the sealed request and maps all native terminals',
+      () async {
+        for (final outcome in <String>[
+          'imported',
+          'imported_with_cleanup_warning',
+          'publication_uncertain',
+        ]) {
+          final owner = Object();
+          Revision3ProjectImportDestinationRequest? captured;
+          var calls = 0;
+          final coordinator = Revision3ProjectImportDestinationCoordinator(
+            readLifecycle: () =>
+                Revision3ProjectImportLifecycle(owner: owner, generation: 0),
+            pickDestination: () async => _destination,
+            importProject: (request) async {
+              calls++;
+              captured = request;
+              return _destinationResponse(outcome: outcome);
+            },
+          );
+          addTearDown(coordinator.dispose);
+
+          final result = await coordinator.materialize(
+            await _inspectionPlan(owner),
+          );
+
+          expect(calls, 1);
+          expect(captured?.toJson().keys, <String>{
+            'source',
+            'destination',
+            'expected_archive',
+          });
+          expect(result.retrySafe, isFalse);
+          if (outcome == 'publication_uncertain') {
+            expect(
+              result.outcome,
+              Revision3ProjectImportDestinationExecutionOutcome
+                  .publicationUncertain,
+            );
+            expect(result.receipt, isNull);
+          } else {
+            expect(result.receipt, isNotNull);
+          }
+        }
+      },
+    );
+
+    test('stale picker output never reaches native', () async {
+      final owner = Object();
+      var generation = 0;
+      var calls = 0;
+      final picker = Completer<String?>();
+      final coordinator = Revision3ProjectImportDestinationCoordinator(
+        readLifecycle: () => Revision3ProjectImportLifecycle(
+          owner: owner,
+          generation: generation,
+        ),
+        pickDestination: () => picker.future,
+        importProject: (_) async {
+          calls++;
+          return _destinationResponse();
+        },
+      );
+      addTearDown(coordinator.dispose);
+
+      final operation = coordinator.materialize(await _inspectionPlan(owner));
+      generation++;
+      picker.complete(_destination);
+
+      expect(
+        (await operation).outcome,
+        Revision3ProjectImportDestinationExecutionOutcome.stale,
+      );
+      expect(calls, 0);
+    });
+
+    test('cancel and dispose suppress late native receipts', () async {
+      for (final dispose in <bool>[false, true]) {
+        final owner = Object();
+        final entered = Completer<void>();
+        final pending = Completer<Object?>();
+        final coordinator = Revision3ProjectImportDestinationCoordinator(
+          readLifecycle: () =>
+              Revision3ProjectImportLifecycle(owner: owner, generation: 0),
+          pickDestination: () async => _destination,
+          importProject: (_) {
+            entered.complete();
+            return pending.future;
+          },
+        );
+
+        final operation = coordinator.materialize(await _inspectionPlan(owner));
+        await entered.future;
+        if (dispose) {
+          coordinator.dispose();
+        } else {
+          expect(coordinator.cancelPending(), isTrue);
+        }
+        pending.complete(_destinationResponse());
+
+        final result = await operation;
+        expect(
+          result.outcome,
+          Revision3ProjectImportDestinationExecutionOutcome.superseded,
+        );
+        expect(result.receipt, isNull);
+        expect(result.retrySafe, isFalse);
+        coordinator.dispose();
+      }
+    });
+
+    test('is single-flight while destination publication is pending', () async {
+      final owner = Object();
+      final entered = Completer<void>();
+      final pending = Completer<Object?>();
+      final coordinator = Revision3ProjectImportDestinationCoordinator(
+        readLifecycle: () =>
+            Revision3ProjectImportLifecycle(owner: owner, generation: 0),
+        pickDestination: () async => _destination,
+        importProject: (_) {
+          entered.complete();
+          return pending.future;
+        },
+      );
+      addTearDown(coordinator.dispose);
+
+      final first = coordinator.materialize(await _inspectionPlan(owner));
+      await entered.future;
+      final busy = await coordinator.materialize(await _inspectionPlan(owner));
+      expect(
+        busy.outcome,
+        Revision3ProjectImportDestinationExecutionOutcome.busy,
+      );
+      expect(busy.retrySafe, isFalse);
+
+      pending.complete(_destinationResponse());
+      expect(
+        (await first).outcome,
+        Revision3ProjectImportDestinationExecutionOutcome.imported,
+      );
+    });
+
+    test(
+      'maps native failures once without retaining private details',
+      () async {
+        final cases =
+            <String, Revision3ProjectImportDestinationExecutionOutcome>{
+              'AUTHORING_REVISION3_IMPORT_DESTINATION_INVALID':
+                  Revision3ProjectImportDestinationExecutionOutcome
+                      .invalidDestination,
+              'AUTHORING_REVISION3_IMPORT_SOURCE_CHANGED':
+                  Revision3ProjectImportDestinationExecutionOutcome
+                      .inspectionExpired,
+              'AUTHORING_REVISION3_IMPORT_PLATFORM_UNSUPPORTED':
+                  Revision3ProjectImportDestinationExecutionOutcome.unavailable,
+              'INTERNAL': Revision3ProjectImportDestinationExecutionOutcome
+                  .importFailed,
+            };
+        for (final entry in cases.entries) {
+          final owner = Object();
+          var calls = 0;
+          final coordinator = Revision3ProjectImportDestinationCoordinator(
+            readLifecycle: () =>
+                Revision3ProjectImportLifecycle(owner: owner, generation: 0),
+            pickDestination: () async => _destination,
+            importProject: (_) async {
+              calls++;
+              throw ModFfiException(
+                command: 'authoring_store_import_revision3_exact_snapshot_v2',
+                code: entry.key,
+                message:
+                    r'private failure at C:\Users\Daniel\secret\restored-story',
+              );
+            },
+          );
+          addTearDown(coordinator.dispose);
+
+          final result = await coordinator.materialize(
+            await _inspectionPlan(owner),
+          );
+
+          expect(result.outcome, entry.value);
+          expect(result.retrySafe, isFalse);
+          expect(result.receipt, isNull);
+          expect(result.toString(), isNot(contains('Daniel')));
+          expect(calls, 1);
+        }
+      },
+    );
+  });
 }
 
 Map<String, Object?> _response({String source = _source}) => <String, Object?>{
@@ -483,7 +996,95 @@ Map<String, Object?> _response({String source = _source}) => <String, Object?>{
   'retry_safe': true,
 };
 
-String _headJson() => jsonEncode(<String, Object?>{
+Revision3ProjectImportInspection _inspection() =>
+    Revision3ProjectImportInspection.fromJson(
+      _response(),
+      expectedSource: _source,
+    );
+
+Future<Revision3ProjectImportInspectionPlan> _inspectionPlan(
+  Object owner, {
+  int generation = 0,
+}) async {
+  final coordinator = Revision3ProjectImportInspectionCoordinator(
+    readLifecycle: () =>
+        Revision3ProjectImportLifecycle(owner: owner, generation: generation),
+    pickSource: () async => _source,
+    inspect: (_) async => _response(),
+  );
+  final result = await coordinator.plan();
+  coordinator.dispose();
+  return result.plan!;
+}
+
+Revision3ProjectImportDestinationPlan _destinationPlan() =>
+    Revision3ProjectImportDestinationPlan.fromInspection(
+      inspection: _inspection(),
+      destination: _destination,
+    );
+
+Map<String, Object?> _destinationResponse({String outcome = 'imported'}) {
+  final response = <String, Object?>{
+    'ok': true,
+    'outcome': outcome,
+    'source': _source,
+    'destination': _destination,
+    'format': revision3ProjectImportFormatV2,
+    'artifact_kind': revision3ProjectImportArtifactKindV2,
+    'restore_status': revision3ProjectImportRestoreStatusV2,
+    'inspection_status': 'verified_exact',
+    'import_status': 'materialized',
+    'project_mutation': 'materialized',
+    'session_adoption': 'not_performed',
+    'game_mutation': 'not_performed',
+    'save_mutation': 'not_performed',
+    'build_status': 'not_performed',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': switch (outcome) {
+      'imported' => 'published',
+      'imported_with_cleanup_warning' => 'published_with_cleanup_warning',
+      'publication_uncertain' => 'publication_uncertain',
+      _ => 'published',
+    },
+    'retry_safe': false,
+    'warning': switch (outcome) {
+      'imported' => null,
+      'imported_with_cleanup_warning' => <String, Object?>{
+        'code': _cleanupWarningCode,
+        'message': _cleanupWarningMessage,
+      },
+      'publication_uncertain' => <String, Object?>{
+        'code': _uncertainWarningCode,
+        'message': _uncertainWarningMessage,
+      },
+      _ => null,
+    },
+  };
+  if (outcome != 'publication_uncertain') {
+    response.addAll(<String, Object?>{
+      'archive': <String, Object?>{'byte_len': 8192, 'sha256': _sha},
+      'manifest': <String, Object?>{
+        'relative_name': revision3ProjectImportManifestName,
+        'byte_len': 512,
+        'sha256': _sha,
+      },
+      'project_id': _projectId,
+      'project_revision': 7,
+      'head_json': _headJson(),
+      'closure': <String, Object?>{
+        'snapshot_objects': 1,
+        'entity_objects': 1,
+        'asset_objects': 1,
+        'archive_entries': 6,
+        'uncompressed_bytes': 4096,
+      },
+    });
+  }
+  return response;
+}
+
+String _headJson({String sha256 = _sha}) => jsonEncode(<String, Object?>{
   'store_format': 1,
-  'snapshot': <String, Object?>{'byte_len': 321, 'sha256': _sha},
+  'snapshot': <String, Object?>{'byte_len': 321, 'sha256': sha256},
 });

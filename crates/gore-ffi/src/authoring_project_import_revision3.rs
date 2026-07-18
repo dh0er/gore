@@ -1,14 +1,17 @@
-//! Read-only inspection of one untrusted restorable managed revision-3 snapshot.
+//! Inspection and destination materialization for one untrusted restorable managed R3 snapshot.
 //!
-//! This command accepts only a source path. Native authoring code opens and
-//! verifies the complete V2 archive through one retained handle. This FFI lane
-//! never accepts a destination or Store root and cannot extract, adopt, mutate,
-//! restore, or publish anything.
+//! The inspection command accepts only a source path and remains strictly read-only. The separate
+//! import command accepts that source, an absent destination, and the exact inspected archive CAS;
+//! native authoring code verifies and streams through one retained source handle before atomically
+//! publishing a new managed directory. Neither command can adopt a Studio session, read or mutate
+//! a game/save, build, deploy, launch, or claim runtime qualification.
 
 use std::path::Path;
 
 use gore_authoring::{
-    inspect_revision3_exact_snapshot_v2, Revision3ExactSnapshotInspectionErrorV2,
+    import_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2, ContentSeal,
+    Revision3ExactSnapshotImportErrorV2, Revision3ExactSnapshotImportPublicationV2,
+    Revision3ExactSnapshotImportV2, Revision3ExactSnapshotInspectionErrorV2,
     Revision3ExactSnapshotInspectionV2, REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2,
     REVISION3_EXACT_SNAPSHOT_IMPORT_FORMAT_V2, REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2,
     REVISION3_EXACT_SNAPSHOT_IMPORT_RESTORE_STATUS_V2,
@@ -19,10 +22,12 @@ use serde_json::{json, Value};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_inspect_revision3_exact_snapshot_v2";
+pub(super) const IMPORT_COMMAND: &str = "authoring_store_import_revision3_exact_snapshot_v2";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 const MAX_WIRE_BYTES: usize = MAX_PATH_BYTES * 6 + 1024;
+const MAX_IMPORT_WIRE_BYTES: usize = MAX_PATH_BYTES * 12 + 2048;
 const MAX_MANIFEST_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SNAPSHOT_OBJECTS: u64 = 100_000;
 const MAX_ENTITY_OBJECTS: u64 = 100_000;
@@ -42,6 +47,18 @@ const ARCHIVE_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_ARCHIVE_INVALID";
 const MANIFEST_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_MANIFEST_INVALID";
 const CLOSURE_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_CLOSURE_INVALID";
 const INVARIANT_CODE: &str = "AUTHORING_REVISION3_IMPORT_INVARIANT";
+const DESTINATION_INVALID_CODE: &str = "AUTHORING_REVISION3_IMPORT_DESTINATION_INVALID";
+const SOURCE_CHANGED_CODE: &str = "AUTHORING_REVISION3_IMPORT_SOURCE_CHANGED";
+const MATERIALIZATION_FAILED_CODE: &str = "AUTHORING_REVISION3_IMPORT_MATERIALIZATION_FAILED";
+const VERIFICATION_FAILED_CODE: &str = "AUTHORING_REVISION3_IMPORT_VERIFICATION_FAILED";
+const PUBLICATION_FAILED_CODE: &str = "AUTHORING_REVISION3_IMPORT_PUBLICATION_FAILED";
+const CLEANUP_FAILED_CODE: &str = "AUTHORING_REVISION3_IMPORT_CLEANUP_FAILED";
+const CLEANUP_WARNING_CODE: &str = "AUTHORING_REVISION3_IMPORT_CLEANUP_WARNING";
+const CLEANUP_WARNING_MESSAGE: &str =
+    "the verified project was materialized, but private staging cleanup was incomplete";
+const PUBLICATION_UNCERTAIN_CODE: &str = "AUTHORING_REVISION3_IMPORT_PUBLICATION_UNCERTAIN";
+const PUBLICATION_UNCERTAIN_MESSAGE: &str =
+    "project publication may have completed; do not retry automatically";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,6 +71,21 @@ struct ExactWireRequest {
 #[serde(deny_unknown_fields)]
 struct InspectSnapshotWirePayload {
     source: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExactImportWireRequest {
+    command: String,
+    payload: ImportSnapshotWirePayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportSnapshotWirePayload {
+    source: String,
+    destination: String,
+    expected_archive: ContentSeal,
 }
 
 #[derive(Debug)]
@@ -79,12 +111,35 @@ pub(super) fn inspect_revision3_exact_snapshot_v2_raw(input: &str) -> Value {
     inspect_revision3_exact_snapshot_v2_inner(input).unwrap_or_else(Failure::response)
 }
 
+pub(super) fn import_revision3_exact_snapshot_v2_raw(input: &str) -> Value {
+    import_revision3_exact_snapshot_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
 fn inspect_revision3_exact_snapshot_v2_inner(input: &str) -> Result<Value, Failure> {
     let payload = parse_exact_wire(input)?;
     let source = payload.source;
     let inspection =
         inspect_revision3_exact_snapshot_v2(Path::new(&source)).map_err(map_inspection_error)?;
     inspection_response(inspection, source)
+}
+
+fn import_revision3_exact_snapshot_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload = parse_exact_import_wire(input)?;
+    let source = payload.source;
+    let destination = payload.destination;
+    let expected_archive = payload.expected_archive;
+    let publication = import_revision3_exact_snapshot_v2(
+        Path::new(&source),
+        &expected_archive,
+        Path::new(&destination),
+    )
+    .map_err(map_import_error)?;
+    Ok(import_publication_response(
+        publication,
+        source,
+        destination,
+        &expected_archive,
+    ))
 }
 
 fn parse_exact_wire(input: &str) -> Result<InspectSnapshotWirePayload, Failure> {
@@ -102,6 +157,37 @@ fn parse_exact_wire(input: &str) -> Result<InspectSnapshotWirePayload, Failure> 
     Ok(request.payload)
 }
 
+fn parse_exact_import_wire(input: &str) -> Result<ImportSnapshotWirePayload, Failure> {
+    if input.len() > MAX_IMPORT_WIRE_BYTES {
+        return Err(Failure::new(
+            LIMIT_CODE,
+            "managed snapshot import request exceeds its closed wire limit",
+        ));
+    }
+    let request: ExactImportWireRequest =
+        serde_json::from_str(input).map_err(|_| invalid_import_request())?;
+    if request.command != IMPORT_COMMAND {
+        return Err(invalid_import_request());
+    }
+    validate_source_spelling(&request.payload.source)?;
+    validate_destination_spelling(&request.payload.destination)?;
+    if request.payload.source == request.payload.destination {
+        return Err(Failure::new(
+            DESTINATION_INVALID_CODE,
+            "managed snapshot source and destination must be distinct",
+        ));
+    }
+    if request.payload.expected_archive.byte_len == 0
+        || request.payload.expected_archive.byte_len > MAX_ARCHIVE_BYTES
+    {
+        return Err(Failure::new(
+            LIMIT_CODE,
+            "expected managed snapshot archive seal exceeds its closed byte range",
+        ));
+    }
+    Ok(request.payload)
+}
+
 fn validate_source_spelling(source: &str) -> Result<(), Failure> {
     if source.len() > MAX_PATH_BYTES {
         return Err(Failure::new(
@@ -113,6 +199,22 @@ fn validate_source_spelling(source: &str) -> Result<(), Failure> {
         return Err(Failure::new(
             SOURCE_INVALID_CODE,
             "managed snapshot source is not one bounded file spelling",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_destination_spelling(destination: &str) -> Result<(), Failure> {
+    if destination.len() > MAX_PATH_BYTES {
+        return Err(Failure::new(
+            LIMIT_CODE,
+            "managed snapshot destination exceeds its closed path limit",
+        ));
+    }
+    if destination.is_empty() || destination.contains('\0') {
+        return Err(Failure::new(
+            DESTINATION_INVALID_CODE,
+            "managed snapshot destination is not one bounded directory spelling",
         ));
     }
     Ok(())
@@ -154,6 +256,136 @@ fn inspection_response(
         "publication_status": "not_supported",
         "retry_safe": true,
     }))
+}
+
+fn import_publication_response(
+    publication: Revision3ExactSnapshotImportPublicationV2,
+    source: String,
+    destination: String,
+    expected_archive: &ContentSeal,
+) -> Value {
+    match publication {
+        Revision3ExactSnapshotImportPublicationV2::Imported(receipt) => confirmed_import_response(
+            receipt,
+            source,
+            destination,
+            expected_archive,
+            "imported",
+            "published",
+            Value::Null,
+        ),
+        Revision3ExactSnapshotImportPublicationV2::ImportedWithCleanupWarning(receipt) => {
+            confirmed_import_response(
+                receipt,
+                source,
+                destination,
+                expected_archive,
+                "imported_with_cleanup_warning",
+                "published_with_cleanup_warning",
+                json!({
+                    "code": CLEANUP_WARNING_CODE,
+                    "message": CLEANUP_WARNING_MESSAGE,
+                }),
+            )
+        }
+        Revision3ExactSnapshotImportPublicationV2::PublicationUncertain => {
+            uncertain_import_response(source, destination)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn confirmed_import_response(
+    receipt: Revision3ExactSnapshotImportV2,
+    source: String,
+    destination: String,
+    expected_archive: &ContentSeal,
+    outcome: &'static str,
+    publication_status: &'static str,
+    warning: Value,
+) -> Value {
+    // The final directory is already visible when native returns a confirmed publication. Any
+    // impossible bridge invariant must therefore become the same non-retryable uncertain terminal,
+    // never an ordinary error that a caller might retry.
+    if receipt.archive != *expected_archive || !valid_import_receipt(&receipt) {
+        return uncertain_import_response(source, destination);
+    }
+    let Ok(head_json) = serde_json::to_string(&receipt.head) else {
+        return uncertain_import_response(source, destination);
+    };
+
+    json!({
+        "ok": true,
+        "outcome": outcome,
+        "source": source,
+        "destination": destination,
+        "format": REVISION3_EXACT_SNAPSHOT_IMPORT_FORMAT_V2,
+        "artifact_kind": REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2,
+        "restore_status": REVISION3_EXACT_SNAPSHOT_IMPORT_RESTORE_STATUS_V2,
+        "archive": receipt.archive,
+        "manifest": {
+            "relative_name": REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2,
+            "byte_len": receipt.manifest.byte_len,
+            "sha256": receipt.manifest.sha256,
+        },
+        "project_id": receipt.project_id.to_string(),
+        "project_revision": receipt.project_revision,
+        "head_json": head_json,
+        "closure": receipt.closure,
+        "inspection_status": "verified_exact",
+        "import_status": "materialized",
+        "project_mutation": "materialized",
+        "session_adoption": "not_performed",
+        "game_mutation": "not_performed",
+        "save_mutation": "not_performed",
+        "build_status": "not_performed",
+        "deployment_status": "not_performed",
+        "runtime_status": "runtime_unqualified",
+        "publication_status": publication_status,
+        "retry_safe": false,
+        "warning": warning,
+    })
+}
+
+fn uncertain_import_response(source: String, destination: String) -> Value {
+    // Deliberately no archive/head/project/closure fields: publication uncertainty carries no
+    // adoptable receipt at either the native or wire boundary.
+    json!({
+        "ok": true,
+        "outcome": "publication_uncertain",
+        "source": source,
+        "destination": destination,
+        "format": REVISION3_EXACT_SNAPSHOT_IMPORT_FORMAT_V2,
+        "artifact_kind": REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2,
+        "restore_status": REVISION3_EXACT_SNAPSHOT_IMPORT_RESTORE_STATUS_V2,
+        "inspection_status": "verified_exact",
+        "import_status": "materialized",
+        "project_mutation": "materialized",
+        "session_adoption": "not_performed",
+        "game_mutation": "not_performed",
+        "save_mutation": "not_performed",
+        "build_status": "not_performed",
+        "deployment_status": "not_performed",
+        "runtime_status": "runtime_unqualified",
+        "publication_status": "publication_uncertain",
+        "retry_safe": false,
+        "warning": {
+            "code": PUBLICATION_UNCERTAIN_CODE,
+            "message": PUBLICATION_UNCERTAIN_MESSAGE,
+        },
+    })
+}
+
+fn valid_import_receipt(receipt: &Revision3ExactSnapshotImportV2) -> bool {
+    validate_inspection_receipt(&Revision3ExactSnapshotInspectionV2 {
+        head: receipt.head.clone(),
+        project_id: receipt.project_id.clone(),
+        project_revision: receipt.project_revision,
+        archive: receipt.archive.clone(),
+        manifest: receipt.manifest.clone(),
+        closure: receipt.closure.clone(),
+    })
+    .is_ok()
 }
 
 fn validate_inspection_receipt(
@@ -233,10 +465,54 @@ fn map_inspection_error(error: Revision3ExactSnapshotInspectionErrorV2) -> Failu
     }
 }
 
+fn map_import_error(error: Revision3ExactSnapshotImportErrorV2) -> Failure {
+    match error {
+        Revision3ExactSnapshotImportErrorV2::Inspection(
+            Revision3ExactSnapshotInspectionErrorV2::UnsupportedPlatform,
+        ) => map_inspection_error(Revision3ExactSnapshotInspectionErrorV2::UnsupportedPlatform),
+        Revision3ExactSnapshotImportErrorV2::Inspection(_) => Failure::new(
+            SOURCE_CHANGED_CODE,
+            "the managed snapshot source no longer verifies as the inspected V2 archive",
+        ),
+        Revision3ExactSnapshotImportErrorV2::ArchiveCasMismatch { .. } => Failure::new(
+            SOURCE_CHANGED_CODE,
+            "the managed snapshot archive no longer matches the inspected archive seal",
+        ),
+        Revision3ExactSnapshotImportErrorV2::InvalidDestination(_)
+        | Revision3ExactSnapshotImportErrorV2::DestinationAlreadyExists => Failure::new(
+            DESTINATION_INVALID_CODE,
+            "the managed snapshot destination is unavailable or no longer absent",
+        ),
+        Revision3ExactSnapshotImportErrorV2::Materialization(_) => Failure::new(
+            MATERIALIZATION_FAILED_CODE,
+            "the managed snapshot could not be materialized into private staging",
+        ),
+        Revision3ExactSnapshotImportErrorV2::CandidateVerification(_) => Failure::new(
+            VERIFICATION_FAILED_CODE,
+            "the materialized managed snapshot candidate failed exact verification",
+        ),
+        Revision3ExactSnapshotImportErrorV2::Publication(_) => Failure::new(
+            PUBLICATION_FAILED_CODE,
+            "the managed snapshot destination could not be published safely",
+        ),
+        Revision3ExactSnapshotImportErrorV2::StagingCleanup { .. } => Failure::new(
+            CLEANUP_FAILED_CODE,
+            "managed snapshot import failed and bounded private staging cleanup was incomplete",
+        ),
+    }
+}
+
 fn invalid_request() -> Failure {
     Failure::new(
         REQUEST_INVALID_CODE,
         "managed snapshot inspection request must contain only one exact command and source payload",
+    )
+}
+
+fn invalid_import_request() -> Failure {
+    Failure::new(
+        REQUEST_INVALID_CODE,
+        "managed snapshot import request must contain only one exact command, source, destination, and expected archive payload",
     )
 }
 
@@ -263,7 +539,6 @@ fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
     use std::collections::BTreeSet;
     #[cfg(windows)]
     use std::fs;
@@ -273,12 +548,11 @@ mod tests {
     use gore_authoring::Revision3ExactSnapshotInspectionErrorV2;
     #[cfg(windows)]
     use gore_authoring::{
-        ProjectRevision3, Revision3ExactSnapshotExportPublicationV1,
+        AssetVerification, ProjectRevision3, Revision3ExactSnapshotExportPublicationV1,
         Revision3ExactSnapshotExportPublicationV2, Revision3ExactSnapshotInspectionV2, WorkingHead,
         WorkingProjectStore, WorkingStoreLimits,
     };
     use serde_json::json;
-    #[cfg(windows)]
     use tempfile::TempDir;
 
     use super::*;
@@ -342,7 +616,18 @@ mod tests {
         .to_string()
     }
 
-    #[cfg(windows)]
+    fn import_request(source: &str, destination: &str, expected_archive: &ContentSeal) -> String {
+        json!({
+            "command": IMPORT_COMMAND,
+            "payload": {
+                "source": source,
+                "destination": destination,
+                "expected_archive": expected_archive,
+            },
+        })
+        .to_string()
+    }
+
     fn exact_keys(value: &Value) -> BTreeSet<&str> {
         value
             .as_object()
@@ -410,6 +695,122 @@ mod tests {
             inspect_revision3_exact_snapshot_v2_raw(&request("bad\0source"))["error"]["code"],
             SOURCE_INVALID_CODE
         );
+    }
+
+    #[test]
+    fn exact_import_wire_rejects_unknown_duplicate_missing_and_wrong_shapes() {
+        const SHA: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+        let cases = [
+            format!(
+                r#"{{"command":"{IMPORT_COMMAND}","payload":{{"source":"x","destination":"y","expected_archive":{{"byte_len":1,"sha256":"{SHA}"}},"future":true}}}}"#
+            ),
+            format!(
+                r#"{{"command":"{IMPORT_COMMAND}","payload":{{"source":"x","source":"x","destination":"y","expected_archive":{{"byte_len":1,"sha256":"{SHA}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"command":"{IMPORT_COMMAND}","payload":{{"source":"x","expected_archive":{{"byte_len":1,"sha256":"{SHA}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"command":"{IMPORT_COMMAND}","payload":{{"source":"x","destination":"y","expected_archive":{{"byte_len":"1","sha256":"{SHA}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"command":"{IMPORT_COMMAND}","payload":{{"source":"x","destination":"y","expected_archive":{{"byte_len":1,"sha256":"{SHA}","future":true}}}}}}"#
+            ),
+            format!(
+                r#"{{"command":"{COMMAND}","payload":{{"source":"x","destination":"y","expected_archive":{{"byte_len":1,"sha256":"{SHA}"}}}}}}"#
+            ),
+        ];
+        for wire in cases {
+            let response = import_revision3_exact_snapshot_v2_raw(&wire);
+            assert_eq!(response["error"]["code"], REQUEST_INVALID_CODE, "{wire}");
+        }
+    }
+
+    #[test]
+    fn import_wire_paths_and_archive_seal_are_bounded_before_native_access() {
+        let seal: ContentSeal = serde_json::from_value(json!({
+            "byte_len": 1,
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        }))
+        .unwrap();
+        assert_eq!(
+            import_revision3_exact_snapshot_v2_raw(&" ".repeat(MAX_IMPORT_WIRE_BYTES + 1))["error"]
+                ["code"],
+            LIMIT_CODE
+        );
+        assert_eq!(
+            import_revision3_exact_snapshot_v2_raw(&import_request(
+                "x",
+                &"y".repeat(MAX_PATH_BYTES + 1),
+                &seal,
+            ))["error"]["code"],
+            LIMIT_CODE
+        );
+        assert_eq!(
+            import_revision3_exact_snapshot_v2_raw(&import_request("x", "", &seal))["error"]
+                ["code"],
+            DESTINATION_INVALID_CODE
+        );
+        assert_eq!(
+            import_revision3_exact_snapshot_v2_raw(&import_request("same", "same", &seal))["error"]
+                ["code"],
+            DESTINATION_INVALID_CODE
+        );
+        let zero_seal: ContentSeal = serde_json::from_value(json!({
+            "byte_len": 0,
+            "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        }))
+        .unwrap();
+        assert_eq!(
+            import_revision3_exact_snapshot_v2_raw(&import_request("x", "y", &zero_seal))["error"]
+                ["code"],
+            LIMIT_CODE
+        );
+    }
+
+    #[test]
+    fn publication_uncertainty_has_no_receipt_or_identity_fields() {
+        let response =
+            uncertain_import_response("source.goremod".to_owned(), "destination".to_owned());
+        assert_eq!(response["ok"], true, "{response:#}");
+        assert_eq!(response["outcome"], "publication_uncertain");
+        assert_eq!(response["publication_status"], "publication_uncertain");
+        assert_eq!(response["retry_safe"], false);
+        assert_eq!(response["warning"]["code"], PUBLICATION_UNCERTAIN_CODE);
+        assert_eq!(
+            exact_keys(&response),
+            BTreeSet::from([
+                "ok",
+                "outcome",
+                "source",
+                "destination",
+                "format",
+                "artifact_kind",
+                "restore_status",
+                "inspection_status",
+                "import_status",
+                "project_mutation",
+                "session_adoption",
+                "game_mutation",
+                "save_mutation",
+                "build_status",
+                "deployment_status",
+                "runtime_status",
+                "publication_status",
+                "retry_safe",
+                "warning",
+            ])
+        );
+        for forbidden in [
+            "archive",
+            "manifest",
+            "project_id",
+            "project_revision",
+            "head_json",
+            "closure",
+        ] {
+            assert!(response.get(forbidden).is_none(), "{forbidden}");
+        }
     }
 
     #[test]
@@ -569,11 +970,161 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn v2_destination_import_routes_and_reopens_one_exact_arbitrary_named_project() {
+        let fixture = exported_v2_fixture();
+        let source = fixture.source.to_string_lossy().into_owned();
+        let destination_path = fixture
+            .source
+            .parent()
+            .unwrap()
+            .join("Restored project without required suffix");
+        let destination = destination_path.to_string_lossy().into_owned();
+        let source_before = fs::read(&fixture.source).unwrap();
+        let wire = import_request(&source, &destination, &fixture.receipt.archive);
+
+        let response: Value = serde_json::from_str(&crate::execute_json(&wire)).unwrap();
+
+        assert_eq!(response["ok"], true, "{response:#}");
+        assert_eq!(response["outcome"], "imported");
+        assert_eq!(response["source"], source);
+        assert_eq!(response["destination"], destination);
+        assert_eq!(response["archive"], json!(fixture.receipt.archive));
+        assert_eq!(
+            response["manifest"],
+            json!({
+                "relative_name": REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2,
+                "byte_len": fixture.receipt.manifest.byte_len,
+                "sha256": fixture.receipt.manifest.sha256,
+            })
+        );
+        assert_eq!(
+            response["project_id"],
+            fixture.receipt.project_id.to_string()
+        );
+        assert_eq!(
+            response["project_revision"],
+            fixture.receipt.project_revision
+        );
+        assert_eq!(
+            response["head_json"],
+            serde_json::to_string(&fixture.receipt.head).unwrap()
+        );
+        assert_eq!(response["closure"], json!(fixture.receipt.closure));
+        assert_eq!(response["inspection_status"], "verified_exact");
+        assert_eq!(response["import_status"], "materialized");
+        assert_eq!(response["project_mutation"], "materialized");
+        assert_eq!(response["session_adoption"], "not_performed");
+        assert_eq!(response["game_mutation"], "not_performed");
+        assert_eq!(response["save_mutation"], "not_performed");
+        assert_eq!(response["build_status"], "not_performed");
+        assert_eq!(response["deployment_status"], "not_performed");
+        assert_eq!(response["runtime_status"], "runtime_unqualified");
+        assert_eq!(response["publication_status"], "published");
+        assert_eq!(response["retry_safe"], false);
+        assert!(response["warning"].is_null());
+        assert_eq!(
+            exact_keys(&response),
+            BTreeSet::from([
+                "ok",
+                "outcome",
+                "source",
+                "destination",
+                "format",
+                "artifact_kind",
+                "restore_status",
+                "archive",
+                "manifest",
+                "project_id",
+                "project_revision",
+                "head_json",
+                "closure",
+                "inspection_status",
+                "import_status",
+                "project_mutation",
+                "session_adoption",
+                "game_mutation",
+                "save_mutation",
+                "build_status",
+                "deployment_status",
+                "runtime_status",
+                "publication_status",
+                "retry_safe",
+                "warning",
+            ])
+        );
+        assert_eq!(fs::read(&fixture.source).unwrap(), source_before);
+
+        let store =
+            WorkingProjectStore::open_existing(&destination_path, WorkingStoreLimits::default())
+                .unwrap();
+        let opened = store
+            .open_current_revision3(AssetVerification::Full)
+            .unwrap();
+        assert_eq!(opened.head, fixture.receipt.head);
+        assert_eq!(opened.project.project_id, fixture.receipt.project_id);
+        assert_eq!(opened.project.revision, fixture.receipt.project_revision);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn v2_destination_import_cas_mismatch_and_existing_destination_publish_nothing() {
+        let fixture = exported_v2_fixture();
+        let source = fixture.source.to_string_lossy().into_owned();
+        let parent = fixture.source.parent().unwrap();
+        let before_tree = directory_tree(parent);
+        let source_before = fs::read(&fixture.source).unwrap();
+        let destination_path = parent.join("CAS mismatch destination");
+        let destination = destination_path.to_string_lossy().into_owned();
+        let mut wrong_archive = fixture.receipt.archive.clone();
+        wrong_archive.byte_len += 1;
+
+        let response = import_revision3_exact_snapshot_v2_raw(&import_request(
+            &source,
+            &destination,
+            &wrong_archive,
+        ));
+        assert_eq!(response["error"]["code"], SOURCE_CHANGED_CODE);
+        assert!(!destination_path.exists());
+        assert_eq!(directory_tree(parent), before_tree);
+        assert_eq!(fs::read(&fixture.source).unwrap(), source_before);
+
+        fs::create_dir(&destination_path).unwrap();
+        let sentinel = destination_path.join("keep.txt");
+        fs::write(&sentinel, b"keep").unwrap();
+        let response = import_revision3_exact_snapshot_v2_raw(&import_request(
+            &source,
+            &destination,
+            &fixture.receipt.archive,
+        ));
+        assert_eq!(response["error"]["code"], DESTINATION_INVALID_CODE);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(&destination_path).unwrap().count(), 1);
+        assert_eq!(fs::read(&fixture.source).unwrap(), source_before);
+    }
+
+    #[test]
     #[cfg(not(windows))]
     fn public_dispatch_reports_the_stable_platform_error_before_source_io() {
         let response: Value =
             serde_json::from_str(&crate::execute_json(&request("/not-opened.goremod"))).unwrap();
         assert_eq!(response["error"]["code"], PLATFORM_UNSUPPORTED_CODE);
+
+        let temp = TempDir::new().unwrap();
+        let destination = temp.path().join("must-not-be-created");
+        let expected_archive: ContentSeal = serde_json::from_value(json!({
+            "byte_len": 1,
+            "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        }))
+        .unwrap();
+        let response: Value = serde_json::from_str(&crate::execute_json(&import_request(
+            "/not-opened.goremod",
+            &destination.to_string_lossy(),
+            &expected_archive,
+        )))
+        .unwrap();
+        assert_eq!(response["error"]["code"], PLATFORM_UNSUPPORTED_CODE);
+        assert!(!destination.exists());
     }
 
     #[test]
@@ -626,6 +1177,79 @@ mod tests {
             map_inspection_error(Revision3ExactSnapshotInspectionErrorV2::UnsupportedReviewCopyV1)
                 .code,
             UNSUPPORTED_REVIEW_COPY_CODE
+        );
+
+        let seal: ContentSeal = serde_json::from_value(json!({
+            "byte_len": 1,
+            "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        }))
+        .unwrap();
+        let import_cases = [
+            (
+                Revision3ExactSnapshotImportErrorV2::Inspection(
+                    Revision3ExactSnapshotInspectionErrorV2::InvalidArchive(
+                        "C:\\LEAK_MARKER\\changed.goremod".to_owned(),
+                    ),
+                ),
+                SOURCE_CHANGED_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::ArchiveCasMismatch {
+                    expected: seal.clone(),
+                    actual: seal,
+                },
+                SOURCE_CHANGED_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::InvalidDestination(
+                    "C:\\LEAK_MARKER\\destination".to_owned(),
+                ),
+                DESTINATION_INVALID_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::DestinationAlreadyExists,
+                DESTINATION_INVALID_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::Materialization(
+                    "LEAK_MARKER materialization".to_owned(),
+                ),
+                MATERIALIZATION_FAILED_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::CandidateVerification(
+                    "LEAK_MARKER verification".to_owned(),
+                ),
+                VERIFICATION_FAILED_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::Publication(
+                    "LEAK_MARKER publication".to_owned(),
+                ),
+                PUBLICATION_FAILED_CODE,
+            ),
+            (
+                Revision3ExactSnapshotImportErrorV2::StagingCleanup {
+                    primary: Box::new(Revision3ExactSnapshotImportErrorV2::Materialization(
+                        "LEAK_MARKER primary".to_owned(),
+                    )),
+                    cleanup: "LEAK_MARKER cleanup".to_owned(),
+                },
+                CLEANUP_FAILED_CODE,
+            ),
+        ];
+        for (error, code) in import_cases {
+            let failure = map_import_error(error);
+            assert_eq!(failure.code, code);
+            assert!(!failure.message.contains("LEAK_MARKER"));
+            assert!(failure.message.len() <= MAX_ERROR_MESSAGE_BYTES);
+        }
+        assert_eq!(
+            map_import_error(Revision3ExactSnapshotImportErrorV2::Inspection(
+                Revision3ExactSnapshotInspectionErrorV2::UnsupportedPlatform,
+            ))
+            .code,
+            PLATFORM_UNSUPPORTED_CODE
         );
 
         let bounded = Failure::new("TEST", "é".repeat(MAX_ERROR_MESSAGE_BYTES));

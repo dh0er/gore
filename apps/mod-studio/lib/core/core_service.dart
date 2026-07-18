@@ -58,6 +58,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_export_revision3_exact_snapshot_v1',
   'authoring_store_export_revision3_exact_snapshot_v2',
   'authoring_store_import_ogg',
+  'authoring_store_import_revision3_exact_snapshot_v2',
   'authoring_store_inspect_revision3_exact_snapshot_v2',
   'authoring_store_inspect_revision3_installed_dataasset_v1',
   'authoring_store_inspect_revision3_npc_source_v1',

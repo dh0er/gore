@@ -305,6 +305,7 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_project_export_revision3::COMMAND,
     authoring_project_export_revision3::COMMAND_V2,
     "authoring_store_import_ogg",
+    authoring_project_import_revision3::IMPORT_COMMAND,
     authoring_project_import_revision3::COMMAND,
     "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
@@ -643,6 +644,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         authoring_project_export_revision3::COMMAND_V2 => Some(
             authoring_project_export_revision3::export_revision3_exact_snapshot_v2_raw,
+        ),
+        authoring_project_import_revision3::IMPORT_COMMAND => Some(
+            authoring_project_import_revision3::import_revision3_exact_snapshot_v2_raw,
         ),
         authoring_project_import_revision3::COMMAND => Some(
             authoring_project_import_revision3::inspect_revision3_exact_snapshot_v2_raw,
@@ -1812,6 +1816,7 @@ mod tests {
                     "authoring_store_export_revision3_exact_snapshot_v1",
                     "authoring_store_export_revision3_exact_snapshot_v2",
                     "authoring_store_import_ogg",
+                    "authoring_store_import_revision3_exact_snapshot_v2",
                     "authoring_store_inspect_revision3_exact_snapshot_v2",
                     "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
