@@ -111,6 +111,36 @@ impl VtData {
 /// "not a valid address" and is skipped during decode.
 const VT_INVALID_OFFSET: u32 = u32::MAX;
 
+/// Maximum number of Morton addresses a single decode/re-tile operation may
+/// inspect across all requested mips. A normal VT mip uses
+/// `round_up_pow2(max(width, height))^2` addresses; two million therefore still
+/// permits a 1024x1024 top mip and its complete mip pyramid, while bounding the
+/// CPU work of extremely skewed or hostile tables.
+const MAX_VT_ADDRESS_WORK: u64 = 2 * 1024 * 1024;
+
+/// Fixed structural ceilings for counts serialized by UE arrays. These are
+/// deliberately independent of the input buffer length: a large but otherwise
+/// well-formed attacker-controlled buffer must not make the parser reserve an
+/// unbounded amount of memory.
+const MAX_VT_LAYERS: usize = 64;
+const MAX_VT_MIPS: usize = 32;
+const MAX_VT_CHUNKS: usize = 4 * 1024;
+const MAX_VT_LAYER_TYPE_CODE_UNITS: usize = 256;
+
+/// Sparse VT tables normally contain very few alternating present/gap runs.
+/// Keep a separate ceiling so a hostile table cannot turn every address lookup
+/// into a binary search over an implausibly large run vector.
+const MAX_VT_OFFSET_RUNS: usize = 64 * 1024;
+
+/// Legacy tile tables can contain one entry per address inspected by preview or
+/// re-tile. Keep their serialized count within that same CPU-work budget.
+const MAX_VT_LEGACY_TILE_ENTRIES: usize = MAX_VT_ADDRESS_WORK as usize;
+
+/// Re-tile rebuilds every chunk in memory. Match the decoded-preview allocation
+/// ceiling so replacement cannot allocate a larger attacker-selected aggregate
+/// chunk payload than preview itself permits for RGBA output.
+const MAX_VT_RETILE_CHUNK_BYTES: usize = crate::decode::MAX_DECODED_RGBA_BYTES;
+
 impl VtTileOffset {
     /// UE `FVirtualTextureTileOffsetData::GetTileOffset`: locate the run that
     /// `address` falls in (the last `Addresses` entry `<= address`) and add the
@@ -129,7 +159,7 @@ impl VtTileOffset {
         if base == VT_INVALID_OFFSET {
             return None;
         }
-        Some(base + (address - self.addresses[block_index]))
+        base.checked_add(address - self.addresses[block_index])
     }
 
     /// True iff `address` maps to a real (non-gap) tile.
@@ -150,6 +180,123 @@ fn reverse_morton2(mut x: u32) -> u32 {
     x
 }
 
+/// Validate the UE `FVirtualTextureTileOffsetData` invariants that make an
+/// address walk bounded and meaningful. UE initializes `MaxAddress` to the
+/// square of the next power of two covering the tile grid; the padding outside
+/// the real rectangle must be represented by gap runs.
+fn validate_mip_address_space(mip: &VtTileOffset, context: &str, prior_work: u64) -> Result<u64> {
+    if mip.width == 0 || mip.height == 0 {
+        return Err(corrupt(&format!("{context}: tile geometry is zero")));
+    }
+
+    let padded_side = mip
+        .width
+        .max(mip.height)
+        .checked_next_power_of_two()
+        .ok_or_else(|| corrupt(&format!("{context}: padded tile geometry overflows")))?;
+    let expected_max = (padded_side as u64)
+        .checked_mul(padded_side as u64)
+        .ok_or_else(|| corrupt(&format!("{context}: Morton address space overflows")))?;
+    if expected_max > u32::MAX as u64 {
+        return Err(corrupt(&format!(
+            "{context}: Morton address space {expected_max} does not fit u32"
+        )));
+    }
+    if mip.max_address as u64 != expected_max {
+        return Err(corrupt(&format!(
+            "{context}: MaxAddress {} does not match {}x{} tile geometry (expected {expected_max})",
+            mip.max_address, mip.width, mip.height
+        )));
+    }
+    // Check the aggregate bound before any loop over this mip's declared
+    // address space. This matters when re-tiling walks a complete mip pyramid.
+    let total_work = prior_work
+        .checked_add(expected_max)
+        .ok_or_else(|| corrupt(&format!("{context}: Morton address work overflows")))?;
+    enforce_address_work_budget(total_work, context)?;
+
+    if mip.addresses.len() != mip.offsets.len() {
+        return Err(corrupt(&format!(
+            "{context}: address/offset run counts differ ({} != {})",
+            mip.addresses.len(),
+            mip.offsets.len()
+        )));
+    }
+    if mip.addresses.is_empty() {
+        return Err(corrupt(&format!("{context}: offset run table is empty")));
+    }
+    if mip.addresses.len() > MAX_VT_OFFSET_RUNS {
+        return Err(corrupt(&format!(
+            "{context}: offset run count {} exceeds work budget {MAX_VT_OFFSET_RUNS}",
+            mip.addresses.len()
+        )));
+    }
+    if mip.addresses[0] != 0 {
+        return Err(corrupt(&format!(
+            "{context}: first offset run must start at address 0"
+        )));
+    }
+
+    for (index, (&start, &base)) in mip.addresses.iter().zip(&mip.offsets).enumerate() {
+        let end = mip
+            .addresses
+            .get(index + 1)
+            .copied()
+            .unwrap_or(mip.max_address);
+        if start >= mip.max_address {
+            return Err(corrupt(&format!(
+                "{context}: offset run {index} starts outside MaxAddress"
+            )));
+        }
+        if end <= start {
+            return Err(corrupt(&format!(
+                "{context}: offset run addresses are not strictly increasing"
+            )));
+        }
+        if base != VT_INVALID_OFFSET {
+            let last_delta = end - start - 1;
+            base.checked_add(last_delta)
+                .ok_or_else(|| corrupt(&format!("{context}: offset run {index} overflows u32")))?;
+        }
+    }
+
+    // `MaxAddress` describes a padded square. Any present tile in that padding
+    // is corrupt: decoding it wastes work and re-tiling would duplicate an edge
+    // pixel into a tile that is not part of the declared grid.
+    let mut present_tiles = 0u64;
+    for address in 0..mip.max_address {
+        if mip.get_offset(address).is_none() {
+            continue;
+        }
+        let x = reverse_morton2(address);
+        let y = reverse_morton2(address >> 1);
+        if x >= mip.width || y >= mip.height {
+            return Err(corrupt(&format!(
+                "{context}: present Morton address {address} resolves outside {}x{} tile geometry",
+                mip.width, mip.height
+            )));
+        }
+        present_tiles += 1;
+    }
+    let geometry_tiles = (mip.width as u64) * (mip.height as u64);
+    if present_tiles > geometry_tiles {
+        return Err(corrupt(&format!(
+            "{context}: {present_tiles} present tiles exceed {geometry_tiles} geometry tiles"
+        )));
+    }
+
+    Ok(total_work)
+}
+
+fn enforce_address_work_budget(work: u64, context: &str) -> Result<()> {
+    if work > MAX_VT_ADDRESS_WORK {
+        return Err(corrupt(&format!(
+            "{context}: Morton address work {work} exceeds budget {MAX_VT_ADDRESS_WORK}"
+        )));
+    }
+    Ok(())
+}
+
 /// Decode a physical `phys`x`phys` tile (`bytes`) to RGBA (`0xAARRGGBB`).
 ///
 /// Handles both block-compressed (BCn) and uncompressed (linear) layer formats:
@@ -158,11 +305,22 @@ fn reverse_morton2(mut x: u32) -> u32 {
 /// per-pixel decode mirrors the regular-texture path (BC6H/FloatRGBA are HDR and
 /// tonemapped to LDR for the preview).
 fn decode_bcn_tile(bytes: &[u8], phys: usize, format: &str) -> Result<Vec<u32>> {
-    let mut out = vec![0u32; phys * phys];
+    if block_bytes(format).is_none() && uncompressed_bytes_per_pixel(format).is_none() {
+        return Err(TexError::UnsupportedFormat(format.to_string()));
+    }
+    let pixels = crate::decode::bounded_preview_pixel_count(
+        phys,
+        phys,
+        format,
+        "decoded virtual-texture RGBA tile",
+    )?;
+    let mut out = vec![0u32; pixels];
 
     // Uncompressed (linear) layer formats: the tile bytes ARE the pixels.
     if let Some(bpp) = uncompressed_bytes_per_pixel(format) {
-        let need = phys * phys * bpp as usize;
+        let need = pixels
+            .checked_mul(bpp as usize)
+            .ok_or_else(|| corrupt("VT tile byte length overflow"))?;
         if bytes.len() < need {
             return Err(TexError::DecodeFailed {
                 format: format.to_string(),
@@ -233,6 +391,125 @@ fn decode_bcn_tile(bytes: &[u8], phys: usize, format: &str) -> Result<Vec<u32>> 
     Ok(out)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Layer0PreviewLayout {
+    out_w: u32,
+    out_h: u32,
+    out_pixels: usize,
+    tile_size: usize,
+    border: usize,
+    phys: usize,
+    packed_size: usize,
+}
+
+/// Validate every dimension used by the layer-0 preview before resolving VT
+/// chunks or allocating a decoded bitmap. `decode_layer0` repeats this at its
+/// public boundary and consumes the returned checked layout.
+pub(crate) fn validate_layer0_preview(vt: &VtData, layer0_format: &str) -> Result<()> {
+    layer0_preview_layout(vt, layer0_format).map(|_| ())
+}
+
+fn layer0_preview_layout(vt: &VtData, layer0_format: &str) -> Result<Layer0PreviewLayout> {
+    if block_bytes(layer0_format).is_none() && uncompressed_bytes_per_pixel(layer0_format).is_none()
+    {
+        return Err(TexError::UnsupportedFormat(layer0_format.to_string()));
+    }
+    if vt.num_mips == 0 || vt.tile_offset_data.is_empty() {
+        return Err(corrupt("VT has no mips to decode"));
+    }
+    let mip = &vt.tile_offset_data[0];
+    if vt.tile_size == 0 || mip.width == 0 || mip.height == 0 {
+        return Err(corrupt("VT mip-0 tile geometry is zero"));
+    }
+
+    let physical_tile_size = vt
+        .tile_border_size
+        .checked_mul(2)
+        .and_then(|border| vt.tile_size.checked_add(border))
+        .ok_or_else(|| corrupt("VT physical tile size overflow"))?;
+    let phys = usize::try_from(physical_tile_size)
+        .map_err(|_| corrupt("VT physical tile size does not fit this platform"))?;
+    let tile_size = usize::try_from(vt.tile_size)
+        .map_err(|_| corrupt("VT tile size does not fit this platform"))?;
+    let border = usize::try_from(vt.tile_border_size)
+        .map_err(|_| corrupt("VT tile border does not fit this platform"))?;
+
+    // A corrupt VT can declare a tiny logical image with an enormous border.
+    // Bound its temporary physical tile independently of the final bitmap.
+    crate::decode::bounded_preview_pixel_count(
+        phys,
+        phys,
+        layer0_format,
+        "decoded virtual-texture RGBA tile",
+    )?;
+
+    let grid_px_w = mip
+        .width
+        .checked_mul(vt.tile_size)
+        .ok_or_else(|| corrupt("VT mip-0 padded pixel width overflow"))?;
+    let grid_px_h = mip
+        .height
+        .checked_mul(vt.tile_size)
+        .ok_or_else(|| corrupt("VT mip-0 padded pixel height overflow"))?;
+
+    // The padded grid is decoded work too. Do not let corrupt logical dimensions
+    // hide an enormous tile grid behind right/bottom clipping.
+    crate::decode::bounded_preview_pixel_count(
+        grid_px_w as usize,
+        grid_px_h as usize,
+        layer0_format,
+        "decoded virtual-texture padded RGBA grid",
+    )?;
+
+    let out_w = if vt.width == 0 {
+        grid_px_w
+    } else {
+        vt.width.min(grid_px_w)
+    };
+    let out_h = if vt.height == 0 {
+        grid_px_h
+    } else {
+        vt.height.min(grid_px_h)
+    };
+    let out_pixels = crate::decode::bounded_preview_pixel_count(
+        out_w as usize,
+        out_h as usize,
+        layer0_format,
+        "decoded virtual-texture RGBA preview",
+    )?;
+
+    // Per-tile size for the physical (bordered) tile. Keep every operation
+    // checked even though the RGBA tile cap above already constrains `phys`.
+    let packed_size = if let Some(bb) = block_bytes(layer0_format) {
+        let blocks = phys
+            .checked_add(3)
+            .ok_or_else(|| corrupt("VT block-grid rounding overflow"))?
+            / 4;
+        blocks
+            .checked_mul(blocks)
+            .and_then(|value| value.checked_mul(bb as usize))
+            .ok_or_else(|| corrupt("VT packed tile byte length overflow"))?
+    } else if let Some(bpp) = uncompressed_bytes_per_pixel(layer0_format) {
+        phys.checked_mul(phys)
+            .and_then(|value| value.checked_mul(bpp as usize))
+            .ok_or_else(|| corrupt("VT packed tile byte length overflow"))?
+    } else {
+        return Err(TexError::UnsupportedFormat(layer0_format.to_string()));
+    };
+
+    validate_mip_address_space(mip, "VT mip 0", 0)?;
+
+    Ok(Layer0PreviewLayout {
+        out_w,
+        out_h,
+        out_pixels,
+        tile_size,
+        border,
+        phys,
+        packed_size,
+    })
+}
+
 /// Decode mip 0, layer 0, to a flat RGBA image (one `u32` per pixel,
 /// `0xAARRGGBB`, the channel order [`crate::decode::to_rgba8`] documents).
 ///
@@ -251,19 +528,20 @@ pub fn decode_layer0(
     chunk_bytes: &[Vec<u8>],
     layer0_format: &str,
 ) -> Result<(u32, u32, Vec<u32>)> {
-    if vt.num_mips == 0 || vt.tile_offset_data.is_empty() {
-        return Err(corrupt("VT has no mips to decode"));
-    }
+    let layout = layer0_preview_layout(vt, layer0_format)?;
     // Mip 0: the largest level (first TileOffsetData entry).
     const LEVEL: usize = 0;
     let mip = &vt.tile_offset_data[LEVEL];
 
-    let tile_size = vt.tile_size;
-    let border = vt.tile_border_size;
-    let phys = (tile_size + 2 * border) as usize;
-    if phys == 0 {
-        return Err(corrupt("VT physical tile size is zero"));
-    }
+    let Layer0PreviewLayout {
+        out_w,
+        out_h,
+        out_pixels,
+        tile_size,
+        border,
+        phys,
+        packed_size,
+    } = layout;
 
     // The tile grid is padded up to whole tiles; the texture's LOGICAL size
     // (vt.width/height) can be smaller (edge-padded VTs). Allocate and report the
@@ -271,32 +549,7 @@ pub fn decode_layer0(
     // preview carries padding pixels and its dimensions won't equal what `retile`
     // requires for a replacement (template.width/height), breaking the
     // export-then-replace round-trip.
-    let grid_w = mip.width;
-    let grid_h = mip.height;
-    let grid_px_w = grid_w * tile_size;
-    let grid_px_h = grid_h * tile_size;
-    let out_w = if vt.width == 0 {
-        grid_px_w
-    } else {
-        vt.width.min(grid_px_w)
-    };
-    let out_h = if vt.height == 0 {
-        grid_px_h
-    } else {
-        vt.height.min(grid_px_h)
-    };
-    let mut bitmap = vec![0u32; (out_w as usize) * (out_h as usize)];
-
-    // Per-tile size for the PHYSICAL (bordered) tile. Block-compressed: block
-    // math (ceil(phys/4)^2 * block_bytes). Uncompressed (linear): phys^2 * bpp.
-    let packed_size = if let Some(bb) = block_bytes(layer0_format) {
-        let blocks = (phys + 3) / 4;
-        blocks * blocks * bb as usize
-    } else if let Some(bpp) = uncompressed_bytes_per_pixel(layer0_format) {
-        phys * phys * bpp as usize
-    } else {
-        return Err(TexError::UnsupportedFormat(layer0_format.to_string()));
-    };
+    let mut bitmap = vec![0u32; out_pixels];
 
     // Per-tile stride across all layers (== TileDataOffsetPerLayer[NumLayers]);
     // layer 0's intra-tile offset is TileDataOffsetPerLayer[0] == 0.
@@ -325,7 +578,9 @@ pub fn decode_layer0(
                 .tile_index_per_mip
                 .get(LEVEL)
                 .ok_or_else(|| corrupt("legacy VT: TileIndexPerMip missing level 0"))?;
-            let tile_index = base_tile + tile_off;
+            let tile_index = base_tile
+                .checked_add(tile_off)
+                .ok_or_else(|| corrupt("legacy VT tile index overflow"))?;
             // chunk = UpperBound(TileIndexPerChunk, tile_index) - 1.
             let chunk = match vt
                 .tile_index_per_chunk
@@ -338,8 +593,9 @@ pub fn decode_layer0(
                 .tile_offset_in_chunk
                 .get(tile_index as usize)
                 .ok_or_else(|| corrupt("legacy VT: TileOffsetInChunk index out of range"))?;
-            let off =
-                in_chunk as u64 + mip.get_offset(addr).map(|_| 0u64).unwrap_or(0) + layer0_offset;
+            let off = (in_chunk as u64)
+                .checked_add(layer0_offset)
+                .ok_or_else(|| corrupt("legacy VT tile byte offset overflow"))?;
             (chunk, off)
         } else {
             // Non-legacy (UE5.0+): ChunkIndexPerMip + BaseOffsetPerMip +
@@ -358,14 +614,19 @@ pub fn decode_layer0(
                 .get_offset(addr)
                 .ok_or_else(|| corrupt("VT: invalid tile after validity check"))?
                 as u64;
-            let off = base + tile_off * per_tile_stride + layer0_offset;
+            let off = tile_off
+                .checked_mul(per_tile_stride)
+                .and_then(|value| base.checked_add(value))
+                .and_then(|value| value.checked_add(layer0_offset))
+                .ok_or_else(|| corrupt("VT tile byte offset overflow"))?;
             (chunk, off)
         };
 
         let data = chunk_bytes
             .get(chunk_index)
             .ok_or_else(|| corrupt("VT tile references a chunk with no resolved bytes"))?;
-        let start = offset as usize;
+        let start = usize::try_from(offset)
+            .map_err(|_| corrupt("VT tile byte offset does not fit this platform"))?;
         let end = start
             .checked_add(packed_size)
             .ok_or_else(|| corrupt("VT tile slice overflow"))?;
@@ -373,27 +634,52 @@ pub fn decode_layer0(
             .get(start..end)
             .ok_or_else(|| corrupt("VT tile bytes run past end of chunk"))?;
 
-        // Decode the physical (bordered) tile, then copy the inner tile_size area.
-        let decoded = decode_bcn_tile(tile, phys, layer0_format)?;
-        let tile_x = (reverse_morton2(addr) * tile_size) as usize;
-        let tile_y = (reverse_morton2(addr >> 1) * tile_size) as usize;
-        let b = border as usize;
-        let ts = tile_size as usize;
+        let tile_x = usize::try_from(reverse_morton2(addr))
+            .ok()
+            .and_then(|value| value.checked_mul(tile_size))
+            .ok_or_else(|| corrupt("VT tile X position overflow"))?;
+        let tile_y = usize::try_from(reverse_morton2(addr >> 1))
+            .ok()
+            .and_then(|value| value.checked_mul(tile_size))
+            .ok_or_else(|| corrupt("VT tile Y position overflow"))?;
         let ow = out_w as usize;
         let oh = out_h as usize;
-        // Skip tiles wholly past the logical right edge; clip the rest.
-        if tile_x >= ow {
+        // Skip tiles wholly past the logical right/bottom edge before allocating
+        // their temporary decoded buffer; clip partially visible tiles below.
+        if tile_x >= ow || tile_y >= oh {
             continue;
         }
-        let copy_w = ts.min(ow - tile_x);
-        for y in 0..ts {
-            let dy = tile_y + y;
+        let decoded = decode_bcn_tile(tile, phys, layer0_format)?;
+        let copy_w = tile_size.min(ow - tile_x);
+        for y in 0..tile_size {
+            let dy = tile_y
+                .checked_add(y)
+                .ok_or_else(|| corrupt("VT destination row overflow"))?;
             if dy >= oh {
                 break; // past the logical bottom edge
             }
-            let src_row = (y + b) * phys + b;
-            let dst_row = dy * ow + tile_x;
-            bitmap[dst_row..dst_row + copy_w].copy_from_slice(&decoded[src_row..src_row + copy_w]);
+            let src_row = y
+                .checked_add(border)
+                .and_then(|value| value.checked_mul(phys))
+                .and_then(|value| value.checked_add(border))
+                .ok_or_else(|| corrupt("VT source row overflow"))?;
+            let dst_row = dy
+                .checked_mul(ow)
+                .and_then(|value| value.checked_add(tile_x))
+                .ok_or_else(|| corrupt("VT destination row overflow"))?;
+            let src_end = src_row
+                .checked_add(copy_w)
+                .ok_or_else(|| corrupt("VT source slice overflow"))?;
+            let dst_end = dst_row
+                .checked_add(copy_w)
+                .ok_or_else(|| corrupt("VT destination slice overflow"))?;
+            let source = decoded
+                .get(src_row..src_end)
+                .ok_or_else(|| corrupt("VT source slice exceeds decoded tile"))?;
+            let destination = bitmap
+                .get_mut(dst_row..dst_end)
+                .ok_or_else(|| corrupt("VT destination slice exceeds preview"))?;
+            destination.copy_from_slice(source);
         }
     }
 
@@ -432,13 +718,28 @@ fn downsample_2x2(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// Build the `template.num_mips` mip levels from a full-res RGBA8 image.
 /// Mip `i` dims = `max(w>>i,1) x max(h>>i,1)`; returned largest-first, each as a
 /// `(width, height, rgba)` triple. Mip 0 is an owned copy of the input.
-fn build_mip_pyramid(rgba: &[u8], w: u32, h: u32, num_mips: u32) -> Vec<(u32, u32, Vec<u8>)> {
-    let mut out = Vec::with_capacity(num_mips as usize);
+fn build_mip_pyramid(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    num_mips: u32,
+) -> Result<Vec<(u32, u32, Vec<u8>)>> {
+    let mip_count = usize::try_from(num_mips)
+        .map_err(|_| corrupt("VT re-tile: NumMips does not fit this platform"))?;
+    if mip_count == 0 || mip_count > MAX_VT_MIPS {
+        return Err(corrupt(&format!(
+            "VT re-tile: NumMips {mip_count} exceeds limit {MAX_VT_MIPS}"
+        )));
+    }
+    let mut out = Vec::with_capacity(mip_count);
     let mut cur = rgba.to_vec();
     let mut cw = w;
     let mut ch = h;
-    for _ in 0..num_mips {
+    for level in 0..mip_count {
         out.push((cw, ch, cur.clone()));
+        if level + 1 == mip_count {
+            break;
+        }
         let (nw, nh) = ((cw >> 1).max(1), (ch >> 1).max(1));
         if cw == 1 && ch == 1 {
             // No further halving possible; subsequent levels (if any) repeat 1x1.
@@ -449,7 +750,38 @@ fn build_mip_pyramid(rgba: &[u8], w: u32, h: u32, num_mips: u32) -> Vec<(u32, u3
         cw = nw;
         ch = nh;
     }
-    out
+    Ok(out)
+}
+
+/// Validate every output-chunk allocation and return platform-sized lengths.
+/// The returned small metadata Vec is itself allocated only after the fixed
+/// chunk-count ceiling has been checked.
+fn checked_retile_chunk_lengths(chunks: &[VtChunk]) -> Result<Vec<usize>> {
+    if chunks.len() > MAX_VT_CHUNKS {
+        return Err(corrupt(&format!(
+            "VT re-tile: chunk count {} exceeds limit {MAX_VT_CHUNKS}",
+            chunks.len()
+        )));
+    }
+    let mut lengths = Vec::with_capacity(chunks.len());
+    let mut total_chunk_bytes = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        let chunk_len = usize::try_from(chunk.size_in_bytes).map_err(|_| {
+            corrupt(&format!(
+                "VT re-tile: chunk {index} size does not fit this platform"
+            ))
+        })?;
+        total_chunk_bytes = total_chunk_bytes
+            .checked_add(chunk_len)
+            .ok_or_else(|| corrupt("VT re-tile: aggregate chunk byte length overflows"))?;
+        if total_chunk_bytes > MAX_VT_RETILE_CHUNK_BYTES {
+            return Err(corrupt(&format!(
+                "VT re-tile: aggregate chunk bytes {total_chunk_bytes} exceed budget {MAX_VT_RETILE_CHUNK_BYTES}"
+            )));
+        }
+        lengths.push(chunk_len);
+    }
+    Ok(lengths)
 }
 
 /// Pure-Rust SHA-1 (FIPS 180-4). VT chunk `FSHAHash bulkDataHash` is the 20-byte
@@ -560,44 +892,102 @@ pub fn retile(
             template.width, template.height
         )));
     }
-    let expected_len = (w as usize)
-        .checked_mul(h as usize)
-        .and_then(|wh| wh.checked_mul(4))
-        .ok_or_else(|| corrupt("VT re-tile: dimensions overflow"))?;
+    let input_pixels = crate::decode::bounded_preview_pixel_count(
+        w as usize,
+        h as usize,
+        layer0_format,
+        "VT re-tile RGBA input",
+    )?;
+    let expected_len = input_pixels
+        .checked_mul(4)
+        .ok_or_else(|| corrupt("VT re-tile: input byte length overflows"))?;
     if new_rgba.len() != expected_len {
         return Err(TexError::VirtualTexture(format!(
             "VT re-tile: rgba length {} != w*h*4 ({expected_len}) for {w}x{h}",
             new_rgba.len()
         )));
     }
-    if template.num_mips == 0 || template.tile_offset_data.is_empty() {
+    let mip_count = usize::try_from(template.num_mips)
+        .map_err(|_| corrupt("VT re-tile: NumMips does not fit this platform"))?;
+    if mip_count == 0 || template.tile_offset_data.is_empty() {
         return Err(corrupt("VT re-tile: template has no mips"));
+    }
+    if mip_count > MAX_VT_MIPS {
+        return Err(corrupt(&format!(
+            "VT re-tile: NumMips {mip_count} exceeds limit {MAX_VT_MIPS}"
+        )));
     }
     if template.is_legacy() {
         return Err(TexError::VirtualTexture(
             "VT re-tile: legacy tile layout not supported".to_string(),
         ));
     }
-
-    let tile_size = template.tile_size;
-    let border = template.tile_border_size as usize;
-    let phys = (tile_size + 2 * template.tile_border_size) as usize;
-    if phys == 0 {
-        return Err(corrupt("VT re-tile: physical tile size is zero"));
+    if template.tile_offset_data.len() != mip_count {
+        return Err(corrupt(&format!(
+            "VT re-tile: TileOffsetData count {} does not match NumMips {}",
+            template.tile_offset_data.len(),
+            template.num_mips
+        )));
     }
+    if template.chunk_index_per_mip.len() != mip_count
+        || template.base_offset_per_mip.len() != mip_count
+    {
+        return Err(corrupt(&format!(
+            "VT re-tile: per-mip index counts ({}, {}) do not match NumMips {mip_count}",
+            template.chunk_index_per_mip.len(),
+            template.base_offset_per_mip.len()
+        )));
+    }
+    let mut address_work = 0u64;
+    for (level, mip) in template.tile_offset_data.iter().enumerate() {
+        let context = format!("VT re-tile mip {level}");
+        address_work = validate_mip_address_space(mip, &context, address_work)?;
+    }
+
+    if template.tile_size == 0 {
+        return Err(corrupt("VT re-tile: tile size is zero"));
+    }
+    let physical_tile_size = template
+        .tile_border_size
+        .checked_mul(2)
+        .and_then(|border| template.tile_size.checked_add(border))
+        .ok_or_else(|| corrupt("VT re-tile: physical tile size overflow"))?;
+    let tile_size = usize::try_from(template.tile_size)
+        .map_err(|_| corrupt("VT re-tile: tile size does not fit this platform"))?;
+    let border = usize::try_from(template.tile_border_size)
+        .map_err(|_| corrupt("VT re-tile: tile border does not fit this platform"))?;
+    let phys = usize::try_from(physical_tile_size)
+        .map_err(|_| corrupt("VT re-tile: physical tile size does not fit this platform"))?;
 
     // Per-tile packed BCn size for the PHYSICAL (bordered) tile — must equal the
     // template's per-tile stride (TileDataOffsetPerLayer.last(), single layer).
     let bb = block_bytes(layer0_format)
         .ok_or_else(|| TexError::UnsupportedFormat(layer0_format.to_string()))?
         as usize;
-    let blocks = (phys + 3) / 4;
-    let packed_size = blocks * blocks * bb;
-    let per_tile_stride = *template
-        .tile_data_offset_per_layer
-        .last()
-        .ok_or_else(|| corrupt("VT re-tile: TileDataOffsetPerLayer is empty"))?
-        as usize;
+    let blocks = phys
+        .checked_add(3)
+        .ok_or_else(|| corrupt("VT re-tile: block-grid rounding overflow"))?
+        / 4;
+    let packed_size = blocks
+        .checked_mul(blocks)
+        .and_then(|value| value.checked_mul(bb))
+        .ok_or_else(|| corrupt("VT re-tile: packed tile byte length overflow"))?;
+    let physical_pixels = crate::decode::bounded_preview_pixel_count(
+        phys,
+        phys,
+        layer0_format,
+        "VT re-tile physical RGBA tile",
+    )?;
+    let bordered_byte_len = physical_pixels
+        .checked_mul(4)
+        .ok_or_else(|| corrupt("VT re-tile: bordered tile byte length overflow"))?;
+    let per_tile_stride = usize::try_from(
+        *template
+            .tile_data_offset_per_layer
+            .last()
+            .ok_or_else(|| corrupt("VT re-tile: TileDataOffsetPerLayer is empty"))?,
+    )
+    .map_err(|_| corrupt("VT re-tile: per-tile stride does not fit this platform"))?;
     if per_tile_stride != packed_size {
         return Err(TexError::VirtualTexture(format!(
             "VT re-tile: per-tile stride {per_tile_stride} != computed packed tile size \
@@ -605,22 +995,27 @@ pub fn retile(
         )));
     }
 
+    // Bound both the number of allocations and their aggregate payload before
+    // reserving the outer Vec or any individual chunk buffer.
+    let chunk_lengths = checked_retile_chunk_lengths(&template.chunks)?;
+
     // Allocate one byte buffer per chunk, sized to the template's chunk size; we
     // place every tile at exactly the offset the template's tables imply.
-    let mut chunk_bytes: Vec<Vec<u8>> = template
-        .chunks
-        .iter()
-        .map(|c| vec![0u8; c.size_in_bytes as usize])
-        .collect();
+    let mut chunk_bytes = Vec::with_capacity(chunk_lengths.len());
+    for chunk_len in chunk_lengths {
+        chunk_bytes.push(vec![0u8; chunk_len]);
+    }
 
     // Build the mip pyramid once, then tile each mip per the template's grid.
-    let pyramid = build_mip_pyramid(new_rgba, w, h, template.num_mips);
-    let ts = tile_size as usize;
+    let pyramid = build_mip_pyramid(new_rgba, w, h, template.num_mips)?;
+    let ts = tile_size;
 
     for (level, mip) in template.tile_offset_data.iter().enumerate() {
         let (mw, mh, ref img) = pyramid[level];
-        let mw = mw as usize;
-        let mh = mh as usize;
+        let mw = usize::try_from(mw)
+            .map_err(|_| corrupt("VT re-tile: mip width does not fit this platform"))?;
+        let mh = usize::try_from(mh)
+            .map_err(|_| corrupt("VT re-tile: mip height does not fit this platform"))?;
 
         let chunk_index = *template
             .chunk_index_per_mip
@@ -639,23 +1034,55 @@ pub fn retile(
                 None => continue, // gap address — no tile
             };
 
-            let tile_x = (reverse_morton2(addr) as usize) * ts;
-            let tile_y = (reverse_morton2(addr >> 1) as usize) * ts;
+            let tile_x = usize::try_from(reverse_morton2(addr))
+                .ok()
+                .and_then(|value| value.checked_mul(ts))
+                .ok_or_else(|| corrupt("VT re-tile: tile X position overflow"))?;
+            let tile_y = usize::try_from(reverse_morton2(addr >> 1))
+                .ok()
+                .and_then(|value| value.checked_mul(ts))
+                .ok_or_else(|| corrupt("VT re-tile: tile Y position overflow"))?;
 
             // Build the phys x phys bordered RGBA tile. For each physical-tile
             // pixel, sample the mip image at the in-tile position, clamped to the
             // tile's TileSize extent AND to the mip image bounds (clamp-to-edge).
-            let mut bordered = vec![0u8; phys * phys * 4];
+            let mut bordered = vec![0u8; bordered_byte_len];
             for py in 0..phys {
                 // in-tile y in [0, tile_size): subtract the border, clamp to tile.
                 let in_ty = (py as isize - border as isize).clamp(0, ts as isize - 1) as usize;
-                let src_y = (tile_y + in_ty).min(mh.saturating_sub(1));
+                let src_y = tile_y
+                    .checked_add(in_ty)
+                    .ok_or_else(|| corrupt("VT re-tile: source Y position overflow"))?
+                    .min(mh.saturating_sub(1));
                 for px in 0..phys {
                     let in_tx = (px as isize - border as isize).clamp(0, ts as isize - 1) as usize;
-                    let src_x = (tile_x + in_tx).min(mw.saturating_sub(1));
-                    let s = (src_y * mw + src_x) * 4;
-                    let d = (py * phys + px) * 4;
-                    bordered[d..d + 4].copy_from_slice(&img[s..s + 4]);
+                    let src_x = tile_x
+                        .checked_add(in_tx)
+                        .ok_or_else(|| corrupt("VT re-tile: source X position overflow"))?
+                        .min(mw.saturating_sub(1));
+                    let s = src_y
+                        .checked_mul(mw)
+                        .and_then(|value| value.checked_add(src_x))
+                        .and_then(|value| value.checked_mul(4))
+                        .ok_or_else(|| corrupt("VT re-tile: source byte offset overflow"))?;
+                    let d = py
+                        .checked_mul(phys)
+                        .and_then(|value| value.checked_add(px))
+                        .and_then(|value| value.checked_mul(4))
+                        .ok_or_else(|| corrupt("VT re-tile: destination byte offset overflow"))?;
+                    let source_end = s
+                        .checked_add(4)
+                        .ok_or_else(|| corrupt("VT re-tile: source pixel end overflows"))?;
+                    let destination_end = d
+                        .checked_add(4)
+                        .ok_or_else(|| corrupt("VT re-tile: destination pixel end overflows"))?;
+                    let source = img
+                        .get(s..source_end)
+                        .ok_or_else(|| corrupt("VT re-tile: source pixel runs past mip"))?;
+                    let destination = bordered
+                        .get_mut(d..destination_end)
+                        .ok_or_else(|| corrupt("VT re-tile: destination pixel runs past tile"))?;
+                    destination.copy_from_slice(source);
                 }
             }
 
@@ -673,7 +1100,10 @@ pub fn retile(
             let dst = chunk_bytes
                 .get_mut(chunk_index)
                 .ok_or_else(|| corrupt("VT re-tile: mip references a missing chunk"))?;
-            let off = base + tile_off * per_tile_stride;
+            let off = tile_off
+                .checked_mul(per_tile_stride)
+                .and_then(|value| base.checked_add(value))
+                .ok_or_else(|| corrupt("VT re-tile: tile offset overflow"))?;
             let end = off
                 .checked_add(packed_size)
                 .ok_or_else(|| corrupt("VT re-tile: tile offset overflow"))?;
@@ -712,20 +1142,97 @@ pub fn retile(
     Ok((new_vt, chunk_bytes))
 }
 
-/// Read a `TArray<u32>` at `*pos`: `i32 count` then `count` u32 elements.
-fn read_u32_array(b: &[u8], pos: &mut usize) -> Result<Vec<u32>> {
-    let count = rd_i32(b, *pos)?;
-    *pos += 4;
-    if count < 0 {
-        return Err(corrupt("negative TArray<u32> count in VT block"));
+/// Validate an attacker-controlled element count before it reaches
+/// `Vec::with_capacity`. Both checks matter: remaining bytes prevent an
+/// immediate oversized reservation from a truncated input, while the semantic
+/// ceiling also bounds a genuinely large input buffer.
+fn checked_count_for_remaining(
+    b: &[u8],
+    pos: usize,
+    count: usize,
+    minimum_element_bytes: usize,
+    semantic_limit: usize,
+    context: &str,
+) -> Result<usize> {
+    if count > semantic_limit {
+        return Err(corrupt(&format!(
+            "{context} count {count} exceeds limit {semantic_limit}"
+        )));
     }
-    let n = count as usize;
+    let required = count
+        .checked_mul(minimum_element_bytes)
+        .ok_or_else(|| corrupt(&format!("{context} byte count overflows")))?;
+    let remaining = b
+        .len()
+        .checked_sub(pos)
+        .ok_or_else(|| corrupt(&format!("{context} starts past end")))?;
+    if required > remaining {
+        return Err(corrupt(&format!(
+            "{context} needs at least {required} bytes for {count} elements, only {remaining} remain"
+        )));
+    }
+    Ok(count)
+}
+
+/// Read a `TArray<u32>` at `*pos`: `i32 count` then `count` u32 elements.
+fn read_u32_array(
+    b: &[u8],
+    pos: &mut usize,
+    context: &str,
+    semantic_limit: usize,
+) -> Result<Vec<u32>> {
+    let count = rd_i32(b, *pos)?;
+    *pos = pos
+        .checked_add(4)
+        .ok_or_else(|| corrupt(&format!("{context} count position overflows")))?;
+    if count < 0 {
+        return Err(corrupt(&format!("negative {context} count in VT block")));
+    }
+    let n = checked_count_for_remaining(
+        b,
+        *pos,
+        count as usize,
+        std::mem::size_of::<u32>(),
+        semantic_limit,
+        context,
+    )?;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         out.push(rd_u32(b, *pos)?);
-        *pos += 4;
+        *pos = pos
+            .checked_add(4)
+            .ok_or_else(|| corrupt(&format!("{context} element position overflows")))?;
     }
     Ok(out)
+}
+
+/// `read_fstring` supports unbounded UTF-16 lengths internally. VT layer names
+/// are pixel-format identifiers, so preflight their serialized length here
+/// before calling it and before its UTF-16 `Vec::with_capacity` path.
+fn read_vt_layer_type(b: &[u8], pos: &mut usize) -> Result<String> {
+    let encoded_count = rd_i32(b, *pos)?;
+    let payload_pos = pos
+        .checked_add(4)
+        .ok_or_else(|| corrupt("VT LayerType count position overflows"))?;
+    let (code_units, unit_bytes) = if encoded_count >= 0 {
+        (encoded_count as usize, 1usize)
+    } else {
+        let positive = encoded_count
+            .checked_neg()
+            .ok_or_else(|| corrupt("VT LayerType code-unit count overflows"))?;
+        (positive as usize, 2usize)
+    };
+    checked_count_for_remaining(
+        b,
+        payload_pos,
+        code_units,
+        unit_bytes,
+        MAX_VT_LAYER_TYPE_CODE_UNITS,
+        "VT LayerType",
+    )?;
+    let (value, next) = read_fstring(b, *pos)?;
+    *pos = next;
+    Ok(value)
 }
 
 /// Write a `TArray<u32>`: `i32 count` then `count` u32 elements.
@@ -743,7 +1250,7 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     *pos += 4;
     let num_layers = rd_u32(b, *pos)?;
     *pos += 4;
-    if num_layers > 64 {
+    if num_layers as usize > MAX_VT_LAYERS {
         return Err(corrupt("implausible VT NumLayers"));
     }
     let width_in_blocks = rd_u32(b, *pos)?;
@@ -755,11 +1262,12 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     let tile_border_size = rd_u32(b, *pos)?;
     *pos += 4;
 
-    let tile_data_offset_per_layer = read_u32_array(b, pos)?;
+    let tile_data_offset_per_layer =
+        read_u32_array(b, pos, "VT TileDataOffsetPerLayer", MAX_VT_LAYERS)?;
 
     let num_mips = rd_u32(b, *pos)?;
     *pos += 4;
-    if num_mips > 32 {
+    if num_mips as usize > MAX_VT_MIPS {
         return Err(corrupt("implausible VT NumMips"));
     }
     let width = rd_u32(b, *pos)?;
@@ -767,8 +1275,8 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     let height = rd_u32(b, *pos)?;
     *pos += 4;
 
-    let chunk_index_per_mip = read_u32_array(b, pos)?;
-    let base_offset_per_mip = read_u32_array(b, pos)?;
+    let chunk_index_per_mip = read_u32_array(b, pos, "VT ChunkIndexPerMip", MAX_VT_MIPS)?;
+    let base_offset_per_mip = read_u32_array(b, pos, "VT BaseOffsetPerMip", MAX_VT_MIPS)?;
 
     // TileOffsetData is a `TArray<FVirtualTextureTileOffsetData>`: an i32 count
     // (== NumMips for non-legacy) then the structs. The count prefix is REAL on
@@ -778,7 +1286,17 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     if tile_offset_count < 0 {
         return Err(corrupt("negative VT TileOffsetData count"));
     }
-    let mut tile_offset_data = Vec::with_capacity(tile_offset_count as usize);
+    // Each entry has three u32 fields plus two empty-array count prefixes at
+    // minimum (20 bytes). Validate that lower bound before reserving structs.
+    let tile_offset_count = checked_count_for_remaining(
+        b,
+        *pos,
+        tile_offset_count as usize,
+        5 * std::mem::size_of::<u32>(),
+        MAX_VT_MIPS,
+        "VT TileOffsetData",
+    )?;
+    let mut tile_offset_data = Vec::with_capacity(tile_offset_count);
     for _ in 0..tile_offset_count {
         let w = rd_u32(b, *pos)?;
         *pos += 4;
@@ -786,8 +1304,8 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
         *pos += 4;
         let max_address = rd_u32(b, *pos)?;
         *pos += 4;
-        let addresses = read_u32_array(b, pos)?;
-        let offsets = read_u32_array(b, pos)?;
+        let addresses = read_u32_array(b, pos, "VT Addresses", MAX_VT_OFFSET_RUNS)?;
+        let offsets = read_u32_array(b, pos, "VT Offsets", MAX_VT_OFFSET_RUNS)?;
         tile_offset_data.push(VtTileOffset {
             width: w,
             height: h,
@@ -798,26 +1316,44 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     }
 
     // Legacy-only arrays (empty in the non-legacy form).
-    let tile_index_per_chunk = read_u32_array(b, pos)?;
-    let tile_index_per_mip = read_u32_array(b, pos)?;
-    let tile_offset_in_chunk = read_u32_array(b, pos)?;
+    let tile_index_per_chunk = read_u32_array(b, pos, "VT TileIndexPerChunk", MAX_VT_CHUNKS)?;
+    let tile_index_per_mip = read_u32_array(b, pos, "VT TileIndexPerMip", MAX_VT_MIPS)?;
+    let tile_offset_in_chunk =
+        read_u32_array(b, pos, "VT TileOffsetInChunk", MAX_VT_LEGACY_TILE_ENTRIES)?;
 
-    let mut layer_types = Vec::with_capacity(num_layers as usize);
-    for _ in 0..num_layers {
-        let (s, next) = read_fstring(b, *pos)?;
-        *pos = next;
-        layer_types.push(s);
+    let layer_count = checked_count_for_remaining(
+        b,
+        *pos,
+        num_layers as usize,
+        std::mem::size_of::<i32>(),
+        MAX_VT_LAYERS,
+        "VT LayerTypes",
+    )?;
+    let mut layer_types = Vec::with_capacity(layer_count);
+    for _ in 0..layer_count {
+        layer_types.push(read_vt_layer_type(b, pos)?);
     }
 
-    let mut layer_fallback_colors = Vec::with_capacity(num_layers as usize);
-    for _ in 0..num_layers {
+    checked_count_for_remaining(
+        b,
+        *pos,
+        layer_count,
+        16,
+        MAX_VT_LAYERS,
+        "VT LayerFallbackColors",
+    )?;
+    let mut layer_fallback_colors = Vec::with_capacity(layer_count);
+    for _ in 0..layer_count {
+        let end = pos
+            .checked_add(16)
+            .ok_or_else(|| corrupt("VT LayerFallbackColor position overflows"))?;
         let s = b
-            .get(*pos..*pos + 16)
+            .get(*pos..end)
             .ok_or_else(|| corrupt("VT LayerFallbackColor runs past end"))?;
         let mut c = [0u8; 16];
         c.copy_from_slice(s);
         layer_fallback_colors.push(c);
-        *pos += 16;
+        *pos = end;
     }
 
     // Chunks: i32 count then the chunk structs.
@@ -826,7 +1362,22 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
     if chunk_count < 0 {
         return Err(corrupt("negative VT chunk count"));
     }
-    let mut chunks = Vec::with_capacity(chunk_count as usize);
+    let minimum_chunk_bytes = 32usize
+        .checked_add(
+            layer_count
+                .checked_mul(5)
+                .ok_or_else(|| corrupt("VT chunk codec byte count overflows"))?,
+        )
+        .ok_or_else(|| corrupt("VT minimum chunk byte count overflows"))?;
+    let chunk_count = checked_count_for_remaining(
+        b,
+        *pos,
+        chunk_count as usize,
+        minimum_chunk_bytes,
+        MAX_VT_CHUNKS,
+        "VT Chunks",
+    )?;
+    let mut chunks = Vec::with_capacity(chunk_count);
     for _ in 0..chunk_count {
         let hash_slice = b
             .get(*pos..*pos + 20)
@@ -840,8 +1391,9 @@ pub fn parse(b: &[u8], pos: &mut usize) -> Result<VtData> {
         let codec_payload_size = rd_u32(b, *pos)?;
         *pos += 4;
 
-        let mut codec = Vec::with_capacity(num_layers as usize);
-        for _ in 0..num_layers {
+        checked_count_for_remaining(b, *pos, layer_count, 5, MAX_VT_LAYERS, "VT chunk codecs")?;
+        let mut codec = Vec::with_capacity(layer_count);
+        for _ in 0..layer_count {
             let codec_type = *b
                 .get(*pos)
                 .ok_or_else(|| corrupt("VT chunk CodecType runs past end"))?;
@@ -936,6 +1488,353 @@ pub fn serialize_into(out: &mut Vec<u8>, vt: &VtData) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_preview_vt(
+        tile_size: u32,
+        border: u32,
+        grid_width: u32,
+        grid_height: u32,
+        logical_width: u32,
+        logical_height: u32,
+    ) -> VtData {
+        VtData {
+            b_cooked: 1,
+            num_layers: 1,
+            width_in_blocks: grid_width,
+            height_in_blocks: grid_height,
+            tile_size,
+            tile_border_size: border,
+            tile_data_offset_per_layer: vec![8],
+            num_mips: 1,
+            width: logical_width,
+            height: logical_height,
+            chunk_index_per_mip: vec![0],
+            base_offset_per_mip: vec![0],
+            tile_offset_data: vec![VtTileOffset {
+                width: grid_width,
+                height: grid_height,
+                max_address: 1,
+                addresses: vec![0],
+                offsets: vec![0],
+            }],
+            tile_index_per_chunk: vec![],
+            tile_index_per_mip: vec![],
+            tile_offset_in_chunk: vec![],
+            layer_types: vec!["PF_DXT1".to_string()],
+            layer_fallback_colors: vec![[0; 16]],
+            chunks: vec![],
+        }
+    }
+
+    fn synthetic_retile_vt() -> VtData {
+        let mut vt = synthetic_preview_vt(4, 0, 1, 1, 4, 4);
+        vt.chunks.push(VtChunk {
+            bulk_data_hash: [0; 20],
+            size_in_bytes: 8,
+            codec_payload_size: 0,
+            codec: vec![(4, 0)],
+            data_resource_index: 0,
+        });
+        vt
+    }
+
+    fn synthetic_chunk(size_in_bytes: u32) -> VtChunk {
+        VtChunk {
+            bulk_data_hash: [0; 20],
+            size_in_bytes,
+            codec_payload_size: 0,
+            codec: vec![(4, 0)],
+            data_resource_index: 0,
+        }
+    }
+
+    #[test]
+    fn serialized_count_preflight_enforces_remaining_limit_and_overflow() {
+        let bytes = [0u8; 16];
+        assert_eq!(
+            checked_count_for_remaining(&bytes, 0, 4, 4, 4, "test").unwrap(),
+            4
+        );
+
+        let error = checked_count_for_remaining(&bytes[..15], 0, 4, 4, 4, "test")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("only 15 remain"), "{error}");
+
+        let error = checked_count_for_remaining(&bytes, 0, 5, 1, 4, "test")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("count 5 exceeds limit 4"), "{error}");
+
+        let error = checked_count_for_remaining(&bytes, 0, 2, usize::MAX, usize::MAX, "test")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("byte count overflows"), "{error}");
+    }
+
+    #[test]
+    fn u32_array_rejects_huge_and_maximum_truncated_counts_before_reserve() {
+        let mut huge = i32::MAX.to_le_bytes().to_vec();
+        let mut pos = 0;
+        let error = read_u32_array(&huge, &mut pos, "test array", MAX_VT_OFFSET_RUNS)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exceeds limit"), "{error}");
+
+        huge[..4].copy_from_slice(&(MAX_VT_OFFSET_RUNS as i32).to_le_bytes());
+        pos = 0;
+        let error = read_u32_array(&huge, &mut pos, "test array", MAX_VT_OFFSET_RUNS)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("only 0 remain"), "{error}");
+    }
+
+    #[test]
+    fn parser_rejects_huge_struct_and_chunk_counts_before_reserve() {
+        let vt = synthetic_retile_vt();
+        let mut bytes = Vec::new();
+        serialize_into(&mut bytes, &vt).unwrap();
+
+        // Header (24), TileDataOffsetPerLayer (8), mip header (12), and the two
+        // one-element per-mip arrays (8 each) place TileOffsetData count at 60.
+        let mut huge_tile_offsets = bytes.clone();
+        huge_tile_offsets[60..64].copy_from_slice(&i32::MAX.to_le_bytes());
+        let error = parse(&huge_tile_offsets, &mut 0).unwrap_err().to_string();
+        assert!(error.contains("VT TileOffsetData count"), "{error}");
+        assert!(error.contains("exceeds limit"), "{error}");
+
+        let chunk_count_offset = bytes.len() - 4 - (20 + 4 + 4 + 5 + 4);
+        let mut huge_chunks = bytes;
+        huge_chunks[chunk_count_offset..chunk_count_offset + 4]
+            .copy_from_slice(&i32::MAX.to_le_bytes());
+        let error = parse(&huge_chunks, &mut 0).unwrap_err().to_string();
+        assert!(error.contains("VT Chunks count"), "{error}");
+        assert!(error.contains("exceeds limit"), "{error}");
+    }
+
+    #[test]
+    fn layer_type_rejects_minimum_signed_count_without_negation_overflow() {
+        let bytes = i32::MIN.to_le_bytes();
+        let error = read_vt_layer_type(&bytes, &mut 0).unwrap_err().to_string();
+        assert!(error.contains("code-unit count overflows"), "{error}");
+    }
+
+    #[test]
+    fn retile_chunk_budget_accepts_exact_limit_and_rejects_excess() {
+        let exact =
+            checked_retile_chunk_lengths(&[synthetic_chunk(MAX_VT_RETILE_CHUNK_BYTES as u32)])
+                .unwrap();
+        assert_eq!(exact, vec![MAX_VT_RETILE_CHUNK_BYTES]);
+
+        let over = [
+            synthetic_chunk(MAX_VT_RETILE_CHUNK_BYTES as u32),
+            synthetic_chunk(1),
+        ];
+        let error = checked_retile_chunk_lengths(&over).unwrap_err().to_string();
+        assert!(error.contains("aggregate chunk bytes"), "{error}");
+        assert!(error.contains("exceed budget"), "{error}");
+    }
+
+    #[test]
+    fn retile_chunk_count_is_bounded_before_payload_allocation() {
+        let chunks = vec![synthetic_chunk(0); MAX_VT_CHUNKS + 1];
+        let error = checked_retile_chunk_lengths(&chunks)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("chunk count"), "{error}");
+        assert!(error.contains("exceeds limit"), "{error}");
+    }
+
+    #[test]
+    fn retile_rejects_physical_and_packed_tile_overflow() {
+        let mut physical = synthetic_retile_vt();
+        physical.width = 1;
+        physical.height = 1;
+        physical.tile_size = u32::MAX;
+        physical.tile_border_size = 1;
+        let error = retile(&[0; 4], 1, 1, &physical, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("physical tile size overflow"), "{error}");
+
+        let mut packed = physical;
+        packed.tile_border_size = 0;
+        let error = retile(&[0; 4], 1, 1, &packed, "PF_DXT5")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("packed tile byte length overflow")
+                || error.contains("block-grid rounding overflow")
+                || error.contains("physical tile size does not fit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn retile_enforces_preview_memory_budget_before_tile_allocation() {
+        let mut vt = synthetic_retile_vt();
+        vt.width = 1;
+        vt.height = 1;
+        vt.tile_size = 1;
+        vt.tile_border_size = 4096;
+        let error = retile(&[0; 4], 1, 1, &vt, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("physical RGBA tile exceeds 134217728 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn retile_rejects_excess_mip_count_before_pyramid_reserve() {
+        let mut vt = synthetic_retile_vt();
+        vt.num_mips = (MAX_VT_MIPS + 1) as u32;
+        vt.tile_offset_data = vec![vt.tile_offset_data[0].clone(); MAX_VT_MIPS + 1];
+        vt.chunk_index_per_mip = vec![0; MAX_VT_MIPS + 1];
+        vt.base_offset_per_mip = vec![0; MAX_VT_MIPS + 1];
+        let error = retile(&[0; 4 * 4 * 4], 4, 4, &vt, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("NumMips 33 exceeds limit 32"), "{error}");
+    }
+
+    #[test]
+    fn preview_rejects_oversized_padded_grid_before_allocation() {
+        // Logical clipping to 1x1 must not hide a 32768x32768 padded grid.
+        let vt = synthetic_preview_vt(128, 0, 256, 256, 1, 1);
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("padded RGBA grid exceeds 134217728 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_oversized_physical_tile_before_allocation() {
+        // A hostile border can make one temporary tile enormous even when both
+        // the logical output and padded grid are a single pixel.
+        let vt = synthetic_preview_vt(1, 4096, 1, 1, 1, 1);
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("RGBA tile exceeds 134217728 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_tile_and_grid_arithmetic_overflow() {
+        let physical_overflow = synthetic_preview_vt(u32::MAX, 1, 1, 1, 1, 1);
+        let error = validate_layer0_preview(&physical_overflow, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("physical tile size overflow"), "{error}");
+
+        let mut grid_overflow = synthetic_preview_vt(2, 0, 1, 1, 1, 1);
+        grid_overflow.tile_offset_data[0].width = u32::MAX;
+        let error = validate_layer0_preview(&grid_overflow, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("padded pixel width overflow"), "{error}");
+    }
+
+    #[test]
+    fn physical_tile_decoder_enforces_preview_cap_at_its_boundary() {
+        let error = decode_bcn_tile(&[], 8192, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("RGBA tile exceeds 134217728 bytes"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_max_address_unrelated_to_geometry_before_walk() {
+        let mut vt = synthetic_preview_vt(1, 0, 1, 1, 1, 1);
+        vt.tile_offset_data[0].max_address = u32::MAX;
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("MaxAddress 4294967295 does not match 1x1 tile geometry (expected 1)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_morton_address_space_over_work_budget() {
+        // UE's padded Morton space for a 1x2048 grid is 2048^2 addresses even
+        // though the real geometry contains only 2048 tiles.
+        let mut vt = synthetic_preview_vt(1, 0, 1, 2048, 1, 2048);
+        vt.tile_offset_data[0].max_address = 2048 * 2048;
+        vt.tile_offset_data[0].offsets[0] = VT_INVALID_OFFSET;
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("Morton address work 4194304 exceeds budget 2097152"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_present_tiles_in_morton_padding() {
+        // A 1x2 grid has a padded 2x2 Morton address space. Address 1 resolves
+        // to (1, 0), outside the declared one-tile-wide geometry.
+        let mut vt = synthetic_preview_vt(1, 0, 1, 2, 1, 2);
+        vt.tile_offset_data[0].max_address = 4;
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("present Morton address 1 resolves outside 1x2 tile geometry"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn preview_rejects_malformed_offset_runs() {
+        let mut vt = synthetic_preview_vt(1, 0, 1, 1, 1, 1);
+        vt.tile_offset_data[0].addresses = vec![0, 0];
+        vt.tile_offset_data[0].offsets = vec![0, 0];
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("offset run addresses are not strictly increasing"),
+            "{error}"
+        );
+
+        vt.tile_offset_data[0].addresses = vec![0];
+        vt.tile_offset_data[0].offsets.clear();
+        let error = decode_layer0(&vt, &[], "PF_DXT1").unwrap_err().to_string();
+        assert!(
+            error.contains("address/offset run counts differ"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn address_validation_preserves_sparse_rectangular_padding() {
+        // Morton addresses 0 and 2 are the real tiles (0,0) and (0,1); 1 and 3
+        // are padding for the power-of-two 2x2 address square.
+        let mip = VtTileOffset {
+            width: 1,
+            height: 2,
+            max_address: 4,
+            addresses: vec![0, 1, 2, 3],
+            offsets: vec![0, VT_INVALID_OFFSET, 1, VT_INVALID_OFFSET],
+        };
+        assert_eq!(validate_mip_address_space(&mip, "test mip", 0).unwrap(), 4);
+    }
+
+    #[test]
+    fn retile_rejects_morton_address_space_over_work_budget() {
+        let mut vt = synthetic_preview_vt(1, 0, 1, 2048, 1, 2048);
+        vt.tile_offset_data[0].max_address = 2048 * 2048;
+        vt.tile_offset_data[0].offsets[0] = VT_INVALID_OFFSET;
+        let rgba = vec![0u8; 2048 * 4];
+        let error = retile(&rgba, 1, 2048, &vt, "PF_DXT1")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Morton address work 4194304 exceeds budget 2097152"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn reverse_morton2_unpacks_even_bits() {

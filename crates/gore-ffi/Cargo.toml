@@ -24,6 +24,7 @@ gore-tex = { path = "../gore-tex" }
 gore-as = { path = "../gore-as" }
 gore-vo = { path = "../gore-vo" }
 image = "0.25"
+base64 = "0.22"
 cap-std = "4"
 getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }

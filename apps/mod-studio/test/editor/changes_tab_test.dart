@@ -13,7 +13,6 @@ import 'package:gore_mod/loc/domain/loc_catalog_provider.dart';
 import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/scripts/domain/script_modules_provider.dart';
-import 'package:gore_mod/textures/domain/texture_index_provider.dart';
 import 'package:gore_mod/textures/domain/texture_replacements_notifier.dart';
 
 void main() {
@@ -95,7 +94,7 @@ void main() {
     expect(find.text('Items (1)'), findsOneWidget);
     expect(find.text('Dialogs (1)'), findsOneWidget);
     expect(find.text('Audio (0)'), findsOneWidget);
-    expect(find.text('Textures (1)'), findsOneWidget);
+    expect(find.text('Textures (1)'), findsNothing);
     expect(find.text('Scripts (0)'), findsOneWidget);
 
     // Default section is "All": the flat OverridesPanel with its search
@@ -276,7 +275,7 @@ void main() {
     container.read(textureReplacementsProvider.notifier).clearAll();
     await tester.pumpAndSettle();
     expect(find.text('All (1)'), findsOneWidget);
-    expect(find.text('Textures (0)'), findsOneWidget);
+    expect(find.text('Textures (0)'), findsNothing);
     // The All list still shows the one remaining change.
     expect(find.text('ItFo_Apple.m_Value'), findsOneWidget);
   });
@@ -290,13 +289,6 @@ void main() {
     // Initial "All" section: no asset-backed view embedded, matching the
     // provider's null default without any initState write.
     expect(container.read(changesAssetSectionProvider), isNull);
-
-    await tester.tap(find.text('Textures (1)'));
-    await tester.pumpAndSettle();
-    expect(
-      container.read(changesAssetSectionProvider),
-      ChangesAssetSection.textures,
-    );
 
     // Every non-asset section publishes null again.
     await tester.tap(find.text('Items (1)'));
@@ -314,14 +306,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(container.read(changesAssetSectionProvider), isNull);
 
-    // Re-selecting an asset section (re-entry path) publishes it again.
-    await tester.tap(find.text('Textures (1)'));
-    await tester.pumpAndSettle();
-    expect(
-      container.read(changesAssetSectionProvider),
-      ChangesAssetSection.textures,
-    );
-
     await tester.tap(find.text('Dialogs (1)'));
     await tester.pumpAndSettle();
     expect(container.read(changesAssetSectionProvider), isNull);
@@ -338,17 +322,54 @@ void main() {
     expect(container.read(changesAssetSectionProvider), isNull);
   });
 
+  testWidgets('re-entering the Scripts section refreshes its provider', (
+    tester,
+  ) async {
+    var scriptBuilds = 0;
+    final container = ProviderContainer(
+      overrides: [
+        scriptModulesProvider.overrideWith((ref) {
+          scriptBuilds++;
+          return Future.value(const <ScriptModuleInfo>[]);
+        }),
+      ],
+    );
+    addTearDown(container.dispose);
+    // Keep the autoDispose provider alive across section switches so a
+    // refetch on re-entry can only come from an explicit invalidate.
+    container.listen(scriptModulesProvider, (_, _) {});
+    await pumpHarness(tester, container);
+    expect(scriptBuilds, 1);
+
+    // The first Scripts display is fresh, so it does not double-fetch.
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 1);
+
+    // Re-entry refetches after a possible deploy, undeploy, or game patch.
+    await tester.tap(find.text('All (0)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Scripts (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 2);
+
+    // Audio re-entry deliberately refreshes nothing (parity with main-tab
+    // re-entry, which doesn't invalidate audio providers either).
+    await tester.tap(find.text('Audio (0)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All (0)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Audio (0)'));
+    await tester.pumpAndSettle();
+    expect(scriptBuilds, 2);
+  });
+
   testWidgets(
-    're-entering the Textures/Scripts sections refreshes their providers',
+    'first Scripts entry refreshes when the standalone tab loaded the provider',
     (tester) async {
-      var textureBuilds = 0;
       var scriptBuilds = 0;
       final container = ProviderContainer(
         overrides: [
-          textureIndexProvider.overrideWith((ref) {
-            textureBuilds++;
-            return Future.value(const <String, String>{});
-          }),
           scriptModulesProvider.overrideWith((ref) {
             scriptBuilds++;
             return Future.value(const <ScriptModuleInfo>[]);
@@ -356,98 +377,20 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
-      // Stand-in for the keep-alive MAIN tabs, which watch the same providers
-      // in the real app: keeps both autoDispose providers alive across section
-      // switches, so a refetch on re-entry can only come from an explicit
-      // invalidate — not from autoDispose disposal/re-creation.
-      container.listen(textureIndexProvider, (_, _) {});
-      container.listen(scriptModulesProvider, (_, _) {});
-      await pumpHarness(tester, container);
-      expect(textureBuilds, 1);
-      expect(scriptBuilds, 1);
-
-      // FIRST entry into each section — and the kinds' first display anywhere
-      // this session: no invalidate on top of the fresh build (no double
-      // fetch) — AssetEntryTracker first-display semantics.
-      await tester.tap(find.text('Textures (0)'));
-      await tester.pumpAndSettle();
-      expect(textureBuilds, 1);
-      await tester.tap(find.text('Scripts (0)'));
-      await tester.pumpAndSettle();
-      expect(scriptBuilds, 1);
-      expect(textureBuilds, 1);
-
-      // RE-entry: the section's data provider re-evaluates (fresh after a
-      // deploy/undeploy); the other section's provider is untouched.
-      await tester.tap(find.text('Textures (0)'));
-      await tester.pumpAndSettle();
-      expect(textureBuilds, 2);
-      expect(scriptBuilds, 1);
-      await tester.tap(find.text('Scripts (0)'));
-      await tester.pumpAndSettle();
-      expect(scriptBuilds, 2);
-      expect(textureBuilds, 2);
-
-      // Audio re-entry deliberately refreshes nothing (parity with main-tab
-      // re-entry, which doesn't invalidate audio providers either).
-      await tester.tap(find.text('Audio (0)'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('All (0)'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Audio (0)'));
-      await tester.pumpAndSettle();
-      expect(textureBuilds, 2);
-      expect(scriptBuilds, 2);
-    },
-  );
-
-  testWidgets(
-    'first section entry refreshes when the standalone tab already loaded '
-    'the shared provider',
-    (tester) async {
-      var textureBuilds = 0;
-      var scriptBuilds = 0;
-      final container = ProviderContainer(
-        overrides: [
-          textureIndexProvider.overrideWith((ref) {
-            textureBuilds++;
-            return Future.value(const <String, String>{});
-          }),
-          scriptModulesProvider.overrideWith((ref) {
-            scriptBuilds++;
-            return Future.value(const <ScriptModuleInfo>[]);
-          }),
-        ],
-      );
-      addTearDown(container.dispose);
-      // Stand-in for the standalone Textures/Scripts MAIN tabs having been
-      // opened before this tab: they built the shared autoDispose providers,
-      // keep them alive across tab switches (the listens here), and marked
-      // both kinds as displayed via handleMainTabEntered's tracker consult.
-      container.listen(textureIndexProvider, (_, _) {});
+      // Stand in for the standalone Scripts tab having built and retained the
+      // shared provider, then marked it displayed through the entry tracker.
       container.listen(scriptModulesProvider, (_, _) {});
       final tracker = container.read(assetEntryTrackerProvider);
-      tracker.shouldInvalidateOnEntry(AssetKind.textureIndex);
       tracker.shouldInvalidateOnEntry(AssetKind.scriptModules);
       await pumpHarness(tester, container);
-      expect(textureBuilds, 1);
       expect(scriptBuilds, 1);
 
-      // A deploy/undeploy/game patch happens here: the still-alive providers
-      // now hold stale data.
+      // A deploy, undeploy, or patch can now make the retained value stale.
 
-      // FIRST entry into each section must refetch. (With the per-surface
-      // visited set these first entries counted as "fresh build" and the
-      // refresh was skipped — the embeds showed the stale values.)
-      await tester.tap(find.text('Textures (0)'));
-      await tester.pumpAndSettle();
-      expect(textureBuilds, 2);
-      expect(scriptBuilds, 1);
-
+      // The first Changes-side Scripts entry must therefore refetch.
       await tester.tap(find.text('Scripts (0)'));
       await tester.pumpAndSettle();
       expect(scriptBuilds, 2);
-      expect(textureBuilds, 2);
     },
   );
 }

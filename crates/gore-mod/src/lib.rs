@@ -5365,9 +5365,11 @@ fn prepare_texture_component(
     // Only use the cached index if it's current for this game build; a stale index
     // (game patched, .usmap/build_id changed) would map paths to outdated package
     // ids and cook the wrong texture. If stale/absent, fall back to a name scan.
+    let build_id = gore_tex::index::build_id_for(&utoc, &usmap)
+        .map_err(|e| ModError::Other(format!("texture source fingerprint: {e}")))?;
     let index = gore_tex::index::TextureIndex::load_current(
         &gore_tex::paths::texture_index_path(),
-        &gore_tex::index::build_id_for(&utoc, &usmap),
+        &build_id,
     );
     // Scope temp dirs by component index too (not just pid): a bundle with >1
     // TexturePatch must not have a later component's `remove_dir_all` wipe an earlier

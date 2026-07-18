@@ -78,7 +78,7 @@ pub enum TextureAction {
     Index {
         #[arg(long)]
         game: Option<PathBuf>,
-        /// Output path (defaults to the shared gore texture_index.json)
+        /// Output path (defaults to an immutable, generation-specific shared cache)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
     },
@@ -122,6 +122,46 @@ fn validate_triplet_name(name: &str) -> Result<()> {
             "invalid --name {name:?}: must be a single filename with no path separators or '..'"
         ),
     }
+}
+
+/// Load or build an index, then prove that the installed source generation did not change
+/// before publishing a newly-built result. Keeping the postflight check in this small helper
+/// makes the ordering independently testable without requiring a multi-gigabyte game fixture.
+fn load_or_build_generation_sealed_index<Load, Build, Observe, Publish>(
+    expected_build_id: &str,
+    load: Load,
+    build: Build,
+    observe_after: Observe,
+    publish: Publish,
+) -> Result<(gore_tex::index::TextureIndex, bool)>
+where
+    Load: FnOnce() -> Option<gore_tex::index::TextureIndex>,
+    Build: FnOnce() -> Result<gore_tex::index::TextureIndex>,
+    Observe: FnOnce() -> Result<String>,
+    Publish: FnOnce(&gore_tex::index::TextureIndex) -> Result<()>,
+{
+    let (index, built_new) = match load() {
+        Some(index) => (index, false),
+        None => (build()?, true),
+    };
+    if index.build_id != expected_build_id {
+        anyhow::bail!(
+            "texture index generation mismatch: expected {expected_build_id}, got {}",
+            index.build_id
+        );
+    }
+
+    let observed_after =
+        observe_after().context("fingerprinting installed texture generation after index scan")?;
+    if observed_after != expected_build_id {
+        anyhow::bail!(
+            "game texture generation changed while the index was being loaded; refusing to publish stale output"
+        );
+    }
+    if built_new {
+        publish(&index)?;
+    }
+    Ok((index, built_new))
 }
 
 pub fn run(action: TextureAction) -> Result<()> {
@@ -339,12 +379,45 @@ pub fn run(action: TextureAction) -> Result<()> {
             let game = gore_loc::config::game_root(game)?;
             let utoc = gore_tex::paths::main_container(&game)?;
             let usmap = gore_tex::paths::usmap(&game)?;
-            let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
-            eprintln!("scanning container to build the texture index (a few minutes)...");
-            let idx = gore_tex::index::build_index(&utoc, &build_id)?;
-            let path = out.unwrap_or_else(gore_tex::paths::texture_index_path);
-            idx.save(&path)?;
-            println!("wrote {} ({} textures)", path.display(), idx.entries.len());
+            eprintln!("fingerprinting installed texture sources...");
+            let build_id = gore_tex::index::build_id_for(&utoc, &usmap)
+                .context("fingerprinting installed texture generation before index scan")?;
+            let managed_cache = out.is_none();
+            let path =
+                out.unwrap_or_else(|| gore_tex::paths::texture_index_path_for_build(&build_id));
+            let (idx, built_new) = load_or_build_generation_sealed_index(
+                &build_id,
+                || gore_tex::index::TextureIndex::load_current(&path, &build_id),
+                || {
+                    eprintln!(
+                        "scanning container to build the texture index (a few minutes; progress is not available yet)..."
+                    );
+                    gore_tex::index::build_index(&utoc, &build_id).map_err(anyhow::Error::from)
+                },
+                || {
+                    eprintln!("verifying installed texture generation...");
+                    gore_tex::index::build_id_for(&utoc, &usmap).map_err(anyhow::Error::from)
+                },
+                |index| {
+                    if managed_cache {
+                        index
+                            .save_atomic_immutable(&path)
+                            .context("publishing generation-specific texture index cache")
+                    } else {
+                        index.save(&path).context("writing texture index output")
+                    }
+                },
+            )?;
+            if managed_cache {
+                gore_tex::index::pin_and_prune_managed_texture_cache(&path)
+                    .context("retaining generation-specific texture index cache")?;
+            }
+            println!(
+                "{} {} ({} textures)",
+                if built_new { "wrote" } else { "using" },
+                path.display(),
+                idx.entries.len()
+            );
             Ok(())
         }
         TextureAction::Undeploy { game, name } => {
@@ -355,5 +428,89 @@ pub fn run(action: TextureAction) -> Result<()> {
             println!("undeployed {name} (removed from ~mods).");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    fn index(build_id: &str) -> gore_tex::index::TextureIndex {
+        gore_tex::index::TextureIndex {
+            build_id: build_id.to_owned(),
+            entries: [("/Game/T_Test".to_owned(), 7)].into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn index_hotfix_race_is_rejected_before_publish() {
+        let published = Cell::new(false);
+        let result = load_or_build_generation_sealed_index(
+            "generation-before",
+            || None,
+            || Ok(index("generation-before")),
+            || Ok("generation-after".to_owned()),
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("generation changed"));
+        assert!(!published.get());
+    }
+
+    #[test]
+    fn newly_built_index_is_published_only_after_postflight() {
+        let events = RefCell::new(Vec::new());
+        let (_, built_new) = load_or_build_generation_sealed_index(
+            "stable",
+            || None,
+            || {
+                events.borrow_mut().push("build");
+                Ok(index("stable"))
+            },
+            || {
+                events.borrow_mut().push("postflight");
+                Ok("stable".to_owned())
+            },
+            |_| {
+                events.borrow_mut().push("publish");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(built_new);
+        assert_eq!(*events.borrow(), ["build", "postflight", "publish"]);
+    }
+
+    #[test]
+    fn current_finished_index_is_reused_without_build_or_publish() {
+        let built = Cell::new(false);
+        let published = Cell::new(false);
+        let (loaded, built_new) = load_or_build_generation_sealed_index(
+            "stable",
+            || Some(index("stable")),
+            || {
+                built.set(true);
+                Ok(index("stable"))
+            },
+            || Ok("stable".to_owned()),
+            |_| {
+                published.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(loaded.build_id, "stable");
+        assert!(!built_new);
+        assert!(!built.get());
+        assert!(!published.get());
     }
 }

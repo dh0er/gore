@@ -14,6 +14,7 @@ void main() {
 
     expect(find.text('LIBRARY BODY'), findsOneWidget);
     expect(find.text('ITEMS BODY'), findsNothing);
+    expect(find.text('TEXTURES BODY'), findsNothing);
     expect(find.text('DATAASSET BODY'), findsNothing);
 
     await tester.tap(find.text('Items'));
@@ -21,8 +22,18 @@ void main() {
 
     expect(find.text('LIBRARY BODY'), findsNothing);
     expect(find.text('ITEMS BODY'), findsOneWidget);
+    expect(find.text('TEXTURES BODY'), findsNothing);
     expect(find.text('DATAASSET BODY'), findsNothing);
 
+    await tester.tap(find.text('Textures'));
+    await tester.pump();
+
+    expect(find.text('LIBRARY BODY'), findsNothing);
+    expect(find.text('ITEMS BODY'), findsNothing);
+    expect(find.text('TEXTURES BODY'), findsOneWidget);
+    expect(find.text('DATAASSET BODY'), findsNothing);
+
+    await tester.ensureVisible(find.text('Verified edits'));
     await tester.tap(find.text('Verified edits'));
     await tester.pump();
 
@@ -37,11 +48,13 @@ void main() {
       findsOneWidget,
     );
 
+    await tester.ensureVisible(find.text('My mod'));
     await tester.tap(find.text('My mod'));
     await tester.pump();
 
     expect(find.text('LIBRARY BODY'), findsOneWidget);
     expect(find.text('ITEMS BODY', skipOffstage: false), findsOneWidget);
+    expect(find.text('TEXTURES BODY', skipOffstage: false), findsOneWidget);
     expect(find.text('DATAASSET BODY', skipOffstage: false), findsOneWidget);
   });
 
@@ -57,6 +70,7 @@ void main() {
     expect(find.text('LIBRARY BODY'), findsNothing);
     expect(find.text('LIBRARY BODY', skipOffstage: false), findsNothing);
     expect(find.text('ITEMS BODY', skipOffstage: false), findsNothing);
+    expect(find.text('TEXTURES BODY', skipOffstage: false), findsNothing);
   });
 
   testWidgets('accepts an explicit Items route before first build', (
@@ -69,6 +83,21 @@ void main() {
 
     expect(find.text('ITEMS BODY'), findsOneWidget);
     expect(find.text('LIBRARY BODY', skipOffstage: false), findsNothing);
+    expect(find.text('TEXTURES BODY', skipOffstage: false), findsNothing);
+    expect(find.text('DATAASSET BODY', skipOffstage: false), findsNothing);
+  });
+
+  testWidgets('accepts an explicit Textures route before first build', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const _Harness(initialSecondary: 'textures'));
+
+    await tester.tap(find.text('OPEN CONTENT'));
+    await tester.pump();
+
+    expect(find.text('TEXTURES BODY'), findsOneWidget);
+    expect(find.text('LIBRARY BODY', skipOffstage: false), findsNothing);
+    expect(find.text('ITEMS BODY', skipOffstage: false), findsNothing);
     expect(find.text('DATAASSET BODY', skipOffstage: false), findsNothing);
   });
 
@@ -150,9 +179,11 @@ class _Harness extends StatelessWidget {
               location: location,
               libraryLabel: 'My mod',
               itemsLabel: 'Items',
+              texturesLabel: 'Textures',
               dataAssetsLabel: 'Verified edits',
               library: const Text('LIBRARY BODY'),
               items: const Text('ITEMS BODY'),
+              textures: const Text('TEXTURES BODY'),
               dataAssets: const Text('DATAASSET BODY'),
             ),
           ),
@@ -246,9 +277,11 @@ class _IdentityHarnessState extends State<_IdentityHarness> {
         ),
         libraryLabel: 'My mod',
         itemsLabel: 'Items',
+        texturesLabel: 'Textures',
         dataAssetsLabel: 'Verified edits',
         library: const Text('LIBRARY BODY'),
         items: const _CounterBody(),
+        textures: const Text('TEXTURES BODY'),
         dataAssets: const Text('DATAASSET BODY'),
       ),
     ),

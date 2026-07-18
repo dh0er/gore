@@ -94,6 +94,14 @@ pub fn texture_index_path() -> PathBuf {
     gore_loc::paths::shared_data_dir().join("texture_index.json")
 }
 
+/// Immutable per-source cache path used by the Managed texture catalog. The source fingerprint
+/// is hashed again solely to produce one bounded, filename-safe key; it is never parsed from a
+/// path or shared with a different installed generation.
+pub fn texture_index_path_for_build(build_id: &str) -> PathBuf {
+    let key = blake3::hash(build_id.as_bytes()).to_hex();
+    gore_loc::paths::shared_data_dir().join(format!("texture-index-v2-{key}.json"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +138,19 @@ mod tests {
         // Plugin / unknown roots are not placeable -> None (caller rejects).
         assert_eq!(content_mount_rel("/MyPlugin/Foo/T_Y"), None);
         assert_eq!(content_mount_rel("NoLeadingSlash"), None);
+    }
+
+    #[test]
+    fn managed_texture_index_cache_is_bounded_and_generation_scoped() {
+        let first = texture_index_path_for_build("source-a");
+        let same = texture_index_path_for_build("source-a");
+        let second = texture_index_path_for_build("source-b");
+        assert_eq!(first, same);
+        assert_ne!(first, second);
+        let name = first.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("texture-index-v2-"));
+        assert!(name.ends_with(".json"));
+        assert_eq!(name.len(), "texture-index-v2-".len() + 64 + ".json".len());
     }
 
     #[test]

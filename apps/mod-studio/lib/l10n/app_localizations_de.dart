@@ -3229,4 +3229,126 @@ class AppLocalizationsDe extends AppLocalizations {
   String managedVoiceBuildBlockedMessage(int count) {
     return 'Der Voice-Build ist durch $count exakte Anforderungen blockiert. Es wurde kein Bundle erstellt oder bereitgestellt.';
   }
+
+  @override
+  String get managedTextureSetupTitle => 'Spielinstallation auswählen';
+
+  @override
+  String get managedTextureSetupDescription =>
+      'Die Texturen werden aus der konfigurierten Gothic-1-Remake-Installation gelesen. Weder Spiel noch Projekt werden verändert.';
+
+  @override
+  String get managedTextureSetupAction => 'Einstellungen öffnen';
+
+  @override
+  String get managedTextureLoading => 'Installierten Texturkatalog laden…';
+
+  @override
+  String get managedTextureLoadingDescription =>
+      'Der erste exakte Scan kann mehrere Minuten dauern. Mod Studio führt nur einen Scan gleichzeitig aus und reiht die letzte Aktualisierung ein.';
+
+  @override
+  String managedTextureCatalogCount(int count) {
+    return '$count installierte Texturen';
+  }
+
+  @override
+  String managedTextureSearchCount(int matches, int total) {
+    return '$matches Treffer · $total gesamt';
+  }
+
+  @override
+  String get managedTextureEmptyTitle => 'Keine Texturen gefunden';
+
+  @override
+  String get managedTextureEmptyDescription =>
+      'Der exakte installierte Katalog enthält keine Textureinträge.';
+
+  @override
+  String get managedTextureErrorTitle => 'Texturkatalog nicht verfügbar';
+
+  @override
+  String get managedTextureErrorDescription =>
+      'Der installierte Texturkatalog konnte für diesen exakten Spiel-Build nicht geladen werden.';
+
+  @override
+  String get managedTextureRetry => 'Erneut versuchen';
+
+  @override
+  String get managedTextureRefreshTooltip =>
+      'Installierten Texturkatalog aktualisieren';
+
+  @override
+  String get managedTextureSearchLabel => 'Texturen suchen';
+
+  @override
+  String get managedTextureSearchHint => 'Name oder Unreal-Asset-Pfad';
+
+  @override
+  String get managedTextureClearSearchTooltip => 'Textursuche leeren';
+
+  @override
+  String get managedTextureSelectPrompt =>
+      'Wähle eine Textur aus, um das installierte Originalbild zu prüfen.';
+
+  @override
+  String get managedTexturePreviewLoading => 'Originaltextur extrahieren…';
+
+  @override
+  String get managedTexturePreviewErrorTitle => 'Vorschau nicht verfügbar';
+
+  @override
+  String get managedTexturePreviewErrorDescription =>
+      'Die Originaltextur konnte aus dem ausgewählten Spiel-Build nicht extrahiert werden.';
+
+  @override
+  String get managedTexturePreviewRetry => 'Vorschau erneut laden';
+
+  @override
+  String get managedTextureBackToCatalog => 'Zurück zu den Texturen';
+
+  @override
+  String get managedTextureInspectionOnly =>
+      'Installierte Referenz · nur ansehen. Projekt, Spielinstallation und Spielstand werden nicht verändert.';
+
+  @override
+  String get managedTextureInstalledBadge => 'Installierte Quelle';
+
+  @override
+  String get managedTextureRegularBadge => 'Normale Textur';
+
+  @override
+  String get managedTextureVirtualBadge => 'Virtuelle Textur';
+
+  @override
+  String managedTextureVirtualLayerCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count VT-Ebenen',
+      one: '1 VT-Ebene',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedTextureMipmappedBadge => 'Mit Mipmaps';
+
+  @override
+  String get managedTextureSingleMipBadge => 'Einzelner Mip';
+
+  @override
+  String get managedTextureReplaceableBadge =>
+      'Ersetzung unterstützt · Bearbeitung noch nicht verfügbar';
+
+  @override
+  String get managedTextureNotReplaceableBadge =>
+      'Ersetzung nicht verfügbar · nur ansehen';
+
+  @override
+  String get managedTextureUnknownReplaceabilityBadge =>
+      'Ersetzung nicht qualifiziert · nur ansehen';
+
+  @override
+  String get managedTextureUnknownFormat => 'Unbekanntes Quellformat';
 }

@@ -3196,6 +3196,128 @@ class AppLocalizationsPt extends AppLocalizations {
   String managedVoiceBuildBlockedMessage(int count) {
     return 'Voice build blocked by $count exact requirements. No bundle was created or deployed.';
   }
+
+  @override
+  String get managedTextureSetupTitle => 'Choose the game installation';
+
+  @override
+  String get managedTextureSetupDescription =>
+      'Textures are read from the configured Gothic 1 Remake installation. Nothing is changed in the game or project.';
+
+  @override
+  String get managedTextureSetupAction => 'Open Settings';
+
+  @override
+  String get managedTextureLoading => 'Loading the installed texture catalog…';
+
+  @override
+  String get managedTextureLoadingDescription =>
+      'The first exact scan can take several minutes. Mod Studio runs only one scan at a time and queues the latest refresh.';
+
+  @override
+  String managedTextureCatalogCount(int count) {
+    return '$count installed textures';
+  }
+
+  @override
+  String managedTextureSearchCount(int matches, int total) {
+    return '$matches matches · $total total';
+  }
+
+  @override
+  String get managedTextureEmptyTitle => 'No textures found';
+
+  @override
+  String get managedTextureEmptyDescription =>
+      'The exact installed catalog contains no texture entries.';
+
+  @override
+  String get managedTextureErrorTitle => 'Texture catalog unavailable';
+
+  @override
+  String get managedTextureErrorDescription =>
+      'The installed texture catalog could not be loaded for this exact game build.';
+
+  @override
+  String get managedTextureRetry => 'Retry';
+
+  @override
+  String get managedTextureRefreshTooltip =>
+      'Refresh installed texture catalog';
+
+  @override
+  String get managedTextureSearchLabel => 'Search textures';
+
+  @override
+  String get managedTextureSearchHint => 'Name or Unreal asset path';
+
+  @override
+  String get managedTextureClearSearchTooltip => 'Clear texture search';
+
+  @override
+  String get managedTextureSelectPrompt =>
+      'Select a texture to inspect its original installed image.';
+
+  @override
+  String get managedTexturePreviewLoading => 'Extracting the original texture…';
+
+  @override
+  String get managedTexturePreviewErrorTitle => 'Preview unavailable';
+
+  @override
+  String get managedTexturePreviewErrorDescription =>
+      'The original texture could not be extracted from the selected game build.';
+
+  @override
+  String get managedTexturePreviewRetry => 'Retry preview';
+
+  @override
+  String get managedTextureBackToCatalog => 'Back to textures';
+
+  @override
+  String get managedTextureInspectionOnly =>
+      'Installed reference · inspect only. This does not edit the project, game installation, or a save.';
+
+  @override
+  String get managedTextureInstalledBadge => 'Installed source';
+
+  @override
+  String get managedTextureRegularBadge => 'Regular texture';
+
+  @override
+  String get managedTextureVirtualBadge => 'Virtual texture';
+
+  @override
+  String managedTextureVirtualLayerCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count VT layers',
+      one: '1 VT layer',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedTextureMipmappedBadge => 'Mipmapped';
+
+  @override
+  String get managedTextureSingleMipBadge => 'Single mip';
+
+  @override
+  String get managedTextureReplaceableBadge =>
+      'Replacement supported · editing not yet available';
+
+  @override
+  String get managedTextureNotReplaceableBadge =>
+      'Replacement unavailable · inspect only';
+
+  @override
+  String get managedTextureUnknownReplaceabilityBadge =>
+      'Replacement not qualified · inspect only';
+
+  @override
+  String get managedTextureUnknownFormat => 'Unknown source format';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).

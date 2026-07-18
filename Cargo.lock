@@ -996,6 +996,7 @@ dependencies = [
 name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "cap-std",
  "getrandom 0.3.4",
  "gore-as",

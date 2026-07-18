@@ -6,11 +6,13 @@ import 'revision3_project_workspace.dart';
 enum Revision3ContentWorkspaceView {
   library,
   items,
+  textures,
   dataAssets;
 
   String? get secondaryRoute => switch (this) {
     Revision3ContentWorkspaceView.library => null,
     Revision3ContentWorkspaceView.items => 'items',
+    Revision3ContentWorkspaceView.textures => 'textures',
     Revision3ContentWorkspaceView.dataAssets => 'data-assets',
   };
 }
@@ -28,9 +30,11 @@ class Revision3ContentWorkspace extends StatefulWidget {
     required this.location,
     required this.libraryLabel,
     required this.itemsLabel,
+    required this.texturesLabel,
     required this.dataAssetsLabel,
     required this.library,
     required this.items,
+    required this.textures,
     required this.dataAssets,
     super.key,
   }) : assert(
@@ -46,9 +50,11 @@ class Revision3ContentWorkspace extends StatefulWidget {
   final Revision3ProjectWorkspaceLocation location;
   final String libraryLabel;
   final String itemsLabel;
+  final String texturesLabel;
   final String dataAssetsLabel;
   final Widget library;
   final Widget items;
+  final Widget textures;
   final Widget dataAssets;
 
   @override
@@ -62,6 +68,7 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
   Revision3ContentWorkspaceView get _selected =>
       switch (widget.location.secondary) {
         'items' => Revision3ContentWorkspaceView.items,
+        'textures' => Revision3ContentWorkspaceView.textures,
         'data-assets' => Revision3ContentWorkspaceView.dataAssets,
         _ => Revision3ContentWorkspaceView.library,
       };
@@ -123,6 +130,14 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
                 ),
               ),
               ButtonSegment(
+                value: Revision3ContentWorkspaceView.textures,
+                icon: const Icon(Icons.texture_outlined),
+                label: Text(
+                  widget.texturesLabel,
+                  key: const Key('revision3-content-workspace-nav-textures'),
+                ),
+              ),
+              ButtonSegment(
                 value: Revision3ContentWorkspaceView.dataAssets,
                 icon: const Icon(Icons.data_object_outlined),
                 label: Text(
@@ -158,6 +173,15 @@ class _Revision3ContentWorkspaceState extends State<Revision3ContentWorkspace> {
                     child: KeyedSubtree(
                       key: ValueKey((widget.projectIdentity, 'items')),
                       child: widget.items,
+                    ),
+                  )
+                : const SizedBox.shrink(),
+            _mounted.contains(Revision3ContentWorkspaceView.textures)
+                ? KeyedSubtree(
+                    key: const Key('revision3-content-workspace-page-textures'),
+                    child: KeyedSubtree(
+                      key: ValueKey((widget.projectIdentity, 'textures')),
+                      child: widget.textures,
                     ),
                   )
                 : const SizedBox.shrink(),

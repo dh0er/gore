@@ -17,18 +17,16 @@ import '../../project/dialog_topics_notifier.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../scripts/domain/script_modules_provider.dart';
 import '../../scripts/ui/script_tab.dart';
-import '../../textures/domain/texture_index_provider.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
-import '../../textures/ui/texture_tab.dart';
 import '../domain/overrides_notifier.dart';
 import 'overrides_panel.dart';
 
 /// Sidebar sections of the Changes tab.
-enum _ChangesSection { all, items, dialogs, audio, textures, scripts }
+enum _ChangesSection { all, items, dialogs, audio, scripts }
 
 /// The Changes-tab sections whose content is backed by an install-bound data
-/// provider (texture index / script module list) rather than staged state.
-enum ChangesAssetSection { textures, scripts }
+/// provider (the script module list) rather than staged state.
+enum ChangesAssetSection { scripts }
 
 /// The asset-backed section the (kept-alive) Changes tab currently embeds,
 /// or null while a non-asset section (All/Items/Dialogs/Audio) is shown —
@@ -36,11 +34,10 @@ enum ChangesAssetSection { textures, scripts }
 ///
 /// Published by [ChangesTab] on section selection so home_page's main-tab
 /// entry handler can refresh exactly the provider backing the embedded
-/// view, in parity with the standalone Textures/Scripts tab entries.
-/// Without it, leaving the Changes MAIN tab parked on Textures/Scripts and
-/// re-entering it later would keep showing a stale texture index / script
-/// module list after a deploy, undeploy, or game patch until the user
-/// manually switched sections.
+/// view, in parity with the standalone Scripts tab entry.
+/// Without it, leaving the Changes MAIN tab parked on Scripts and re-entering
+/// it later would keep showing a stale script module list after a deploy,
+/// undeploy, or game patch until the user manually switched sections.
 final changesAssetSectionProvider = StateProvider<ChangesAssetSection?>(
   (ref) => null,
 );
@@ -66,16 +63,13 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
     // shown ANYWHERE this session (then this very build creates the
     // provider fresh, and invalidating would double-fetch). The gate is the
     // session-wide tracker rather than a per-surface visited set on
-    // purpose: the standalone Textures/Scripts main tabs watch the same
-    // autoDispose providers and, kept alive, can hold a value from before a
+    // purpose: the standalone Scripts main tab watches the same
+    // autoDispose provider and, kept alive, can hold a value from before a
     // deploy, undeploy, or game patch — so even this tab's FIRST section
     // entry may hit a stale provider. (Runs on section taps only — never
     // during a build.)
     final tracker = ref.read(assetEntryTrackerProvider);
-    if (section == _ChangesSection.textures &&
-        tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
-      ref.invalidate(textureIndexProvider);
-    } else if (section == _ChangesSection.scripts &&
+    if (section == _ChangesSection.scripts &&
         tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
       ref.invalidate(scriptModulesProvider);
     }
@@ -89,7 +83,6 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
       // sidebar taps, never during another consumer's build. (The initial
       // "All" needs no write — it matches the provider's null default.)
       ref.read(changesAssetSectionProvider.notifier).state = switch (section) {
-        _ChangesSection.textures => ChangesAssetSection.textures,
         _ChangesSection.scripts => ChangesAssetSection.scripts,
         _ChangesSection.all ||
         _ChangesSection.items ||
@@ -169,12 +162,6 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
             count: audioState.count,
           ),
           (
-            section: _ChangesSection.textures,
-            icon: Icons.texture,
-            label: l10n.tabTextures,
-            count: textureState.count,
-          ),
-          (
             section: _ChangesSection.scripts,
             icon: Icons.code,
             label: l10n.tabScripts,
@@ -209,9 +196,9 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
         const VerticalDivider(width: 1),
         // Right: the selected section's view. Content is swapped per
         // selection rather than kept alive in an IndexedStack: an
-        // IndexedStack would mount and build all six children up front,
-        // paying hidden provider costs (audio bank loads, texture index,
-        // script module list) for sections the user may never open. The
+        // IndexedStack would mount and build all five children up front,
+        // paying hidden provider costs (audio bank loads and the script module
+        // list) for sections the user may never open. The
         // trade-off is that a filtered view's local UI state (search text,
         // tree expansion) resets on section switch — acceptable for a
         // review surface; the main tabs keep their own state independently.
@@ -245,8 +232,6 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
       // path change drops any subtree state tied to the previous install.
       case _ChangesSection.audio:
         return const GamePathScope(child: AudioTab(onlyStaged: true));
-      case _ChangesSection.textures:
-        return const GamePathScope(child: TextureTab(onlyStaged: true));
       case _ChangesSection.scripts:
         return const GamePathScope(child: ScriptTab(onlyStaged: true));
     }

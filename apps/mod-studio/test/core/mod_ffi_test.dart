@@ -871,6 +871,138 @@ void main() {
     expect(core.calls.single.command, 'find_game');
   });
 
+  test('texture index accepts only one bounded canonical generation', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'texture_index': {
+          'ok': true,
+          'build_id': 'build-1',
+          'count': 2,
+          'entries': {
+            '/Game/Textures/T_A': '0',
+            '/Engine/Textures/T_B': '18446744073709551615',
+          },
+        },
+      },
+    );
+
+    final snapshot = await ModFfi(core).textureIndex(r'C:\Game');
+
+    expect(snapshot.buildId, 'build-1');
+    expect(snapshot.entries, {
+      '/Game/Textures/T_A': '0',
+      '/Engine/Textures/T_B': '18446744073709551615',
+    });
+  });
+
+  test('texture index rejects malformed native boundaries', () async {
+    final invalidResponses = <Map<String, Object?>>[
+      {
+        'ok': true,
+        'build_id': 'build-1',
+        'count': 1.0,
+        'entries': {'/Game/Textures/T_A': '1'},
+      },
+      {
+        'ok': true,
+        'build_id': 'build-1',
+        'count': 1,
+        'entries': {'Game/Textures/T_A': '1'},
+      },
+      {
+        'ok': true,
+        'build_id': 'build-1',
+        'count': 1,
+        'entries': {'/Game/Textures/T_A': '01'},
+      },
+      {
+        'ok': true,
+        'build_id': 'build-1',
+        'count': 1,
+        'entries': {'/Game/Textures/T_A': '18446744073709551616'},
+      },
+      {
+        'ok': true,
+        'build_id': 'build-1',
+        'count': 2,
+        'entries': {'/Game/Textures/T_A': '1', '/game/Textures/T_A': '2'},
+      },
+    ];
+
+    for (final response in invalidResponses) {
+      final core = FakeGoreCoreFfiService(
+        responses: {'texture_index': response},
+      );
+      await expectLater(
+        ModFfi(core).textureIndex(r'C:\Game'),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test(
+    'texture extract validates generation and exact indexed identity',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'texture_extract': {'ok': true},
+        },
+      );
+      final ffi = ModFfi(core);
+
+      await ffi.textureExtract(
+        r'C:\Game',
+        expectedBuildId: 'build-1',
+        asset: '/Game/Textures/T_A',
+        packageId: '42',
+      );
+
+      expect(core.calls.single.payload, {
+        'game': r'C:\Game',
+        'expected_build_id': 'build-1',
+        'asset': '/Game/Textures/T_A',
+        'package_id': '42',
+      });
+      await expectLater(
+        ffi.textureExtract(
+          r'C:\Game',
+          expectedBuildId: 'build-1',
+          asset: '/Game/Textures/T_A',
+          packageId: '042',
+        ),
+        throwsArgumentError,
+      );
+      expect(core.calls, hasLength(1));
+    },
+  );
+
+  test('texture preview capability wrappers bind token and offset', () async {
+    final token = 'd' * 64;
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'texture_preview_read': {'ok': true},
+        'texture_preview_release': {'ok': true},
+      },
+    );
+    final ffi = ModFfi(core);
+
+    await ffi.texturePreviewRead(previewToken: token, offset: 17);
+    await ffi.texturePreviewRelease(previewToken: token);
+
+    expect(core.calls[0].payload, {'preview_token': token, 'offset': 17});
+    expect(core.calls[1].payload, {'preview_token': token});
+    expect(
+      () => ffi.texturePreviewRead(previewToken: 'D' * 64, offset: 0),
+      throwsArgumentError,
+    );
+    expect(
+      () =>
+          ffi.texturePreviewRead(previewToken: token, offset: 64 * 1024 * 1024),
+      throwsArgumentError,
+    );
+    expect(core.calls, hasLength(2));
+  });
+
   test(
     'structured native error preserves command, code, and message',
     () async {

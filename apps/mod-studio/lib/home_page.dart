@@ -90,6 +90,9 @@ import 'project/revision3_scoped_content_browser.dart';
 import 'project/revision3_settings_expert_page.dart';
 import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_items_view.dart';
+import 'project/revision3_texture_catalog.dart';
+import 'project/revision3_texture_catalog_native.dart';
+import 'project/revision3_texture_catalog_view.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_production_card.dart';
@@ -113,8 +116,6 @@ import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
 import 'story/domain/story_workspace_launcher.dart';
 import 'story/ui/story_workspace_flow.dart';
-import 'textures/domain/texture_index_provider.dart';
-import 'textures/ui/texture_tab.dart';
 
 typedef ManagedRevision3DirectoryPicker =
     Future<String?> Function(String confirmButtonText);
@@ -280,9 +281,8 @@ final managedRevision3DataAssetExtractReceiptInspectorProvider =
     );
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
-const _texturesTabIndex = 3;
-const _scriptsTabIndex = 4;
-const _changesTabIndex = 5;
+const _scriptsTabIndex = 3;
+const _changesTabIndex = 4;
 
 /// Entry refresh for the kept-alive main tabs (see the [TabEntryListener]
 /// in [HomePage]): invalidates the install-bound data providers backing the
@@ -291,7 +291,7 @@ const _changesTabIndex = 5;
 /// Runs on EVERY settled tab entry, first entries included; whether an
 /// entry actually refreshes is the session-wide [AssetEntryTracker]'s call.
 /// A per-tab "first entry = fresh build, skip" shortcut would be wrong
-/// here: the Changes tab embeds the same Textures/Scripts views, and while
+/// here: the Changes tab embeds the same Scripts view, and while
 /// its embed keeps the shared `autoDispose` provider alive a deploy,
 /// undeploy, or game patch can stale the value before the standalone tab is
 /// ever opened. Only the very first display of an asset kind ANYWHERE
@@ -309,20 +309,12 @@ const _changesTabIndex = 5;
 void handleMainTabEntered(WidgetRef ref, int index) {
   final tracker = ref.read(assetEntryTrackerProvider);
   switch (index) {
-    case _texturesTabIndex:
-      if (tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
-        ref.invalidate(textureIndexProvider);
-      }
     case _scriptsTabIndex:
       if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
         ref.invalidate(scriptModulesProvider);
       }
     case _changesTabIndex:
       switch (ref.read(changesAssetSectionProvider)) {
-        case ChangesAssetSection.textures:
-          if (tracker.shouldInvalidateOnEntry(AssetKind.textureIndex)) {
-            ref.invalidate(textureIndexProvider);
-          }
         case ChangesAssetSection.scripts:
           if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
             ref.invalidate(scriptModulesProvider);
@@ -1007,6 +999,9 @@ class _HomePageState extends ConsumerState<HomePage>
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     final gameConfigured = gameRoot != null;
+    final textureCatalogAdapter = Revision3TextureCatalogNativeAdapter(
+      ModFfi(ref.read(coreServiceProvider)),
+    );
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1332,6 +1327,8 @@ class _HomePageState extends ConsumerState<HomePage>
           loadBaseGameCatalog: ref.read(
             revision3BaseGameContentCatalogLoaderProvider,
           ),
+          loadTextureCatalog: textureCatalogAdapter.loadCatalog,
+          loadTexturePreview: textureCatalogAdapter.loadPreview,
           readDialogLocalization:
               ({
                 required expectedProjectId,
@@ -2157,11 +2154,11 @@ class _HomePageState extends ConsumerState<HomePage>
               : () => unawaited(_showModStudioSettingsDialog(context)),
         ),
         LegacyCurrentProjectState() => DefaultTabController(
-          length: 8,
+          length: 7,
           // KeepAliveTab keeps every tab (and its autoDispose providers)
-          // mounted across switches, so the texture index / script module list
-          // would go stale after a deploy, undeploy, or game patch. Entering
-          // those tabs refetches (tracker-gated: only an asset kind's very
+          // mounted across switches, so the script module list would go stale
+          // after a deploy, undeploy, or game patch. Entering that tab refetches
+          // (tracker-gated: only the asset kind's very
           // first display anywhere builds fresh instead) — the pre-keep-alive
           // freshness semantics — while the tabs' UI state survives.
           child: TabEntryListener(
@@ -2208,10 +2205,6 @@ class _HomePageState extends ConsumerState<HomePage>
                               text: l10n.tabAudio,
                             ),
                             Tab(
-                              icon: const Icon(Icons.texture),
-                              text: l10n.tabTextures,
-                            ),
-                            Tab(
                               icon: const Icon(Icons.code),
                               text: l10n.tabScripts,
                             ),
@@ -2241,15 +2234,11 @@ class _HomePageState extends ConsumerState<HomePage>
                       // Dialoge: localized dialog/bark line editor.
                       const KeepAliveTab(child: DialogeTab()),
                       // Audio: FMOD bank sample browser + replacement.
-                      // (GamePathScope: these three tabs' kept UI state is
+                      // (GamePathScope: these tabs' kept UI state is
                       // bound to the configured install and resets when the
                       // game path changes.)
                       const KeepAliveTab(
                         child: GamePathScope(child: AudioTab()),
-                      ),
-                      // Textures: texture asset browser + replacement.
-                      const KeepAliveTab(
-                        child: GamePathScope(child: TextureTab()),
                       ),
                       // AngelScript: stage .as mods, compile, splice.
                       const KeepAliveTab(
@@ -2306,6 +2295,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.removeStoryDraft,
     required this.removeStoryDraftDisabledReason,
     required this.loadBaseGameCatalog,
+    required this.loadTextureCatalog,
+    required this.loadTexturePreview,
     required this.readDialogLocalization,
     required this.loadDialogLocalizationEditSeed,
     required this.publishDialogLocalizationEdit,
@@ -2382,6 +2373,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3StoryWorkspaceRemoveDraftAction? removeStoryDraft;
   final String? removeStoryDraftDisabledReason;
   final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
+  final Revision3TextureCatalogLoader loadTextureCatalog;
+  final Revision3TexturePreviewLoader loadTexturePreview;
   final Revision3DialogLineEntryLocalizationReader readDialogLocalization;
   final Revision3DialogLocalizationEditSeedLoader
   loadDialogLocalizationEditSeed;
@@ -3598,6 +3591,7 @@ class _ManagedRevision3ProjectViewState
     location: location,
     libraryLabel: l10n.managedContentWorkspaceBrowseLabel,
     itemsLabel: l10n.tabItems,
+    texturesLabel: l10n.tabTextures,
     dataAssetsLabel: l10n.managedContentWorkspaceVerifiedEditsLabel,
     library: _ManagedRevision3GlobalContentHost(
       contentLibraryController: _contentLibraryController,
@@ -3859,6 +3853,14 @@ class _ManagedRevision3ProjectViewState
           ),
     ),
     items: const Revision3ItemsView(),
+    textures: Revision3TextureCatalogView(
+      gameRoot: gameRoot,
+      sourceSelectionIdentity: gameRoot,
+      loadCatalog: widget.loadTextureCatalog,
+      loadPreview: widget.loadTexturePreview,
+      copy: _revision3TextureCatalogCopy(l10n),
+      openSettings: () => unawaited(_showModStudioSettingsDialog(context)),
+    ),
     dataAssets: Revision3DataAssetStagePanel(
       controller: _dataAssetStagePanelController,
       projectRoot: project.root.path,
@@ -6841,6 +6843,44 @@ Revision3NpcProfileEditDialogCopy _npcProfileEditDialogCopy(
   discardBody: l10n.managedNpcProfileEditDiscardBody,
   keepEditing: l10n.managedNpcProfileEditKeepEditing,
   discard: l10n.managedNpcProfileEditDiscard,
+);
+
+Revision3TextureCatalogViewCopy _revision3TextureCatalogCopy(
+  AppLocalizations l10n,
+) => Revision3TextureCatalogViewCopy(
+  setupTitle: l10n.managedTextureSetupTitle,
+  setupDescription: l10n.managedTextureSetupDescription,
+  setupActionLabel: l10n.managedTextureSetupAction,
+  loadingLabel: l10n.managedTextureLoading,
+  loadingDescription: l10n.managedTextureLoadingDescription,
+  catalogCount: l10n.managedTextureCatalogCount,
+  searchCount: l10n.managedTextureSearchCount,
+  emptyTitle: l10n.managedTextureEmptyTitle,
+  emptyDescription: l10n.managedTextureEmptyDescription,
+  errorTitle: l10n.managedTextureErrorTitle,
+  errorDescription: l10n.managedTextureErrorDescription,
+  retryLabel: l10n.managedTextureRetry,
+  refreshTooltip: l10n.managedTextureRefreshTooltip,
+  searchLabel: l10n.managedTextureSearchLabel,
+  searchHint: l10n.managedTextureSearchHint,
+  clearSearchTooltip: l10n.managedTextureClearSearchTooltip,
+  selectPrompt: l10n.managedTextureSelectPrompt,
+  previewLoadingLabel: l10n.managedTexturePreviewLoading,
+  previewErrorTitle: l10n.managedTexturePreviewErrorTitle,
+  previewErrorDescription: l10n.managedTexturePreviewErrorDescription,
+  previewRetryLabel: l10n.managedTexturePreviewRetry,
+  backToCatalogLabel: l10n.managedTextureBackToCatalog,
+  inspectionOnlyNotice: l10n.managedTextureInspectionOnly,
+  installedSourceBadge: l10n.managedTextureInstalledBadge,
+  regularTextureBadge: l10n.managedTextureRegularBadge,
+  virtualTextureBadge: l10n.managedTextureVirtualBadge,
+  virtualLayerCount: l10n.managedTextureVirtualLayerCount,
+  mipmappedBadge: l10n.managedTextureMipmappedBadge,
+  singleMipBadge: l10n.managedTextureSingleMipBadge,
+  replaceableBadge: l10n.managedTextureReplaceableBadge,
+  notReplaceableBadge: l10n.managedTextureNotReplaceableBadge,
+  unknownReplaceabilityBadge: l10n.managedTextureUnknownReplaceabilityBadge,
+  unknownFormatLabel: l10n.managedTextureUnknownFormat,
 );
 
 Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>

@@ -536,7 +536,7 @@ void main() {
         findsOneWidget,
       );
       final tabBar = tester.widget<TabBar>(find.byType(TabBar));
-      expect(tabBar.tabs, hasLength(8));
+      expect(tabBar.tabs, hasLength(7));
       expect(find.byType(TabBarView), findsOneWidget);
 
       for (final key in const [
@@ -1874,6 +1874,14 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await _navigateManagedTextures(tester);
+      expect(
+        find.byKey(const Key('revision3-texture-catalog-setup')),
+        findsOneWidget,
+      );
       expect(baseCatalogCalls, 0);
       expect(managed.dataAssetPackageIndexReadCalls, 0);
 
@@ -11165,6 +11173,21 @@ Future<void> _navigateManagedDataAssets(WidgetTester tester) async {
   );
   expect(
     find.byKey(const Key('revision3-content-workspace-page-data-assets')),
+    findsOneWidget,
+  );
+}
+
+Future<void> _navigateManagedTextures(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-tab-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-textures'),
+  );
+  expect(
+    find.byKey(const Key('revision3-content-workspace-page-textures')),
     findsOneWidget,
   );
 }

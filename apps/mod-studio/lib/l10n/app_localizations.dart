@@ -5381,6 +5381,204 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Voice build blocked by {count} exact requirements. No bundle was created or deployed.'**
   String managedVoiceBuildBlockedMessage(int count);
+
+  /// No description provided for @managedTextureSetupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the game installation'**
+  String get managedTextureSetupTitle;
+
+  /// No description provided for @managedTextureSetupDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Textures are read from the configured Gothic 1 Remake installation. Nothing is changed in the game or project.'**
+  String get managedTextureSetupDescription;
+
+  /// No description provided for @managedTextureSetupAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Settings'**
+  String get managedTextureSetupAction;
+
+  /// No description provided for @managedTextureLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the installed texture catalog…'**
+  String get managedTextureLoading;
+
+  /// No description provided for @managedTextureLoadingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The first exact scan can take several minutes. Mod Studio runs only one scan at a time and queues the latest refresh.'**
+  String get managedTextureLoadingDescription;
+
+  /// No description provided for @managedTextureCatalogCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed textures'**
+  String managedTextureCatalogCount(int count);
+
+  /// No description provided for @managedTextureSearchCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{matches} matches · {total} total'**
+  String managedTextureSearchCount(int matches, int total);
+
+  /// No description provided for @managedTextureEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No textures found'**
+  String get managedTextureEmptyTitle;
+
+  /// No description provided for @managedTextureEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact installed catalog contains no texture entries.'**
+  String get managedTextureEmptyDescription;
+
+  /// No description provided for @managedTextureErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Texture catalog unavailable'**
+  String get managedTextureErrorTitle;
+
+  /// No description provided for @managedTextureErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed texture catalog could not be loaded for this exact game build.'**
+  String get managedTextureErrorDescription;
+
+  /// No description provided for @managedTextureRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedTextureRetry;
+
+  /// No description provided for @managedTextureRefreshTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh installed texture catalog'**
+  String get managedTextureRefreshTooltip;
+
+  /// No description provided for @managedTextureSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search textures'**
+  String get managedTextureSearchLabel;
+
+  /// No description provided for @managedTextureSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Name or Unreal asset path'**
+  String get managedTextureSearchHint;
+
+  /// No description provided for @managedTextureClearSearchTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear texture search'**
+  String get managedTextureClearSearchTooltip;
+
+  /// No description provided for @managedTextureSelectPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a texture to inspect its original installed image.'**
+  String get managedTextureSelectPrompt;
+
+  /// No description provided for @managedTexturePreviewLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Extracting the original texture…'**
+  String get managedTexturePreviewLoading;
+
+  /// No description provided for @managedTexturePreviewErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview unavailable'**
+  String get managedTexturePreviewErrorTitle;
+
+  /// No description provided for @managedTexturePreviewErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The original texture could not be extracted from the selected game build.'**
+  String get managedTexturePreviewErrorDescription;
+
+  /// No description provided for @managedTexturePreviewRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry preview'**
+  String get managedTexturePreviewRetry;
+
+  /// No description provided for @managedTextureBackToCatalog.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to textures'**
+  String get managedTextureBackToCatalog;
+
+  /// No description provided for @managedTextureInspectionOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed reference · inspect only. This does not edit the project, game installation, or a save.'**
+  String get managedTextureInspectionOnly;
+
+  /// No description provided for @managedTextureInstalledBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed source'**
+  String get managedTextureInstalledBadge;
+
+  /// No description provided for @managedTextureRegularBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Regular texture'**
+  String get managedTextureRegularBadge;
+
+  /// No description provided for @managedTextureVirtualBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Virtual texture'**
+  String get managedTextureVirtualBadge;
+
+  /// No description provided for @managedTextureVirtualLayerCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 VT layer} other{{count} VT layers}}'**
+  String managedTextureVirtualLayerCount(int count);
+
+  /// No description provided for @managedTextureMipmappedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Mipmapped'**
+  String get managedTextureMipmappedBadge;
+
+  /// No description provided for @managedTextureSingleMipBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Single mip'**
+  String get managedTextureSingleMipBadge;
+
+  /// No description provided for @managedTextureReplaceableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement supported · editing not yet available'**
+  String get managedTextureReplaceableBadge;
+
+  /// No description provided for @managedTextureNotReplaceableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement unavailable · inspect only'**
+  String get managedTextureNotReplaceableBadge;
+
+  /// No description provided for @managedTextureUnknownReplaceabilityBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement not qualified · inspect only'**
+  String get managedTextureUnknownReplaceabilityBadge;
+
+  /// No description provided for @managedTextureUnknownFormat.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown source format'**
+  String get managedTextureUnknownFormat;
 }
 
 class _AppLocalizationsDelegate

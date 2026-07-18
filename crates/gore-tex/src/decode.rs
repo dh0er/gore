@@ -68,6 +68,35 @@
 
 use crate::error::{Result, TexError};
 
+/// Hard ceiling for any decoded RGBA8 preview allocation.
+///
+/// Keep this in one place so regular and virtual-texture decode paths enforce
+/// the same budget before allocating their output buffers.
+pub(crate) const MAX_DECODED_RGBA_BYTES: usize = 128 * 1024 * 1024;
+
+pub(crate) fn bounded_preview_pixel_count(
+    width: usize,
+    height: usize,
+    format: &str,
+    subject: &str,
+) -> Result<usize> {
+    let pixels = width.checked_mul(height);
+    let byte_length = pixels.and_then(|value| value.checked_mul(std::mem::size_of::<u32>()));
+    match (pixels, byte_length) {
+        (Some(pixels), Some(byte_length))
+            if pixels > 0 && byte_length <= MAX_DECODED_RGBA_BYTES =>
+        {
+            Ok(pixels)
+        }
+        _ => Err(TexError::DecodeFailed {
+            format: format.to_string(),
+            reason: format!(
+                "{subject} exceeds {MAX_DECODED_RGBA_BYTES} bytes for {width}x{height}"
+            ),
+        }),
+    }
+}
+
 /// Minimal decoded platform data needed to turn a cooked texture into pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TexInfo {
@@ -181,6 +210,10 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         if !is_supported_format(&layer0_format) {
             return Err(TexError::UnsupportedFormat(layer0_format));
         }
+        // Reject hostile/corrupt VT dimensions and tile geometry before resolving
+        // any chunk payloads. `decode_layer0` repeats this validation at its own
+        // public boundary before allocating the stitched bitmap or tile buffer.
+        crate::vt::validate_layer0_preview(vt, &layer0_format)?;
         let mut chunk_bytes = Vec::with_capacity(vt.chunks.len());
         for ch in &vt.chunks {
             chunk_bytes.push(crate::texdata::resolve_data_resource_bytes(
@@ -306,14 +339,25 @@ pub fn replace_supported(info: &TexInfo) -> bool {
 /// Any unrecognized `format` returns [`TexError::UnsupportedFormat`]; a decoder
 /// failure (e.g. truncated block data) returns [`TexError::DecodeFailed`].
 pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
+    let w = info.width as usize;
+    let h = info.height as usize;
+    let pixels = bounded_preview_pixel_count(w, h, &info.format, "decoded RGBA preview")?;
+
     // Pre-decoded inputs (virtual textures) carry their stitched RGBA directly.
     if let Some(rgba) = &info.decoded_rgba {
+        if rgba.len() != pixels {
+            return Err(TexError::DecodeFailed {
+                format: info.format.clone(),
+                reason: format!(
+                    "pre-decoded RGBA has {} pixels, need {pixels} for {w}x{h}",
+                    rgba.len()
+                ),
+            });
+        }
         return Ok(rgba.clone());
     }
 
-    let w = info.width as usize;
-    let h = info.height as usize;
-    let mut image = vec![0u32; w * h];
+    let mut image = vec![0u32; pixels];
 
     // Uncompressed (linear) formats: the mip0 bytes ARE the pixels — no block
     // decode. Validate the length against w*h*bpp, then repack to 0xAARRGGBB.
@@ -547,6 +591,42 @@ mod tests {
             assert_eq!(b, 0, "pixel {i}: B={b} not 0 ({p:#010x})");
             assert_eq!(a, 255, "pixel {i}: A={a} not 255 ({p:#010x})");
         }
+    }
+
+    #[test]
+    fn preview_decode_rejects_oversized_rgba_before_allocation() {
+        let info = TexInfo {
+            width: 32_768,
+            height: 32_768,
+            format: "PF_G8".into(),
+            mip0: Vec::new(),
+            is_virtual: false,
+            vt_layers: None,
+            vt_legacy: false,
+            mipmapped: false,
+            decoded_rgba: None,
+        };
+
+        let error = to_rgba8(&info).unwrap_err().to_string();
+        assert!(error.contains("exceeds 134217728 bytes"), "{error}");
+    }
+
+    #[test]
+    fn preview_decode_rejects_wrong_predecoded_pixel_count() {
+        let info = TexInfo {
+            width: 2,
+            height: 2,
+            format: "PF_DXT1".into(),
+            mip0: Vec::new(),
+            is_virtual: true,
+            vt_layers: Some(1),
+            vt_legacy: false,
+            mipmapped: false,
+            decoded_rgba: Some(vec![0; 3]),
+        };
+
+        let error = to_rgba8(&info).unwrap_err().to_string();
+        assert!(error.contains("has 3 pixels, need 4"), "{error}");
     }
 
     /// Decode the local fixture's mip0 to RGBA. Gated: skips if the fixture is

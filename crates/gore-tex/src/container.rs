@@ -300,19 +300,40 @@ struct CachedChunk {
     receipt: VerifiedChunkReceipt,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SnapshotMemoryLimits {
+    max_chunk_bytes: u64,
+    max_total_bytes: u64,
+}
+
+impl Default for SnapshotMemoryLimits {
+    fn default() -> Self {
+        Self {
+            max_chunk_bytes: MAX_SNAPSHOT_CHUNK_BYTES,
+            max_total_bytes: MAX_SNAPSHOT_TOTAL_BYTES,
+        }
+    }
+}
+
 /// Read-through IoStore snapshot. Every first read selects the exact composite
 /// winner, verifies its decompressed bytes against the TOC BLAKE3 chunk hash,
 /// and caches those bytes. All conversion re-reads then use the immutable cache.
 struct VerifiedSnapshotStore<'a> {
     inner: &'a dyn iostore::IoStoreTrait,
     chunks: Mutex<std::collections::HashMap<FIoChunkId, CachedChunk>>,
+    limits: SnapshotMemoryLimits,
 }
 
 impl<'a> VerifiedSnapshotStore<'a> {
     fn new(inner: &'a dyn iostore::IoStoreTrait) -> Self {
+        Self::with_limits(inner, SnapshotMemoryLimits::default())
+    }
+
+    fn with_limits(inner: &'a dyn iostore::IoStoreTrait, limits: SnapshotMemoryLimits) -> Self {
         Self {
             inner,
             chunks: Mutex::new(std::collections::HashMap::new()),
+            limits,
         }
     }
 
@@ -408,9 +429,10 @@ impl<'a> VerifiedSnapshotStore<'a> {
             .find(|info| info.id() == chunk_id)
             .ok_or_else(|| anyhow::anyhow!("{chunk_id:?} not found in composite IoStore"))?;
         let advertised = info.size();
-        if advertised > MAX_SNAPSHOT_CHUNK_BYTES {
+        if advertised > self.limits.max_chunk_bytes {
             anyhow::bail!(
-                "IoStore chunk {chunk_id:?} advertises {advertised} bytes; per-chunk snapshot limit is {MAX_SNAPSHOT_CHUNK_BYTES}"
+                "IoStore chunk {chunk_id:?} advertises {advertised} bytes; per-chunk snapshot limit is {}",
+                self.limits.max_chunk_bytes
             );
         }
         let cached_total = chunks.values().try_fold(0u64, |total, cached| {
@@ -421,9 +443,10 @@ impl<'a> VerifiedSnapshotStore<'a> {
         let prospective_total = cached_total
             .checked_add(advertised)
             .ok_or_else(|| anyhow::anyhow!("verified chunk cache size overflowed"))?;
-        if prospective_total > MAX_SNAPSHOT_TOTAL_BYTES {
+        if prospective_total > self.limits.max_total_bytes {
             anyhow::bail!(
-                "IoStore snapshot would reach {prospective_total} bytes; aggregate limit is {MAX_SNAPSHOT_TOTAL_BYTES}"
+                "IoStore snapshot would reach {prospective_total} bytes; aggregate limit is {}",
+                self.limits.max_total_bytes
             );
         }
         let bytes = info.read()?;
@@ -785,6 +808,143 @@ const MAX_LEGACY_MEMORY_UEXP_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LEGACY_MEMORY_PACKAGE_PAIR_BYTES: usize = 320 * 1024 * 1024;
 const MAX_LEGACY_MEMORY_SIDECAR_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LEGACY_MEMORY_TOTAL_BYTES: usize = 512 * 1024 * 1024;
+// Texture previews decode to at most 128 MiB RGBA. Keep the transient Zen
+// snapshot and legacy cooked representation in the same order of magnitude so
+// malformed or merely huge sidecars cannot multiply into GiB-scale allocations.
+const MAX_TEXTURE_PREVIEW_SNAPSHOT_CHUNK_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_SNAPSHOT_TOTAL_BYTES: u64 = 160 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_UASSET_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_UEXP_BYTES: usize = 32 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_PACKAGE_PAIR_BYTES: usize = 40 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_SIDECAR_BYTES: usize = 128 * 1024 * 1024;
+const MAX_TEXTURE_PREVIEW_LEGACY_TOTAL_BYTES: usize = 160 * 1024 * 1024;
+
+/// One concrete file admitted by the installed-game composite used for texture
+/// discovery and extraction. `role` includes Retoc's actual winner-priority
+/// position; the order therefore changes whenever the composite winner rules do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InstalledTextureSource {
+    pub(crate) role: String,
+    pub(crate) path: PathBuf,
+    /// Retoc hashes the bounded UTOC bytes before parsing them. UCAS files do not
+    /// have an equivalent whole-file digest, so only UTOC sources carry this seal.
+    pub(crate) parsed_blake3: Option<[u8; 32]>,
+}
+
+/// The single authority behind installed texture indexing and extraction.
+///
+/// Opening the requested main UTOC by itself is insufficient: hotfix containers
+/// and `global.utoc` are sibling inputs and Retoc resolves duplicate chunks using
+/// the sorted child order of the whole Paks directory. This object retains that
+/// exact composite and exposes the exact UTOC/UCAS files in the same order for
+/// source fingerprinting.
+pub(crate) struct InstalledTextureComposite {
+    store: Box<dyn iostore::IoStoreTrait>,
+    sources: Vec<InstalledTextureSource>,
+}
+
+impl InstalledTextureComposite {
+    pub(crate) fn open(main_utoc: &Path) -> Result<Self> {
+        let paks = main_utoc
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("installed texture UTOC has no Paks parent"))?;
+        let canonical_paks = std::fs::canonicalize(paks)?;
+        if !std::fs::symlink_metadata(&canonical_paks)?
+            .file_type()
+            .is_dir()
+        {
+            return Err(
+                anyhow::anyhow!("installed texture Paks authority is not a directory").into(),
+            );
+        }
+        let canonical_main = std::fs::canonicalize(main_utoc)?;
+        let store = iostore::open(&canonical_paks, Arc::new(Config::default()))?;
+
+        let children: Vec<_> = store.child_containers().collect();
+        if children.is_empty() {
+            return Err(
+                anyhow::anyhow!("installed texture composite exposes no child containers").into(),
+            );
+        }
+        if children.len() > 256 {
+            return Err(anyhow::anyhow!(
+                "installed texture composite exceeds its child-container limit"
+            )
+            .into());
+        }
+
+        let mut found_main = false;
+        let mut seen_paths = std::collections::HashSet::new();
+        let mut sources = Vec::with_capacity(children.len().saturating_mul(2));
+        for (priority, child) in children.into_iter().enumerate() {
+            let (source_utoc, parsed_blake3) = child
+                .opened_utoc_identity()
+                .ok_or_else(|| anyhow::anyhow!("installed texture child has no UTOC identity"))?;
+            let canonical_utoc = std::fs::canonicalize(source_utoc)?;
+            if canonical_utoc.parent() != Some(canonical_paks.as_path()) {
+                return Err(
+                    anyhow::anyhow!("installed texture child escaped the Paks authority").into(),
+                );
+            }
+            if !seen_paths.insert(canonical_utoc.clone()) {
+                return Err(
+                    anyhow::anyhow!("installed texture composite opened one UTOC twice").into(),
+                );
+            }
+            found_main |= canonical_utoc == canonical_main;
+
+            let source_name = canonical_utoc
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow::anyhow!("installed texture UTOC name is not Unicode"))?;
+            sources.push(InstalledTextureSource {
+                role: format!("winner-{priority:03}-utoc-{source_name}"),
+                path: canonical_utoc.clone(),
+                parsed_blake3: Some(*parsed_blake3),
+            });
+
+            // The bounded Retoc reader currently accepts exactly one UCAS per UTOC.
+            // Deriving this path from each concrete opened child keeps the source set
+            // identical to the files that can supply winner bytes.
+            let canonical_ucas = std::fs::canonicalize(canonical_utoc.with_extension("ucas"))?;
+            if canonical_ucas.parent() != Some(canonical_paks.as_path()) {
+                return Err(
+                    anyhow::anyhow!("installed texture UCAS escaped the Paks authority").into(),
+                );
+            }
+            if !seen_paths.insert(canonical_ucas.clone()) {
+                return Err(
+                    anyhow::anyhow!("installed texture composite opened one UCAS twice").into(),
+                );
+            }
+            let data_name = canonical_ucas
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow::anyhow!("installed texture UCAS name is not Unicode"))?;
+            sources.push(InstalledTextureSource {
+                role: format!("winner-{priority:03}-ucas-{data_name}"),
+                path: canonical_ucas,
+                parsed_blake3: None,
+            });
+        }
+        if !found_main {
+            return Err(anyhow::anyhow!(
+                "requested main UTOC is absent from the installed texture composite"
+            )
+            .into());
+        }
+
+        Ok(Self { store, sources })
+    }
+
+    pub(crate) fn store(&self) -> &dyn iostore::IoStoreTrait {
+        self.store.as_ref()
+    }
+
+    pub(crate) fn sources(&self) -> &[InstalledTextureSource] {
+        &self.sources
+    }
+}
 
 /// List texture assets in an IoStore container, using `usmap` to resolve types.
 ///
@@ -1348,6 +1508,50 @@ pub(crate) fn unpack_asset_from_open_store_verified_to_memory(
     let (snapshot, package_id) = verified_package_snapshot(store, asset_path)?;
     let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
     let converted = legacy_from_package_to_memory(&snapshot, package_id, leaf)?;
+    Ok(VerifiedUnpackedAssetBytes {
+        uasset: converted.uasset,
+        uexp: converted.uexp,
+        sidecars: converted.sidecars,
+        consumed_chunks: snapshot.receipts()?,
+        metadata_utocs: snapshot.metadata_utoc_receipts()?,
+    })
+}
+
+/// Bounded, write-free conversion used only by the installed texture preview.
+///
+/// `package_id` comes from an index sealed to the same installed composite. The
+/// tighter snapshot and legacy-output budgets are applied before Retoc reads any
+/// advertised package/sidecar chunk and before its output vectors are retained.
+pub(crate) fn unpack_texture_preview_by_id_from_open_store(
+    store: &dyn iostore::IoStoreTrait,
+    package_id: u64,
+    leaf: &str,
+) -> Result<VerifiedUnpackedAssetBytes> {
+    let package_id = FPackageId(package_id);
+    let snapshot = VerifiedSnapshotStore::with_limits(
+        store,
+        SnapshotMemoryLimits {
+            max_chunk_bytes: MAX_TEXTURE_PREVIEW_SNAPSHOT_CHUNK_BYTES,
+            max_total_bytes: MAX_TEXTURE_PREVIEW_SNAPSHOT_TOTAL_BYTES,
+        },
+    );
+    snapshot.prime_container_metadata()?;
+    let export = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+    if !snapshot.has_chunk_id(export) {
+        return Err(TexError::AssetNotFound(format!("package:{package_id:?}")));
+    }
+    let converted = legacy_from_package_to_memory_with_limits(
+        &snapshot,
+        package_id,
+        leaf,
+        LegacyMemoryLimits {
+            max_uasset_bytes: MAX_TEXTURE_PREVIEW_UASSET_BYTES,
+            max_uexp_bytes: MAX_TEXTURE_PREVIEW_UEXP_BYTES,
+            max_pair_bytes: MAX_TEXTURE_PREVIEW_PACKAGE_PAIR_BYTES,
+            max_sidecar_bytes: MAX_TEXTURE_PREVIEW_SIDECAR_BYTES,
+            max_total_bytes: MAX_TEXTURE_PREVIEW_LEGACY_TOTAL_BYTES,
+        },
+    )?;
     Ok(VerifiedUnpackedAssetBytes {
         uasset: converted.uasset,
         uexp: converted.uexp,
@@ -2281,10 +2485,24 @@ fn legacy_from_package_to_memory(
     package_id: FPackageId,
     leaf: &str,
 ) -> Result<LegacyMemoryOutput> {
+    legacy_from_package_to_memory_with_limits(
+        store,
+        package_id,
+        leaf,
+        LegacyMemoryLimits::default(),
+    )
+}
+
+fn legacy_from_package_to_memory_with_limits(
+    store: &dyn iostore::IoStoreTrait,
+    package_id: FPackageId,
+    leaf: &str,
+    limits: LegacyMemoryLimits,
+) -> Result<LegacyMemoryOutput> {
     let out_rel = format!("{leaf}.uasset");
     let log = Log::no_log();
     let context = FZenPackageContext::create(store, None, &log, None);
-    let writer = BoundedLegacyMemoryWriter::new(leaf, LegacyMemoryLimits::default())?;
+    let writer = BoundedLegacyMemoryWriter::new(leaf, limits)?;
     let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         build_legacy(&context, package_id, UEPath::new(&out_rel), &writer)
     }))
@@ -3085,6 +3303,121 @@ mod tests {
             .write_file("DA_Test.uasset".to_owned(), false, vec![1])
             .unwrap();
         assert!(missing.finish().is_err());
+    }
+
+    #[test]
+    fn installed_texture_composite_seals_every_source_in_winner_order() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("installed-texture-composite");
+        std::fs::create_dir_all(&base).unwrap();
+        let version = EngineVersion::UE5_4;
+        let package = FPackageId(0x0102_0304_0506_0708);
+        let export = FIoChunkId::from_package_id(package, 0, EIoChunkType::ExportBundleData);
+
+        let write_container = |name: &str, package_bytes: Option<&[u8]>| {
+            let utoc = base.join(format!("{name}.utoc"));
+            let mut writer = IoStoreWriter::new(
+                &utoc,
+                version.toc_version(),
+                Some(version.container_header_version()),
+                UEPathBuf::from("../../../"),
+            )
+            .unwrap();
+            if let Some(bytes) = package_bytes {
+                writer
+                    .write_package_chunk(
+                        export,
+                        Some(UEPath::new("../../../G1R/Content/T_Test.uasset")),
+                        bytes,
+                        &StoreEntry::default(),
+                    )
+                    .unwrap();
+            }
+            writer.finalize().unwrap();
+            utoc
+        };
+
+        let main = write_container("pakchunk0-Windows", Some(b"base-winner"));
+        write_container("pakchunk0-Windows_P", Some(b"patch-winner"));
+        write_container("global", None);
+
+        let composite = InstalledTextureComposite::open(&main).unwrap();
+        assert_eq!(composite.store().read(export).unwrap(), b"patch-winner");
+        let names: Vec<_> = composite
+            .sources()
+            .iter()
+            .map(|source| {
+                source
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "global.utoc",
+                "global.ucas",
+                "pakchunk0-Windows_P.utoc",
+                "pakchunk0-Windows_P.ucas",
+                "pakchunk0-Windows.utoc",
+                "pakchunk0-Windows.ucas",
+            ]
+        );
+        assert!(composite
+            .sources()
+            .iter()
+            .step_by(2)
+            .all(|source| source.parsed_blake3.is_some()));
+        assert!(composite
+            .sources()
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .all(|source| source.parsed_blake3.is_none()));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn preview_snapshot_budget_rejects_advertised_chunk_before_read() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("preview-snapshot-budget");
+        let utoc = base.join("preview.utoc");
+        let version = EngineVersion::UE5_4;
+        let chunk = FIoChunkId::from_package_id(
+            FPackageId(0x1122_3344_5566_7788),
+            0,
+            EIoChunkType::BulkData,
+        );
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        writer.write_chunk(chunk, None, &[1, 2, 3, 4, 5]).unwrap();
+        writer.finalize().unwrap();
+
+        let store = iostore::open(&utoc, Arc::new(Config::default())).unwrap();
+        let snapshot = VerifiedSnapshotStore::with_limits(
+            store.as_ref(),
+            SnapshotMemoryLimits {
+                max_chunk_bytes: 4,
+                max_total_bytes: 4,
+            },
+        );
+        let error = snapshot.read_verified(chunk).unwrap_err();
+        assert!(error.to_string().contains("per-chunk snapshot limit"));
+        assert!(snapshot.receipts().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

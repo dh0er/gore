@@ -265,12 +265,18 @@ mod authoring_voice_take_status_revision3;
 mod authoring_voice_target_revision3;
 mod dataasset;
 mod script_compile_report;
+mod texture_preview;
 mod transport;
 mod voice;
 
 use serde_json::{json, Value};
+use std::collections::VecDeque;
+use std::io::Write;
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use image::ImageEncoder;
 
 use gore_loc::{loc_store, paths};
 use gore_modgen::gen::{gen_lua, OverridesConfig};
@@ -387,6 +393,8 @@ const CORE_COMMANDS: &[&str] = &[
     "script_list_modules",
     "texture_extract",
     "texture_index",
+    texture_preview::READ_COMMAND,
+    texture_preview::RELEASE_COMMAND,
     "validate",
     "voice_archive_extract",
     "voice_archive_list",
@@ -814,6 +822,8 @@ fn dispatch(input: &str) -> Value {
         "mgr_undeploy_all" => mgr_undeploy_all(payload),
         "texture_index" => texture_index(payload),
         "texture_extract" => texture_extract(payload),
+        texture_preview::READ_COMMAND => texture_preview::read(payload),
+        texture_preview::RELEASE_COMMAND => texture_preview::release(payload),
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
@@ -1073,18 +1083,60 @@ fn audio_extract(payload: Value) -> Value {
     json!({"ok": true, "ogg_path": path.display().to_string(), "wav_path": path.display().to_string()})
 }
 
+/// The one texture catalog that can authorize previews in this process.
+#[derive(Default)]
+struct LiveTextureIndexStore {
+    indexes: Mutex<VecDeque<Arc<gore_tex::index::TextureIndex>>>,
+}
+
+impl LiveTextureIndexStore {
+    const MAX_RETAINED_GENERATIONS: usize = 2;
+
+    fn retain(&self, index: Arc<gore_tex::index::TextureIndex>) {
+        let mut current = self
+            .indexes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current.retain(|candidate| candidate.build_id != index.build_id);
+        current.push_back(index);
+        while current.len() > Self::MAX_RETAINED_GENERATIONS {
+            current.pop_front();
+        }
+    }
+
+    fn get_exact(&self, expected_build_id: &str) -> Option<Arc<gore_tex::index::TextureIndex>> {
+        let current = self
+            .indexes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        current
+            .iter()
+            .find(|index| index.build_id.as_str() == expected_build_id)
+            .cloned()
+    }
+}
+
+fn live_texture_index_store() -> &'static LiveTextureIndexStore {
+    static STORE: OnceLock<LiveTextureIndexStore> = OnceLock::new();
+    STORE.get_or_init(LiveTextureIndexStore::default)
+}
+
 /// `{ok, build_id, count, entries:{path:package_id_str}}` — load the cached index, building it
 /// if absent or if `payload.rebuild` is true. `payload.game` = install dir.
 fn texture_index(payload: Value) -> Value {
-    let game = match payload.get("game").and_then(Value::as_str) {
+    let Some(request) = payload.as_object().filter(|request| {
+        request.len() == 2 && request.contains_key("game") && request.contains_key("rebuild")
+    }) else {
+        return err("BAD_REQUEST", "texture index request is invalid");
+    };
+    let game = match request.get("game").and_then(Value::as_str) {
         Some(g) => std::path::PathBuf::from(g),
         None => return err("BAD_REQUEST", "missing game"),
     };
-    let rebuild = payload
-        .get("rebuild")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let cache = gore_tex::paths::texture_index_path();
+    let rebuild = match request.get("rebuild").and_then(Value::as_bool) {
+        Some(value) => value,
+        None => return err("BAD_REQUEST", "texture index rebuild flag is invalid"),
+    };
     let usmap = match gore_tex::paths::usmap(&game) {
         Ok(p) => p,
         Err(e) => return err("USMAP", e.to_string()),
@@ -1093,45 +1145,73 @@ fn texture_index(payload: Value) -> Value {
         Ok(p) => p,
         Err(e) => return err("CONTAINER", e.to_string()),
     };
-    let build_id = gore_tex::index::build_id_for(&utoc, &usmap);
-    // Only reuse the cache when it's current for THIS game build; build_id keys on the .usmap
-    // name AND the container's identity, so a game patch (even one keeping the .usmap name) that
-    // rewrites the container invalidates a cache mapping paths to outdated package ids.
+    let build_id = match gore_tex::index::build_id_for(&utoc, &usmap) {
+        Ok(value) => value,
+        Err(e) => return err("SOURCE_FINGERPRINT", e.to_string()),
+    };
+    let cache = gore_tex::paths::texture_index_path_for_build(&build_id);
+    // Each cryptographically sealed installed source owns one immutable, disposable cache entry.
+    // A successful call establishes separate process-local preview authority below.
     let cached = if rebuild {
         None
     } else {
         gore_tex::index::TextureIndex::load_current(&cache, &build_id)
     };
-    let mut cache_saved = true; // a loaded cache is, by definition, already persisted
-    let idx = match cached {
-        Some(i) => i,
+    let (idx, built_new) = match cached {
+        Some(i) => (i, false),
         None => {
             let i = match gore_tex::index::build_index(&utoc, &build_id) {
                 Ok(i) => i,
                 Err(e) => return err("INDEX_BUILD", e.to_string()),
             };
-            // Don't silently ignore a failed persist: the index is usable in-memory this call,
-            // but a failed write means every later load rebuilds. Surface it (warning + flag)
-            // instead of reporting unqualified success.
-            if let Err(e) = i.save(&cache) {
-                eprintln!("warning: failed to persist texture index cache: {e}");
-                cache_saved = false;
-            }
-            i
+            (i, true)
         }
     };
+    let observed_after = match gore_tex::index::build_id_for(&utoc, &usmap) {
+        Ok(value) => value,
+        Err(e) => return err("GENERATION_CHANGED", e.to_string()),
+    };
+    if observed_after != idx.build_id {
+        return err(
+            "GENERATION_CHANGED",
+            "game texture generation changed while the index was being loaded",
+        );
+    }
+    if built_new {
+        // The disk cache is a disposable performance artifact. Persist only
+        // after proving the source stayed stable, but never let cache I/O
+        // suppress the already validated in-memory catalog.
+        let _ = idx.save_atomic_immutable(&cache);
+    }
+    let _ = gore_tex::index::pin_and_prune_managed_texture_cache(&cache);
     let entries: serde_json::Map<String, Value> = idx
         .entries
         .iter()
         .map(|(k, v)| (k.clone(), Value::String(v.to_string())))
         .collect();
-    json!({ "ok": true, "build_id": idx.build_id, "count": idx.entries.len(), "cache_saved": cache_saved, "entries": entries })
+    let response_build_id = idx.build_id.clone();
+    let count = idx.entries.len();
+    let live_index = Arc::new(idx);
+    let response =
+        json!({ "ok": true, "build_id": response_build_id, "count": count, "entries": entries });
+    live_texture_index_store().retain(live_index);
+    response
 }
 
-/// `{ok, png_path, width, height, format}` — extract a texture to a temp PNG. `payload.game`,
-/// and either `payload.package_id` (string) or `payload.asset` (path).
+/// Extract one indexed texture into a native-owned, token-bound PNG preview.
+/// No temporary path crosses the FFI; callers read and release the opaque
+/// capability through `texture_preview_read` / `texture_preview_release`.
 fn texture_extract(payload: Value) -> Value {
-    let game = match payload.get("game").and_then(Value::as_str) {
+    let Some(request) = payload.as_object().filter(|request| {
+        request.len() == 4
+            && request.contains_key("game")
+            && request.contains_key("expected_build_id")
+            && request.contains_key("asset")
+            && request.contains_key("package_id")
+    }) else {
+        return err("BAD_REQUEST", "texture extract request is invalid");
+    };
+    let game = match request.get("game").and_then(Value::as_str) {
         Some(g) => std::path::PathBuf::from(g),
         None => return err("BAD_REQUEST", "missing game"),
     };
@@ -1143,83 +1223,117 @@ fn texture_extract(payload: Value) -> Value {
         Ok(p) => p,
         Err(e) => return err("USMAP", e.to_string()),
     };
-    let asset = payload.get("asset").and_then(Value::as_str).unwrap_or("");
-    let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
-    let (info, px) = if let Some(pid) = payload
-        .get("package_id")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<u64>().ok())
-    {
-        match gore_tex::index::extract_by_package_id(&utoc, &usmap, pid, &leaf) {
-            Ok(x) => x,
-            Err(e) => return err("EXTRACT", e.to_string()),
-        }
-    } else if !asset.is_empty() {
-        let tmp = match gore_tex::paths::unique_temp_dir("gore-tex-ffi-extract") {
-            Ok(t) => t,
-            Err(_) => return err("IO", "tmp"),
-        };
-        let ua = match gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp) {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return err("UNPACK", e.to_string());
-            }
-        };
-        // Surface read failures instead of defaulting to empty bytes (which would yield a
-        // misleading PARSE/DECODE error). `.ubulk` is legitimately optional (inline-mip textures).
-        macro_rules! read_or_err {
-            ($p:expr) => {
-                match std::fs::read($p) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        let _ = std::fs::remove_dir_all(&tmp);
-                        return err("READ", e.to_string());
-                    }
-                }
-            };
-        }
-        let ua_bytes = read_or_err!(&ua);
-        let uexp_bytes = read_or_err!(ua.with_extension("uexp"));
-        let usmap_bytes = read_or_err!(&usmap);
-        let ubulk_bytes = match gore_tex::paths::read_optional(&ua.with_extension("ubulk")) {
-            Ok(b) => b,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return err("READ", e.to_string());
-            }
-        };
-        let info = match gore_tex::decode::parse(&ua_bytes, &uexp_bytes, &ubulk_bytes, &usmap_bytes)
+    let expected_build_id = match request.get("expected_build_id").and_then(Value::as_str) {
+        Some(value)
+            if !value.is_empty()
+                && value.len() <= 512
+                && value.trim() == value
+                && !value.chars().any(char::is_control) =>
         {
-            Ok(i) => i,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return err("PARSE", e.to_string());
-            }
-        };
-        let px = match gore_tex::decode::to_rgba8(&info) {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp);
-                return err("DECODE", e.to_string());
-            }
-        };
-        let _ = std::fs::remove_dir_all(&tmp);
-        (info, px)
-    } else {
-        return err("BAD_REQUEST", "need package_id or asset");
+            value
+        }
+        _ => return err("BAD_REQUEST", "missing or invalid expected_build_id"),
     };
-    let mut buf = Vec::with_capacity(px.len() * 4);
+    let index = match live_texture_index_store().get_exact(expected_build_id) {
+        Some(index) => index,
+        None => {
+            return err(
+                "INDEX_REQUIRED",
+                "matching live texture index is unavailable",
+            )
+        }
+    };
+    let observed_before = match gore_tex::index::build_id_for(&utoc, &usmap) {
+        Ok(value) => value,
+        Err(e) => return err("SOURCE_FINGERPRINT", e.to_string()),
+    };
+    if observed_before != expected_build_id {
+        return err(
+            "STALE_TEXTURE_INDEX",
+            "installed texture generation no longer matches the selected index",
+        );
+    }
+    let asset = match request.get("asset").and_then(Value::as_str) {
+        Some(value)
+            if !value.is_empty()
+                && value.len() <= 1024
+                && value.trim() == value
+                && !value.chars().any(char::is_control) =>
+        {
+            value
+        }
+        _ => return err("BAD_REQUEST", "missing asset"),
+    };
+    let package_id_text = match request.get("package_id").and_then(Value::as_str) {
+        Some(value) => value,
+        None => return err("BAD_REQUEST", "missing package_id"),
+    };
+    let package_id = match package_id_text.parse::<u64>() {
+        Ok(value) if value.to_string() == package_id_text => value,
+        _ => return err("BAD_REQUEST", "package_id must be canonical decimal u64"),
+    };
+    if index.entries.get(asset).copied() != Some(package_id) {
+        return err(
+            "TEXTURE_IDENTITY_MISMATCH",
+            "asset and package_id do not match the selected texture index",
+        );
+    }
+    // Reserve one of the two process-wide native preview slots before any
+    // expensive container conversion or decode begins. The pending capability
+    // is automatically cancelled and its exact output handle deleted on every
+    // failure path.
+    let mut pending_preview = match texture_preview::PendingPreview::create() {
+        Ok(preview) => preview,
+        Err(e) => return err(e.code, e.message),
+    };
+    let leaf = asset.rsplit('/').next().unwrap_or("texture").to_string();
+    let (info, px) = match gore_tex::index::extract_by_package_id(&utoc, &usmap, package_id, &leaf)
+    {
+        Ok(value) => value,
+        Err(e) => return err("EXTRACT", e.to_string()),
+    };
+    const MAX_PREVIEW_RGBA_BYTES: usize = 128 * 1024 * 1024;
+    let rgba_len = match px.len().checked_mul(4) {
+        Some(value) if value <= MAX_PREVIEW_RGBA_BYTES => value,
+        _ => return err("TOO_LARGE", "decoded texture preview exceeds 128 MiB"),
+    };
+    let expected_pixels = match (info.width as usize).checked_mul(info.height as usize) {
+        Some(value) => value,
+        None => return err("TOO_LARGE", "texture dimensions overflow"),
+    };
+    if px.len() != expected_pixels {
+        return err(
+            "DECODE",
+            "decoded pixel count does not match texture dimensions",
+        );
+    }
+    let mut buf = Vec::with_capacity(rgba_len);
     for p in px {
         buf.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
     }
-    // Unique per-request output path: a deterministic name would let two
-    // extractions of the same texture (e.g. a stale request finishing after a
-    // game/index change) race on one file. Each call owns its own PNG and the UI
-    // deletes exactly the file it was handed.
-    let out = gore_tex::paths::unique_temp_file(&format!("gore-tex-preview-{leaf}"), "png");
-    if image::save_buffer(&out, &buf, info.width, info.height, image::ColorType::Rgba8).is_err() {
-        return err("PNG", "save failed");
+    // The PNG is written directly into a native-owned, delete-on-close handle.
+    // No ambient temp path crosses the FFI boundary.
+    let encoder = image::codecs::png::PngEncoder::new(pending_preview.file_mut());
+    if let Err(e) = encoder.write_image(
+        &buf,
+        info.width,
+        info.height,
+        image::ExtendedColorType::Rgba8,
+    ) {
+        return err("PNG", format!("encoding preview: {e}"));
+    }
+    if let Err(e) = pending_preview.file_mut().flush() {
+        return err("PNG", format!("flushing preview: {e}"));
+    }
+    let observed_after = match gore_tex::index::build_id_for(&utoc, &usmap) {
+        Ok(value) => value,
+        Err(e) => return err("GENERATION_CHANGED", e.to_string()),
+    };
+    if observed_after != expected_build_id {
+        return err(
+            "GENERATION_CHANGED",
+            "installed texture generation changed while extracting the preview",
+        );
     }
     // `replaceable` is the AUTHORITATIVE capability flag the UI gates the Replace
     // button on (always a plain bool). It requires BOTH a re-encodable
@@ -1228,13 +1342,17 @@ fn texture_extract(payload: Value) -> Value {
     // asset under any other root (e.g. /DatasmithContent) must report not
     // replaceable rather than appear supported and fail later at build/deploy.
     // `is_virtual`/`vt_layers` are exposed for diagnostics.
-    // Only enforce mount-root deployability when we actually know the asset path.
-    // A package_id-only extract passes an empty asset, where mount resolution
-    // can't run — don't let that wrongly mark an encodable /Game texture as not
-    // replaceable.
-    let deployable_root = asset.is_empty() || gore_tex::paths::content_mount_rel(asset).is_some();
+    // The request always carries the exact indexed asset identity, so mount
+    // eligibility is evaluated without a package-only fallback.
+    let deployable_root = gore_tex::paths::content_mount_rel(asset).is_some();
     let replaceable = gore_tex::decode::replace_supported(&info) && deployable_root;
-    json!({ "ok": true, "png_path": out.display().to_string(), "width": info.width, "height": info.height,
+    // Publication is deliberately the final fallible action. Once the token is
+    // visible, only response construction remains and the caller owns release.
+    let published_preview = match pending_preview.publish() {
+        Ok(preview) => preview,
+        Err(e) => return err(e.code, e.message),
+    };
+    json!({ "ok": true, "build_id": expected_build_id, "preview_token": published_preview.token, "png_byte_len": published_preview.byte_len, "png_sha256": published_preview.sha256, "width": info.width, "height": info.height,
         "format": info.format, "replaceable": replaceable,
         "is_virtual": info.is_virtual, "vt_layers": info.vt_layers, "mipmapped": info.mipmapped })
 }
@@ -1698,6 +1816,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_texture_index_store_retains_two_overlapping_exact_generations() {
+        let store = LiveTextureIndexStore::default();
+        assert!(store.get_exact("generation-a").is_none());
+
+        let first = Arc::new(gore_tex::index::TextureIndex {
+            build_id: "generation-a".to_string(),
+            entries: std::collections::BTreeMap::from([("/Game/A".to_string(), 1)]),
+        });
+        store.retain(Arc::clone(&first));
+
+        let selected = store.get_exact("generation-a").unwrap();
+        assert!(Arc::ptr_eq(&selected, &first));
+        assert_eq!(selected.entries.get("/Game/A"), Some(&1));
+        assert!(store.get_exact("generation-b").is_none());
+
+        let second = Arc::new(gore_tex::index::TextureIndex {
+            build_id: "generation-b".to_string(),
+            entries: std::collections::BTreeMap::from([("/Game/B".to_string(), 2)]),
+        });
+        store.retain(Arc::clone(&second));
+
+        assert!(Arc::ptr_eq(
+            &store.get_exact("generation-a").unwrap(),
+            &first,
+        ));
+        assert!(Arc::ptr_eq(
+            &store.get_exact("generation-b").unwrap(),
+            &second,
+        ));
+
+        let third = Arc::new(gore_tex::index::TextureIndex {
+            build_id: "generation-c".to_string(),
+            entries: std::collections::BTreeMap::from([("/Game/C".to_string(), 3)]),
+        });
+        store.retain(Arc::clone(&third));
+
+        assert!(store.get_exact("generation-a").is_none());
+        assert!(Arc::ptr_eq(
+            &store.get_exact("generation-b").unwrap(),
+            &second,
+        ));
+        assert!(Arc::ptr_eq(
+            &store.get_exact("generation-c").unwrap(),
+            &third,
+        ));
+    }
+
+    #[test]
     fn raw_store_route_caps_input_before_building_a_generic_payload_tree() {
         let request = format!(
             "{{\"command\":\"authoring_store_read_revision3_content_index_v1\",\"payload\":{{\"padding\":\"{}\"}}}}",
@@ -1894,6 +2060,8 @@ mod tests {
                     "script_list_modules",
                     "texture_extract",
                     "texture_index",
+                    "texture_preview_read",
+                    "texture_preview_release",
                     "validate",
                     "voice_archive_extract",
                     "voice_archive_list",

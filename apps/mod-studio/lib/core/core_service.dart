@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -129,6 +130,8 @@ const requiredStudioCoreCommands = <String>[
   'script_list_modules',
   'texture_extract',
   'texture_index',
+  'texture_preview_read',
+  'texture_preview_release',
   'voice_archive_match_line',
   'voice_ogg_inspect_v1',
 ];
@@ -326,10 +329,11 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
     Map<String, Object?> payload = const {},
   }) async {
     final request = jsonEncode({'command': command, 'payload': payload});
-    final response = await Isolate.run(
-      () => _executeNativeRequest(libraryPath, request),
+    return Isolate.run(
+      () => decodeCanonicalGoreCoreResponse(
+        _executeNativeRequest(libraryPath, request),
+      ),
     );
-    return decodeCanonicalGoreCoreResponse(response);
   }
 }
 
@@ -520,8 +524,13 @@ class MissingGoreCoreFfiService implements GoreCoreFfiService {
 
 /// Injectable fake for widget tests — callers supply canned responses.
 class FakeGoreCoreFfiService implements GoreCoreFfiService {
-  FakeGoreCoreFfiService({required this.responses});
+  FakeGoreCoreFfiService({required this.responses, this.handlers = const {}});
   final Map<String, Map<String, Object?>> responses;
+  final Map<
+    String,
+    FutureOr<Map<String, Object?>> Function(Map<String, Object?> payload)
+  >
+  handlers;
   final List<({String command, Map<String, Object?> payload})> calls = [];
 
   @override
@@ -535,6 +544,8 @@ class FakeGoreCoreFfiService implements GoreCoreFfiService {
     Map<String, Object?> payload = const {},
   }) async {
     calls.add((command: command, payload: payload));
+    final handler = handlers[command];
+    if (handler != null) return handler(payload);
     return responses[command] ??
         {
           'ok': false,

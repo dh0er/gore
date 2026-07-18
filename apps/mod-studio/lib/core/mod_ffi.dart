@@ -142,7 +142,46 @@ const _maxAuthoringDiagnostics = 262144;
 const _maxAuthoringDiagnosticMessageBytes = 4096;
 const _maxAuthoringDiagnosticPathBytes = 4096;
 const _maxAuthoringRelatedEntities = 100000;
+const _maxTextureIndexEntries = 65536;
+const _maxTextureAssetPathCodeUnits = 1024;
+const _maxTexturePreviewBytes = 64 * 1024 * 1024;
 final _nativeErrorCodePattern = RegExp(r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$');
+final _textureAssetPathPattern = RegExp(
+  r'^/[A-Za-z0-9_]+(?:/[A-Za-z0-9_+\-]+)+$',
+);
+final _texturePackageIdPattern = RegExp(r'^(0|[1-9][0-9]{0,19})$');
+final _texturePreviewTokenPattern = RegExp(r'^[0-9a-f]{64}$');
+final _maximumTexturePackageId = (BigInt.one << 64) - BigInt.one;
+
+bool _isValidTextureBuildId(Object? value) =>
+    value is String &&
+    value.isNotEmpty &&
+    value == value.trim() &&
+    value.length <= 512 &&
+    !value.codeUnits.any((codeUnit) => codeUnit < 0x20 || codeUnit == 0x7f);
+
+bool _isValidTextureAssetPath(Object? value) =>
+    value is String &&
+    value.length <= _maxTextureAssetPathCodeUnits &&
+    _textureAssetPathPattern.hasMatch(value);
+
+bool _isValidTexturePackageId(Object? value) {
+  if (value is! String || !_texturePackageIdPattern.hasMatch(value)) {
+    return false;
+  }
+  final parsed = BigInt.tryParse(value);
+  return parsed != null && parsed <= _maximumTexturePackageId;
+}
+
+final class TextureIndexSnapshot {
+  TextureIndexSnapshot({
+    required this.buildId,
+    required Map<String, String> entries,
+  }) : entries = Map<String, String>.unmodifiable(entries);
+
+  final String buildId;
+  final Map<String, String> entries;
+}
 
 /// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, stateless
 /// authoring checks, and unified mod build/deploy.
@@ -2642,26 +2681,131 @@ class ModFfi {
     return r['record'] != null;
   }
 
-  /// Load (or build, if absent/`rebuild`) the texture index. Returns {assetPath: packageIdString}.
-  Future<Map<String, String>> textureIndex(
+  /// Load one generation-bound texture index atomically with its native build ID.
+  Future<TextureIndexSnapshot> textureIndex(
     String game, {
     bool rebuild = false,
   }) async {
     final r = await _call('texture_index', {'game': game, 'rebuild': rebuild});
-    final entries = (r['entries'] as Map).cast<String, Object?>();
-    return entries.map((k, v) => MapEntry(k, v as String));
+    final buildId = r['build_id'];
+    if (!_isValidTextureBuildId(buildId)) {
+      throw const FormatException(
+        'texture_index returned an invalid native build ID',
+      );
+    }
+    final entries = r['entries'];
+    if (entries is! Map || entries.length > _maxTextureIndexEntries) {
+      throw const FormatException('texture_index returned invalid entries');
+    }
+    final typedEntries = <String, String>{};
+    final foldedAssetPaths = <String>{};
+    for (final entry in entries.entries) {
+      final key = entry.key;
+      final value = entry.value;
+      if (!_isValidTextureAssetPath(key)) {
+        throw const FormatException(
+          'texture_index returned an invalid asset path',
+        );
+      }
+      if (!_isValidTexturePackageId(value)) {
+        throw const FormatException(
+          'texture_index returned an invalid package ID',
+        );
+      }
+      final assetPath = key as String;
+      if (!foldedAssetPaths.add(assetPath.toLowerCase())) {
+        throw const FormatException(
+          'texture_index returned case-colliding asset paths',
+        );
+      }
+      typedEntries[assetPath] = value as String;
+    }
+    final count = r['count'];
+    if (count is! int ||
+        count < 0 ||
+        count > _maxTextureIndexEntries ||
+        count != typedEntries.length) {
+      throw const FormatException('texture_index count does not match entries');
+    }
+    return TextureIndexSnapshot(
+      buildId: buildId as String,
+      entries: typedEntries,
+    );
   }
 
-  /// Extract a texture to a temp PNG; returns the FFI result map (png_path, width, height, format).
+  /// Extract one indexed texture from the same exact native build.
   Future<Map<String, Object?>> textureExtract(
     String game, {
-    String? asset,
-    String? packageId,
+    required String expectedBuildId,
+    required String asset,
+    required String packageId,
   }) async {
-    final payload = <String, Object?>{'game': game};
-    if (asset != null) payload['asset'] = asset;
-    if (packageId != null) payload['package_id'] = packageId;
-    return _call('texture_extract', payload);
+    if (!_isValidTextureBuildId(expectedBuildId)) {
+      throw ArgumentError.value(
+        expectedBuildId,
+        'expectedBuildId',
+        'expected one bounded native texture build ID',
+      );
+    }
+    if (!_isValidTextureAssetPath(asset)) {
+      throw ArgumentError.value(
+        asset,
+        'asset',
+        'expected one canonical Unreal long package name',
+      );
+    }
+    if (!_isValidTexturePackageId(packageId)) {
+      throw ArgumentError.value(
+        packageId,
+        'packageId',
+        'expected one canonical unsigned 64-bit decimal package ID',
+      );
+    }
+    return _call('texture_extract', {
+      'game': game,
+      'expected_build_id': expectedBuildId,
+      'asset': asset,
+      'package_id': packageId,
+    });
+  }
+
+  /// Read the next bounded byte chunk from one native-owned texture preview.
+  Future<Map<String, Object?>> texturePreviewRead({
+    required String previewToken,
+    required int offset,
+  }) {
+    if (!_texturePreviewTokenPattern.hasMatch(previewToken)) {
+      throw ArgumentError.value(
+        previewToken,
+        'previewToken',
+        'expected one opaque 64-digit lowercase hex token',
+      );
+    }
+    if (offset < 0 || offset >= _maxTexturePreviewBytes) {
+      throw ArgumentError.value(
+        offset,
+        'offset',
+        'expected one in-range texture preview offset',
+      );
+    }
+    return _call('texture_preview_read', {
+      'preview_token': previewToken,
+      'offset': offset,
+    });
+  }
+
+  /// Release one native-owned texture preview capability.
+  Future<Map<String, Object?>> texturePreviewRelease({
+    required String previewToken,
+  }) {
+    if (!_texturePreviewTokenPattern.hasMatch(previewToken)) {
+      throw ArgumentError.value(
+        previewToken,
+        'previewToken',
+        'expected one opaque 64-digit lowercase hex token',
+      );
+    }
+    return _call('texture_preview_release', {'preview_token': previewToken});
   }
 
   /// Auto-detect the game install via Steam; returns the exe path hint, or null.
