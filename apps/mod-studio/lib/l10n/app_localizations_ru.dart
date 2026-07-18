@@ -1084,7 +1084,10 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedSectionSettingsExpertDescription =>
-      'Настройки доступны; экспертные инструменты ещё не интегрированы.';
+      'Доступны настройки и DataAsset Lab в режиме только для чтения.';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => 'Состояние';

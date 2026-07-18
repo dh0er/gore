@@ -1082,7 +1082,10 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get managedSectionSettingsExpertDescription =>
-      'As definições estão disponíveis; as ferramentas especializadas ainda não estão integradas.';
+      'As definições e o DataAsset Lab só de leitura estão disponíveis.';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => 'Estado';
@@ -3691,7 +3694,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get managedSectionSettingsExpertDescription =>
-      'As configurações estão disponíveis; as ferramentas especializadas ainda não estão integradas.';
+      'As configurações e o DataAsset Lab somente leitura estão disponíveis.';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => 'Status';

@@ -1907,8 +1907,14 @@ abstract class AppLocalizations {
   /// No description provided for @managedSectionSettingsExpertDescription.
   ///
   /// In en, this message translates to:
-  /// **'Settings are available; expert tools are not yet integrated.'**
+  /// **'Settings and the read-only DataAsset Lab are available.'**
   String get managedSectionSettingsExpertDescription;
+
+  /// No description provided for @managedSettingsExpertDataAssetLabLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset Lab'**
+  String get managedSettingsExpertDataAssetLabLabel;
 
   /// No description provided for @managedSectionStatusHeading.
   ///

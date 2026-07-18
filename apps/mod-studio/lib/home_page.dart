@@ -3190,14 +3190,17 @@ class _ManagedRevision3ProjectViewState
                       label: l10n.managedWorkspaceSettingsExpertLabel,
                       icon: Icons.settings_outlined,
                       selectedIcon: Icons.settings,
-                      pageBuilder: (_, _) => Revision3SettingsExpertPage(
-                        title: l10n.managedWorkspaceSettingsExpertLabel,
-                        description:
-                            l10n.managedSectionSettingsExpertDescription,
-                        expertStatusLabel: l10n.managedCapabilityUnavailable,
-                        expertStatusDescription:
-                            l10n.managedSectionSettingsExpertDescription,
+                      pageBuilder: (_, location) => Revision3SettingsExpertPage(
+                        location: location,
+                        settingsLabel: l10n.managedActionSettingsTitle,
+                        dataAssetLabLabel:
+                            l10n.managedSettingsExpertDataAssetLabLabel,
                         settings: _buildManagedSettingsArea(l10n),
+                        dataAssetLab: DataAssetLab(
+                          inspector: inspectDataAssetSemanticEdit,
+                          uassetPicker: pickDataAssetSemanticUasset,
+                          usmapPicker: pickDataAssetSemanticUsmap,
+                        ),
                       ),
                     ),
                   ],
@@ -3251,7 +3254,12 @@ class _ManagedRevision3ProjectViewState
           ),
         ),
         settingsCommand: Revision3ProjectCommand.enabled(
-          () => _openSettings(context),
+          () => Revision3ProjectWorkspace.navigate(
+            context,
+            const Revision3ProjectWorkspaceLocation(
+              Revision3ProjectWorkspaceSection.settingsExpert,
+            ),
+          ),
         ),
         busy: busy,
         copy: l10n.localeName.startsWith('de')

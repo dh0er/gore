@@ -9,12 +9,22 @@ import 'package:gore_mod/dataasset/ui/dataasset_lab.dart';
 import 'dataasset_test_fixtures.dart';
 
 void main() {
-  Future<void> pumpLab(WidgetTester tester, DataAssetLab lab) async {
-    await tester.binding.setSurfaceSize(const Size(1400, 900));
+  Future<void> pumpLab(
+    WidgetTester tester,
+    DataAssetLab lab, {
+    Size size = const Size(1400, 900),
+    TextScaler textScaler = TextScaler.noScaling,
+  }) async {
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       ProviderScope(
-        child: MaterialApp(home: Scaffold(body: lab)),
+        child: MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(textScaler: textScaler),
+            child: Scaffold(body: lab),
+          ),
+        ),
       ),
     );
   }
@@ -243,12 +253,115 @@ void main() {
     expect(find.textContaining('Needle_Export'), findsOneWidget);
     expect(find.byType(ExpansionTile), findsOneWidget);
   });
+
+  testWidgets(
+    '320px at 200 percent text stacks inputs and keeps the report reachable',
+    (tester) async {
+      await pumpLab(
+        tester,
+        DataAssetLab(
+          uassetPicker: () async => 'compact.uasset',
+          usmapPicker: () async => 'compact.usmap',
+          inspector:
+              ({required uassetPath, required usmapPath, exportIndex}) async =>
+                  DataAssetInspection.fromJson(
+                    validDataAssetInspectionResponse(objectName: 'DA_Compact'),
+                  ),
+        ),
+        size: const Size(320, 700),
+        textScaler: const TextScaler.linear(2),
+      );
+
+      expect(find.byKey(const Key('dataasset-lab-scroll')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      final uasset = find.byKey(const Key('dataasset-pick-uasset'));
+      final usmap = find.byKey(const Key('dataasset-pick-usmap'));
+      final exportIndex = find.byKey(const Key('dataasset-export-index'));
+      final inspect = find.byKey(const Key('dataasset-inspect'));
+      await _revealLabChild(tester, uasset);
+      expect(
+        tester.getTopLeft(uasset).dy,
+        lessThan(tester.getTopLeft(usmap).dy),
+      );
+      expect(
+        tester.getTopLeft(usmap).dy,
+        lessThan(tester.getTopLeft(exportIndex).dy),
+      );
+      expect(
+        tester.getTopLeft(exportIndex).dy,
+        lessThan(tester.getTopLeft(inspect).dy),
+      );
+
+      await _tapVisible(tester, uasset);
+      await _tapVisible(tester, usmap);
+      await _tapVisible(tester, inspect);
+
+      final search = find.byKey(const Key('dataasset-search'));
+      await _revealLabChild(tester, search);
+      expect(search.hitTestable(), findsOneWidget);
+      expect(find.textContaining('DA_Compact'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    '320x180 at 200 percent scrolls notice inputs and errors safely',
+    (tester) async {
+      await pumpLab(
+        tester,
+        DataAssetLab(
+          uassetPicker: () async => 'short.uasset',
+          usmapPicker: () async => 'short.usmap',
+          inspector:
+              ({required uassetPath, required usmapPath, exportIndex}) async =>
+                  throw const FormatException('short fixture failure'),
+        ),
+        size: const Size(320, 180),
+        textScaler: const TextScaler.linear(2),
+      );
+
+      final labScroll = find.byKey(const Key('dataasset-lab-scroll'));
+      expect(labScroll, findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await _tapVisible(tester, find.byKey(const Key('dataasset-pick-uasset')));
+      await _tapVisible(tester, find.byKey(const Key('dataasset-pick-usmap')));
+      await _tapVisible(tester, find.byKey(const Key('dataasset-inspect')));
+
+      final error = find.byKey(const Key('dataasset-error'));
+      expect(error, findsOneWidget);
+      final failure = find.textContaining('short fixture failure');
+      await _revealLabChild(tester, failure);
+      expect(failure.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _chooseBoth(WidgetTester tester) async {
   await tester.tap(find.byKey(const Key('dataasset-pick-uasset')));
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('dataasset-pick-usmap')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
+  await _revealLabChild(tester, finder);
+  expect(finder.hitTestable(), findsOneWidget);
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _revealLabChild(WidgetTester tester, Finder finder) async {
+  if (finder.evaluate().isEmpty) {
+    final labScroll = find.byKey(const Key('dataasset-lab-scroll'));
+    final scrollable = find
+        .descendant(of: labScroll, matching: find.byType(Scrollable))
+        .first;
+    await tester.scrollUntilVisible(finder, 160, scrollable: scrollable);
+  }
+  await tester.ensureVisible(finder);
   await tester.pumpAndSettle();
 }
 

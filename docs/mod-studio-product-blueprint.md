@@ -101,6 +101,17 @@ authenticated append-only History restore lane; the other commands reuse their
 owning workspaces. None creates another dashboard, project model, or parallel
 mutation path.
 
+**Settings & Expert** now follows the same compact rule. It opens directly on a
+horizontally scrollable **Settings | DataAsset Lab** switch and the selected
+tool; the redundant destination header and availability card are gone. The Lab
+mounts only when selected, retains its UI state within the same project, and is
+responsive down to a 320 x 180 viewport at 200% text. It performs read-only
+inspection of explicitly selected local `.uasset`/`.usmap` snapshots and is
+deliberately separate from Content's project-owned verified DataAsset edits.
+The global Settings command selects Settings rather than reopening a duplicate
+dialog; recovery and no-project states keep their dialog fallback because no
+managed workspace exists there.
+
 Story now also demonstrates the intended in-place Guided shape. A selected
 Quest keeps a persistent path matching the real two-publication recipe: one
 atomic saved Quest-details checkpoint followed by a separately saved opening

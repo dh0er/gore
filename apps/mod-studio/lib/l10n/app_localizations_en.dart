@@ -1079,7 +1079,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedSectionSettingsExpertDescription =>
-      'Settings are available; expert tools are not yet integrated.';
+      'Settings and the read-only DataAsset Lab are available.';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => 'Status';

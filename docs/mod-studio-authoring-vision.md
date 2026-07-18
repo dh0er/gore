@@ -40,6 +40,12 @@ been consolidated:
   while lazy mounting, same-project state, secondary-route memory, keyboard
   activation, and project-identity reset remain intact. This is presentation
   only and grants no format, mutation, build, deployment, or runtime authority.
+- Managed **Settings & Expert** now opens directly on compact
+  **Settings | DataAsset Lab** secondary navigation. Both views mount lazily and
+  retain same-project state; the global Settings command selects the embedded
+  Settings view, while recovery/no-project states retain a dialog fallback.
+  The responsive Lab has one scroll surface and remains read-only local snapshot
+  inspection, separate from project-owned verified DataAsset edits.
 - **Name & objectives** is no longer disabled after a Quest receives generator-
   V4 behavior. A native/Dart managed Outline V2 transaction keeps the active
   objective-slot set, next ordinal, conditions, effects, identities, and all

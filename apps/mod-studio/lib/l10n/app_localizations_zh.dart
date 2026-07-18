@@ -1069,7 +1069,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
 
   @override
-  String get managedSectionSettingsExpertDescription => '设置现已可用；专家工具尚未集成。';
+  String get managedSectionSettingsExpertDescription =>
+      '设置和只读 DataAsset Lab 现已可用。';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => '状态';
@@ -3603,7 +3607,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
 
   @override
-  String get managedSectionSettingsExpertDescription => '设置现已可用；专家工具尚未集成。';
+  String get managedSectionSettingsExpertDescription =>
+      '设置和只读 DataAsset Lab 现已可用。';
+
+  @override
+  String get managedSettingsExpertDataAssetLabLabel => 'DataAsset Lab';
 
   @override
   String get managedSectionStatusHeading => '状态';

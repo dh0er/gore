@@ -722,10 +722,11 @@ void main() {
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
       await tester.tap(find.byKey(const Key('managed-open-settings')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('managed-settings-dialog')), findsOneWidget);
-      await tester.tap(find.byKey(const Key('managed-settings-close')));
-      await tester.pumpAndSettle();
       expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-settings')),
+        findsOneWidget,
+      );
 
       final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
@@ -2726,6 +2727,145 @@ void main() {
       expect(
         find.byKey(const Key('revision3-project-dashboard')),
         findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'managed Settings hosts a lazy retained read-only DataAsset Lab and Settings command resets its route',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      var uassetPickerCalls = 0;
+      var usmapPickerCalls = 0;
+      var inspectorCalls = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\managed-dataasset-lab'),
+        projectId: '4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a',
+        projectRevision: 6,
+        head: _head(6),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        inspectDataAssetSemanticEdit:
+            ({required uassetPath, required usmapPath, exportIndex}) async {
+              inspectorCalls++;
+              expect(uassetPath, r'C:\proof\ManagedLab.uasset');
+              expect(usmapPath, r'C:\proof\Mappings.usmap');
+              expect(exportIndex, isNull);
+              return DataAssetInspection.fromJson(
+                validDataAssetInspectionResponse(objectName: 'DA_ManagedLab'),
+              );
+            },
+        pickDataAssetSemanticUasset: () async {
+          uassetPickerCalls++;
+          return r'C:\proof\ManagedLab.uasset';
+        },
+        pickDataAssetSemanticUsmap: () async {
+          usmapPickerCalls++;
+          return r'C:\proof\Mappings.usmap';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-settings-expert'),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-settings')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-settings-expert-page-data-asset-lab'),
+          skipOffstage: false,
+        ),
+        findsNothing,
+        reason: 'the Lab must remain unmounted until the author selects it',
+      );
+      expect(uassetPickerCalls, 0);
+      expect(usmapPickerCalls, 0);
+      expect(inspectorCalls, 0);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-settings-expert-page-nav-data-asset-lab'),
+      );
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-data-asset-lab')),
+        findsOneWidget,
+      );
+      expect(uassetPickerCalls, 0);
+      expect(usmapPickerCalls, 0);
+      expect(inspectorCalls, 0);
+
+      await tester.tap(find.byKey(const Key('dataasset-pick-uasset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-pick-usmap')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-inspect')));
+      await tester.pumpAndSettle();
+
+      expect(uassetPickerCalls, 1);
+      expect(usmapPickerCalls, 1);
+      expect(inspectorCalls, 1);
+      expect(
+        find.byKey(const Key('dataasset-inspection-report')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('DA_ManagedLab'), findsOneWidget);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-settings-expert-page-nav-settings'),
+      );
+      expect(
+        find.byKey(const Key('dataasset-inspection-report')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          const Key('dataasset-inspection-report'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+        reason: 'switching views retains the completed read-only evidence',
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-settings-expert-page-nav-data-asset-lab'),
+      );
+      expect(
+        find.byKey(const Key('dataasset-inspection-report')),
+        findsOneWidget,
+      );
+      expect(inspectorCalls, 1);
+
+      await tester.tap(find.byKey(Revision3ProjectCommandBar.settingsKey));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-settings')),
+        findsOneWidget,
+        reason: 'the explicit Settings command clears the remembered Lab route',
+      );
+      expect(
+        find.byKey(
+          const Key('dataasset-inspection-report'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+        reason:
+            'route reset does not destroy the lazy page within this project',
       );
     },
   );
@@ -9845,6 +9985,12 @@ void main() {
         find.byKey(const Key('revision3-content-workspace-navigation')),
         findsNothing,
       );
+      await tester.tap(find.byKey(const Key('managed-open-settings')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('managed-settings-dialog')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('managed-settings-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
       for (final key in const <Key>[
         Key('managed-home-story'),
         Key('managed-home-dialog-voice'),
@@ -10672,15 +10818,12 @@ void main() {
         find.byKey(Revision3ProjectCommandBar.compactSettingsKey),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('managed-settings-dialog')), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      await tester.tap(find.byKey(const Key('managed-settings-close')));
-      await tester.pumpAndSettle();
-
-      await _navigateManagedWorkspace(
-        tester,
-        const Key('revision3-project-workspace-tab-settings-expert'),
+      expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-settings')),
+        findsOneWidget,
       );
+      expect(tester.takeException(), isNull);
       expect(
         tester
             .widget<Text>(find.byKey(Revision3ProjectCommandBar.sectionKey))

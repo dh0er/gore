@@ -152,39 +152,46 @@ class _DataAssetLabState extends ConsumerState<DataAssetLab> {
   @override
   Widget build(BuildContext context) {
     final result = _inspection;
+    final controls = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _EvidenceNotice(),
+        const SizedBox(height: 12),
+        _InputPanel(
+          uassetPath: _uassetPath,
+          usmapPath: _usmapPath,
+          exportIndexController: _exportIndexController,
+          exportIndexError: _exportIndexError,
+          canInspect: _canInspect,
+          onPickUasset: _pickUasset,
+          onPickUsmap: _pickUsmap,
+          onExportIndexChanged: (_) => setState(_inputsChanged),
+          onInspect: _inspect,
+        ),
+        if (_busy) ...[
+          const SizedBox(height: 12),
+          const LinearProgressIndicator(key: Key('dataasset-progress')),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          _InspectionError(error: _error!),
+        ],
+      ],
+    );
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const _EvidenceNotice(),
-          const SizedBox(height: 12),
-          _InputPanel(
-            uassetPath: _uassetPath,
-            usmapPath: _usmapPath,
-            exportIndexController: _exportIndexController,
-            exportIndexError: _exportIndexError,
-            canInspect: _canInspect,
-            onPickUasset: _pickUasset,
-            onPickUsmap: _pickUsmap,
-            onExportIndexChanged: (_) => setState(_inputsChanged),
-            onInspect: _inspect,
-          ),
-          if (_busy) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(key: Key('dataasset-progress')),
-          ],
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            _InspectionError(error: _error!),
-          ],
-          if (result != null) ...[
-            const SizedBox(height: 12),
-            Expanded(child: DataAssetInspectionReport(inspection: result)),
-          ] else
-            const Spacer(),
-        ],
-      ),
+      child: result == null
+          ? SingleChildScrollView(
+              key: const Key('dataasset-lab-scroll'),
+              child: controls,
+            )
+          : KeyedSubtree(
+              key: const Key('dataasset-lab-scroll'),
+              child: DataAssetInspectionReport(
+                inspection: result,
+                header: controls,
+              ),
+            ),
     );
   }
 }
@@ -230,61 +237,78 @@ class _InputPanel extends StatelessWidget {
   final VoidCallback onInspect;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              children: [
-                _FileChoice(
-                  buttonKey: const Key('dataasset-pick-uasset'),
-                  label: 'Choose .uasset',
-                  path: uassetPath,
-                  onPressed: onPickUasset,
-                ),
-                const SizedBox(height: 8),
-                _FileChoice(
-                  buttonKey: const Key('dataasset-pick-usmap'),
-                  label: 'Choose .usmap',
-                  path: usmapPath,
-                  onPressed: onPickUsmap,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 220,
-            child: TextField(
-              key: const Key('dataasset-export-index'),
-              controller: exportIndexController,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: InputDecoration(
-                labelText: 'Export index (optional)',
-                errorText: exportIndexError,
-                border: const OutlineInputBorder(),
-              ),
-              onChanged: onExportIndexChanged,
-              onSubmitted: (_) {
-                if (canInspect) onInspect();
-              },
-            ),
-          ),
-          const SizedBox(width: 12),
-          FilledButton.icon(
-            key: const Key('dataasset-inspect'),
-            onPressed: canInspect ? onInspect : null,
-            icon: const Icon(Icons.manage_search),
-            label: const Text('Inspect snapshot'),
-          ),
-        ],
+  Widget build(BuildContext context) {
+    final fileChoices = Column(
+      children: [
+        _FileChoice(
+          buttonKey: const Key('dataasset-pick-uasset'),
+          label: 'Choose .uasset',
+          path: uassetPath,
+          onPressed: onPickUasset,
+        ),
+        const SizedBox(height: 8),
+        _FileChoice(
+          buttonKey: const Key('dataasset-pick-usmap'),
+          label: 'Choose .usmap',
+          path: usmapPath,
+          onPressed: onPickUsmap,
+        ),
+      ],
+    );
+    final exportIndex = TextField(
+      key: const Key('dataasset-export-index'),
+      controller: exportIndexController,
+      keyboardType: TextInputType.number,
+      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      decoration: InputDecoration(
+        labelText: 'Export index (optional)',
+        errorText: exportIndexError,
+        border: const OutlineInputBorder(),
       ),
-    ),
-  );
+      onChanged: onExportIndexChanged,
+      onSubmitted: (_) {
+        if (canInspect) onInspect();
+      },
+    );
+    final inspect = FilledButton.icon(
+      key: const Key('dataasset-inspect'),
+      onPressed: canInspect ? onInspect : null,
+      icon: const Icon(Icons.manage_search),
+      label: const Text('Inspect snapshot', textAlign: TextAlign.center),
+    );
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 760) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  fileChoices,
+                  const SizedBox(height: 12),
+                  exportIndex,
+                  const SizedBox(height: 12),
+                  SizedBox(width: double.infinity, child: inspect),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: fileChoices),
+                const SizedBox(width: 12),
+                SizedBox(width: 220, child: exportIndex),
+                const SizedBox(width: 12),
+                inspect,
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class _FileChoice extends StatelessWidget {
@@ -301,27 +325,43 @@ class _FileChoice extends StatelessWidget {
   final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      OutlinedButton.icon(
-        key: buttonKey,
-        onPressed: onPressed,
-        icon: const Icon(Icons.folder_open_outlined),
-        label: Text(label),
+  Widget build(BuildContext context) {
+    final button = OutlinedButton.icon(
+      key: buttonKey,
+      onPressed: onPressed,
+      icon: const Icon(Icons.folder_open_outlined),
+      label: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+    );
+    final selectedPath = Tooltip(
+      message: path ?? 'Nothing selected',
+      child: Text(
+        path ?? 'Nothing selected',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Tooltip(
-          message: path ?? 'Nothing selected',
-          child: Text(
-            path ?? 'Nothing selected',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ),
-    ],
-  );
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 420) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: double.infinity, child: button),
+              const SizedBox(height: 4),
+              selectedPath,
+            ],
+          );
+        }
+        return Row(
+          children: [
+            button,
+            const SizedBox(width: 8),
+            Expanded(child: selectedPath),
+          ],
+        );
+      },
+    );
+  }
 }
 
 class _InspectionError extends StatelessWidget {
