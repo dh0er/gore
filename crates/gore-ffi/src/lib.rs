@@ -233,6 +233,7 @@ mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
 mod authoring_project_export_revision3;
+mod authoring_project_import_revision3;
 mod authoring_store;
 mod authoring_story;
 mod authoring_story_build;
@@ -302,7 +303,9 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_check_revision3_npc_compiler_v1",
     "authoring_store_check_revision3_quest_compiler_v1",
     authoring_project_export_revision3::COMMAND,
+    authoring_project_export_revision3::COMMAND_V2,
     "authoring_store_import_ogg",
+    authoring_project_import_revision3::COMMAND,
     "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
     "authoring_store_inspect_revision3_quest_source_v1",
@@ -637,6 +640,12 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         authoring_project_export_revision3::COMMAND => Some(
             authoring_project_export_revision3::export_revision3_exact_snapshot_v1_raw,
+        ),
+        authoring_project_export_revision3::COMMAND_V2 => Some(
+            authoring_project_export_revision3::export_revision3_exact_snapshot_v2_raw,
+        ),
+        authoring_project_import_revision3::COMMAND => Some(
+            authoring_project_import_revision3::inspect_revision3_exact_snapshot_v2_raw,
         ),
         "authoring_store_inspect_revision3_installed_dataasset_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::inspect_revision3_installed_dataasset_v1_raw,
@@ -1801,7 +1810,9 @@ mod tests {
                     "authoring_store_check_revision3_npc_compiler_v1",
                     "authoring_store_check_revision3_quest_compiler_v1",
                     "authoring_store_export_revision3_exact_snapshot_v1",
+                    "authoring_store_export_revision3_exact_snapshot_v2",
                     "authoring_store_import_ogg",
+                    "authoring_store_inspect_revision3_exact_snapshot_v2",
                     "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
                     "authoring_store_inspect_revision3_quest_source_v1",

@@ -1,12 +1,18 @@
 # Managed project snapshot export
 
-The managed revision-3 export is a portable copy of one exact published project
+A managed revision-3 export is a portable copy of one exact published project
 snapshot. It is project management, not a mod build, deployment, Save As,
 working-directory move, runtime qualification, or save-game operation.
 
-V1 deliberately has no importer. Mod Studio must therefore call the result a
+The current Studio **Export project copy** workflow emits V1. V1 is frozen as a
+review-only artifact and deliberately has no importer: it must be called a
 **project copy** or **portable snapshot/review copy**, never a restorable backup.
 The original managed project directory remains authoritative and must be kept.
+
+The V2 backend/bridge foundation exports the same exact closure with a closed
+restorable-copy manifest and can inspect that result read-only. It is not wired
+to the Studio export or import UI and cannot restore or adopt a destination. See
+[Managed project snapshot import V2 foundation](managed-project-import.md).
 
 ## Authority boundary
 
@@ -21,12 +27,18 @@ build profile, deploy target, or runtime claim. The managed session calls it
 inside the serialized exact-basis lane. Export neither publishes a new project
 head nor changes the current project path.
 
-## Archive format
+## Versioned archive format
 
-Every archive has the closed marker `gore.managed-project-snapshot.v1` in
-`gore-export.json`. The marker binds the exact project identity, revision and
-head, declares `portable_snapshot_review_copy` authority and
+Every V1 archive has the closed marker `gore.managed-project-snapshot.v1` and
+schema `1` in `gore-export.json`. The marker binds the exact project identity,
+revision and head, declares `portable_snapshot_review_copy` authority and
 `restore_status: not_supported`, and seals every other member.
+
+V2 retains the same deterministic layout and member closure but uses
+`gore.managed-project-snapshot.v2`, schema `2`,
+`portable_snapshot_restorable_copy`, and `restore_status: supported`.
+`supported` is a format property for a future separately reviewed destination
+importer; the current checkpoint performs export and read-only inspection only.
 
 The fixed layout is:
 
@@ -48,7 +60,8 @@ orphans are excluded.
 ## Reachable closure
 
 Collection starts at the expected current head and recursively walks exact
-schema-revision-3 snapshots. For every snapshot V1 includes and fully verifies:
+schema-revision-3 snapshots. For every snapshot both versions include and fully
+verify:
 
 1. the canonical snapshot manifest;
 2. every entity shard named by that manifest;
@@ -126,12 +139,13 @@ chosen destination and never retries, replaces, or deletes the same output
 automatically. Errors that are proven to occur before the publication boundary
 leave the output absent.
 
-## Studio workflow
+## Current V1 Studio workflow
 
-Healthy managed projects expose one shared **Export project copy** dialog from
-the Project menu and Home's Project tools. The dialog asks only for a new
-portable filename and destination folder, explains that the result is not a
-playable mod, and states that game and save files are untouched.
+Healthy managed projects expose one **Export project copy** dialog from the
+Project menu. The dialog emits V1, asks only for a new portable filename and
+destination folder, explains that the result is not a playable mod or restorable
+backup, and states that game and save files are untouched. There is no V2 export
+or import action in the current Studio UI.
 
 Export is unavailable while the managed session requires recovery or while a
 visible project-text draft has not been saved or discarded. It does not require
@@ -161,3 +175,10 @@ The V1 gate requires native, FFI, session, coordinator and widget tests for:
 - managed-only, game-independent UI with dirty/recovery/busy gates; and
 - proof that Store bytes, fixed head, current project path, game and saves are
   unchanged.
+
+The V2 backend gate additionally proves the distinct closed V2 authority tuple,
+byte-identical repeated exports, unchanged Store closure, strict V1 rejection by
+the V2 parser, exact reopen by the read-only inspector, and the same format-hard
+full-reopen work budget on producers and consumers even when their local Store
+limits differ. These checks are not evidence of a destination importer or
+Studio workflow.

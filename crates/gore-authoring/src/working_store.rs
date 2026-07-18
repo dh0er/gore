@@ -29,19 +29,33 @@ use crate::{
 
 mod revision3_export;
 mod revision3_history;
+mod revision3_import;
 
 pub use revision3_export::{
-    Revision3ExactSnapshotClosureV1, Revision3ExactSnapshotExportErrorV1,
-    Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportV1,
-    Revision3ExactSnapshotExportWarningV1, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1,
-    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1,
-    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1,
+    Revision3ExactSnapshotClosureV1, Revision3ExactSnapshotClosureV2,
+    Revision3ExactSnapshotExportErrorV1, Revision3ExactSnapshotExportErrorV2,
+    Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportPublicationV2,
+    Revision3ExactSnapshotExportV1, Revision3ExactSnapshotExportV2,
+    Revision3ExactSnapshotExportWarningV1, Revision3ExactSnapshotExportWarningV2,
+    REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V2,
+    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V2,
+    REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V2,
+    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V2,
+    REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V2,
 };
 pub use revision3_history::{
     PreparedRevision3HistoryRestoreV1, Revision3CheckpointHistoryV1, Revision3CheckpointParentV1,
     Revision3HistoryEntryV1, Revision3HistoryErrorV1, Revision3HistoryV1,
     MAX_REVISION3_HISTORY_ENTRIES_V1, MAX_REVISION3_HISTORY_MANIFEST_BYTES_V1,
     MAX_REVISION3_HISTORY_PARENT_RECORDS_V1, REVISION3_HISTORY_AUTHORITY_V1,
+};
+pub use revision3_import::{
+    inspect_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2_with_limits,
+    Revision3ExactSnapshotInspectionClosureV2, Revision3ExactSnapshotInspectionErrorV2,
+    Revision3ExactSnapshotInspectionV2, REVISION3_EXACT_SNAPSHOT_IMPORT_ARTIFACT_KIND_V2,
+    REVISION3_EXACT_SNAPSHOT_IMPORT_FORMAT_V2, REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_FILE_V2,
+    REVISION3_EXACT_SNAPSHOT_IMPORT_MANIFEST_MARKER_V2,
+    REVISION3_EXACT_SNAPSHOT_IMPORT_RESTORE_STATUS_V2,
 };
 
 const HEAD_FILE_NAME: &str = "gore-project.json";

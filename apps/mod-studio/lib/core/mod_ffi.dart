@@ -2271,6 +2271,21 @@ class ModFfi {
     }
   }
 
+  /// Inspect one restorable managed revision-3 V2 snapshot without importing
+  /// or publishing it.
+  ///
+  /// The native command receives only [source]. It verifies the complete
+  /// archive and returns a closed read-only receipt; it accepts no destination,
+  /// Store root, game path, save path, or publication authority. The project
+  /// layer owns strict receipt parsing so this core bridge stays dependency-free.
+  Future<Map<String, Object?>> authoringStoreInspectRevision3ExactSnapshotV2({
+    required String source,
+  }) async {
+    const command = 'authoring_store_inspect_revision3_exact_snapshot_v2';
+    _authoringRevision3Path(source, 'source');
+    return _call(command, <String, Object?>{'source': source});
+  }
+
   /// Build one exact-basis reviewed revision-3 DataAsset stage into a new,
   /// receipt-bound PAK/UCAS/UTOC triplet.
   ///
