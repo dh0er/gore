@@ -13,50 +13,55 @@ const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 void main() {
-  test(
-    'Quest uses four canonical sections while NPC sections stay unchanged',
-    () {
-      final index = _fixture();
-      final quest = index.entityById(_questId)!;
-      final npc = index.entityById(_npcId)!;
+  test('Quest and NPC expose four canonical productive sections', () {
+    final index = _fixture();
+    final quest = index.entityById(_questId)!;
+    final npc = index.entityById(_npcId)!;
 
+    expect(
+      Revision3StoryEntityWorkbench.sectionsFor(quest),
+      const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.overview,
+        Revision3StoryWorkbenchSection.dialogVoice,
+        Revision3StoryWorkbenchSection.references,
+        Revision3StoryWorkbenchSection.problemsChecks,
+      ],
+    );
+    expect(
+      Revision3StoryEntityWorkbench.sectionsFor(npc),
+      const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.profile,
+        Revision3StoryWorkbenchSection.dialogVoice,
+        Revision3StoryWorkbenchSection.references,
+        Revision3StoryWorkbenchSection.problemsChecks,
+      ],
+    );
+    expect(
+      Revision3StoryEntityWorkbench.supportsSection(
+        quest,
+        Revision3StoryWorkbenchSection.story,
+      ),
+      isTrue,
+    );
+    expect(
+      Revision3StoryEntityWorkbench.supportsSection(
+        quest,
+        Revision3StoryWorkbenchSection.logic,
+      ),
+      isTrue,
+    );
+    for (final legacySection in const <Revision3StoryWorkbenchSection>[
+      Revision3StoryWorkbenchSection.story,
+      Revision3StoryWorkbenchSection.routine,
+      Revision3StoryWorkbenchSection.inventory,
+    ]) {
       expect(
-        Revision3StoryEntityWorkbench.sectionsFor(quest),
-        const <Revision3StoryWorkbenchSection>[
-          Revision3StoryWorkbenchSection.overview,
-          Revision3StoryWorkbenchSection.dialogVoice,
-          Revision3StoryWorkbenchSection.references,
-          Revision3StoryWorkbenchSection.problemsChecks,
-        ],
-      );
-      expect(
-        Revision3StoryEntityWorkbench.sectionsFor(npc),
-        const <Revision3StoryWorkbenchSection>[
-          Revision3StoryWorkbenchSection.profile,
-          Revision3StoryWorkbenchSection.story,
-          Revision3StoryWorkbenchSection.routine,
-          Revision3StoryWorkbenchSection.inventory,
-          Revision3StoryWorkbenchSection.dialogVoice,
-          Revision3StoryWorkbenchSection.references,
-          Revision3StoryWorkbenchSection.problemsChecks,
-        ],
-      );
-      expect(
-        Revision3StoryEntityWorkbench.supportsSection(
-          quest,
-          Revision3StoryWorkbenchSection.story,
-        ),
+        Revision3StoryEntityWorkbench.supportsSection(npc, legacySection),
         isTrue,
+        reason: '${legacySection.name} remains a safe legacy input',
       );
-      expect(
-        Revision3StoryEntityWorkbench.supportsSection(
-          quest,
-          Revision3StoryWorkbenchSection.logic,
-        ),
-        isTrue,
-      );
-    },
-  );
+    }
+  });
 
   testWidgets('wide Quest workbench exposes only the canonical four tabs', (
     tester,
@@ -422,6 +427,109 @@ void main() {
   });
 
   testWidgets(
+    'NPC Profile is one productive Character journey with planned work collapsed',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 720));
+      final index = _fixture();
+      var profileEdits = 0;
+
+      await _pumpWorkbench(
+        tester,
+        index: index,
+        entityId: _npcId,
+        selectedSection: Revision3StoryWorkbenchSection.profile,
+        npcDialogVoice: const Text('Exact NPC greeting editor'),
+        actions: Revision3StoryEntityWorkbenchActions(
+          openEntity: _ignoreString,
+          openAsset: _ignoreString,
+          editNpcProfile: () async => profileEdits++,
+        ),
+      );
+
+      for (final section in const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.profile,
+        Revision3StoryWorkbenchSection.dialogVoice,
+        Revision3StoryWorkbenchSection.references,
+        Revision3StoryWorkbenchSection.problemsChecks,
+      ]) {
+        expect(
+          find.byKey(
+            Key('revision3-story-workbench-tab-${section.name}-$_npcId'),
+          ),
+          findsOneWidget,
+        );
+      }
+      for (final removedSection in const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.story,
+        Revision3StoryWorkbenchSection.routine,
+        Revision3StoryWorkbenchSection.inventory,
+      ]) {
+        expect(
+          find.byKey(
+            Key('revision3-story-workbench-tab-${removedSection.name}-$_npcId'),
+          ),
+          findsNothing,
+        );
+      }
+
+      expect(find.text('Gate Guard'), findsWidgets);
+      expect(find.text('Next step: Dialog & Voice'), findsOneWidget);
+      expect(
+        find.byKey(
+          const Key('revision3-story-workbench-npc-planned-capabilities'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Quest and story relationships are not modeled for NPC drafts yet.',
+        ),
+        findsNothing,
+        reason: 'planned domains start collapsed instead of filling tabs',
+      );
+      expect(
+        find.byKey(
+          const ValueKey('revision3-story-workbench-unavailable-Story'),
+        ),
+        findsNothing,
+        reason: 'the old standalone empty capability is gone',
+      );
+
+      await tester.tap(
+        _actionTile(
+          'revision3-story-workbench-action-edit-npc-profile-$_npcId',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(profileEdits, 1);
+
+      final semantics = tester.ensureSemantics();
+      final plannedSemantics = find.semantics.byLabel(
+        RegExp('Story, Routine, Inventory'),
+      );
+      expect(plannedSemantics, findsOneWidget);
+      tester.semantics.tap(plannedSemantics);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Quest and story relationships are not modeled for NPC drafts yet.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Routine and world placement are not modeled yet.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Inventory, equipment, and trading are not modeled yet.'),
+        findsOneWidget,
+      );
+      semantics.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'compact scaled NPC profile continues to Dialog & Voice for the same draft',
     (tester) async {
       await _setSurfaceSize(tester, const Size(360, 640));
@@ -543,6 +651,67 @@ void main() {
     },
   );
 
+  testWidgets(
+    'compact scaled NPC planned summary expands accessibly without overflow',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(360, 640));
+      final index = _fixture();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Revision3StoryEntityWorkbench(
+              projectId: index.projectId,
+              index: index,
+              entity: index.entityById(_npcId)!,
+              selectedSection: Revision3StoryWorkbenchSection.profile,
+              onSectionChanged: (_) {},
+              actions: _actions,
+              npcDialogVoice: const Text('Exact NPC greeting editor'),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final profile = find.byKey(
+        Key('revision3-story-workbench-section-profile-$_npcId'),
+      );
+      final profileScroll = find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
+      );
+      final plannedTitle = find.text('Story, Routine, Inventory');
+      await tester.scrollUntilVisible(
+        plannedTitle,
+        120,
+        scrollable: profileScroll,
+      );
+      await tester.pumpAndSettle();
+
+      final semantics = tester.ensureSemantics();
+      final plannedSemantics = find.semantics.byLabel(
+        RegExp('Story, Routine, Inventory'),
+      );
+      expect(plannedSemantics, findsOneWidget);
+      tester.semantics.tap(plannedSemantics);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Routine and world placement are not modeled yet.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
+
   for (final legacySection in const <Revision3StoryWorkbenchSection>[
     Revision3StoryWorkbenchSection.story,
     Revision3StoryWorkbenchSection.logic,
@@ -582,6 +751,49 @@ void main() {
             Key(
               'revision3-story-workbench-tab-${legacySection.name}-$_questId',
             ),
+          ),
+          findsNothing,
+        );
+      },
+    );
+  }
+
+  for (final legacySection in const <Revision3StoryWorkbenchSection>[
+    Revision3StoryWorkbenchSection.story,
+    Revision3StoryWorkbenchSection.routine,
+    Revision3StoryWorkbenchSection.inventory,
+  ]) {
+    testWidgets(
+      'legacy NPC ${legacySection.name} selection normalizes to Profile',
+      (tester) async {
+        await _setSurfaceSize(tester, const Size(1000, 720));
+        final index = _fixture();
+
+        await _pumpWorkbench(
+          tester,
+          index: index,
+          entityId: _npcId,
+          selectedSection: legacySection,
+          npcDialogVoice: const Text('Exact NPC greeting editor'),
+        );
+
+        expect(
+          tester
+              .widget<ChoiceChip>(
+                find.byKey(
+                  Key('revision3-story-workbench-tab-profile-$_npcId'),
+                ),
+              )
+              .selected,
+          isTrue,
+        );
+        expect(
+          find.byKey(Key('revision3-story-workbench-section-profile-$_npcId')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            Key('revision3-story-workbench-tab-${legacySection.name}-$_npcId'),
           ),
           findsNothing,
         );

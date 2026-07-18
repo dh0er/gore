@@ -974,6 +974,14 @@ void main() {
       await tester.pump();
       await tester.pump();
 
+      final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
+      expect(undo, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(undo).onPressed, isNull);
+      expect(
+        find.byTooltip(l10n.managedProjectHistoryDirtyBlocked),
+        findsOneWidget,
+      );
+
       final projectMenu = find.byKey(const Key('project-menu'));
       final exportItem = tester
           .widget<PopupMenuButton<String>>(projectMenu)
@@ -2157,6 +2165,310 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'global Undo from Story loads fresh History, confirms friendly, and rebinds N plus 1',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const currentRevision = 7;
+      const restoredFromRevision = 6;
+      const nextRevision = 8;
+      final currentProjectJson = revision3VoiceFixtureProjectJson(
+        revision: currentRevision,
+      );
+      final currentHead = revision3DataAssetHeadForProject(currentProjectJson);
+      final restoredFromHead = revision3DataAssetHeadForProject(
+        revision3VoiceFixtureProjectJson(revision: restoredFromRevision),
+      );
+      final history = Revision3ProjectHistorySnapshot(
+        basisHead: currentHead,
+        projectId: revision3VoiceFixtureProjectId,
+        currentRevision: currentRevision,
+        entries: <Revision3ProjectHistoryEntry>[
+          Revision3ProjectHistoryEntry(
+            head: currentHead,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: currentRevision,
+            isCurrent: true,
+          ),
+          Revision3ProjectHistoryEntry(
+            head: restoredFromHead,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: restoredFromRevision,
+            isCurrent: false,
+          ),
+        ],
+        historyTruncated: false,
+      );
+      late final _FakeHistoryManagedLease managed;
+      managed = _FakeHistoryManagedLease(
+        root: Directory(r'C:\mods\global-undo-story'),
+        projectId: revision3VoiceFixtureProjectId,
+        projectRevision: currentRevision,
+        head: currentHead,
+        canonicalProjectJsonValue: currentProjectJson,
+        history: history,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onRestore: (lease, expectedHistory, target) {
+          expect(identical(expectedHistory, history), isTrue);
+          expect(target.projectRevision, restoredFromRevision);
+          expect(target.head.canonicalJson, restoredFromHead.canonicalJson);
+          final nextProjectJson = revision3VoiceFixtureProjectJson(
+            revision: nextRevision,
+          );
+          final nextHead = revision3DataAssetHeadForProject(nextProjectJson);
+          lease
+            ..projectRevision = nextRevision
+            ..head = nextHead
+            ..canonicalProjectJsonValue = nextProjectJson;
+          return ManagedRevision3ProjectHistoryRestoreCheckpoint(
+            previousHead: currentHead,
+            head: nextHead,
+            projectJson: nextProjectJson,
+            projectId: revision3VoiceFixtureProjectId,
+            previousProjectRevision: currentRevision,
+            projectRevision: nextRevision,
+            restoredFromHead: target.head,
+            restoredFromRevision: target.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      expect(managed.historyReadCalls, 0);
+      expect(managed.historyRestoreCalls, 0);
+      final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
+      expect(undo, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(undo).onPressed, isNotNull);
+      final contentReadsBeforeRestore = managed.contentReadCalls;
+
+      await tester.tap(undo);
+      await tester.pumpAndSettle();
+
+      expect(managed.historyReadCalls, 1);
+      expect(managed.historyRestoreCalls, 0);
+      expect(
+        find.byKey(const Key('revision3-project-global-undo-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'The content from revision 6 will be saved as new revision 8. '
+          'The current version remains in history.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Only the project changes. The game installation and save files '
+          'remain untouched.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining(revision3VoiceFixtureProjectId), findsNothing);
+      expect(find.textContaining(managed.root.path), findsNothing);
+      expect(
+        find.textContaining(currentHead.snapshotSha256.substring(0, 12)),
+        findsNothing,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-project-global-undo-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.historyReadCalls, 1);
+      expect(managed.historyRestoreCalls, 1);
+      expect(managed.projectRevision, nextRevision);
+      final visible = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(visible.projectRevision, nextRevision);
+      expect(visible.head.canonicalJson, managed.head.canonicalJson);
+      expect(managed.contentReadCalls, greaterThan(contentReadsBeforeRestore));
+      expect(
+        find.byKey(const Key('revision3-story-workspace')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Revision 6 was restored as a new project version.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'global Undo from Voice needs no game root and Cancel publishes nothing',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const currentRevision = 5;
+      final currentProjectJson = revision3VoiceFixtureProjectJson(
+        revision: currentRevision,
+      );
+      final currentHead = revision3DataAssetHeadForProject(currentProjectJson);
+      final history = Revision3ProjectHistorySnapshot(
+        basisHead: currentHead,
+        projectId: revision3VoiceFixtureProjectId,
+        currentRevision: currentRevision,
+        entries: <Revision3ProjectHistoryEntry>[
+          Revision3ProjectHistoryEntry(
+            head: currentHead,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: currentRevision,
+            isCurrent: true,
+          ),
+          Revision3ProjectHistoryEntry(
+            head: revision3DataAssetHeadForProject(
+              revision3VoiceFixtureProjectJson(revision: 4),
+            ),
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: 4,
+            isCurrent: false,
+          ),
+        ],
+        historyTruncated: false,
+      );
+      final managed = _FakeHistoryManagedLease(
+        root: Directory(r'C:\mods\global-undo-voice'),
+        projectId: revision3VoiceFixtureProjectId,
+        projectRevision: currentRevision,
+        head: currentHead,
+        canonicalProjectJsonValue: currentProjectJson,
+        history: history,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-localization-voice'),
+      );
+      expect(managed.historyReadCalls, 0);
+      final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
+      expect(undo, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(undo).onPressed, isNotNull);
+
+      await tester.tap(undo);
+      await tester.pumpAndSettle();
+      expect(managed.historyReadCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-project-global-undo-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-global-undo-cancel')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.historyRestoreCalls, 0);
+      expect(managed.projectRevision, currentRevision);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        currentRevision,
+      );
+      expect(
+        find.textContaining('was restored as a new project version'),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('global Undo reports a freshly proven empty History', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    const revision = 3;
+    final projectJson = revision3VoiceFixtureProjectJson(revision: revision);
+    final head = revision3DataAssetHeadForProject(projectJson);
+    final managed = _FakeHistoryManagedLease(
+      root: Directory(r'C:\mods\global-undo-empty'),
+      projectId: revision3VoiceFixtureProjectId,
+      projectRevision: revision,
+      head: head,
+      canonicalProjectJsonValue: projectJson,
+      history: Revision3ProjectHistorySnapshot(
+        basisHead: head,
+        projectId: revision3VoiceFixtureProjectId,
+        currentRevision: revision,
+        entries: <Revision3ProjectHistoryEntry>[
+          Revision3ProjectHistoryEntry(
+            head: head,
+            projectId: revision3VoiceFixtureProjectId,
+            projectRevision: revision,
+            isCurrent: true,
+          ),
+        ],
+        historyTruncated: false,
+      ),
+      contentIndexBuilder: (lease) => _contentIndex(
+        projectId: lease.projectId,
+        revision: lease.projectRevision,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(managed.historyReadCalls, 0);
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.undoKey));
+    await tester.pumpAndSettle();
+
+    expect(managed.historyReadCalls, 1);
+    expect(managed.historyRestoreCalls, 0);
+    expect(
+      find.text('No previous project versions have been recorded yet.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-global-undo-dialog')),
+      findsNothing,
+    );
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState)
+          .projectRevision,
+      revision,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'direct Story reports an exact-selection miss after Quest publish',
@@ -5762,6 +6074,14 @@ void main() {
         find.byKey(const Key('revision3-quest-journey-panel')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('revision3-quest-draft-setup')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-draft-setup-step-openingDialog')),
+        findsOneWidget,
+      );
       expect(find.text('Find Homer'), findsWidgets);
       expect(
         find.byKey(const Key('revision3-quest-journey-main-behavior')),
@@ -5829,6 +6149,38 @@ void main() {
         find.byKey(const Key('revision3-quest-transitions-cancel')),
       );
       await tester.pumpAndSettle();
+
+      final continueWithOpeningDialog = find.byKey(
+        const Key('revision3-quest-draft-setup-recommended-dialog-voice'),
+      );
+      await tester.scrollUntilVisible(
+        continueWithOpeningDialog,
+        240,
+        scrollable: find
+            .descendant(of: overview, matching: find.byType(Scrollable))
+            .first,
+      );
+      await tester.tap(continueWithOpeningDialog);
+      await tester.pumpAndSettle();
+
+      final dialogVoice = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-dialogVoice-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(dialogVoice, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(dialogVoice).selected, isTrue);
+      expect(
+        find.byKey(const Key('revision3-quest-transcript-panel')),
+        findsOneWidget,
+      );
+      final newLine = find.byKey(
+        const Key('revision3-quest-transcript-new-line'),
+      );
+      expect(newLine, findsOneWidget);
+      await tester.ensureVisible(newLine);
+      expect(tester.widget<FilledButton>(newLine).onPressed, isNotNull);
       expect(tester.takeException(), isNull);
     },
   );
@@ -11329,6 +11681,13 @@ final class _FakeNpcGreetingManagedLease extends _FakeManagedLease
   );
 }
 
+typedef _HistoryRestoreCallback =
+    FutureOr<ManagedRevision3ProjectHistoryRestoreCheckpoint> Function(
+      _FakeHistoryManagedLease lease,
+      Revision3ProjectHistorySnapshot expectedHistory,
+      Revision3ProjectHistoryEntry target,
+    );
+
 final class _FakeHistoryManagedLease extends _FakeManagedLease
     implements ManagedRevision3ProjectHistoryLease {
   _FakeHistoryManagedLease({
@@ -11337,11 +11696,15 @@ final class _FakeHistoryManagedLease extends _FakeManagedLease
     required super.projectRevision,
     required super.head,
     required this.history,
+    super.canonicalProjectJsonValue,
     super.contentIndexBuilder,
+    this.onRestore,
   });
 
   final Revision3ProjectHistorySnapshot history;
+  final _HistoryRestoreCallback? onRestore;
   int historyReadCalls = 0;
+  int historyRestoreCalls = 0;
 
   @override
   bool get supportsProjectHistory => true;
@@ -11357,7 +11720,14 @@ final class _FakeHistoryManagedLease extends _FakeManagedLease
   prepareAndPublishProjectHistoryRestoreV1({
     required Revision3ProjectHistorySnapshot expectedHistory,
     required Revision3ProjectHistoryEntry target,
-  }) => throw StateError('history restore is not configured for this fake');
+  }) async {
+    historyRestoreCalls++;
+    final restore = onRestore;
+    if (restore == null) {
+      throw StateError('history restore is not configured for this fake');
+    }
+    return restore(this, expectedHistory, target);
+  }
 
   @override
   void markRequiresReopenAfterHistoryUncertainty() {

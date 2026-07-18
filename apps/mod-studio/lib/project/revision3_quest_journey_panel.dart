@@ -36,6 +36,24 @@ final class Revision3QuestJourneyPanelCopy {
     required this.editNameObjectives,
     required this.editDescriptionConnections,
     required this.editStatesTransitions,
+    required this.setupTitle,
+    required this.setupDescription,
+    required this.setupDraftBoundary,
+    required this.setupQuestDetailsTitle,
+    required this.setupOpeningDialogTitle,
+    required this.setupLegacyBehaviorTitle,
+    required this.setupCompleteStatus,
+    required this.setupNextStatus,
+    required this.setupOpenStatus,
+    required this.setupQuestDetailsComplete,
+    required this.setupQuestDetailsLegacy,
+    required this.setupQuestDetailsUnavailable,
+    required this.setupOpeningPending,
+    required this.setupLegacyBehaviorPending,
+    required this.setupRecommendedNext,
+    required this.setupWriteOpeningDialog,
+    required this.setupReviewDialogVoice,
+    required this.setupActionUnavailable,
     this.editActionBusyReason =
         'Another Quest action is still running. Wait for it to finish.',
     required this.mainQuestTitle,
@@ -87,6 +105,32 @@ final class Revision3QuestJourneyPanelCopy {
       editNameObjectives = 'Edit name & objectives',
       editDescriptionConnections = 'Edit description & connections',
       editStatesTransitions = 'Edit states & transitions',
+      setupTitle = 'Write this Quest',
+      setupDescription =
+          'This workflow publishes the Quest details as one project checkpoint. Saving the opening dialog publishes a separate second checkpoint.',
+      setupDraftBoundary =
+          'Draft setup tracks authored project content only. It is not Build-ready or proven playable.',
+      setupQuestDetailsTitle = '1. Quest details',
+      setupOpeningDialogTitle = '2. Opening dialog',
+      setupLegacyBehaviorTitle = 'Legacy behavior review',
+      setupCompleteStatus = 'Saved in project',
+      setupNextStatus = 'Recommended next step',
+      setupOpenStatus = 'Still open',
+      setupQuestDetailsComplete =
+          'Name, objectives, Quest family, giver, and explicit behavior were saved together.',
+      setupQuestDetailsLegacy =
+          'Name, objectives, Quest family, and giver are saved together. Behavior still uses legacy fixed defaults.',
+      setupQuestDetailsUnavailable =
+          'The exact saved Quest details could not be verified.',
+      setupOpeningPending =
+          'Write a first project dialog line with text in at least one language.',
+      setupLegacyBehaviorPending =
+          'Review the legacy fixed behavior and save explicit states and transitions.',
+      setupRecommendedNext = 'Recommended next step',
+      setupWriteOpeningDialog = 'Write opening dialog',
+      setupReviewDialogVoice = 'Review dialog & Voice',
+      setupActionUnavailable =
+          'This Draft step is unavailable until the exact project can be edited.',
       editActionBusyReason =
           'Another Quest action is still running. Wait for it to finish.',
       mainQuestTitle = 'Main Quest',
@@ -142,6 +186,32 @@ final class Revision3QuestJourneyPanelCopy {
       editNameObjectives = 'Name & Ziele bearbeiten',
       editDescriptionConnections = 'Beschreibung & Verknüpfungen bearbeiten',
       editStatesTransitions = 'Zustände & Übergänge bearbeiten',
+      setupTitle = 'Diese Quest schreiben',
+      setupDescription =
+          'In diesem Ablauf werden die Quest-Details gemeinsam als ein Projektstand veröffentlicht. Das Speichern des Eröffnungsdialogs veröffentlicht einen getrennten zweiten Projektstand.',
+      setupDraftBoundary =
+          'Der Entwurfsfortschritt zeigt nur Projektinhalte. Er bedeutet weder Build-Bereitschaft noch nachgewiesene Spielbarkeit.',
+      setupQuestDetailsTitle = '1. Quest-Details',
+      setupOpeningDialogTitle = '2. Eröffnungsdialog',
+      setupLegacyBehaviorTitle = 'Altes Verhalten prüfen',
+      setupCompleteStatus = 'Im Projekt gespeichert',
+      setupNextStatus = 'Empfohlener nächster Schritt',
+      setupOpenStatus = 'Noch offen',
+      setupQuestDetailsComplete =
+          'Name, Ziele, Quest-Familie, Questgeber und ausdrückliches Verhalten wurden gemeinsam gespeichert.',
+      setupQuestDetailsLegacy =
+          'Name, Ziele, Quest-Familie und Questgeber sind gemeinsam gespeichert. Das Verhalten verwendet noch alte feste Vorgaben.',
+      setupQuestDetailsUnavailable =
+          'Die genau gespeicherten Quest-Details konnten nicht bestätigt werden.',
+      setupOpeningPending =
+          'Schreibe eine erste Projekt-Dialogzeile mit Text in mindestens einer Sprache.',
+      setupLegacyBehaviorPending =
+          'Prüfe das alte feste Verhalten und speichere eigene Zustände und Übergänge.',
+      setupRecommendedNext = 'Empfohlener nächster Schritt',
+      setupWriteOpeningDialog = 'Eröffnungsdialog schreiben',
+      setupReviewDialogVoice = 'Dialog & Voice prüfen',
+      setupActionUnavailable =
+          'Dieser Entwurfsschritt ist erst verfügbar, wenn das exakte Projekt bearbeitet werden kann.',
       editActionBusyReason =
           'Eine andere Quest-Aktion läuft noch. Warte, bis sie abgeschlossen ist.',
       mainQuestTitle = 'Hauptquest',
@@ -197,6 +267,24 @@ final class Revision3QuestJourneyPanelCopy {
   final String editNameObjectives;
   final String editDescriptionConnections;
   final String editStatesTransitions;
+  final String setupTitle;
+  final String setupDescription;
+  final String setupDraftBoundary;
+  final String setupQuestDetailsTitle;
+  final String setupOpeningDialogTitle;
+  final String setupLegacyBehaviorTitle;
+  final String setupCompleteStatus;
+  final String setupNextStatus;
+  final String setupOpenStatus;
+  final String setupQuestDetailsComplete;
+  final String setupQuestDetailsLegacy;
+  final String setupQuestDetailsUnavailable;
+  final String setupOpeningPending;
+  final String setupLegacyBehaviorPending;
+  final String setupRecommendedNext;
+  final String setupWriteOpeningDialog;
+  final String setupReviewDialogVoice;
+  final String setupActionUnavailable;
   final String editActionBusyReason;
   final String mainQuestTitle;
   final String mainQuestSubtitle;
@@ -244,10 +332,12 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
     this.onEditNameObjectives,
     this.onEditDescriptionConnections,
     this.onEditStatesTransitions,
+    this.onOpenDialogVoice,
     this.editDisabledReason,
     this.editNameObjectivesDisabledReason,
     this.editDescriptionConnectionsDisabledReason,
     this.editStatesTransitionsDisabledReason,
+    this.openDialogVoiceDisabledReason,
     this.onOpenDialogLine,
     this.copy = const Revision3QuestJourneyPanelCopy.english(),
     super.key,
@@ -267,6 +357,8 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
   }) : projection = null,
        giverDisplayName = null,
        parentStoryDisplayName = null,
+       onOpenDialogVoice = null,
+       openDialogVoiceDisabledReason = null,
        onOpenDialogLine = null;
 
   final Revision3QuestJourneyProjection? projection;
@@ -278,6 +370,7 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
   final Revision3QuestJourneyAction? onEditNameObjectives;
   final Revision3QuestJourneyAction? onEditDescriptionConnections;
   final Revision3QuestJourneyAction? onEditStatesTransitions;
+  final Revision3QuestJourneyAction? onOpenDialogVoice;
 
   /// Localized owner-provided reason that disables all three edit actions.
   ///
@@ -294,6 +387,7 @@ class Revision3QuestJourneyPanel extends StatefulWidget {
   final String? editNameObjectivesDisabledReason;
   final String? editDescriptionConnectionsDisabledReason;
   final String? editStatesTransitionsDisabledReason;
+  final String? openDialogVoiceDisabledReason;
   final Revision3QuestJourneyOpenDialogLine? onOpenDialogLine;
   final Revision3QuestJourneyAction? onRetry;
   final Revision3QuestJourneyPanelCopy copy;
@@ -349,6 +443,46 @@ final class _Revision3QuestJourneyPanelState
     if (action == null) return;
     await _runAction('dialog-${line.transcriptIndex}', () => action(line.row));
   }
+
+  Revision3QuestJourneyAction? _setupAction(
+    Revision3QuestDraftSetupStepKind step,
+  ) => switch (step) {
+    Revision3QuestDraftSetupStepKind.questDetails => null,
+    Revision3QuestDraftSetupStepKind.openingDialog => widget.onOpenDialogVoice,
+    Revision3QuestDraftSetupStepKind.legacyBehavior =>
+      widget.onEditStatesTransitions,
+  };
+
+  String? _setupActionSpecificDisabledReason(
+    Revision3QuestDraftSetupStepKind step,
+  ) => _nonEmptyReason(switch (step) {
+    Revision3QuestDraftSetupStepKind.questDetails => null,
+    Revision3QuestDraftSetupStepKind.openingDialog =>
+      widget.openDialogVoiceDisabledReason,
+    Revision3QuestDraftSetupStepKind.legacyBehavior =>
+      widget.editStatesTransitionsDisabledReason,
+  });
+
+  String _setupActionKey(Revision3QuestDraftSetupStepKind step) =>
+      switch (step) {
+        Revision3QuestDraftSetupStepKind.questDetails => 'quest-details',
+        Revision3QuestDraftSetupStepKind.openingDialog => 'dialog-voice',
+        Revision3QuestDraftSetupStepKind.legacyBehavior => 'states-transitions',
+      };
+
+  String _setupActionLabel(
+    Revision3QuestDraftSetupStepKind step,
+    Revision3QuestDraftSetup setup,
+  ) => switch (step) {
+    Revision3QuestDraftSetupStepKind.questDetails =>
+      widget.copy.setupQuestDetailsTitle,
+    Revision3QuestDraftSetupStepKind.openingDialog =>
+      setup.openingDialogComplete
+          ? widget.copy.setupReviewDialogVoice
+          : widget.copy.setupWriteOpeningDialog,
+    Revision3QuestDraftSetupStepKind.legacyBehavior =>
+      widget.copy.editStatesTransitions,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -459,6 +593,49 @@ final class _Revision3QuestJourneyPanelState
                     ),
                   ],
                   const SizedBox(height: 20),
+                  Builder(
+                    builder: (context) {
+                      final setup = projection.draftSetup;
+                      final step = setup.recommendedStep;
+                      final action = _setupAction(step);
+                      final actionKey = _setupActionKey(step);
+                      final globalReason = _nonEmptyReason(
+                        widget.editDisabledReason,
+                      );
+                      final specificReason = _setupActionSpecificDisabledReason(
+                        step,
+                      );
+                      final blockingReason = _busyAction != null
+                          ? widget.copy.editActionBusyReason
+                          : globalReason ??
+                                specificReason ??
+                                (action == null
+                                    ? widget.copy.setupActionUnavailable
+                                    : null);
+                      final reasonAlreadyVisible =
+                          _busyAction != null ||
+                          globalReason != null ||
+                          (specificReason != null &&
+                              step ==
+                                  Revision3QuestDraftSetupStepKind
+                                      .legacyBehavior);
+                      return _DraftSetupOverview(
+                        setup: setup,
+                        copy: widget.copy,
+                        recommendedActionKey: actionKey,
+                        recommendedActionLabel: _setupActionLabel(step, setup),
+                        recommendedActionBusy: _busyAction == actionKey,
+                        recommendedActionDisabledReason: reasonAlreadyVisible
+                            ? null
+                            : blockingReason,
+                        onRecommendedAction:
+                            action == null || blockingReason != null
+                            ? null
+                            : () => _runAction(actionKey, action),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 20),
                   _JourneyBehaviorCard(
                     key: const Key('revision3-quest-journey-main-behavior'),
                     title: widget.copy.mainQuestTitle,
@@ -517,6 +694,285 @@ final class _Revision3QuestJourneyPanelState
           ),
         );
       },
+    );
+  }
+}
+
+final class _DraftSetupOverview extends StatelessWidget {
+  const _DraftSetupOverview({
+    required this.setup,
+    required this.copy,
+    required this.recommendedActionKey,
+    required this.recommendedActionLabel,
+    required this.recommendedActionBusy,
+    required this.recommendedActionDisabledReason,
+    required this.onRecommendedAction,
+  });
+
+  final Revision3QuestDraftSetup setup;
+  final Revision3QuestJourneyPanelCopy copy;
+  final String recommendedActionKey;
+  final String recommendedActionLabel;
+  final bool recommendedActionBusy;
+  final String? recommendedActionDisabledReason;
+  final VoidCallback? onRecommendedAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final recommended = setup.recommendedStep;
+    final openingSupplement = setup.openingDialogLineCount == 0
+        ? null
+        : <String>[
+            copy.textLanguageCount(setup.openingTextLanguageCount),
+            copy.voiceTakeCount(setup.openingVoiceTakeCount),
+            if (setup.openingSelectedVoiceTakeCount > 0)
+              copy.selectedVoiceCount(setup.openingSelectedVoiceTakeCount),
+          ].join(' · ');
+    final steps = <_DraftSetupStepData>[
+      _DraftSetupStepData(
+        kind: Revision3QuestDraftSetupStepKind.questDetails,
+        title: copy.setupQuestDetailsTitle,
+        detail: setup.questDetailsComplete
+            ? setup.legacyBehaviorReviewRequired
+                  ? copy.setupQuestDetailsLegacy
+                  : copy.setupQuestDetailsComplete
+            : copy.setupQuestDetailsUnavailable,
+      ),
+      _DraftSetupStepData(
+        kind: Revision3QuestDraftSetupStepKind.openingDialog,
+        title: copy.setupOpeningDialogTitle,
+        detail: setup.openingDialogComplete
+            ? openingSupplement!
+            : copy.setupOpeningPending,
+        supplement: setup.openingDialogComplete ? null : openingSupplement,
+      ),
+      if (setup.legacyBehaviorReviewRequired)
+        _DraftSetupStepData(
+          kind: Revision3QuestDraftSetupStepKind.legacyBehavior,
+          title: copy.setupLegacyBehaviorTitle,
+          detail: copy.setupLegacyBehaviorPending,
+        ),
+    ];
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      key: const Key('revision3-quest-draft-setup'),
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              copy.setupTitle,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(copy.setupDescription),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cardWidth = constraints.maxWidth >= 720
+                    ? (constraints.maxWidth - 12) / 2
+                    : constraints.maxWidth;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: <Widget>[
+                    for (final step in steps)
+                      SizedBox(
+                        width: cardWidth,
+                        child: _DraftSetupStepCard(
+                          step: step,
+                          complete: setup.complete(step.kind),
+                          recommended: step.kind == recommended,
+                          copy: copy,
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            Container(
+              key: const Key('revision3-quest-draft-setup-next'),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text(
+                    copy.setupRecommendedNext,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    key: Key(
+                      'revision3-quest-draft-setup-recommended-$recommendedActionKey',
+                    ),
+                    onPressed: onRecommendedAction,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: <Widget>[
+                          if (recommendedActionBusy)
+                            const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          else
+                            const Icon(Icons.arrow_forward),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              recommendedActionLabel,
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (recommendedActionDisabledReason case final reason?) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      reason,
+                      key: const Key(
+                        'revision3-quest-draft-setup-next-disabled-reason',
+                      ),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              copy.setupDraftBoundary,
+              key: const Key('revision3-quest-draft-setup-boundary'),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _DraftSetupStepData {
+  const _DraftSetupStepData({
+    required this.kind,
+    required this.title,
+    required this.detail,
+    this.supplement,
+  });
+
+  final Revision3QuestDraftSetupStepKind kind;
+  final String title;
+  final String detail;
+  final String? supplement;
+}
+
+final class _DraftSetupStepCard extends StatelessWidget {
+  const _DraftSetupStepCard({
+    required this.step,
+    required this.complete,
+    required this.recommended,
+    required this.copy,
+  });
+
+  final _DraftSetupStepData step;
+  final bool complete;
+  final bool recommended;
+  final Revision3QuestJourneyPanelCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final status = complete
+        ? copy.setupCompleteStatus
+        : recommended
+        ? copy.setupNextStatus
+        : copy.setupOpenStatus;
+    return Semantics(
+      container: true,
+      excludeSemantics: true,
+      label: '${step.title}. $status. ${step.detail}',
+      child: Material(
+        key: Key('revision3-quest-draft-setup-step-${step.kind.name}'),
+        color: complete
+            ? scheme.secondaryContainer.withValues(alpha: 0.45)
+            : scheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: recommended ? scheme.primary : scheme.outlineVariant,
+            width: recommended ? 2 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(
+                    complete
+                        ? Icons.check_circle_outline
+                        : recommended
+                        ? Icons.arrow_circle_right_outlined
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                    color: complete
+                        ? scheme.secondary
+                        : recommended
+                        ? scheme.primary
+                        : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          step.title,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          status,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(step.detail),
+              if (step.supplement case final supplement?) ...<Widget>[
+                const SizedBox(height: 5),
+                Text(supplement, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -886,8 +1342,19 @@ final class _ContextChip extends StatelessWidget {
       children: <Widget>[
         Icon(icon, size: 18),
         const SizedBox(width: 7),
-        Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w600)),
-        Flexible(child: Text(value, overflow: TextOverflow.ellipsis)),
+        Flexible(
+          child: Text.rich(
+            TextSpan(
+              children: <InlineSpan>[
+                TextSpan(
+                  text: '$label: ',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                TextSpan(text: value),
+              ],
+            ),
+          ),
+        ),
       ],
     ),
   );

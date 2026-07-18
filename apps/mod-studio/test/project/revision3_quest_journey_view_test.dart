@@ -24,6 +24,7 @@ void main() {
     var nameEdits = 0;
     var connectionEdits = 0;
     var transitionEdits = 0;
+    var dialogVoiceOpens = 0;
     Revision3QuestTranscriptRow? opened;
 
     Widget app(Revision3QuestJourneyService service) => _app(
@@ -36,6 +37,7 @@ void main() {
         onEditNameObjectives: () => nameEdits++,
         onEditDescriptionConnections: () => connectionEdits++,
         onEditStatesTransitions: () => transitionEdits++,
+        onOpenDialogVoice: () => dialogVoiceOpens++,
         onOpenDialogLine: (row) => opened = row,
       ),
     );
@@ -45,8 +47,11 @@ void main() {
 
     expect(find.byKey(const Key('revision3-quest-journey-panel')), findsOne);
     expect(find.text('Find Homer'), findsOne);
-    expect(find.text('Guard Asghan'), findsOne);
-    expect(find.text('Old Camp story'), findsOne);
+    expect(
+      find.text('Quest giver: Guard Asghan', findRichText: true),
+      findsOne,
+    );
+    expect(find.text('Part of: Old Camp story', findRichText: true), findsOne);
     expect(harness.calls.seedReads, 1);
     expect(harness.calls.transcriptReads, 1);
 
@@ -64,6 +69,12 @@ void main() {
       find.byKey(const Key('revision3-quest-journey-edit-states-transitions')),
     );
     await tester.pumpAndSettle();
+    final setupNext = find.byKey(
+      const Key('revision3-quest-draft-setup-recommended-dialog-voice'),
+    );
+    await tester.ensureVisible(setupNext);
+    await tester.tap(setupNext);
+    await tester.pumpAndSettle();
     final line = find.byKey(const Key('revision3-quest-journey-dialog-line-0'));
     await tester.ensureVisible(line);
     await tester.tap(line);
@@ -72,6 +83,7 @@ void main() {
     expect(nameEdits, 1);
     expect(connectionEdits, 1);
     expect(transitionEdits, 1);
+    expect(dialogVoiceOpens, 1);
     expect(opened?.lineId, _lineId);
     harness.calls.expectNoForbiddenCalls();
 
@@ -466,10 +478,12 @@ Revision3QuestJourneyView _view({
   Revision3QuestJourneyAction? onEditNameObjectives,
   Revision3QuestJourneyAction? onEditDescriptionConnections,
   Revision3QuestJourneyAction? onEditStatesTransitions,
+  Revision3QuestJourneyAction? onOpenDialogVoice,
   String? editDisabledReason,
   String? editNameObjectivesDisabledReason,
   String? editDescriptionConnectionsDisabledReason,
   String? editStatesTransitionsDisabledReason,
+  String? openDialogVoiceDisabledReason,
   Revision3QuestJourneyOpenDialogLine? onOpenDialogLine,
   int authorityEpoch = 0,
 }) => Revision3QuestJourneyView(
@@ -485,11 +499,13 @@ Revision3QuestJourneyView _view({
   onEditNameObjectives: onEditNameObjectives,
   onEditDescriptionConnections: onEditDescriptionConnections,
   onEditStatesTransitions: onEditStatesTransitions,
+  onOpenDialogVoice: onOpenDialogVoice,
   editDisabledReason: editDisabledReason,
   editNameObjectivesDisabledReason: editNameObjectivesDisabledReason,
   editDescriptionConnectionsDisabledReason:
       editDescriptionConnectionsDisabledReason,
   editStatesTransitionsDisabledReason: editStatesTransitionsDisabledReason,
+  openDialogVoiceDisabledReason: openDialogVoiceDisabledReason,
   onOpenDialogLine: onOpenDialogLine,
   copy: const Revision3QuestJourneyPanelCopy.english(),
 );

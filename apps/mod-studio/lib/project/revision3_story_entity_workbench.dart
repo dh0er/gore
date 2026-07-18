@@ -328,8 +328,11 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
   /// Whether [section] is a valid incoming selection for [entity].
   ///
   /// Legacy Quest Story/Logic values remain accepted for API compatibility;
-  /// the workbench normalizes both to the canonical Journey/Overview. Use
-  /// [sectionsFor] for the tabs that should actually be presented to authors.
+  /// the workbench normalizes both to the canonical Journey/Overview. Legacy
+  /// NPC Story/Routine/Inventory values likewise normalize to Profile now that
+  /// those three unmodeled placeholders no longer occupy primary tab space.
+  /// Use [sectionsFor] for the tabs that should actually be presented to
+  /// authors.
   static bool supportsSection(
     Revision3ContentEntity entity,
     Revision3StoryWorkbenchSection section,
@@ -337,7 +340,11 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
       sectionsFor(entity).contains(section) ||
       (entity.kind == Revision3ContentEntityKind.questDraft &&
           (section == Revision3StoryWorkbenchSection.story ||
-              section == Revision3StoryWorkbenchSection.logic));
+              section == Revision3StoryWorkbenchSection.logic)) ||
+      (entity.kind == Revision3ContentEntityKind.npcDraft &&
+          (section == Revision3StoryWorkbenchSection.story ||
+              section == Revision3StoryWorkbenchSection.routine ||
+              section == Revision3StoryWorkbenchSection.inventory));
 
   static List<Revision3StoryWorkbenchSection> sectionsFor(
     Revision3ContentEntity entity,
@@ -350,9 +357,6 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
         ]
       : const <Revision3StoryWorkbenchSection>[
           Revision3StoryWorkbenchSection.profile,
-          Revision3StoryWorkbenchSection.story,
-          Revision3StoryWorkbenchSection.routine,
-          Revision3StoryWorkbenchSection.inventory,
           Revision3StoryWorkbenchSection.dialogVoice,
           Revision3StoryWorkbenchSection.references,
           Revision3StoryWorkbenchSection.problemsChecks,
@@ -744,6 +748,7 @@ class _Revision3StoryEntityWorkbenchState
     final entity = widget.entity;
     return <Widget>[
       _SectionHeading(widget.copy.profileTab),
+      _Fact(label: widget.copy.npcDisplayNameLabel, value: entity.displayName),
       _AtomicActionCard(
         key: Key(
           'revision3-story-workbench-action-edit-npc-profile-${entity.id}',
@@ -756,9 +761,7 @@ class _Revision3StoryEntityWorkbenchState
         onPressed: widget.actions.editNpcProfile,
       ),
       const SizedBox(height: 12),
-      _Fact(label: widget.copy.npcDisplayNameLabel, value: entity.displayName),
       if (widget.npcDialogVoice != null) ...[
-        const SizedBox(height: 4),
         _NpcDialogVoiceNextStepCard(
           key: Key(
             'revision3-story-workbench-npc-dialog-next-step-${entity.id}',
@@ -769,8 +772,9 @@ class _Revision3StoryEntityWorkbenchState
           onPressed: () =>
               _selectSection(Revision3StoryWorkbenchSection.dialogVoice),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 12),
       ],
+      _NpcPlannedCapabilities(copy: widget.copy),
       const SizedBox(height: 4),
       _TechnicalDetails(entity: entity, copy: widget.copy),
     ];
@@ -1004,6 +1008,12 @@ Revision3StoryWorkbenchSection _normalizedSection(
           candidate == Revision3StoryWorkbenchSection.logic)) {
     return Revision3StoryWorkbenchSection.overview;
   }
+  if (entity.kind == Revision3ContentEntityKind.npcDraft &&
+      (candidate == Revision3StoryWorkbenchSection.story ||
+          candidate == Revision3StoryWorkbenchSection.routine ||
+          candidate == Revision3StoryWorkbenchSection.inventory)) {
+    return Revision3StoryWorkbenchSection.profile;
+  }
   return Revision3StoryEntityWorkbench.supportsSection(entity, candidate)
       ? candidate
       : Revision3StoryEntityWorkbench.defaultSectionFor(entity);
@@ -1142,6 +1152,93 @@ class _NpcDialogVoiceNextStepCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Keeps future NPC domains discoverable without making authors navigate into
+/// three empty workbench sections. The existing copy is deliberately reused:
+/// this projection adds no capability or readiness claim of its own.
+class _NpcPlannedCapabilities extends StatelessWidget {
+  const _NpcPlannedCapabilities({required this.copy});
+
+  final Revision3StoryEntityWorkbenchCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Card.outlined(
+    key: const Key('revision3-story-workbench-npc-planned-capabilities'),
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    child: ExpansionTile(
+      key: const Key(
+        'revision3-story-workbench-npc-planned-capabilities-toggle',
+      ),
+      leading: const Icon(Icons.lock_outline),
+      title: Text('${copy.storyTab}, ${copy.routineTab}, ${copy.inventoryTab}'),
+      subtitle: Text(copy.capabilityUnavailable),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      children: [
+        _NpcPlannedCapability(
+          title: copy.storyTab,
+          description: copy.npcStoryUnavailable,
+          fallback: copy.capabilityUnavailable,
+        ),
+        const Divider(height: 1),
+        _NpcPlannedCapability(
+          title: copy.routineTab,
+          description: copy.npcRoutineUnavailable,
+          fallback: copy.capabilityUnavailable,
+        ),
+        const Divider(height: 1),
+        _NpcPlannedCapability(
+          title: copy.inventoryTab,
+          description: copy.npcInventoryUnavailable,
+          fallback: copy.capabilityUnavailable,
+        ),
+      ],
+    ),
+  );
+}
+
+class _NpcPlannedCapability extends StatelessWidget {
+  const _NpcPlannedCapability({
+    required this.title,
+    required this.description,
+    required this.fallback,
+  });
+
+  final String title;
+  final String description;
+  final String fallback;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleDescription = description.isEmpty ? fallback : description;
+    return Semantics(
+      container: true,
+      label: '$title. $visibleDescription',
+      child: ExcludeSemantics(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.lock_outline, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 4),
+                    Text(visibleDescription),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _UnavailableCapability extends StatelessWidget {

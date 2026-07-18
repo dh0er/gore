@@ -60,9 +60,11 @@ void main() {
 
     expect(find.byKey(const Key('revision3-quest-journey-wide')), findsOne);
     expect(find.text('Find Homer'), findsOne);
-    expect(find.text('Quest giver: '), findsOne);
-    expect(find.text('Asghan'), findsWidgets);
-    expect(find.text('Swamp Camp SC Chapter 2'), findsOne);
+    expect(find.text('Quest giver: Asghan', findRichText: true), findsOne);
+    expect(
+      find.text('Part of: Swamp Camp SC Chapter 2', findRichText: true),
+      findsOne,
+    );
     expect(find.text('Draft'), findsOne);
     expect(find.text('Project logic'), findsOne);
     expect(find.textContaining('does not prove'), findsOne);
@@ -169,6 +171,183 @@ void main() {
     expect(general, findsOne);
     expect(find.text('General dialog'), findsOne);
     expect(find.text('Dialog line 3'), findsOne);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'persistent Draft setup shows two publications and one review action',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 900));
+      final projection = await _projection(legacy: false);
+      var dialogOpens = 0;
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          onEditNameObjectives: () {},
+          onEditDescriptionConnections: () {},
+          onEditStatesTransitions: () {},
+          onOpenDialogVoice: () => dialogOpens++,
+        ),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-quest-draft-setup')),
+        findsOneWidget,
+      );
+      for (final step in const <Revision3QuestDraftSetupStepKind>[
+        Revision3QuestDraftSetupStepKind.questDetails,
+        Revision3QuestDraftSetupStepKind.openingDialog,
+      ]) {
+        expect(
+          find.byKey(Key('revision3-quest-draft-setup-step-${step.name}')),
+          findsOneWidget,
+        );
+      }
+      expect(
+        find.byKey(
+          const Key('revision3-quest-draft-setup-step-legacyBehavior'),
+        ),
+        findsNothing,
+      );
+      expect(find.text('Saved in project'), findsNWidgets(2));
+      expect(find.textContaining('one project checkpoint'), findsOneWidget);
+      expect(find.textContaining('separate second checkpoint'), findsOneWidget);
+      final recommended = find.byKey(
+        const Key('revision3-quest-draft-setup-recommended-dialog-voice'),
+      );
+      expect(recommended, findsOneWidget);
+      expect(
+        find.byKey(
+          const Key('revision3-quest-draft-setup-recommended-quest-details'),
+        ),
+        findsNothing,
+      );
+      expect(find.text('Review dialog & Voice'), findsOneWidget);
+      expect(
+        find.textContaining('not Build-ready or proven playable'),
+        findsOneWidget,
+      );
+      final semantics = tester.ensureSemantics();
+      expect(
+        find.semantics.byLabel(
+          RegExp(
+            r'^1\. Quest details\. Saved in project\. '
+            r'Name, objectives, Quest family, giver, and explicit behavior '
+            r'were saved together\.$',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.semantics.byLabel(RegExp(r'^1\. Quest details$')),
+        findsNothing,
+        reason: 'visible step text is excluded from the composed label',
+      );
+      await tester.ensureVisible(recommended);
+      await tester.tap(recommended);
+      await tester.pumpAndSettle();
+      expect(dialogOpens, 1);
+      semantics.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'legacy Draft recommends behavior and shares the single-flight action lane',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(900, 800));
+      final projection = await _projection(legacy: true);
+      final pending = Completer<void>();
+      var transitionCalls = 0;
+
+      await _pumpPanel(
+        tester,
+        Revision3QuestJourneyPanel(
+          projection: projection,
+          onEditStatesTransitions: () {
+            transitionCalls++;
+            return pending.future;
+          },
+          onOpenDialogVoice: () {},
+        ),
+      );
+
+      expect(
+        find.byKey(
+          const Key('revision3-quest-draft-setup-step-legacyBehavior'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Legacy behavior review'), findsOneWidget);
+      final recommended = find.byKey(
+        const Key('revision3-quest-draft-setup-recommended-states-transitions'),
+      );
+      await tester.ensureVisible(recommended);
+      await tester.tap(recommended);
+      await tester.pump();
+      await tester.tap(recommended, warnIfMissed: false);
+      await tester.pump();
+
+      expect(transitionCalls, 1);
+      expect(tester.widget<FilledButton>(recommended).onPressed, isNull);
+      expect(
+        find.byKey(const Key('revision3-quest-journey-action-progress')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          const Revision3QuestJourneyPanelCopy.english().editActionBusyReason,
+        ),
+        findsWidgets,
+      );
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(transitionCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Draft setup remains usable at 360px and 200% text', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(360, 900));
+    final projection = await _projection(legacy: false, emptyTranscript: true);
+    var dialogOpens = 0;
+
+    await _pumpPanel(
+      tester,
+      Revision3QuestJourneyPanel(
+        projection: projection,
+        onOpenDialogVoice: () => dialogOpens++,
+      ),
+      textScaler: const TextScaler.linear(2),
+    );
+
+    expect(
+      find.byKey(const Key('revision3-quest-draft-setup')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-quest-draft-setup-step-openingDialog')),
+      findsOneWidget,
+    );
+    final recommended = find.byKey(
+      const Key('revision3-quest-draft-setup-recommended-dialog-voice'),
+    );
+    expect(recommended, findsOneWidget);
+    expect(find.text('Write opening dialog'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      recommended,
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(recommended);
+    await tester.pumpAndSettle();
+    expect(dialogOpens, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -482,7 +661,7 @@ void main() {
       expect(find.text('Homer finden'), findsOne);
       expect(find.text('Name & Ziele bearbeiten'), findsOne);
       expect(find.text('Beschreibung & Verknüpfungen bearbeiten'), findsOne);
-      expect(find.text('Zustände & Übergänge bearbeiten'), findsOne);
+      expect(find.text('Zustände & Übergänge bearbeiten'), findsNWidgets(2));
       expect(find.text('Entwurf'), findsOne);
       expect(find.text('Projektlogik'), findsOne);
       expect(find.text('Offline-Projektansicht'), findsOne);
@@ -517,8 +696,8 @@ void main() {
         findsNWidgets(4),
       );
       expect(find.text('Dialogzeile 3'), findsOne);
-      expect(find.textContaining('Text in 1 Sprache'), findsNWidgets(3));
-      expect(find.textContaining('0 Sprachaufnahmen'), findsNWidgets(3));
+      expect(find.textContaining('Text in 1 Sprache'), findsNWidgets(4));
+      expect(find.textContaining('0 Sprachaufnahmen'), findsNWidgets(4));
 
       final generalLine = find.byKey(
         const Key('revision3-quest-journey-dialog-line-2'),
@@ -976,11 +1155,16 @@ Map<String, Object?> _reference({
 
 Future<void> _pumpPanel(
   WidgetTester tester,
-  Revision3QuestJourneyPanel panel,
-) async {
+  Revision3QuestJourneyPanel panel, {
+  TextScaler textScaler = TextScaler.noScaling,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       theme: ThemeData(useMaterial3: true),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+        child: child!,
+      ),
       home: Scaffold(body: panel),
     ),
   );

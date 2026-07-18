@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 typedef Revision3ProjectCommandCallback = FutureOr<void> Function();
 
-enum Revision3ProjectCommandKind { search, create, problems, settings }
+enum Revision3ProjectCommandKind { undo, search, create, problems, settings }
 
 /// One command exposed by [Revision3ProjectCommandBar].
 ///
@@ -53,6 +53,7 @@ final class Revision3ProjectCommandBarCopy {
     this.currentSectionTemplate = 'Current section: {section}',
     this.orientationSemanticsTemplate =
         'Project {project}. Current section: {section}.',
+    this.undoLabel = 'Undo',
     this.searchLabel = 'Search',
     this.createLabel = 'Create',
     this.problemsLabel = 'Problems',
@@ -66,6 +67,7 @@ final class Revision3ProjectCommandBarCopy {
     currentSectionTemplate: 'Aktueller Bereich: {section}',
     orientationSemanticsTemplate:
         'Projekt {project}. Aktueller Bereich: {section}.',
+    undoLabel: 'R\u00fcckg\u00e4ngig',
     searchLabel: 'Suchen',
     createLabel: 'Erstellen',
     problemsLabel: 'Probleme',
@@ -78,6 +80,7 @@ final class Revision3ProjectCommandBarCopy {
 
   final String currentSectionTemplate;
   final String orientationSemanticsTemplate;
+  final String undoLabel;
   final String searchLabel;
   final String createLabel;
   final String problemsLabel;
@@ -97,7 +100,7 @@ final class Revision3ProjectCommandBarCopy {
       .replaceAll('{section}', section);
 }
 
-/// Persistent project orientation and the three common project commands.
+/// Persistent project orientation and common project commands.
 ///
 /// The bar serializes its own callbacks. Hosts that serialize actions across
 /// the whole project workspace can additionally supply [busy].
@@ -106,6 +109,7 @@ class Revision3ProjectCommandBar extends StatefulWidget {
     super.key,
     required this.projectDisplayName,
     required this.currentSectionLabel,
+    this.undoCommand,
     required this.searchCommand,
     required this.createCommand,
     required this.problemsCommand,
@@ -123,6 +127,7 @@ class Revision3ProjectCommandBar extends StatefulWidget {
     'revision3-project-command-bar-project-name',
   );
   static const sectionKey = Key('revision3-project-command-bar-section');
+  static const undoKey = Key('revision3-project-command-bar-undo');
   static const searchKey = Key('revision3-project-command-bar-search');
   static const createKey = Key('revision3-project-command-bar-create');
   static const problemsKey = Key('revision3-project-command-bar-problems');
@@ -130,6 +135,9 @@ class Revision3ProjectCommandBar extends StatefulWidget {
   static const moreKey = Key('revision3-project-command-bar-more');
   static const compactCreateKey = Key(
     'revision3-project-command-bar-compact-create',
+  );
+  static const compactUndoKey = Key(
+    'revision3-project-command-bar-compact-undo',
   );
   static const compactProblemsKey = Key(
     'revision3-project-command-bar-compact-problems',
@@ -141,6 +149,7 @@ class Revision3ProjectCommandBar extends StatefulWidget {
 
   final String projectDisplayName;
   final String currentSectionLabel;
+  final Revision3ProjectCommand? undoCommand;
   final Revision3ProjectCommand searchCommand;
   final Revision3ProjectCommand createCommand;
   final Revision3ProjectCommand problemsCommand;
@@ -162,6 +171,7 @@ class _Revision3ProjectCommandBarState
 
   Revision3ProjectCommand _commandFor(Revision3ProjectCommandKind kind) =>
       switch (kind) {
+        Revision3ProjectCommandKind.undo => widget.undoCommand!,
         Revision3ProjectCommandKind.search => widget.searchCommand,
         Revision3ProjectCommandKind.create => widget.createCommand,
         Revision3ProjectCommandKind.problems => widget.problemsCommand,
@@ -169,6 +179,7 @@ class _Revision3ProjectCommandBarState
       };
 
   String _labelFor(Revision3ProjectCommandKind kind) => switch (kind) {
+    Revision3ProjectCommandKind.undo => widget.copy.undoLabel,
     Revision3ProjectCommandKind.search => widget.copy.searchLabel,
     Revision3ProjectCommandKind.create => widget.copy.createLabel,
     Revision3ProjectCommandKind.problems => widget.copy.problemsLabel,
@@ -176,6 +187,7 @@ class _Revision3ProjectCommandBarState
   };
 
   IconData _iconFor(Revision3ProjectCommandKind kind) => switch (kind) {
+    Revision3ProjectCommandKind.undo => Icons.undo,
     Revision3ProjectCommandKind.search => Icons.search,
     Revision3ProjectCommandKind.create => Icons.add,
     Revision3ProjectCommandKind.problems => Icons.warning_amber_outlined,
@@ -183,6 +195,7 @@ class _Revision3ProjectCommandBarState
   };
 
   Key _wideKeyFor(Revision3ProjectCommandKind kind) => switch (kind) {
+    Revision3ProjectCommandKind.undo => Revision3ProjectCommandBar.undoKey,
     Revision3ProjectCommandKind.search => Revision3ProjectCommandBar.searchKey,
     Revision3ProjectCommandKind.create => Revision3ProjectCommandBar.createKey,
     Revision3ProjectCommandKind.problems =>
@@ -268,6 +281,8 @@ class _Revision3ProjectCommandBarState
         runSpacing: 8,
         alignment: WrapAlignment.end,
         children: [
+          if (widget.undoCommand != null)
+            _buildWideCommand(Revision3ProjectCommandKind.undo),
           _buildWideCommand(Revision3ProjectCommandKind.search),
           _buildWideCommand(Revision3ProjectCommandKind.create),
           _buildWideCommand(Revision3ProjectCommandKind.problems),
@@ -381,6 +396,8 @@ class _Revision3ProjectCommandBarState
         icon: const Icon(Icons.more_horiz),
         onSelected: _invoke,
         itemBuilder: (context) => [
+          if (widget.undoCommand != null)
+            _buildCompactMenuItem(Revision3ProjectCommandKind.undo),
           _buildCompactMenuItem(Revision3ProjectCommandKind.create),
           _buildCompactMenuItem(Revision3ProjectCommandKind.problems),
           if (widget.settingsCommand != null)
@@ -421,6 +438,8 @@ class _Revision3ProjectCommandBarState
     final disabledReason = _disabledReasonFor(kind);
     final label = _labelFor(kind);
     final key = switch (kind) {
+      Revision3ProjectCommandKind.undo =>
+        Revision3ProjectCommandBar.compactUndoKey,
       Revision3ProjectCommandKind.create =>
         Revision3ProjectCommandBar.compactCreateKey,
       Revision3ProjectCommandKind.problems =>

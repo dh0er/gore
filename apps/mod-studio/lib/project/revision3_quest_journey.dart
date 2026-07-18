@@ -7,6 +7,81 @@ import 'revision3_quest_transcript_authoring.dart';
 /// Hard authoring limit inherited from the revision-3 Quest transcript model.
 const revision3QuestJourneyMaxDialogLines = 256;
 
+/// The persisted stages and conditional migration of the bounded Quest Draft
+/// setup path.
+///
+/// These labels describe authored project facts only. They are deliberately
+/// unrelated to build, deployment, runtime, or save-game readiness.
+enum Revision3QuestDraftSetupStepKind {
+  questDetails,
+  openingDialog,
+  legacyBehavior,
+}
+
+/// Exact-current, read-only progress for the persistent "Write a Quest" path.
+///
+/// The setup never invents a separate completion flag. Every value is derived
+/// from the same exact Journey projection that the author can inspect below
+/// it. Voice counts are supplemental production context and never gate a step.
+final class Revision3QuestDraftSetup {
+  const Revision3QuestDraftSetup._({
+    required this.questDetailsComplete,
+    required this.openingDialogComplete,
+    required this.legacyBehaviorReviewRequired,
+    required this.openingDialogLineCount,
+    required this.openingTextLanguageCount,
+    required this.openingVoiceTakeCount,
+    required this.openingSelectedVoiceTakeCount,
+  });
+
+  /// Whether the one atomic Quest-details publication contains the required
+  /// name, objectives, story/giver bindings, and valid generated behavior.
+  ///
+  /// Exact-current managed Quests satisfy this invariant. It remains explicit
+  /// so the UI describes the persisted boundary instead of inventing separate
+  /// name and connection checkpoints.
+  final bool questDetailsComplete;
+  final bool openingDialogComplete;
+
+  /// Legacy generator-v2/v3 Quests expose fixed synthetic behavior. They need
+  /// one explicit review/migration after their separately saved opening dialog;
+  /// modern generator-v4 creation does not show a universal behavior step.
+  final bool legacyBehaviorReviewRequired;
+  final int openingDialogLineCount;
+  final int openingTextLanguageCount;
+  final int openingVoiceTakeCount;
+  final int openingSelectedVoiceTakeCount;
+
+  bool complete(Revision3QuestDraftSetupStepKind step) => switch (step) {
+    Revision3QuestDraftSetupStepKind.questDetails => questDetailsComplete,
+    Revision3QuestDraftSetupStepKind.openingDialog => openingDialogComplete,
+    Revision3QuestDraftSetupStepKind.legacyBehavior =>
+      !legacyBehaviorReviewRequired,
+  };
+
+  bool get draftSetupComplete =>
+      questDetailsComplete &&
+      openingDialogComplete &&
+      !legacyBehaviorReviewRequired;
+
+  /// The sole recommended continuation shown by the persistent setup path.
+  ///
+  /// The opening dialog is always the first separately persisted continuation.
+  /// A legacy behavior migration follows only when the exact Quest still uses
+  /// synthetic fixed behavior. Otherwise Dialog & Voice remains the
+  /// conservative review continuation. That does not make Voice mandatory and
+  /// does not turn Draft completion into runtime readiness.
+  Revision3QuestDraftSetupStepKind get recommendedStep {
+    if (!openingDialogComplete) {
+      return Revision3QuestDraftSetupStepKind.openingDialog;
+    }
+    if (legacyBehaviorReviewRequired) {
+      return Revision3QuestDraftSetupStepKind.legacyBehavior;
+    }
+    return Revision3QuestDraftSetupStepKind.openingDialog;
+  }
+}
+
 /// One or more supposedly exact inputs no longer describe the same checkpoint.
 ///
 /// The journey projection is read-only and deliberately fails closed instead
@@ -345,6 +420,28 @@ final class Revision3QuestJourneyProjection {
 
   /// Transcript rows without a persisted objective association.
   final List<Revision3QuestJourneyDialogLine> generalDialogLines;
+
+  /// Persistent Guided-mode progress derived only from exact project facts.
+  Revision3QuestDraftSetup get draftSetup {
+    final opening = orderedDialogLines.isEmpty
+        ? null
+        : orderedDialogLines.first.row;
+    return Revision3QuestDraftSetup._(
+      questDetailsComplete:
+          title.trim().isNotEmpty &&
+          objectives.isNotEmpty &&
+          objectives.every((objective) => objective.title.trim().isNotEmpty) &&
+          parentRuntimeClass.trim().isNotEmpty &&
+          giverRuntimeUniqueName.trim().isNotEmpty,
+      openingDialogComplete:
+          opening != null && opening.authoredLocales.isNotEmpty,
+      legacyBehaviorReviewRequired: legacySyntheticBehavior,
+      openingDialogLineCount: orderedDialogLines.length,
+      openingTextLanguageCount: opening?.authoredLocales.length ?? 0,
+      openingVoiceTakeCount: opening?.voiceTakeCount ?? 0,
+      openingSelectedVoiceTakeCount: opening?.selectedVoiceTakeCount ?? 0,
+    );
+  }
 }
 
 void _requireObjectivesMatchSeed(

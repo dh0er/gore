@@ -26,10 +26,12 @@ class Revision3QuestJourneyView extends StatefulWidget {
     this.onEditNameObjectives,
     this.onEditDescriptionConnections,
     this.onEditStatesTransitions,
+    this.onOpenDialogVoice,
     this.editDisabledReason,
     this.editNameObjectivesDisabledReason,
     this.editDescriptionConnectionsDisabledReason,
     this.editStatesTransitionsDisabledReason,
+    this.openDialogVoiceDisabledReason,
     this.onOpenDialogLine,
     this.copy = const Revision3QuestJourneyPanelCopy.english(),
     super.key,
@@ -54,6 +56,7 @@ class Revision3QuestJourneyView extends StatefulWidget {
   final Revision3QuestJourneyAction? onEditNameObjectives;
   final Revision3QuestJourneyAction? onEditDescriptionConnections;
   final Revision3QuestJourneyAction? onEditStatesTransitions;
+  final Revision3QuestJourneyAction? onOpenDialogVoice;
 
   /// Localized owner-provided reason that keeps all edit affordances visible
   /// but disabled. Leave null together with null callbacks for a deliberately
@@ -65,6 +68,7 @@ class Revision3QuestJourneyView extends StatefulWidget {
   final String? editNameObjectivesDisabledReason;
   final String? editDescriptionConnectionsDisabledReason;
   final String? editStatesTransitionsDisabledReason;
+  final String? openDialogVoiceDisabledReason;
   final Revision3QuestJourneyOpenDialogLine? onOpenDialogLine;
   final Revision3QuestJourneyPanelCopy copy;
 
@@ -234,9 +238,11 @@ final class _Revision3QuestJourneyViewState
             (widget.onEditNameObjectives != null ||
                     widget.onEditDescriptionConnections != null ||
                     widget.onEditStatesTransitions != null ||
+                    widget.onOpenDialogVoice != null ||
                     widget.editNameObjectivesDisabledReason != null ||
                     widget.editDescriptionConnectionsDisabledReason != null ||
-                    widget.editStatesTransitionsDisabledReason != null
+                    widget.editStatesTransitionsDisabledReason != null ||
+                    widget.openDialogVoiceDisabledReason != null
                 ? widget.copy.unavailableBody
                 : null),
       ),
@@ -247,12 +253,14 @@ final class _Revision3QuestJourneyViewState
       onEditNameObjectives: widget.onEditNameObjectives,
       onEditDescriptionConnections: widget.onEditDescriptionConnections,
       onEditStatesTransitions: widget.onEditStatesTransitions,
+      onOpenDialogVoice: widget.onOpenDialogVoice,
       editDisabledReason: widget.editDisabledReason,
       editNameObjectivesDisabledReason: widget.editNameObjectivesDisabledReason,
       editDescriptionConnectionsDisabledReason:
           widget.editDescriptionConnectionsDisabledReason,
       editStatesTransitionsDisabledReason:
           widget.editStatesTransitionsDisabledReason,
+      openDialogVoiceDisabledReason: widget.openDialogVoiceDisabledReason,
       onOpenDialogLine: widget.onOpenDialogLine,
       copy: widget.copy,
     ),

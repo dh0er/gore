@@ -94,6 +94,62 @@ void main() {
     },
   );
 
+  test(
+    'derives two persisted Draft stages plus conditional legacy migration',
+    () async {
+      final completeParts = await _JourneyFixture(
+        generatorVersion: 4,
+        bindings: const <_TranscriptBinding>[
+          (lineIndex: 0, objectiveSlot: null),
+        ],
+      ).load();
+      final complete = completeParts.compose().draftSetup;
+
+      expect(complete.questDetailsComplete, isTrue);
+      expect(complete.openingDialogComplete, isTrue);
+      expect(complete.legacyBehaviorReviewRequired, isFalse);
+      expect(complete.draftSetupComplete, isTrue);
+      expect(complete.openingDialogLineCount, 1);
+      expect(complete.openingTextLanguageCount, 1);
+      expect(complete.openingVoiceTakeCount, 0);
+      expect(complete.openingSelectedVoiceTakeCount, 0);
+      expect(
+        complete.recommendedStep,
+        Revision3QuestDraftSetupStepKind.openingDialog,
+        reason:
+            'complete Draft setup conservatively continues to dialog review',
+      );
+
+      final emptyLegacyParts = await _JourneyFixture(
+        generatorVersion: 3,
+        bindings: const <_TranscriptBinding>[],
+      ).load();
+      final emptyLegacy = emptyLegacyParts.compose().draftSetup;
+      expect(emptyLegacy.questDetailsComplete, isTrue);
+      expect(emptyLegacy.openingDialogComplete, isFalse);
+      expect(emptyLegacy.legacyBehaviorReviewRequired, isTrue);
+      expect(emptyLegacy.draftSetupComplete, isFalse);
+      expect(
+        emptyLegacy.recommendedStep,
+        Revision3QuestDraftSetupStepKind.openingDialog,
+      );
+
+      final dialogLegacyParts = await _JourneyFixture(
+        generatorVersion: 3,
+        bindings: const <_TranscriptBinding>[
+          (lineIndex: 0, objectiveSlot: null),
+        ],
+      ).load();
+      final dialogLegacy = dialogLegacyParts.compose().draftSetup;
+      expect(dialogLegacy.openingDialogComplete, isTrue);
+      expect(dialogLegacy.legacyBehaviorReviewRequired, isTrue);
+      expect(
+        dialogLegacy.recommendedStep,
+        Revision3QuestDraftSetupStepKind.legacyBehavior,
+      );
+    },
+  );
+
   for (final generatorVersion in <int>[2, 3]) {
     test(
       'generator V$generatorVersion keeps synthetic behavior but never invents transcript grouping',

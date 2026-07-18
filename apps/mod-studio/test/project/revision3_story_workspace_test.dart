@@ -839,12 +839,16 @@ void main() {
         tester,
         load: () async => _fixture(includeTranscriptLine: true),
         questJourneyBuilder:
-            ({required index, required quest, required onOpenDialogLine}) =>
-                FilledButton(
-                  key: const Key('test-journey-open-line'),
-                  onPressed: () => onOpenDialogLine(_transcriptLineId),
-                  child: const Text('Open journey dialog'),
-                ),
+            ({
+              required index,
+              required quest,
+              required onOpenDialogVoice,
+              required onOpenDialogLine,
+            }) => FilledButton(
+              key: const Key('test-journey-open-line'),
+              onPressed: () => onOpenDialogLine(_transcriptLineId),
+              child: const Text('Open journey dialog'),
+            ),
         questTranscriptBuilder:
             ({
               required index,
@@ -878,6 +882,56 @@ void main() {
   );
 
   testWidgets(
+    'Quest journey opens Dialog & Voice before the first line exists',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        questJourneyBuilder:
+            ({
+              required index,
+              required quest,
+              required onOpenDialogVoice,
+              required onOpenDialogLine,
+            }) => FilledButton(
+              key: const Key('test-journey-open-empty-dialog'),
+              onPressed: onOpenDialogVoice,
+              child: const Text('Write opening dialog'),
+            ),
+        questTranscriptBuilder:
+            ({
+              required index,
+              required quest,
+              required selectedLineId,
+              required onSelectedLineChanged,
+            }) =>
+                Text('Empty transcript selection: ${selectedLineId ?? 'none'}'),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const Key('test-journey-open-empty-dialog')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('test-journey-open-empty-dialog')));
+      await tester.pump();
+
+      final dialogTab = find.byKey(
+        Key('revision3-story-workbench-tab-dialogVoice-$_questId'),
+      );
+      expect(tester.widget<ChoiceChip>(dialogTab).selected, isTrue);
+      expect(find.text('Empty transcript selection: none'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'compact Quest journey owns scrolling and opens the exact transcript row',
     (tester) async {
       await _setSurfaceSize(tester, const Size(560, 760));
@@ -885,24 +939,28 @@ void main() {
         tester,
         load: () async => _fixture(includeTranscriptLine: true),
         questJourneyBuilder:
-            ({required index, required quest, required onOpenDialogLine}) =>
-                SingleChildScrollView(
-                  key: const Key('test-compact-journey-scroll'),
-                  child: Column(
-                    children: [
-                      FilledButton(
-                        key: const Key('test-compact-journey-open-line'),
-                        onPressed: () => onOpenDialogLine(_transcriptLineId),
-                        child: const Text('Open compact journey dialog'),
-                      ),
-                      const SizedBox(height: 900),
-                      const Text(
-                        'General dialog reached',
-                        key: Key('test-compact-journey-general-dialog'),
-                      ),
-                    ],
+            ({
+              required index,
+              required quest,
+              required onOpenDialogVoice,
+              required onOpenDialogLine,
+            }) => SingleChildScrollView(
+              key: const Key('test-compact-journey-scroll'),
+              child: Column(
+                children: [
+                  FilledButton(
+                    key: const Key('test-compact-journey-open-line'),
+                    onPressed: () => onOpenDialogLine(_transcriptLineId),
+                    child: const Text('Open compact journey dialog'),
                   ),
-                ),
+                  const SizedBox(height: 900),
+                  const Text(
+                    'General dialog reached',
+                    key: Key('test-compact-journey-general-dialog'),
+                  ),
+                ],
+              ),
+            ),
         questTranscriptBuilder:
             ({
               required index,
@@ -1651,6 +1709,77 @@ void main() {
     controller.dispose();
     expect(await unresolved, isFalse);
   });
+
+  testWidgets(
+    'legacy NPC sections normalize to Profile and survive a revision reload',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      final controller = Revision3StoryWorkspaceController();
+      addTearDown(controller.dispose);
+      var revision = 7;
+      var index = _fixture();
+      late StateSetter rebuild;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Scaffold(
+                body: _workspace(
+                  revision: revision,
+                  head: 'head-$revision',
+                  load: () async => index,
+                  controller: controller,
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final legacy in const <Revision3StoryWorkbenchSection>[
+        Revision3StoryWorkbenchSection.story,
+        Revision3StoryWorkbenchSection.routine,
+        Revision3StoryWorkbenchSection.inventory,
+      ]) {
+        expect(
+          await controller.selectEntityAtRevision(
+            entityId: _npcId,
+            projectRevision: revision,
+            projectHeadCanonicalJson: 'head-$revision',
+            section: legacy,
+          ),
+          isTrue,
+        );
+        await tester.pump();
+        expect(
+          tester
+              .widget<Revision3StoryEntityWorkbench>(
+                find.byType(Revision3StoryEntityWorkbench),
+              )
+              .selectedSection,
+          Revision3StoryWorkbenchSection.profile,
+        );
+      }
+
+      rebuild(() {
+        revision = 8;
+        index = _fixture(revision: revision);
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<Revision3StoryEntityWorkbench>(
+              find.byType(Revision3StoryEntityWorkbench),
+            )
+            .selectedSection,
+        Revision3StoryWorkbenchSection.profile,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('controller deep-links only an exact Quest transcript row', (
     tester,

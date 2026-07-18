@@ -52,12 +52,24 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Gate Guard'), findsWidgets);
-    expect(find.text('GORE_GATE_GUARD'), findsNothing);
-    await tester.tap(
-      find.byKey(Key('revision3-story-workbench-technical-$_npcId')),
+    expect(
+      find.byKey(Key('revision3-story-workbench-tab-profile-$_npcId')),
+      findsOneWidget,
     );
-    await tester.pumpAndSettle();
-    expect(find.text('GORE_GATE_GUARD'), findsOneWidget);
+    expect(
+      find.byKey(
+        const Key('revision3-story-workbench-npc-planned-capabilities'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Story, Routine, Inventory'), findsOneWidget);
+    expect(
+      find.text(
+        'Quest and story relationships are not modeled for NPC drafts yet.',
+      ),
+      findsNothing,
+      reason: 'planned NPC domains start collapsed',
+    );
   });
 
   testWidgets(
@@ -1091,11 +1103,15 @@ void main() {
       find.byKey(const Key('revision3-content-entity-details')),
       findsOneWidget,
     );
-    final technical = find.byKey(
-      Key('revision3-story-workbench-technical-$_npcId'),
+    expect(
+      find.byKey(Key('revision3-story-workbench-tab-profile-$_npcId')),
+      findsOneWidget,
+    );
+    final planned = find.byKey(
+      const Key('revision3-story-workbench-npc-planned-capabilities'),
     );
     await tester.scrollUntilVisible(
-      technical,
+      planned,
       100,
       scrollable: find.descendant(
         of: find.byKey(
@@ -1106,10 +1122,14 @@ void main() {
         matching: find.byType(Scrollable),
       ),
     );
-    await tester.tap(technical);
     await tester.pumpAndSettle();
-    expect(find.text('Stable ID'), findsOneWidget);
-    expect(find.text(_npcId), findsOneWidget);
+    expect(planned, findsOneWidget);
+    expect(find.text('Story, Routine, Inventory'), findsOneWidget);
+    expect(
+      find.text('Routine and world placement are not modeled yet.'),
+      findsNothing,
+      reason: 'planned NPC domains remain collapsed on compact entry',
+    );
   });
 
   for (final viewport in <({String label, Size size})>[
@@ -1343,21 +1363,49 @@ void main() {
     expect(find.text('Build blocked'), findsOneWidget);
     expect(find.text('Runtime not verified'), findsOneWidget);
 
-    await _openWorkbenchSection(
-      tester,
-      Revision3StoryWorkbenchSection.routine,
-      _npcId,
+    final profile = find.byKey(
+      Key(
+        'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.profile.name}-$_npcId',
+      ),
+    );
+    final plannedTitle = find.text('Story, Routine, Inventory');
+    await tester.scrollUntilVisible(
+      plannedTitle,
+      100,
+      scrollable: find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(plannedTitle, findsOneWidget);
+    expect(
+      find.text('Routine and world placement are not modeled yet.'),
+      findsNothing,
+      reason: 'the honest planned-work summary starts collapsed',
+    );
+    final semantics = tester.ensureSemantics();
+    final plannedSemantics = find.semantics.byLabel(
+      RegExp('Story, Routine, Inventory'),
+    );
+    expect(plannedSemantics, findsOneWidget);
+    tester.semantics.tap(plannedSemantics);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Quest and story relationships are not modeled for NPC drafts yet.',
+      ),
+      findsOneWidget,
     );
     expect(
       find.text('Routine and world placement are not modeled yet.'),
       findsOneWidget,
     );
     expect(
-      find.byKey(
-        const ValueKey('revision3-story-workbench-unavailable-Routine'),
-      ),
+      find.text('Inventory, equipment, and trading are not modeled yet.'),
       findsOneWidget,
     );
+    semantics.dispose();
 
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();

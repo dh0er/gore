@@ -76,6 +76,7 @@ import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_project_dashboard.dart';
 import 'project/revision3_project_export_dialog.dart';
+import 'project/revision3_project_global_undo.dart';
 import 'project/revision3_project_history.dart';
 import 'project/revision3_project_history_page.dart';
 import 'project/revision3_project_problems.dart';
@@ -2358,6 +2359,7 @@ class _ManagedRevision3ProjectViewState
   _localizationVoiceWorkspaceController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
+  late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
   late final VoidCallback _activateGlobalSearchQuery;
   bool _recoveryStarting = false;
@@ -2526,6 +2528,84 @@ class _ManagedRevision3ProjectViewState
       project.projectId == origin.projectId &&
       identical(_storyWorkspaceController, origin.controller);
 
+  Revision3ProjectGlobalUndoCoordinator _createGlobalUndoCoordinator() =>
+      Revision3ProjectGlobalUndoCoordinator(
+        readCurrentCheckpoint: _readGlobalUndoCheckpoint,
+        loadHistory: (basis) async {
+          final current = _readGlobalUndoCheckpoint();
+          if (current == null || !current.sameAs(basis)) {
+            throw const Revision3ProjectHistoryStaleCheckpointException();
+          }
+          return widget.loadProjectHistory();
+        },
+        confirm: (plan) {
+          if (!mounted) return Future<bool>.value(false);
+          final l10n = AppLocalizations.of(context);
+          return showRevision3ProjectGlobalUndoConfirmation(
+            context: context,
+            plan: plan,
+            copy: Revision3ProjectGlobalUndoCopy(
+              title: l10n.managedProjectHistoryUndo,
+              body: l10n.managedProjectHistoryRestoreBody,
+              projectOnlyBoundary: l10n.managedProjectHistoryRestoreBoundary,
+              cancel: l10n.managedProjectHistoryCancel,
+              undo: l10n.managedProjectHistoryUndo,
+            ),
+          );
+        },
+        restore: (basis, expectedHistory, target) {
+          final current = _readGlobalUndoCheckpoint();
+          if (current == null || !current.sameAs(basis)) {
+            throw const Revision3ProjectHistoryStaleCheckpointException();
+          }
+          return widget.restoreProjectHistory(expectedHistory, target);
+        },
+      );
+
+  Revision3ProjectGlobalUndoCheckpoint? _readGlobalUndoCheckpoint() {
+    if (!mounted || widget.managedWorkspaceDirty) return null;
+    final current = currentManagedProject;
+    if (current == null || current.requiresReopen) return null;
+    return Revision3ProjectGlobalUndoCheckpoint(
+      root: current.root.path,
+      projectId: current.projectId,
+      projectRevision: current.projectRevision,
+      head: current.head,
+    );
+  }
+
+  Future<void> _runGlobalUndo() async {
+    final l10n = AppLocalizations.of(context);
+    try {
+      final result = await _globalUndoCoordinator.undo();
+      if (!mounted) return;
+      final message = switch (result.outcome) {
+        Revision3ProjectGlobalUndoOutcome.restored =>
+          l10n.managedProjectHistoryRestoreSucceeded(
+            result.publication!.restoredFromRevision,
+          ),
+        Revision3ProjectGlobalUndoOutcome.nothingToUndo =>
+          l10n.managedProjectHistoryEmpty,
+        Revision3ProjectGlobalUndoOutcome.cancelled ||
+        Revision3ProjectGlobalUndoOutcome.busy => null,
+        Revision3ProjectGlobalUndoOutcome.unavailable ||
+        Revision3ProjectGlobalUndoOutcome.stale ||
+        Revision3ProjectGlobalUndoOutcome.superseded =>
+          l10n.managedProjectHistoryRestoreFailed,
+      };
+      if (message != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      }
+    } on Object {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.managedProjectHistoryRestoreFailed)),
+      );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -2539,6 +2619,7 @@ class _ManagedRevision3ProjectViewState
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
+    _globalUndoCoordinator = _createGlobalUndoCoordinator();
     _globalSearchQueryFocusNode = FocusNode(
       debugLabel: 'managed project global content search',
     );
@@ -2590,6 +2671,8 @@ class _ManagedRevision3ProjectViewState
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
+    _globalUndoCoordinator.dispose();
+    _globalUndoCoordinator = _createGlobalUndoCoordinator();
     _globalSearchQueryFocusNode.unfocus();
   }
 
@@ -2686,6 +2769,7 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController.dispose();
     _dataAssetStagePanelController.dispose();
     _scopedContentBrowserController.dispose();
+    _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
     super.dispose();
   }
@@ -3026,6 +3110,15 @@ class _ManagedRevision3ProjectViewState
     AppLocalizations l10n,
   ) {
     final mutationDisabledReason = _storyMutationDisabledReason(l10n);
+    final undoCommand =
+        widget.canRestoreProjectHistory && project.projectRevision > 0
+        ? Revision3ProjectCommand.enabled(_runGlobalUndo)
+        : Revision3ProjectCommand.disabled(
+            widget.historyRestoreDisabledReason ??
+                (project.projectRevision == 0
+                    ? l10n.managedProjectHistoryEmpty
+                    : l10n.managedProjectHistoryUnavailable),
+          );
     final busy = widget.recoveryBusy
         ? Revision3ProjectCommandBarBusyState(
             label: l10n.managedProjectHistoryBusy,
@@ -3037,6 +3130,7 @@ class _ManagedRevision3ProjectViewState
       child: Revision3ProjectCommandBar(
         projectDisplayName: _projectCommandBarDisplayName(l10n),
         currentSectionLabel: _workspaceSectionLabel(l10n, location.section),
+        undoCommand: undoCommand,
         searchCommand: Revision3ProjectCommand.enabled(
           () => _openProjectSearch(context),
         ),
@@ -3755,14 +3849,19 @@ class _ManagedRevision3ProjectViewState
           : gameRequiredReason,
       inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
       questJourneyBuilder:
-          ({required index, required quest, required onOpenDialogLine}) =>
-              _buildQuestJourneyView(
-                context,
-                l10n,
-                index: index,
-                quest: quest,
-                onOpenDialogLine: onOpenDialogLine,
-              ),
+          ({
+            required index,
+            required quest,
+            required onOpenDialogVoice,
+            required onOpenDialogLine,
+          }) => _buildQuestJourneyView(
+            context,
+            l10n,
+            index: index,
+            quest: quest,
+            onOpenDialogVoice: onOpenDialogVoice,
+            onOpenDialogLine: onOpenDialogLine,
+          ),
       questTranscriptBuilder:
           ({
             required index,
@@ -3817,6 +3916,7 @@ class _ManagedRevision3ProjectViewState
     AppLocalizations l10n, {
     required Revision3ContentIndex index,
     required Revision3ContentEntity quest,
+    required VoidCallback onOpenDialogVoice,
     required ValueChanged<String> onOpenDialogLine,
   }) {
     final basisProjectId = project.projectId;
@@ -3859,6 +3959,7 @@ class _ManagedRevision3ProjectViewState
       editDescriptionConnectionsDisabledReason: gameRoot == null
           ? l10n.managedDashboardMissingGameDescription
           : null,
+      onOpenDialogVoice: onOpenDialogVoice,
       onOpenDialogLine: (row) => onOpenDialogLine(row.lineId),
       copy: copy,
     );

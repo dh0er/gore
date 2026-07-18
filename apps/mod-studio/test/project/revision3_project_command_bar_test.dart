@@ -6,6 +6,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
 
 void main() {
+  testWidgets('wide bar exposes Undo directly and serializes it', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(1100, 700));
+    final pending = Completer<void>();
+    var undos = 0;
+    var searches = 0;
+    await _pumpBar(
+      tester,
+      undo: Revision3ProjectCommand.enabled(() {
+        undos++;
+        return pending.future;
+      }),
+      search: Revision3ProjectCommand.enabled(() => searches++),
+      create: const Revision3ProjectCommand.disabled('Creation unavailable.'),
+      problems: const Revision3ProjectCommand.disabled('Checks unavailable.'),
+    );
+
+    expect(find.byKey(Revision3ProjectCommandBar.undoKey), findsOneWidget);
+    expect(find.byIcon(Icons.undo), findsOneWidget);
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.undoKey));
+    await tester.pump();
+    expect(undos, 1);
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.searchKey));
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.undoKey));
+    await tester.pump();
+    expect((undos, searches), (1, 0));
+
+    pending.complete();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Revision3ProjectCommandBar.searchKey));
+    await tester.pump();
+    expect(searches, 1);
+  });
+
   testWidgets('wide bar keeps project orientation and exposes all commands', (
     tester,
   ) async {
@@ -150,6 +185,7 @@ void main() {
         copy: Revision3ProjectCommandBarCopy.german,
         textScaler: const TextScaler.linear(2),
         section: 'Dialoge und Sprachausgabe',
+        undo: Revision3ProjectCommand.enabled(() {}),
         search: Revision3ProjectCommand.enabled(() {}),
         create: Revision3ProjectCommand.enabled(() => creates++),
         problems: const Revision3ProjectCommand.disabled(
@@ -163,12 +199,14 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(Revision3ProjectCommandBar.searchKey), findsOneWidget);
+      expect(find.byKey(Revision3ProjectCommandBar.undoKey), findsNothing);
       expect(find.byKey(Revision3ProjectCommandBar.createKey), findsNothing);
       expect(find.byKey(Revision3ProjectCommandBar.moreKey), findsOneWidget);
       expect(tester.takeException(), isNull);
 
       await tester.tap(find.byKey(Revision3ProjectCommandBar.moreKey));
       await tester.pumpAndSettle();
+      expect(find.text('R\u00fcckg\u00e4ngig'), findsOneWidget);
       expect(find.text('Erstellen'), findsOneWidget);
       expect(find.text('Probleme'), findsOneWidget);
       expect(
@@ -265,6 +303,7 @@ void main() {
 
 Future<void> _pumpBar(
   WidgetTester tester, {
+  Revision3ProjectCommand? undo,
   required Revision3ProjectCommand search,
   required Revision3ProjectCommand create,
   required Revision3ProjectCommand problems,
@@ -284,6 +323,7 @@ Future<void> _pumpBar(
             child: Revision3ProjectCommandBar(
               projectDisplayName: 'My Story Mod',
               currentSectionLabel: section,
+              undoCommand: undo,
               searchCommand: search,
               createCommand: create,
               problemsCommand: problems,

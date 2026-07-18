@@ -57,14 +57,36 @@ been consolidated:
 - The selected managed-R3 Quest/NPC detail is one responsive, exact-current
   Story Workbench. Quest exposes the four canonical homes **Journey**, **Dialog
   & Voice**, **References**, and **Problems & Checks**; legacy Story/Logic
-  selections normalize to Journey. NPC exposes **Profile**, **Story**,
-  **Routine**, **Inventory**, **Dialog & Voice**, **References**, and **Problems
-  & Checks**. Journey retains the three bounded Quest editor handoffs, Dialog &
-  Voice owns transcript authoring, Profile owns bounded NPC name/archetype
-  editing, Problems & Checks owns source/compiler inspection, and More actions
-  owns safe Draft removal. Unmodeled NPC areas remain visibly unavailable.
+  selections normalize to Journey. NPC now likewise exposes only four
+  productive homes: **Profile**, **Dialog & Voice**, **References**, and
+  **Problems & Checks**. Legacy NPC Story/Routine/Inventory selections normalize
+  to Profile; those three unmodeled areas remain discoverable in one initially
+  collapsed, honest summary instead of occupying empty primary tabs. Journey
+  retains the bounded Quest editor handoffs, Dialog & Voice owns transcript or
+  greeting authoring, Profile owns bounded NPC name/archetype editing and its
+  greeting continuation, Problems & Checks owns source/compiler inspection,
+  and More actions owns safe Draft removal.
   Projected reference problems are not full build/runtime readiness, and the
   distinct Draft/build-blocked/runtime-unqualified boundaries remain visible.
+- The exact-current Quest Journey now carries a persistent **Write this
+  Quest** path that matches the real publication boundary: the valid Quest
+  details are one atomic saved checkpoint and the opening dialog is a separate
+  second publication. Generator-v2/v3 Quests additionally expose a conditional
+  legacy-behavior review; modern V4 Quests do not invent a universal extra
+  step. Progress is derived from the same reopened Journey projection, not
+  stored as another flag. It exposes one recommended continuation through the
+  already-owned Dialog & Voice or Transitions editor, remains responsive at
+  compact/high-scale layouts, and keeps Voice counts supplemental. A complete
+  Draft setup is still neither Build-ready nor playable and grants no runtime
+  authority.
+- The persistent Project Work Bar now also exposes **Undo last change**. Each
+  invocation loads fresh authenticated history, selects only its immediate
+  predecessor, confirms the project-only append operation, and restores that
+  content as a new current+1 revision through the existing serialized restore
+  lane. Dirty text, recovery/reopen, another project action, head drift, late
+  results, malformed receipts, and missing history fail closed. This is one
+  global previous-change continuation, not labeled Redo, a semantic diff, or a
+  general cross-domain transaction system; it never touches the game or saves.
 - The primary managed-R3 **Story** destination is now a direct authoring
   workspace instead of a card page that redirects authors into Content. It
   loads the exact-current content index, projects only `NpcDraft` and
