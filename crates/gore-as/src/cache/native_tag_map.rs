@@ -840,8 +840,23 @@ mod tests {
             eprintln!("skip: set GORE_AS_DEFAULT_CACHE");
             return;
         };
-        let cache = std::fs::read(path).expect("read configured Shipping cache");
-        let ancestry = DefaultNativeAncestry::from_test_edges_and_maps(&[], &[]);
+        let Some(usmap_path) = std::env::var_os("GORE_AS_DEFAULT_USMAP") else {
+            eprintln!("skip: set GORE_AS_DEFAULT_USMAP");
+            return;
+        };
+        let cache_path = std::path::PathBuf::from(path);
+        let cache = std::fs::read(&cache_path).expect("read configured Shipping cache");
+        let binds = crate::cache::binds::NativeApi::load(
+            &cache_path
+                .parent()
+                .expect("Script directory")
+                .join("Binds.Cache"),
+        )
+        .expect("load sealed sibling Binds.Cache");
+        let usmap = std::fs::read(usmap_path).expect("read configured USMAP");
+        let schemas = gore_asset::SchemaDb::from_usmap(&usmap).expect("parse configured USMAP");
+        let ancestry = DefaultNativeAncestry::from_schema_db(&binds, &cache, &schemas)
+            .expect("derive configured sealed ancestry profile");
         let guid = CacheHeader::parse(&cache).expect("production header").hash;
         let fingerprint = combined_default_cache_fingerprint(&cache)
             .expect("production combined default fingerprint");

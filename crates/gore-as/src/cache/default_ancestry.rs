@@ -37,8 +37,79 @@ pub const DEFAULT_NATIVE_ANCESTRY_PROFILE_ID: &str =
     "sha256:98da5430f213b0107bd7361fa3c78316bf5320fbd15a53a9258d50d8d3ac9ed5";
 pub const DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID: &str =
     "sha256:f20ce5ce571f3d121046ac1942e0705cfb30c3761a3e390cd5d77ea2c16159cc";
+const HOTFIX_24169431_SCRIPT_CACHE_GUID: [u8; 16] = [
+    0x43, 0x52, 0x1b, 0x38, 0x49, 0x7e, 0x98, 0x4f, 0x8a, 0xbb, 0xc0, 0x35, 0xeb, 0x4c, 0xb1, 0xd7,
+];
+const HOTFIX_24169431_SCRIPT_CACHE_MUTATION_STABLE_SHA256: [u8; 32] = [
+    0x21, 0x21, 0x11, 0x87, 0xec, 0xa2, 0x88, 0x9f, 0x04, 0xe2, 0xba, 0xf9, 0x5d, 0xa2, 0x2d, 0x4e,
+    0x71, 0x88, 0x28, 0x73, 0x41, 0xb7, 0x6e, 0xde, 0xd1, 0x18, 0x8a, 0x1d, 0x08, 0x54, 0x34, 0xc5,
+];
+/// Exact native-ancestry evidence identity for Steam BuildID 24169431. This ID is derived from
+/// the hotfix cache GUID and combined mutation-stable fingerprint plus the sealed Binds/USMAP
+/// parser outputs; it is not a version-name or filename match.
+pub const HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID: &str =
+    "sha256:b7e13f7f3756e97a07194bdbd6ba6a1f2cb99179888d0d8e581f505be969b645";
+pub const HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID: &str =
+    "sha256:b56365eff74dc11610c0e2f08dcb41923773bbb6efc954403c6ea09c48239b8a";
 const GAMEPLAY_TAG_FLOAT32_MAP_SEMANTIC_ID: &[u8] =
     b"usmap-class-declared-case-sensitive-array-dim-1:Map{key=Struct(GameplayTag),value=Float}";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SealedDefaultNativeAncestryProfile {
+    script_cache_guid: [u8; 16],
+    script_cache_mutation_stable_sha256: [u8; 32],
+    scalar_default_operand_count: usize,
+    gameplay_tag_float32_operand_count: usize,
+    profile_id: &'static str,
+    gameplay_tag_float32_map_proof_id: &'static str,
+}
+
+const SEALED_DEFAULT_NATIVE_ANCESTRY_PROFILES: [SealedDefaultNativeAncestryProfile; 2] = [
+    SealedDefaultNativeAncestryProfile {
+        script_cache_guid: VERIFIED_SCRIPT_CACHE_GUID,
+        script_cache_mutation_stable_sha256: VERIFIED_SCRIPT_CACHE_MUTATION_STABLE_SHA256,
+        scalar_default_operand_count: VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT,
+        gameplay_tag_float32_operand_count: VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT,
+        profile_id: DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+        gameplay_tag_float32_map_proof_id: DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+    },
+    SealedDefaultNativeAncestryProfile {
+        script_cache_guid: HOTFIX_24169431_SCRIPT_CACHE_GUID,
+        script_cache_mutation_stable_sha256: HOTFIX_24169431_SCRIPT_CACHE_MUTATION_STABLE_SHA256,
+        scalar_default_operand_count: VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT,
+        gameplay_tag_float32_operand_count: VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT,
+        profile_id: HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+        gameplay_tag_float32_map_proof_id: HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+    },
+];
+
+fn sealed_profile_for_cache(
+    script_cache_guid: &[u8; 16],
+    fingerprint: &DefaultCacheFingerprint,
+) -> Option<&'static SealedDefaultNativeAncestryProfile> {
+    SEALED_DEFAULT_NATIVE_ANCESTRY_PROFILES
+        .iter()
+        .find(|profile| {
+            script_cache_guid == &profile.script_cache_guid
+                && fingerprint.sha256 == profile.script_cache_mutation_stable_sha256
+                && fingerprint.scalar_operand_count == profile.scalar_default_operand_count
+                && fingerprint.tag_operand_count == profile.gameplay_tag_float32_operand_count
+        })
+}
+
+/// Return whether the two selector identities are one exact supported ancestry/map-proof pair.
+/// Independently recognized IDs from different game generations are deliberately rejected.
+pub fn is_supported_gameplay_tag_float32_proof_pair(
+    ancestry_profile_id: &str,
+    map_proof_id: &str,
+) -> bool {
+    SEALED_DEFAULT_NATIVE_ANCESTRY_PROFILES
+        .iter()
+        .any(|profile| {
+            profile.profile_id == ancestry_profile_id
+                && profile.gameplay_tag_float32_map_proof_id == map_proof_id
+        })
+}
 
 const VERIFIED_USMAP_SHA256: [u8; 32] = [
     0x73, 0x55, 0x8c, 0x36, 0x89, 0x5c, 0xd1, 0xb0, 0xf0, 0xfd, 0x1b, 0x3c, 0xb4, 0x43, 0x05, 0xb2,
@@ -159,6 +230,7 @@ pub enum DefaultAncestryError {
 /// Opaque, exact-build proof for native class ancestry. Callers cannot construct arbitrary edges.
 #[derive(Debug, Clone)]
 pub struct DefaultNativeAncestry {
+    sealed_profile: &'static SealedDefaultNativeAncestryProfile,
     evidence: DefaultNativeAncestryEvidence,
     class_ids: HashMap<String, SchemaId>,
     super_ids: Vec<Option<SchemaId>>,
@@ -179,15 +251,9 @@ impl DefaultNativeAncestry {
             .hash;
         let script_cache_fingerprint = combined_default_cache_fingerprint(cache)
             .map_err(|error| DefaultAncestryError::InvalidCache(error.to_string()))?;
-        if script_cache_guid != VERIFIED_SCRIPT_CACHE_GUID
-            || script_cache_fingerprint.sha256 != VERIFIED_SCRIPT_CACHE_MUTATION_STABLE_SHA256
-            || script_cache_fingerprint.scalar_operand_count
-                != VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT
-            || script_cache_fingerprint.tag_operand_count
-                != VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT
-        {
-            return Err(DefaultAncestryError::UnsupportedCache);
-        }
+        let sealed_profile =
+            sealed_profile_for_cache(&script_cache_guid, &script_cache_fingerprint)
+                .ok_or(DefaultAncestryError::UnsupportedCache)?;
         let class_paths = native
             .verified_default_class_paths(&script_cache_guid)
             .ok_or(DefaultAncestryError::UnsupportedBinds)?;
@@ -324,20 +390,21 @@ impl DefaultNativeAncestry {
             usmap_graph_sha256,
             resolved_profile_sha256,
         );
-        if expected_profile_sha256() != Some(evidence.profile_sha256) {
+        if expected_id_sha256(sealed_profile.profile_id) != Some(evidence.profile_sha256) {
             return Err(DefaultAncestryError::ProfileIdDrift);
         }
         let gameplay_tag_float32_map_proof_sha256 = map_proof_sha256(
             &evidence.profile_sha256,
             &gameplay_tag_float32_map_profile_sha256,
         );
-        if expected_id_sha256(DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID)
+        if expected_id_sha256(sealed_profile.gameplay_tag_float32_map_proof_id)
             != Some(gameplay_tag_float32_map_proof_sha256)
         {
             return Err(DefaultAncestryError::GameplayTagFloat32MapProofIdDrift);
         }
 
         let profile = Self {
+            sealed_profile,
             evidence,
             class_ids,
             super_ids,
@@ -355,10 +422,10 @@ impl DefaultNativeAncestry {
 
     pub fn profile_id(&self) -> &'static str {
         debug_assert_eq!(
-            expected_profile_sha256(),
+            expected_id_sha256(self.sealed_profile.profile_id),
             Some(self.evidence.profile_sha256)
         );
-        DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+        self.sealed_profile.profile_id
     }
 
     pub fn gameplay_tag_float32_map_profile_sha256(&self) -> [u8; 32] {
@@ -374,10 +441,10 @@ impl DefaultNativeAncestry {
             )
         );
         debug_assert_eq!(
-            expected_id_sha256(DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID),
+            expected_id_sha256(self.sealed_profile.gameplay_tag_float32_map_proof_id),
             Some(self.gameplay_tag_float32_map_proof_sha256)
         );
-        DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        self.sealed_profile.gameplay_tag_float32_map_proof_id
     }
 
     pub(crate) fn supports_cache(
@@ -460,6 +527,7 @@ impl DefaultNativeAncestry {
             .map(|(_, parent)| parent.and_then(|parent| class_ids.get(parent).copied()))
             .collect();
         Self {
+            sealed_profile: &SEALED_DEFAULT_NATIVE_ANCESTRY_PROFILES[0],
             evidence: DefaultNativeAncestryEvidence {
                 script_cache_guid: VERIFIED_SCRIPT_CACHE_GUID,
                 script_cache_fingerprint_format: DEFAULT_CACHE_FINGERPRINT_FORMAT,
@@ -471,7 +539,8 @@ impl DefaultNativeAncestry {
                 usmap_source_sha256: [0; 32],
                 usmap_graph_sha256: [0; 32],
                 resolved_profile_sha256: [0; 32],
-                profile_sha256: expected_profile_sha256().expect("production profile id"),
+                profile_sha256: expected_id_sha256(DEFAULT_NATIVE_ANCESTRY_PROFILE_ID)
+                    .expect("production profile id"),
             },
             class_ids,
             super_ids,
@@ -487,10 +556,6 @@ impl DefaultNativeAncestry {
             .expect("production map proof id"),
         }
     }
-}
-
-fn expected_profile_sha256() -> Option<[u8; 32]> {
-    expected_id_sha256(DEFAULT_NATIVE_ANCESTRY_PROFILE_ID)
 }
 
 fn expected_id_sha256(id: &str) -> Option<[u8; 32]> {
@@ -557,7 +622,8 @@ mod tests {
         assert_eq!(
             expected_id_sha256(DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID),
             Some(map_proof_sha256(
-                &expected_profile_sha256().expect("production ancestry profile id"),
+                &expected_id_sha256(DEFAULT_NATIVE_ANCESTRY_PROFILE_ID)
+                    .expect("production ancestry profile id"),
                 &VERIFIED_GAMEPLAY_TAG_FLOAT32_MAP_PROFILE_SHA256
             ))
         );
@@ -574,6 +640,64 @@ mod tests {
             map_profile.proves_gameplay_tag_float32_map("UNativeLeaf", "damage"),
             None
         );
+    }
+
+    #[test]
+    fn sealed_generation_tuples_and_selector_proof_pairs_do_not_cross() {
+        let retained = DefaultCacheFingerprint {
+            sha256: VERIFIED_SCRIPT_CACHE_MUTATION_STABLE_SHA256,
+            scalar_operand_count: VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT,
+            tag_operand_count: VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT,
+        };
+        let hotfix = DefaultCacheFingerprint {
+            sha256: HOTFIX_24169431_SCRIPT_CACHE_MUTATION_STABLE_SHA256,
+            scalar_operand_count: VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT,
+            tag_operand_count: VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT,
+        };
+
+        assert_eq!(
+            sealed_profile_for_cache(&VERIFIED_SCRIPT_CACHE_GUID, &retained)
+                .map(|profile| profile.profile_id),
+            Some(DEFAULT_NATIVE_ANCESTRY_PROFILE_ID)
+        );
+        assert_eq!(
+            sealed_profile_for_cache(&HOTFIX_24169431_SCRIPT_CACHE_GUID, &hotfix)
+                .map(|profile| profile.profile_id),
+            Some(HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID)
+        );
+        assert!(sealed_profile_for_cache(&VERIFIED_SCRIPT_CACHE_GUID, &hotfix).is_none());
+        assert!(sealed_profile_for_cache(&HOTFIX_24169431_SCRIPT_CACHE_GUID, &retained).is_none());
+
+        let mut unknown_guid = HOTFIX_24169431_SCRIPT_CACHE_GUID;
+        unknown_guid[0] ^= 1;
+        assert!(sealed_profile_for_cache(&unknown_guid, &hotfix).is_none());
+        let mut unknown_fingerprint = hotfix;
+        unknown_fingerprint.sha256[0] ^= 1;
+        assert!(
+            sealed_profile_for_cache(&HOTFIX_24169431_SCRIPT_CACHE_GUID, &unknown_fingerprint)
+                .is_none()
+        );
+
+        assert!(is_supported_gameplay_tag_float32_proof_pair(
+            DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        ));
+        assert!(is_supported_gameplay_tag_float32_proof_pair(
+            HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+            HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        ));
+        assert!(!is_supported_gameplay_tag_float32_proof_pair(
+            DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+            HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        ));
+        assert!(!is_supported_gameplay_tag_float32_proof_pair(
+            HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        ));
+        assert!(!is_supported_gameplay_tag_float32_proof_pair(
+            "sha256:unknown",
+            "sha256:unknown"
+        ));
     }
 
     #[test]
@@ -604,6 +728,13 @@ mod tests {
             .expect("load sibling Binds");
         let usmap = std::fs::read(usmap_path).expect("read configured USMAP");
         let schemas = SchemaDb::from_usmap(&usmap).expect("parse configured USMAP");
+        let fingerprint = combined_default_cache_fingerprint(&cache)
+            .expect("fingerprint configured production cache");
+        let cache_guid = CacheHeader::parse(&cache)
+            .expect("parse configured cache")
+            .hash;
+        let expected =
+            sealed_profile_for_cache(&cache_guid, &fingerprint).expect("configured sealed tuple");
         let profile = DefaultNativeAncestry::from_schema_db(&binds, &cache, &schemas)
             .expect("derive configured profile");
         assert_eq!(profile.gameplay_tag_float32_maps.len(), 8);
@@ -611,20 +742,17 @@ mod tests {
             profile.gameplay_tag_float32_map_profile_sha256(),
             VERIFIED_GAMEPLAY_TAG_FLOAT32_MAP_PROFILE_SHA256
         );
-        assert_eq!(profile.profile_id(), DEFAULT_NATIVE_ANCESTRY_PROFILE_ID);
+        assert_eq!(profile.profile_id(), expected.profile_id);
         assert_eq!(
             profile.gameplay_tag_float32_map_proof_id(),
-            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+            expected.gameplay_tag_float32_map_proof_id
         );
-
-        let fingerprint = combined_default_cache_fingerprint(&cache)
-            .expect("fingerprint configured production cache");
         assert_eq!(
             fingerprint,
             DefaultCacheFingerprint {
-                sha256: VERIFIED_SCRIPT_CACHE_MUTATION_STABLE_SHA256,
-                scalar_operand_count: VERIFIED_SCALAR_DEFAULT_OPERAND_COUNT,
-                tag_operand_count: VERIFIED_GAMEPLAY_TAG_FLOAT32_OPERAND_COUNT,
+                sha256: expected.script_cache_mutation_stable_sha256,
+                scalar_operand_count: expected.scalar_default_operand_count,
+                tag_operand_count: expected.gameplay_tag_float32_operand_count,
             }
         );
         let references = super::super::default_tag_map::reference_proven_tag_map_sites(&cache)
@@ -648,10 +776,7 @@ mod tests {
 
         let reconstructed = DefaultNativeAncestry::from_schema_db(&binds, &mutated, &schemas)
             .expect("reconstruct ancestry after tag edit");
-        assert_eq!(
-            reconstructed.profile_id(),
-            DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
-        );
+        assert_eq!(reconstructed.profile_id(), expected.profile_id);
         let tag_report =
             super::super::native_tag_map::inspect_native_tag_maps(&mutated, &reconstructed)
                 .expect("rediscover native tag-map sites after tag edit");
@@ -672,13 +797,10 @@ mod tests {
             tag_report.tag_operand_count(),
             fingerprint.tag_operand_count
         );
-        assert_eq!(
-            tag_report.ancestry_profile_id(),
-            DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
-        );
+        assert_eq!(tag_report.ancestry_profile_id(), expected.profile_id);
         assert_eq!(
             tag_report.map_proof_id(),
-            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+            expected.gameplay_tag_float32_map_proof_id
         );
         let rediscovered = tag_report
             .sites()
@@ -696,7 +818,7 @@ mod tests {
         )
         .expect("retain scalar ancestry membership after tag edit");
         assert!(scalar_report.sites.iter().any(|site| {
-            site.selector.ancestry_profile.as_deref() == Some(DEFAULT_NATIVE_ANCESTRY_PROFILE_ID)
+            site.selector.ancestry_profile.as_deref() == Some(expected.profile_id)
         }));
     }
 }

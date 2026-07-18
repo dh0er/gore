@@ -59,11 +59,24 @@ const VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256: [u8; 32] = [
     0xcf, 0xfb, 0xce, 0x6f, 0xeb, 0x2f, 0x8c, 0x14, 0xdc, 0x5f, 0x25, 0x19, 0x37, 0x41, 0xf5, 0x89,
     0x51, 0xc1, 0x6f, 0x27, 0x0a, 0x76, 0x77, 0x31, 0x25, 0xd0, 0xe5, 0x07, 0xd3, 0x6e, 0x95, 0xc4,
 ];
-/// Per-build GUID from the matching audited `PrecompiledScript_Shipping.Cache` header.
-/// A sealed Binds file is not mutation evidence for any other script-cache build.
+/// Per-build GUIDs from the exact audited `PrecompiledScript_Shipping.Cache` headers that share
+/// this byte-identical Binds database. A sealed Binds file is not mutation evidence for any other
+/// script-cache build; the native-ancestry layer separately binds each GUID to its exact combined
+/// cache fingerprint.
 const VERIFIED_DEFAULT_SCRIPT_CACHE_GUID: [u8; 16] = [
     0x45, 0x0d, 0x65, 0xc0, 0x4f, 0x0c, 0x01, 0x4f, 0xbe, 0xc5, 0x68, 0x01, 0x63, 0x78, 0xe6, 0x9a,
 ];
+const VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID: [u8; 16] = [
+    0x43, 0x52, 0x1b, 0x38, 0x49, 0x7e, 0x98, 0x4f, 0x8a, 0xbb, 0xc0, 0x35, 0xeb, 0x4c, 0xb1, 0xd7,
+];
+
+fn is_verified_default_script_cache_guid(script_cache_guid: &[u8; 16]) -> bool {
+    [
+        VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
+        VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
+    ]
+    .contains(script_cache_guid)
+}
 
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
 
@@ -219,7 +232,7 @@ impl NativeApi {
         class: &str,
         field: &str,
     ) -> Option<&str> {
-        if script_cache_guid != &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID {
+        if !is_verified_default_script_cache_guid(script_cache_guid) {
             return None;
         }
         self.verified_default_field_types
@@ -234,7 +247,7 @@ impl NativeApi {
         &self,
         script_cache_guid: &[u8; 16],
     ) -> Option<&HashMap<String, String>> {
-        (script_cache_guid == &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID
+        (is_verified_default_script_cache_guid(script_cache_guid)
             && !self.verified_default_class_paths.is_empty())
         .then_some(&self.verified_default_class_paths)
     }
@@ -245,7 +258,7 @@ impl NativeApi {
         &self,
         script_cache_guid: &[u8; 16],
     ) -> Option<VerifiedDefaultClassProfileDigests> {
-        (script_cache_guid == &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID
+        (is_verified_default_script_cache_guid(script_cache_guid)
             && !self.verified_default_class_paths.is_empty())
         .then_some(self.verified_default_class_profile_digests)
         .flatten()
@@ -1025,6 +1038,14 @@ mod tests {
             Some("int")
         );
         assert_eq!(
+            api.verified_default_field_type(
+                &VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
+                "UItemDefinition",
+                "m_Value",
+            ),
+            Some("int")
+        );
+        assert_eq!(
             api.verified_default_field_type(&foreign_guid, "UItemDefinition", "m_Value"),
             None,
             "an unknown script-cache GUID must expose no mutation evidence"
@@ -1061,6 +1082,12 @@ mod tests {
         assert_eq!(
             api.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID),
             from_bytes.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
+        );
+        assert_eq!(
+            api.verified_default_class_profile_digests(&VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID),
+            from_bytes.verified_default_class_profile_digests(
+                &VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID
+            )
         );
         let (source_sha256, bridge_sha256) = api
             .verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
@@ -1212,22 +1239,23 @@ mod tests {
             return;
         }
         let api = NativeApi::load(path).expect("load Binds.Cache");
-        assert_eq!(
-            api.verified_default_field_type(
-                &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
-                "UItemDefinition",
-                "m_Value",
-            ),
-            Some("int")
-        );
-        assert_eq!(
-            api.verified_default_field_type(
-                &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
-                "UItemDefinition",
-                "m_MaxStack",
-            ),
-            Some("int")
-        );
+        for guid in [
+            VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
+            VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
+        ] {
+            for (field, value_type) in [
+                ("m_Value", "int"),
+                ("m_MaxStack", "int"),
+                ("m_Weight", "float32"),
+                ("m_Mass", "float32"),
+            ] {
+                assert_eq!(
+                    api.verified_default_field_type(&guid, "UItemDefinition", field),
+                    Some(value_type),
+                    "sealed item field {field} for GUID {guid:02x?}"
+                );
+            }
+        }
         let mut foreign_guid = VERIFIED_DEFAULT_SCRIPT_CACHE_GUID;
         foreign_guid[0] ^= 1;
         assert_eq!(

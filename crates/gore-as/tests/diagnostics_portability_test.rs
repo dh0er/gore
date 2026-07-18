@@ -30,10 +30,16 @@ const RELEASE_FIXTURES: &[ReleaseFixture] = &[
         callback_rva: 0x467e200,
     },
     ReleaseFixture {
-        version: "1.0.3",
+        version: "1.0.3 Hotfix 1",
         byte_len: 171_698_176,
         sha256: "f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5",
         callback_rva: 0x467f5b0,
+    },
+    ReleaseFixture {
+        version: "1.0.3 Hotfix 2",
+        byte_len: 171_704_320,
+        sha256: "b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d",
+        callback_rva: 0x467fcd0,
     },
 ];
 
@@ -49,7 +55,7 @@ fn default_fixture_root() -> PathBuf {
 /// Offline-only regression over the archived release executables. The fixtures are intentionally
 /// not distributed with the crate. CI without them skips; setting `GORE_AS_RELEASE_MATRIX_DIR`
 /// makes their absence a test failure. A locally present default matrix must also be complete so a
-/// partially copied archive cannot look like four-version coverage.
+/// partially copied archive cannot look like complete release coverage.
 #[test]
 fn archived_release_executables_keep_the_verified_callback_capability() {
     let explicit_root = std::env::var_os("GORE_AS_RELEASE_MATRIX_DIR").map(PathBuf::from);
@@ -118,7 +124,7 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
         assert!(rvas.insert(fixture.callback_rva));
     }
 
-    // Different RVAs across all four releases prove the regression is exercising AOB discovery,
+    // Different RVAs across all archived releases prove the regression is exercising AOB discovery,
     // not accidentally validating one build-specific fixed address.
     assert_eq!(hashes.len(), RELEASE_FIXTURES.len());
     assert_eq!(rvas.len(), RELEASE_FIXTURES.len());

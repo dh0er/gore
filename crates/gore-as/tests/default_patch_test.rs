@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::Path;
 
 use gore_as::cache::{
@@ -8,6 +10,7 @@ use gore_as::cache::{
     },
     wire::WireError,
 };
+use sha2::{Digest, Sha256};
 
 const SAMPLES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -957,8 +960,229 @@ fn configured_real_default_ancestry_profile_is_sealed() {
     )
     .expect("build sealed ancestry profile");
     assert_eq!(profile.class_count(), 6_572);
+    assert!(
+        gore_as::cache::default_ancestry::is_supported_gameplay_tag_float32_proof_pair(
+            profile.profile_id(),
+            profile.gameplay_tag_float32_map_proof_id(),
+        )
+    );
+}
+
+#[test]
+fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
+    let Some(game) = std::env::var_os("GORE_AS_HOTFIX_24169431_GAME") else {
+        eprintln!("skip: set GORE_AS_HOTFIX_24169431_GAME");
+        return;
+    };
+    let game = std::path::PathBuf::from(game);
+    let exe = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+    let cache_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let binds_path = game.join("G1R/Script/Binds.Cache");
+    let usmap = std::env::var_os("GORE_AS_HOTFIX_24169431_USMAP")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let directory = game.join("G1R/Binaries/Win64/ue4ss");
+            let mut candidates: Vec<_> = std::fs::read_dir(&directory)
+                .expect("read configured hotfix ue4ss directory")
+                .map(|entry| entry.expect("read ue4ss entry").path())
+                .filter(|path| {
+                    path.extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("usmap"))
+                })
+                .collect();
+            candidates.sort();
+            assert_eq!(
+                candidates.len(),
+                1,
+                "hotfix qualification requires one USMAP"
+            );
+            candidates.remove(0)
+        });
+
+    fn stream_seal(path: &Path) -> (u64, String) {
+        let mut file = std::fs::File::open(path).expect("open sealed generation file");
+        let length = file.metadata().expect("read sealed file metadata").len();
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        loop {
+            let read = file.read(&mut buffer).expect("hash sealed generation file");
+            if read == 0 {
+                break;
+            }
+            hash.update(&buffer[..read]);
+        }
+        (
+            length,
+            gore_as::cache::default_patch::encode_hex(&hash.finalize()),
+        )
+    }
+
+    assert_eq!(
+        stream_seal(&exe),
+        (
+            171_704_320,
+            "b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&cache_path),
+        (
+            123_394_250,
+            "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&binds_path),
+        (
+            5_903_938,
+            "46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&usmap),
+        (
+            2_516_955,
+            "73558c36895cd1b0f0fd1b3cb44305b240f8dbb93730ad03c88d7b8478b7ffca".into()
+        )
+    );
+
+    let cache = std::fs::read(&cache_path).expect("read hotfix Shipping cache");
+    assert_eq!(
+        gore_as::cache::default_patch::encode_hex(&Sha256::digest(&cache)),
+        "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385"
+    );
+    assert_eq!(
+        CacheHeader::parse(&cache)
+            .expect("parse hotfix header")
+            .hash,
+        [
+            0x43, 0x52, 0x1b, 0x38, 0x49, 0x7e, 0x98, 0x4f, 0x8a, 0xbb, 0xc0, 0x35, 0xeb, 0x4c,
+            0xb1, 0xd7,
+        ]
+    );
+    let binds_bytes = std::fs::read(&binds_path).expect("read hotfix Binds");
+    assert_eq!(
+        gore_as::cache::default_patch::encode_hex(&Sha256::digest(&binds_bytes)),
+        "46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea"
+    );
+    let binds = gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes)
+        .expect("parse sealed hotfix Binds");
+    let usmap_bytes = std::fs::read(&usmap).expect("read hotfix USMAP");
+    assert_eq!(
+        gore_as::cache::default_patch::encode_hex(&Sha256::digest(&usmap_bytes)),
+        "73558c36895cd1b0f0fd1b3cb44305b240f8dbb93730ad03c88d7b8478b7ffca"
+    );
+    let schemas =
+        gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse sealed hotfix USMAP");
+    let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+        &binds, &cache, &schemas,
+    )
+    .expect("derive exact BuildID-24169431 profile");
+    assert_eq!(profile.class_count(), 6_572);
     assert_eq!(
         profile.profile_id(),
-        gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+    );
+    assert_eq!(
+        profile.gameplay_tag_float32_map_proof_id(),
+        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+    );
+
+    let tag_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(&cache, &profile)
+        .expect("inspect sealed hotfix tag maps");
+    assert_eq!(tag_report.site_count(), 1_432);
+    assert_eq!(
+        tag_report.ancestry_profile_id(),
+        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+    );
+    assert_eq!(
+        tag_report.map_proof_id(),
+        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+    );
+
+    let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+        &cache,
+        Some(
+            gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes)
+                .expect("reparse sealed hotfix Binds"),
+        ),
+        Some(profile),
+    )
+    .expect("inspect hotfix defaults with sealed ancestry");
+    assert_eq!(report.stats.unresolved_fields, 0);
+
+    let wanted_types = BTreeMap::from([
+        ("m_Value", "int"),
+        ("m_MaxStack", "int"),
+        ("m_Weight", "float32"),
+        ("m_Mass", "float32"),
+    ]);
+    let expected_counts = BTreeMap::from([
+        ("m_Value", 906usize),
+        ("m_MaxStack", 641usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let expected_native_counts = BTreeMap::from([
+        ("m_Value", 583usize),
+        ("m_MaxStack", 317usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let mut counts = BTreeMap::new();
+    let mut native_counts = BTreeMap::new();
+    let mut target_fields: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for site in report
+        .sites
+        .iter()
+        .filter(|site| wanted_types.contains_key(site.selector.field.as_str()))
+    {
+        let field = site.selector.field.as_str();
+        assert_eq!(site.selector.field_owner, "UItemDefinition", "{field}");
+        assert_eq!(
+            site.selector.value_type,
+            *wanted_types.get(field).expect("known requested field"),
+            "{field}"
+        );
+        *counts.entry(field).or_insert(0usize) += 1;
+        if let Some(ancestry_profile) = site.selector.ancestry_profile.as_deref() {
+            assert_eq!(
+                ancestry_profile,
+                gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+                "{field}"
+            );
+            *native_counts.entry(field).or_insert(0usize) += 1;
+        }
+        assert!(
+            target_fields
+                .entry((site.selector.module.clone(), site.selector.class.clone()))
+                .or_default()
+                .insert(site.selector.field.clone()),
+            "duplicate qualified target field: {}.{}.{}",
+            site.selector.module,
+            site.selector.class,
+            site.selector.field
+        );
+    }
+    assert_eq!(counts, expected_counts);
+    assert_eq!(native_counts, expected_native_counts);
+    assert_eq!(target_fields.len(), 918);
+
+    let mut combinations: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+    for fields in target_fields.values() {
+        *combinations
+            .entry(fields.iter().cloned().collect())
+            .or_default() += 1;
+    }
+    assert_eq!(
+        combinations,
+        BTreeMap::from([
+            (vec!["m_Mass".into()], 2usize),
+            (vec!["m_MaxStack".into()], 10usize),
+            (vec!["m_MaxStack".into(), "m_Value".into()], 631usize),
+            (vec!["m_Value".into()], 166usize),
+            (vec!["m_Value".into(), "m_Weight".into()], 109usize),
+        ])
     );
 }

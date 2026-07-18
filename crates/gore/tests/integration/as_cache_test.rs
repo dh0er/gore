@@ -11,6 +11,22 @@ fn fixture_path() -> String {
     .to_string()
 }
 
+fn expected_default_evidence(cache: &[u8]) -> (&'static str, &'static str, &'static str) {
+    match format!("{:x}", Sha256::digest(cache)).as_str() {
+        "1018f1cfe6b99a650eecb33afb96752d691d2088ead27808971b812f04ecb4c2" => (
+            gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+            gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            "d02d0b0a7bd68cdae2d2e04b530fa959a94c2270cf178d406f64c474f1840312",
+        ),
+        "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385" => (
+            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+            gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            "7b6864cf0e12a886b80b1ad574bb08a42c0afe0d6ae6831fd441a90dcefb304c",
+        ),
+        other => panic!("configured cache is not an exact supported pristine generation: {other}"),
+    }
+}
+
 #[test]
 fn decode_header_prints_values() {
     Command::cargo_bin("gore")
@@ -62,6 +78,45 @@ fn cli_command_graph_has_stack_headroom_for_version_and_help() {
                 .stdout(contains("GORE_AS_USMAP"))
                 .stdout(contains("fails closed"));
         }
+    }
+}
+
+#[test]
+fn configured_hotfix_24169431_cli_loads_only_the_exact_profile_pair() {
+    let Some(game) = std::env::var_os("GORE_AS_HOTFIX_24169431_GAME") else {
+        eprintln!("skip: set GORE_AS_HOTFIX_24169431_GAME");
+        return;
+    };
+    let cache = std::path::PathBuf::from(game).join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let assertion = Command::cargo_bin("gore")
+        .unwrap()
+        .env_remove("GORE_AS_BINDS")
+        .env_remove("GORE_AS_USMAP")
+        .args([
+            "as",
+            "default-sites",
+            cache.to_str().unwrap(),
+            "--field",
+            "m_Weight",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stderr(contains(
+            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+        ));
+    let document: Value = serde_json::from_slice(&assertion.get_output().stdout)
+        .expect("BuildID-24169431 default-sites JSON");
+    assert_eq!(document["site_count"], 109);
+    assert_eq!(document["stats"]["unresolved_fields"], 0);
+    for site in document["sites"].as_array().expect("weight sites") {
+        assert_eq!(site["selector"]["field_owner"], "UItemDefinition");
+        assert_eq!(site["selector"]["field"], "m_Weight");
+        assert_eq!(site["selector"]["value_type"], "float32");
+        assert_eq!(
+            site["selector"]["ancestry_profile"],
+            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+        );
     }
 }
 
@@ -258,6 +313,7 @@ fn configured_real_cache_native_ancestry_patch_is_rediscovered_and_fail_closed()
     let cache = std::path::PathBuf::from(cache);
     let original = std::fs::read(&cache).unwrap();
     let original_sha = Sha256::digest(&original);
+    let (expected_profile, _, _) = expected_default_evidence(&original);
     let binds = cache.parent().unwrap().join("Binds.Cache");
     let usmap = std::env::var_os("GORE_AS_USMAP")
         .map(std::path::PathBuf::from)
@@ -312,10 +368,7 @@ fn configured_real_cache_native_ancestry_patch_is_rediscovered_and_fail_closed()
     assert_eq!(site["selector"]["value_type"], "int");
     assert_eq!(site["expected_hex"], "0a000000");
     assert_eq!(site["display_value"], "10");
-    assert_eq!(
-        site["selector"]["ancestry_profile"],
-        gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
-    );
+    assert_eq!(site["selector"]["ancestry_profile"], expected_profile);
 
     let directory = tempfile::tempdir().unwrap();
     let selector = directory.path().join("sword-value.selector.json");
@@ -379,10 +432,7 @@ fn configured_real_cache_native_ancestry_patch_is_rediscovered_and_fail_closed()
     assert_eq!(receipt["status"], "patched");
     assert_eq!(receipt["expected_hex"], "0a000000");
     assert_eq!(receipt["replacement_hex"], "0b000000");
-    assert_eq!(
-        receipt["selector"]["ancestry_profile"],
-        gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
-    );
+    assert_eq!(receipt["selector"]["ancestry_profile"], expected_profile);
 
     let patched = std::fs::read(&output).unwrap();
     assert_eq!(patched.len(), original.len());
@@ -454,6 +504,8 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
     let cache = std::path::PathBuf::from(cache);
     let original = std::fs::read(&cache).unwrap();
     let original_sha = Sha256::digest(&original);
+    let (expected_profile, expected_map_proof, expected_context_sha256) =
+        expected_default_evidence(&original);
     let binds = cache.parent().unwrap().join("Binds.Cache");
     let usmap = std::env::var_os("GORE_AS_USMAP")
         .map(std::path::PathBuf::from)
@@ -539,17 +591,11 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
     assert_eq!(site["selector"]["tag"], "Item_Damage_Physical_Edge");
     assert_eq!(site["selector"]["tag_is_string"], false);
     assert_eq!(site["selector"]["value_type"], "float32");
-    assert_eq!(
-        site["selector"]["map_proof_id"],
-        gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
-    );
-    assert_eq!(
-        site["selector"]["ancestry_profile"],
-        gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
-    );
+    assert_eq!(site["selector"]["map_proof_id"], expected_map_proof);
+    assert_eq!(site["selector"]["ancestry_profile"], expected_profile);
     assert_eq!(
         site["provenance"]["context_sha256"],
-        "d02d0b0a7bd68cdae2d2e04b530fa959a94c2270cf178d406f64c474f1840312"
+        expected_context_sha256
     );
     assert!(site["provenance"]["function"]
         .as_str()
@@ -557,7 +603,7 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
         .ends_with("UItMw_1H_Sword_Old_01::__InitDefaults"));
     assert_eq!(
         site["provenance"]["field_schema_proof_id"],
-        gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        expected_map_proof
     );
     assert_eq!(site["provenance"]["length"], 4);
 
@@ -570,10 +616,7 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
     .unwrap();
 
     // Proof/profile constants are selector input and are rejected before any output is created.
-    for (field, error_fragment) in [
-        ("map_proof_id", "map_proof_id does not match"),
-        ("ancestry_profile", "ancestry_profile does not match"),
-    ] {
+    for field in ["map_proof_id", "ancestry_profile"] {
         let mut stale = site["selector"].clone();
         stale[field] = Value::String("sha256:stale".into());
         let stale_selector = directory.path().join(format!("stale-{field}.json"));
@@ -598,7 +641,7 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
             .assert()
             .failure()
             .stdout(predicates::str::is_empty())
-            .stderr(contains(error_fragment));
+            .stderr(contains("is not one exact sealed generation pair"));
         assert!(!rejected.exists());
     }
 

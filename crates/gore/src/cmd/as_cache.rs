@@ -464,9 +464,7 @@ impl TagMapSelectorJson {
     }
 
     fn into_core(self) -> Result<gore_as::cache::native_tag_map::NativeTagMapSelector> {
-        use gore_as::cache::default_ancestry::{
-            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID, DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
-        };
+        use gore_as::cache::default_ancestry::is_supported_gameplay_tag_float32_proof_pair;
         use gore_as::cache::native_tag_map::{
             NATIVE_TAG_MAP_SELECTOR_FORMAT, NATIVE_TAG_MAP_SELECTOR_KIND, NATIVE_TAG_MAP_VALUE_TYPE,
         };
@@ -514,14 +512,10 @@ impl TagMapSelectorJson {
         if self.tag_is_string {
             bail!("AS_TAG_MAP_SELECTOR: tag_is_string must be false");
         }
-        if self.map_proof_id != DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID {
+        if !is_supported_gameplay_tag_float32_proof_pair(&self.ancestry_profile, &self.map_proof_id)
+        {
             bail!(
-                "AS_TAG_MAP_SELECTOR: map_proof_id does not match the sealed GameplayTag-float32 map proof"
-            );
-        }
-        if self.ancestry_profile != DEFAULT_NATIVE_ANCESTRY_PROFILE_ID {
-            bail!(
-                "AS_TAG_MAP_SELECTOR: ancestry_profile does not match the sealed native ancestry profile"
+                "AS_TAG_MAP_SELECTOR: ancestry_profile/map_proof_id is not one exact sealed generation pair"
             );
         }
         Ok(gore_as::cache::native_tag_map::NativeTagMapSelector {
@@ -2414,6 +2408,38 @@ mod default_cli_tests {
         assert_eq!(core.tag_module, "");
         assert_eq!(core.tag_namespace, "GameplayTag");
         assert!(!core.tag_is_string);
+
+        let mut hotfix: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
+        hotfix["ancestry_profile"] = serde_json::Value::String(
+            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID.into(),
+        );
+        hotfix["map_proof_id"] = serde_json::Value::String(
+            gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+                .into(),
+        );
+        serde_json::from_value::<TagMapSelectorJson>(hotfix.clone())
+            .unwrap()
+            .into_core()
+            .expect("the exact hotfix selector proof pair is supported");
+
+        for (profile, proof) in [
+            (
+                gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+                gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            ),
+            (
+                gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+                gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            ),
+        ] {
+            let mut crossed = hotfix.clone();
+            crossed["ancestry_profile"] = serde_json::Value::String(profile.into());
+            crossed["map_proof_id"] = serde_json::Value::String(proof.into());
+            assert!(serde_json::from_value::<TagMapSelectorJson>(crossed)
+                .unwrap()
+                .into_core()
+                .is_err());
+        }
 
         let mut missing: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
         missing.as_object_mut().unwrap().remove("map_proof_id");
