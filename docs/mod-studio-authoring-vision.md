@@ -30,6 +30,12 @@ tabs does not preserve its format-1 project backend. Any older migration wording
 below is superseded until the obsolete sections are deleted in the dedicated
 cleanup checkpoint.
 
+Every surviving format-1 or schema-R1/R2 startup, session, persistence, and
+build path is therefore deletion debt, not a compatibility surface. It may
+supply an implementation or UX lesson, but no new feature may write to it, read
+it as a fallback, migrate it, or expose it as another project mode. Snapshot V2
+is the sole backup/restore wire format.
+
 The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
 been consolidated:

@@ -81,6 +81,14 @@ number of productive surfaces over more navigation, cards, and modal launchers.
 Technical IDs, evidence, and diagnostics remain available through details or
 Expert mode without dominating normal work.
 
+This is also a status-reporting rule. Any later capability-matrix wording that
+mentions a format-1 "compatibility project", schema-R1/R2 Story workspace, or
+project migration describes unreleased implementation debt still awaiting
+deletion; it does **not** describe a supported product path. New work must not
+extend those paths. Useful jobs move directly to R3, after which their old
+startup, session, persistence, and build owners are removed. No old-project
+reader, converter, migration action, dual-read/write, or fallback is planned.
+
 The implemented managed-project Home follows that rule: it is one compact
 five-task router for **Story**, **Dialog & Voice**, **Problems**, **Content**,
 and **Build & Release**. It does not duplicate low-level create/import/build

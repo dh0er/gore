@@ -10,7 +10,6 @@ mod dataasset_build_receipt;
 mod dataasset_stage;
 mod document;
 mod ids;
-mod migration;
 mod migration_revision3;
 mod model;
 pub mod model_revision2;
@@ -79,10 +78,6 @@ pub use dataasset_stage::{
 };
 pub use document::{ProjectDocument, ProjectDocumentError};
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
-pub use migration::{
-    migrate_revision1_to_revision2, Revision1ToRevision2Error, Revision1ToRevision2Migration,
-    Revision1ToRevision2Report, Revision1ToRevision2Transformation, Revision1TypedRefPosition,
-};
 pub use migration_revision3::{
     migrate_revision2_to_revision3, Revision2ToRevision3Error, Revision2ToRevision3Migration,
     Revision2ToRevision3Report,
