@@ -1,4 +1,7 @@
+import 'dart:ui' show SemanticsRole, Tristate;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
 
@@ -40,93 +43,143 @@ void main() {
   });
 
   testWidgets(
-    'wide shell exposes all canonical destinations in an extended rail',
+    'desktop shell exposes every canonical destination as a direct top tab',
     (tester) async {
       _setSurface(tester, const Size(1400, 900));
+      final semantics = tester.ensureSemantics();
       await _pumpWorkspace(tester);
 
       expect(
-        find.byKey(const Key('revision3-project-workspace-desktop-navigation')),
+        find.byKey(const Key('revision3-project-workspace-tabbar')),
         findsOneWidget,
       );
+      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byType(NavigationRail), findsNothing);
+      expect(find.byType(PopupMenuButton), findsNothing);
       expect(
-        find.byKey(const Key('revision3-project-workspace-narrow-navigation')),
-        findsNothing,
-      );
-      expect(
-        tester.widget<NavigationRail>(find.byType(NavigationRail)).extended,
-        isTrue,
-      );
-      expect(
-        tester
-            .widget<NavigationRail>(find.byType(NavigationRail))
-            .selectedIndex,
+        _selectedTabIndex(tester),
         Revision3ProjectWorkspaceSection.home.index,
       );
       for (final section in Revision3ProjectWorkspaceSection.values) {
-        expect(find.byKey(_navigationKey(section)), findsOneWidget);
+        expect(find.byKey(_tabKey(section)), findsOneWidget);
       }
       expect(find.text('home page / secondary:none'), findsOneWidget);
+      _expectTabSemantics(
+        tester,
+        Revision3ProjectWorkspaceSection.home,
+        selected: true,
+      );
+      _expectTabSemantics(
+        tester,
+        Revision3ProjectWorkspaceSection.story,
+        selected: false,
+      );
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
     },
   );
 
-  testWidgets('medium shell uses an icon rail with labels as tooltips', (
-    tester,
-  ) async {
-    _setSurface(tester, const Size(1000, 900));
-    await _pumpWorkspace(tester);
+  testWidgets(
+    '640x420 shell keeps every destination directly reachable and exact '
+    'programmatic navigation reveals the offscreen selected tab',
+    (tester) async {
+      _setSurface(tester, const Size(640, 420));
+      final semantics = tester.ensureSemantics();
+      await _pumpWorkspace(
+        tester,
+        destinations: _destinations(
+          pageBuilder: (section) =>
+              (context, location) => Center(
+                child: section == Revision3ProjectWorkspaceSection.home
+                    ? FilledButton(
+                        key: const Key('navigate-to-last-tab'),
+                        onPressed: () => Revision3ProjectWorkspace.navigate(
+                          context,
+                          const Revision3ProjectWorkspaceLocation(
+                            Revision3ProjectWorkspaceSection.settingsExpert,
+                            secondary: 'advanced',
+                          ),
+                        ),
+                        child: const Text('Open expert settings fixture'),
+                      )
+                    : Text(
+                        '${section.name} page / '
+                        'secondary:${location.secondary ?? 'none'}',
+                      ),
+              ),
+        ),
+      );
 
-    final rail = tester.widget<NavigationRail>(find.byType(NavigationRail));
-    expect(rail.extended, isFalse);
-    for (final destination in _destinations()) {
-      expect(find.byKey(_navigationKey(destination.section)), findsOneWidget);
-      expect(find.byTooltip(destination.label), findsOneWidget);
-    }
+      expect(
+        find.byKey(const Key('revision3-project-workspace-tabbar')),
+        findsOneWidget,
+      );
+      for (final section in Revision3ProjectWorkspaceSection.values) {
+        expect(find.byKey(_tabKey(section)), findsOneWidget);
+      }
 
-    await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
-    expect(find.text('story page / secondary:none'), findsOneWidget);
-    expect(
-      tester.widget<NavigationRail>(find.byType(NavigationRail)).selectedIndex,
-      Revision3ProjectWorkspaceSection.story.index,
-    );
-  });
+      final lastTab = find.byKey(
+        _tabKey(Revision3ProjectWorkspaceSection.settingsExpert),
+      );
+      expect(lastTab.hitTestable(), findsNothing);
 
-  testWidgets('narrow shell menu exposes and selects all nine destinations', (
-    tester,
-  ) async {
-    _setSurface(tester, const Size(600, 700));
-    await _pumpWorkspace(tester);
+      await tester.tap(find.byKey(const Key('navigate-to-last-tab')));
+      await tester.pumpAndSettle();
 
-    expect(find.byType(NavigationRail), findsNothing);
-    expect(
-      find.byKey(const Key('revision3-project-workspace-narrow-navigation')),
-      findsOneWidget,
-    );
-    expect(find.text('Home fixture'), findsOneWidget);
-    expect(find.text('home page / secondary:none'), findsOneWidget);
+      expect(
+        find.text('settingsExpert page / secondary:advanced'),
+        findsOneWidget,
+      );
+      expect(
+        _selectedTabIndex(tester),
+        Revision3ProjectWorkspaceSection.settingsExpert.index,
+      );
+      expect(lastTab.hitTestable(), findsOneWidget);
+      _expectTabSemantics(
+        tester,
+        Revision3ProjectWorkspaceSection.settingsExpert,
+        selected: true,
+      );
+      _expectTabSemantics(
+        tester,
+        Revision3ProjectWorkspaceSection.home,
+        selected: false,
+      );
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
 
-    await tester.tap(
-      find.byKey(const Key('revision3-project-workspace-narrow-menu')),
-    );
-    await tester.pumpAndSettle();
+  testWidgets(
+    '200 percent text keeps tabs overflow-safe, semantic, focusable and '
+    'keyboard activatable',
+    (tester) async {
+      _setSurface(tester, const Size(640, 420));
+      final semantics = tester.ensureSemantics();
+      await _pumpWorkspace(tester, textScaler: const TextScaler.linear(2));
 
-    for (final section in Revision3ProjectWorkspaceSection.values) {
-      expect(find.byKey(_navigationKey(section)), findsOneWidget);
-    }
+      for (final section in Revision3ProjectWorkspaceSection.values) {
+        expect(find.byKey(_tabKey(section)), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
 
-    await tester.tap(
-      find.byKey(
-        _navigationKey(Revision3ProjectWorkspaceSection.localizationVoice),
-      ),
-    );
-    await tester.pumpAndSettle();
+      const target = Revision3ProjectWorkspaceSection.story;
+      expect(await _focusTab(tester, target), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
 
-    expect(
-      find.text('localizationVoice page / secondary:none'),
-      findsOneWidget,
-    );
-    expect(find.text('Localization & Voice fixture'), findsOneWidget);
-  });
+      expect(find.text('story page / secondary:none'), findsOneWidget);
+      expect(_selectedTabIndex(tester), target.index);
+      _expectTabSemantics(tester, target, selected: true);
+      _expectTabSemantics(
+        tester,
+        Revision3ProjectWorkspaceSection.home,
+        selected: false,
+      );
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
 
   testWidgets(
     'persistent chrome follows primary and secondary navigation above pages',
@@ -169,21 +222,21 @@ void main() {
       final pageTop = tester.getTopLeft(find.text('home page'));
       expect(chromeTop.dy, lessThan(pageTop.dy));
 
-      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.story);
       expect(find.text('chrome:story:none'), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('set-secondary-story')));
       await tester.pumpAndSettle();
       expect(find.text('chrome:story:details'), findsOneWidget);
 
-      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.home);
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.home);
       expect(find.text('chrome:home:none'), findsOneWidget);
-      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.story);
       expect(find.text('chrome:story:details'), findsOneWidget);
     },
   );
 
-  testWidgets('persistent chrome follows compact popup navigation', (
+  testWidgets('persistent chrome follows compact horizontal tab navigation', (
     tester,
   ) async {
     _setSurface(tester, const Size(360, 480));
@@ -196,17 +249,13 @@ void main() {
     );
 
     expect(find.text('compact chrome:home'), findsOneWidget);
-    await tester.tap(
-      find.byKey(const Key('revision3-project-workspace-narrow-menu')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(_navigationKey(Revision3ProjectWorkspaceSection.history)),
-    );
-    await tester.pumpAndSettle();
+    await _tapTab(tester, Revision3ProjectWorkspaceSection.history);
 
     expect(find.text('compact chrome:history'), findsOneWidget);
-    expect(find.text('History fixture'), findsOneWidget);
+    expect(
+      _selectedTabIndex(tester),
+      Revision3ProjectWorkspaceSection.history.index,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -227,7 +276,14 @@ void main() {
 
     final chromeScroll = find.byKey(Revision3ProjectWorkspace.chromeScrollKey);
     expect(chromeScroll, findsOneWidget);
-    expect(tester.getSize(chromeScroll).height, 80);
+    expect(
+      tester.getSize(chromeScroll).height,
+      lessThan(
+        tester
+            .getSize(find.byKey(const Key('revision3-project-workspace')))
+            .height,
+      ),
+    );
     expect(find.text('home page / secondary:none'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -260,7 +316,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop rail remains scroll-safe at short height', (
+  testWidgets('top tabs and page remain overflow-safe at short height', (
     tester,
   ) async {
     _setSurface(tester, const Size(1000, 300));
@@ -268,17 +324,13 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(
-      find.byKey(
-        const Key('revision3-project-workspace-desktop-navigation-scroll'),
-      ),
+      find.byKey(const Key('revision3-project-workspace-tabbar')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(
-        _navigationKey(Revision3ProjectWorkspaceSection.settingsExpert),
-      ),
-      findsOneWidget,
-    );
+    for (final section in Revision3ProjectWorkspaceSection.values) {
+      expect(find.byKey(_tabKey(section)), findsOneWidget);
+    }
+    expect(find.text('home page / secondary:none'), findsOneWidget);
   });
 
   testWidgets(
@@ -329,11 +381,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('content secondary:data-assets'), findsOneWidget);
 
-      await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
-      await _tapDesktopSection(
-        tester,
-        Revision3ProjectWorkspaceSection.content,
-      );
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.story);
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.content);
       expect(find.text('content secondary:data-assets'), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('reset-content-route')));
@@ -360,11 +409,11 @@ void main() {
     );
 
     expect(events, ['init:home']);
-    await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.content);
+    await _tapTab(tester, Revision3ProjectWorkspaceSection.content);
     expect(events, ['init:home', 'init:content']);
-    await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.story);
+    await _tapTab(tester, Revision3ProjectWorkspaceSection.story);
     expect(events, ['init:home', 'init:content', 'init:story']);
-    await _tapDesktopSection(tester, Revision3ProjectWorkspaceSection.home);
+    await _tapTab(tester, Revision3ProjectWorkspaceSection.home);
     expect(events.where((event) => event.startsWith('dispose:')), isEmpty);
   });
 
@@ -391,9 +440,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        tester
-            .widget<NavigationRail>(find.byType(NavigationRail))
-            .selectedIndex,
+        _selectedTabIndex(tester),
         Revision3ProjectWorkspaceSection.content.index,
       );
     },
@@ -426,9 +473,7 @@ void main() {
       expect(find.text('chrome:home-B:none count:0'), findsOneWidget);
       expect(find.text('chrome:content-A:data-assets count:1'), findsNothing);
       expect(
-        tester
-            .widget<NavigationRail>(find.byType(NavigationRail))
-            .selectedIndex,
+        _selectedTabIndex(tester),
         Revision3ProjectWorkspaceSection.home.index,
       );
     },
@@ -446,13 +491,17 @@ Future<void> _pumpWorkspace(
   WidgetTester tester, {
   List<Revision3ProjectWorkspaceDestination>? destinations,
   Revision3ProjectWorkspaceChromeBuilder? chromeBuilder,
+  TextScaler textScaler = TextScaler.noScaling,
 }) => tester.pumpWidget(
   MaterialApp(
-    home: Scaffold(
-      body: Revision3ProjectWorkspace(
-        projectIdentity: 'project-fixture',
-        destinations: destinations ?? _destinations(),
-        chromeBuilder: chromeBuilder,
+    home: MediaQuery(
+      data: MediaQueryData(textScaler: textScaler),
+      child: Scaffold(
+        body: Revision3ProjectWorkspace(
+          projectIdentity: 'project-fixture',
+          destinations: destinations ?? _destinations(),
+          chromeBuilder: chromeBuilder,
+        ),
       ),
     ),
   ),
@@ -480,12 +529,50 @@ List<Revision3ProjectWorkspaceDestination> _destinations({
     ),
 ];
 
-Future<void> _tapDesktopSection(
+Future<void> _tapTab(
   WidgetTester tester,
   Revision3ProjectWorkspaceSection section,
 ) async {
-  await tester.tap(find.byKey(_navigationKey(section)));
+  final tab = find.byKey(_tabKey(section));
+  await tester.ensureVisible(tab);
   await tester.pumpAndSettle();
+  await tester.tap(tab);
+  await tester.pumpAndSettle();
+}
+
+int _selectedTabIndex(WidgetTester tester) => tester
+    .widget<TabBar>(find.byKey(const Key('revision3-project-workspace-tabbar')))
+    .controller!
+    .index;
+
+void _expectTabSemantics(
+  WidgetTester tester,
+  Revision3ProjectWorkspaceSection section, {
+  required bool selected,
+}) {
+  final node = tester.getSemantics(find.byKey(_tabKey(section)));
+  expect(node.label, startsWith(_label(section)));
+  expect(node.role, SemanticsRole.tab);
+  expect(node.flagsCollection.isSelected, isNot(Tristate.none));
+  expect(
+    node.flagsCollection.isSelected,
+    selected ? Tristate.isTrue : Tristate.isFalse,
+  );
+}
+
+Future<bool> _focusTab(
+  WidgetTester tester,
+  Revision3ProjectWorkspaceSection section,
+) async {
+  final tab = find.byKey(_tabKey(section));
+  bool hasPrimaryFocus() =>
+      Focus.of(tester.element(tab), scopeOk: true).hasPrimaryFocus;
+
+  for (var step = 0; step < 30 && !hasPrimaryFocus(); step++) {
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+  }
+  return hasPrimaryFocus();
 }
 
 double _chromeScrollOffset(WidgetTester tester, Finder chromeScroll) => tester
@@ -495,8 +582,8 @@ double _chromeScrollOffset(WidgetTester tester, Finder chromeScroll) => tester
     .position
     .pixels;
 
-Key _navigationKey(Revision3ProjectWorkspaceSection section) =>
-    Key('revision3-project-workspace-nav-${_sectionKey(section)}');
+Key _tabKey(Revision3ProjectWorkspaceSection section) =>
+    Key('revision3-project-workspace-tab-${_sectionKey(section)}');
 
 String _sectionKey(Revision3ProjectWorkspaceSection section) =>
     switch (section) {

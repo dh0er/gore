@@ -114,12 +114,8 @@ class Revision3ProjectWorkspace extends StatefulWidget {
       _Revision3ProjectWorkspaceState();
 }
 
-class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
-  static const _railBreakpoint = 720.0;
-  static const _extendedRailBreakpoint = 1200.0;
-  static const _railDestinationExtent = 72.0;
-  static const _railVerticalPadding = 24.0;
-
+class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace>
+    with SingleTickerProviderStateMixin {
   Revision3ProjectWorkspaceSection _selected =
       Revision3ProjectWorkspaceSection.home;
   final Set<Revision3ProjectWorkspaceSection> _mounted = {
@@ -128,7 +124,28 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
   final Map<Revision3ProjectWorkspaceSection, String?> _secondaryRoutes = {
     Revision3ProjectWorkspaceSection.home: null,
   };
+  late final TabController _tabController;
+  final Map<Revision3ProjectWorkspaceSection, GlobalKey> _tabVisibilityKeys = {
+    for (final section in Revision3ProjectWorkspaceSection.values)
+      section: GlobalKey(debugLabel: 'workspace-tab-${_sectionKey(section)}'),
+  };
   int _projectEpoch = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(
+      length: widget.destinations.length,
+      initialIndex: _selected.index,
+      vsync: this,
+    );
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(covariant Revision3ProjectWorkspace oldWidget) {
@@ -142,6 +159,8 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
     _secondaryRoutes
       ..clear()
       ..[Revision3ProjectWorkspaceSection.home] = null;
+    _tabController.index = Revision3ProjectWorkspaceSection.home.index;
+    _scheduleTabVisible(Revision3ProjectWorkspaceSection.home);
   }
 
   Revision3ProjectWorkspaceLocation _locationFor(
@@ -158,12 +177,31 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
     if (_selected == location.section &&
         _mounted.contains(location.section) &&
         _secondaryRoutes[location.section] == location.secondary) {
+      _scheduleTabVisible(location.section);
       return;
     }
     setState(() {
       _selected = location.section;
       _secondaryRoutes[location.section] = location.secondary;
       _mounted.add(location.section);
+    });
+    if (_tabController.index != location.section.index) {
+      _tabController.index = location.section.index;
+    }
+    _scheduleTabVisible(location.section);
+  }
+
+  void _scheduleTabVisible(Revision3ProjectWorkspaceSection section) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _selected != section) return;
+      final tabContext = _tabVisibilityKeys[section]?.currentContext;
+      if (tabContext == null) return;
+      Scrollable.ensureVisible(
+        tabContext,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+      );
     });
   }
 
@@ -172,137 +210,72 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
     key: const Key('revision3-project-workspace'),
     container: true,
     explicitChildNodes: true,
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final pages = _buildPages();
-        if (constraints.maxWidth < _railBreakpoint) {
-          return _buildNarrowWorkspace(pages);
-        }
-        return _buildRailWorkspace(
-          pages,
-          extended: constraints.maxWidth >= _extendedRailBreakpoint,
-        );
-      },
+    child: Column(
+      children: [
+        _buildTabBar(),
+        Expanded(child: _buildPageArea(_buildPages())),
+      ],
     ),
   );
 
-  Widget _buildNarrowWorkspace(Widget pages) {
-    final selected = widget.destinations[_selected.index];
-    return Column(
-      children: [
-        Material(
-          key: const Key('revision3-project-workspace-narrow-navigation'),
-          color: Theme.of(context).colorScheme.surfaceContainerLow,
-          child: SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(16, 8, 8, 8),
-              child: Row(
-                children: [
-                  Icon(selected.selectedIcon),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Semantics(
-                      header: true,
-                      child: Text(
-                        selected.label,
-                        key: const Key(
-                          'revision3-project-workspace-narrow-current-label',
+  Widget _buildTabBar() {
+    final theme = Theme.of(context);
+    final labelStyle =
+        theme.tabBarTheme.labelStyle ?? theme.textTheme.titleSmall;
+    final fontSize = labelStyle?.fontSize ?? 14.0;
+    final scaledLineHeight =
+        MediaQuery.textScalerOf(context).scale(fontSize) *
+        (labelStyle?.height ?? 1.2);
+    final contentHeight = scaledLineHeight > 24.0 ? scaledLineHeight : 24.0;
+    final tabHeight = contentHeight + 24.0 < 48.0 ? 48.0 : contentHeight + 24.0;
+
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      child: SafeArea(
+        bottom: false,
+        child: TabBar(
+          key: const Key('revision3-project-workspace-tabbar'),
+          controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          padding: const EdgeInsetsDirectional.only(start: 4),
+          labelPadding: EdgeInsets.zero,
+          onTap: (index) => _selectSection(widget.destinations[index].section),
+          tabs: [
+            for (final destination in widget.destinations)
+              Tab(
+                key: _tabKey(destination.section),
+                height: tabHeight,
+                child: KeyedSubtree(
+                  key: _tabVisibilityKeys[destination.section],
+                  child: Tooltip(
+                    message: destination.label,
+                    child: SizedBox(
+                      height: tabHeight,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              destination.section == _selected
+                                  ? destination.selectedIcon
+                                  : destination.icon,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(destination.label, softWrap: false),
+                          ],
                         ),
-                        style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
                   ),
-                  PopupMenuButton<Revision3ProjectWorkspaceSection>(
-                    key: const Key('revision3-project-workspace-narrow-menu'),
-                    initialValue: _selected,
-                    onSelected: _selectSection,
-                    itemBuilder: (context) => [
-                      for (final destination in widget.destinations)
-                        PopupMenuItem(
-                          key: _navigationKey(destination.section),
-                          value: destination.section,
-                          child: Row(
-                            children: [
-                              Icon(
-                                destination.section == _selected
-                                    ? destination.selectedIcon
-                                    : destination.icon,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(child: Text(destination.label)),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        Expanded(child: _buildPageArea(pages)),
-      ],
-    );
-  }
-
-  Widget _buildRailWorkspace(Widget pages, {required bool extended}) => Row(
-    children: [
-      Semantics(
-        key: const Key('revision3-project-workspace-desktop-navigation'),
-        container: true,
-        explicitChildNodes: true,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final minimumHeight =
-                (widget.destinations.length * _railDestinationExtent) +
-                _railVerticalPadding;
-            final viewportHeight = constraints.maxHeight.isFinite
-                ? constraints.maxHeight
-                : minimumHeight;
-            final railHeight = viewportHeight < minimumHeight
-                ? minimumHeight
-                : viewportHeight;
-            return SingleChildScrollView(
-              key: const Key(
-                'revision3-project-workspace-desktop-navigation-scroll',
-              ),
-              child: SizedBox(
-                height: railHeight,
-                child: NavigationRail(
-                  key: const Key('revision3-project-workspace-rail'),
-                  selectedIndex: _selected.index,
-                  extended: extended,
-                  onDestinationSelected: (index) =>
-                      _selectSection(widget.destinations[index].section),
-                  destinations: [
-                    for (final destination in widget.destinations)
-                      NavigationRailDestination(
-                        icon: _RailDestinationIcon(
-                          key: _navigationKey(destination.section),
-                          icon: destination.icon,
-                          label: destination.label,
-                          selected: false,
-                        ),
-                        selectedIcon: _RailDestinationIcon(
-                          key: _navigationKey(destination.section),
-                          icon: destination.selectedIcon,
-                          label: destination.label,
-                          selected: true,
-                        ),
-                        label: Text(destination.label),
-                      ),
-                  ],
                 ),
               ),
-            );
-          },
+          ],
         ),
       ),
-      const VerticalDivider(width: 1),
-      Expanded(child: _buildPageArea(pages)),
-    ],
-  );
+    );
+  }
 
   Widget _buildPageArea(Widget pages) {
     final chromeBuilder = widget.chromeBuilder;
@@ -378,30 +351,6 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace> {
   );
 }
 
-class _RailDestinationIcon extends StatelessWidget {
-  const _RailDestinationIcon({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    super.key,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) => Tooltip(
-    message: label,
-    child: Semantics(
-      button: true,
-      selected: selected,
-      label: label,
-      child: Icon(icon),
-    ),
-  );
-}
-
 List<Revision3ProjectWorkspaceDestination> _validatedDestinations(
   List<Revision3ProjectWorkspaceDestination> destinations,
 ) {
@@ -425,8 +374,8 @@ List<Revision3ProjectWorkspaceDestination> _validatedDestinations(
   return List<Revision3ProjectWorkspaceDestination>.unmodifiable(destinations);
 }
 
-Key _navigationKey(Revision3ProjectWorkspaceSection section) =>
-    Key('revision3-project-workspace-nav-${_sectionKey(section)}');
+Key _tabKey(Revision3ProjectWorkspaceSection section) =>
+    Key('revision3-project-workspace-tab-${_sectionKey(section)}');
 
 Key _pageKey(Revision3ProjectWorkspaceSection section) =>
     Key('revision3-project-workspace-page-${_sectionKey(section)}');

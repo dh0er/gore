@@ -37,6 +37,7 @@ import 'package:gore_mod/project/revision3_npc_greeting_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
+import 'package:gore_mod/project/revision3_project_workspace.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_journey_view.dart';
@@ -701,7 +702,11 @@ void main() {
       expect(find.text('${managed.projectRevision}'), findsOneWidget);
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
       expect(find.text('Build / Deploy'), findsNothing);
-      expect(find.byType(NavigationRail), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-project-workspace-tabbar')),
+        findsOneWidget,
+      );
+      expect(find.byType(NavigationRail), findsNothing);
       for (final key in _managedPrimaryNavigationKeys) {
         expect(find.byKey(key), findsOneWidget);
       }
@@ -2523,7 +2528,7 @@ void main() {
       expect(managed.dataAssetListCalls, 1);
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       expect(
         find.byKey(const Key('revision3-story-workspace')),
@@ -2586,7 +2591,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-content'),
+        const Key('revision3-project-workspace-tab-content'),
       );
       expect(
         find.byKey(const Key('revision3-content-workspace-page-data-assets')),
@@ -2597,7 +2602,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       expect(
         find.byKey(const Key('revision3-story-workspace')),
@@ -2611,7 +2616,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-world'),
+        const Key('revision3-project-workspace-tab-world'),
       );
       expect(
         find.byKey(const Key('revision3-project-section-world-page')),
@@ -2626,7 +2631,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-localization-voice'),
+        const Key('revision3-project-workspace-tab-localization-voice'),
       );
       expect(
         find.byKey(const Key('revision3-localization-voice-workspace')),
@@ -2650,7 +2655,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
       expect(
         find.byKey(const Key('revision3-project-problems-view')),
@@ -2667,7 +2672,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-build-release'),
+        const Key('revision3-project-workspace-tab-build-release'),
       );
       expect(
         find.byKey(const Key('revision3-project-section-build-release-page')),
@@ -2688,7 +2693,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-history'),
+        const Key('revision3-project-workspace-tab-history'),
       );
       expect(
         find.byKey(const Key('revision3-project-history-page')),
@@ -2706,7 +2711,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-settings-expert'),
+        const Key('revision3-project-workspace-tab-settings-expert'),
       );
       expect(
         find.byKey(const Key('revision3-settings-expert-page')),
@@ -2809,7 +2814,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       expect(managed.historyReadCalls, 0);
       expect(managed.historyRestoreCalls, 0);
@@ -2929,7 +2934,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-localization-voice'),
+        const Key('revision3-project-workspace-tab-localization-voice'),
       );
       expect(managed.historyReadCalls, 0);
       final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
@@ -3078,7 +3083,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
 
       final createNpcOpening = find.byKey(
@@ -3201,7 +3206,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
 
       await tester.tap(
@@ -3317,7 +3322,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
 
       await tester.tap(
@@ -3468,7 +3473,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       await tester.tap(
         find.byKey(
@@ -3795,7 +3800,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       expect(
         find.byKey(const Key('revision3-story-workspace-empty')),
@@ -3916,7 +3921,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-story'),
+        const Key('revision3-project-workspace-tab-story'),
       );
       await _openAdvancedQuestCreation(tester);
       await tester.pump();
@@ -3932,12 +3937,10 @@ void main() {
             .projectId,
         secondProjectId,
       );
-      final switchedRail = find.byKey(
-        const Key('revision3-project-workspace-rail'),
-        skipOffstage: false,
+      _selectManagedWorkspaceTabProgrammatically(
+        tester,
+        Revision3ProjectWorkspaceSection.story,
       );
-      expect(switchedRail, findsOneWidget);
-      tester.widget<NavigationRail>(switchedRail).onDestinationSelected!(2);
       await tester.pumpAndSettle();
       expect(
         find.byKey(
@@ -4036,14 +4039,7 @@ void main() {
         ).languageCode,
         'de',
       );
-      await tester.tap(
-        find.byKey(const Key('revision3-project-workspace-narrow-menu')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('revision3-project-workspace-nav-story')),
-      );
-      await tester.pumpAndSettle();
+      await _navigateManagedStory(tester);
 
       final createNpcOpening = find.byKey(
         const Key('revision3-story-workspace-create-npc-opening'),
@@ -4162,7 +4158,7 @@ void main() {
     await tester.pumpAndSettle();
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-nav-validate-test'),
+      const Key('revision3-project-workspace-tab-validate-test'),
     );
 
     final openEntity = find.byKey(
@@ -4238,7 +4234,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
 
       final openEntity = find.byKey(
@@ -4310,7 +4306,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
 
       final openEntity = find.byKey(
@@ -4390,7 +4386,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
       expect(reads, 2);
       final openEntity = find.byKey(
@@ -4476,7 +4472,7 @@ void main() {
     await tester.pumpAndSettle();
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-nav-validate-test'),
+      const Key('revision3-project-workspace-tab-validate-test'),
     );
     await tester.tap(
       find.byKey(Key('revision3-project-problem-${stageProblem.id}')),
@@ -4552,7 +4548,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
 
       expect(
@@ -4631,7 +4627,7 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-validate-test'),
+        const Key('revision3-project-workspace-tab-validate-test'),
       );
 
       expect(find.text('Voice-Bereitschaft'), findsOneWidget);
@@ -10683,7 +10679,7 @@ void main() {
 
       await _navigateManagedWorkspace(
         tester,
-        const Key('revision3-project-workspace-nav-settings-expert'),
+        const Key('revision3-project-workspace-tab-settings-expert'),
       );
       expect(
         tester
@@ -10870,7 +10866,7 @@ Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
   if (details.evaluate().isEmpty) {
     await _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-nav-settings-expert'),
+      const Key('revision3-project-workspace-tab-settings-expert'),
     );
     details = find.byKey(const Key('managed-project-technical-details'));
   }
@@ -10892,15 +10888,15 @@ Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
 }
 
 const _managedPrimaryNavigationKeys = <Key>[
-  Key('revision3-project-workspace-nav-home'),
-  Key('revision3-project-workspace-nav-content'),
-  Key('revision3-project-workspace-nav-story'),
-  Key('revision3-project-workspace-nav-world'),
-  Key('revision3-project-workspace-nav-localization-voice'),
-  Key('revision3-project-workspace-nav-validate-test'),
-  Key('revision3-project-workspace-nav-build-release'),
-  Key('revision3-project-workspace-nav-history'),
-  Key('revision3-project-workspace-nav-settings-expert'),
+  Key('revision3-project-workspace-tab-home'),
+  Key('revision3-project-workspace-tab-content'),
+  Key('revision3-project-workspace-tab-story'),
+  Key('revision3-project-workspace-tab-world'),
+  Key('revision3-project-workspace-tab-localization-voice'),
+  Key('revision3-project-workspace-tab-validate-test'),
+  Key('revision3-project-workspace-tab-build-release'),
+  Key('revision3-project-workspace-tab-history'),
+  Key('revision3-project-workspace-tab-settings-expert'),
 ];
 
 void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
@@ -10949,19 +10945,19 @@ void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
 Future<void> _navigateManagedHome(WidgetTester tester) =>
     _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-nav-home'),
+      const Key('revision3-project-workspace-tab-home'),
     );
 
 Future<void> _navigateManagedStory(WidgetTester tester) =>
     _navigateManagedWorkspace(
       tester,
-      const Key('revision3-project-workspace-nav-story'),
+      const Key('revision3-project-workspace-tab-story'),
     );
 
 Future<void> _navigateManagedContent(WidgetTester tester) async {
   await _navigateManagedWorkspace(
     tester,
-    const Key('revision3-project-workspace-nav-content'),
+    const Key('revision3-project-workspace-tab-content'),
   );
   await _navigateManagedWorkspace(
     tester,
@@ -10980,7 +10976,7 @@ Future<void> _navigateManagedContent(WidgetTester tester) async {
 Future<void> _navigateManagedBaseGameContent(WidgetTester tester) async {
   await _navigateManagedWorkspace(
     tester,
-    const Key('revision3-project-workspace-nav-content'),
+    const Key('revision3-project-workspace-tab-content'),
   );
   await _navigateManagedWorkspace(
     tester,
@@ -10999,7 +10995,7 @@ Future<void> _navigateManagedBaseGameContent(WidgetTester tester) async {
 Future<void> _navigateManagedInstalledContent(WidgetTester tester) async {
   await _navigateManagedWorkspace(
     tester,
-    const Key('revision3-project-workspace-nav-content'),
+    const Key('revision3-project-workspace-tab-content'),
   );
   await _navigateManagedWorkspace(
     tester,
@@ -11018,7 +11014,7 @@ Future<void> _navigateManagedInstalledContent(WidgetTester tester) async {
 Future<void> _navigateManagedDataAssets(WidgetTester tester) async {
   await _navigateManagedWorkspace(
     tester,
-    const Key('revision3-project-workspace-nav-content'),
+    const Key('revision3-project-workspace-tab-content'),
   );
   await _navigateManagedWorkspace(
     tester,
@@ -11049,20 +11045,39 @@ Future<Finder> _revealManagedDataAssetExpertAction(
 }
 
 Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
-  final narrowMenu = find.byKey(
-    const Key('revision3-project-workspace-narrow-menu'),
-  );
-  if (narrowMenu.evaluate().isNotEmpty) {
-    await tester.tap(narrowMenu);
-    await tester.pumpAndSettle();
-  }
   final destination = find.byKey(key);
   expect(destination, findsOneWidget);
   await tester.ensureVisible(destination);
-  await tester.pump();
-  expect(destination.hitTestable(), findsOneWidget);
-  await tester.tap(destination);
   await tester.pumpAndSettle();
+  if (destination.hitTestable().evaluate().isNotEmpty) {
+    await tester.tap(destination);
+  } else {
+    final tabBar = find.byKey(const Key('revision3-project-workspace-tabbar'));
+    expect(tabBar, findsOneWidget);
+    final viewport = find
+        .descendant(of: tabBar, matching: find.byType(Scrollable))
+        .first;
+    final visible = tester
+        .getRect(destination)
+        .intersect(tester.getRect(viewport));
+    expect(visible.isEmpty, isFalse);
+    await tester.tapAt(visible.center);
+  }
+  await tester.pumpAndSettle();
+}
+
+void _selectManagedWorkspaceTabProgrammatically(
+  WidgetTester tester,
+  Revision3ProjectWorkspaceSection section,
+) {
+  final tabBar = tester.widget<TabBar>(
+    find.byKey(
+      const Key('revision3-project-workspace-tabbar'),
+      skipOffstage: false,
+    ),
+  );
+  expect(tabBar.onTap, isNotNull);
+  tabBar.onTap!(section.index);
 }
 
 Future<void> _navigateManagedLocalizationVoice(
@@ -11070,15 +11085,8 @@ Future<void> _navigateManagedLocalizationVoice(
   bool settle = true,
 }) async {
   const destinationKey = Key(
-    'revision3-project-workspace-nav-localization-voice',
+    'revision3-project-workspace-tab-localization-voice',
   );
-  final narrowMenu = find.byKey(
-    const Key('revision3-project-workspace-narrow-menu'),
-  );
-  if (narrowMenu.evaluate().isNotEmpty) {
-    await tester.tap(narrowMenu);
-    await tester.pumpAndSettle();
-  }
   final destination = find.byKey(destinationKey);
   expect(destination, findsOneWidget);
   await tester.ensureVisible(destination);

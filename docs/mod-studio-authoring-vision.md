@@ -34,6 +34,12 @@ The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
 been consolidated:
 
+- The managed shell now presents all nine canonical destinations as direct,
+  horizontally scrollable classic top tabs. Desktop and compact layouts share
+  one navigation model; programmatic routes reveal an off-screen selection,
+  while lazy mounting, same-project state, secondary-route memory, keyboard
+  activation, and project-identity reset remain intact. This is presentation
+  only and grants no format, mutation, build, deployment, or runtime authority.
 - **Name & objectives** is no longer disabled after a Quest receives generator-
   V4 behavior. A native/Dart managed Outline V2 transaction keeps the active
   objective-slot set, next ordinal, conditions, effects, identities, and all
@@ -514,8 +520,10 @@ dialog-line, and Voice actions;
 Validate owns Problems; Content owns discovery and DataAsset work; Build &
 Release owns output actions. Export stays in the Project menu. Normal chrome
 calls this a **Mod Studio project** and keeps schema/head vocabulary in technical
-details. The nine stable shell destinations and the useful Legacy UI remain
-unchanged.
+details. The nine stable shell destinations now use direct, horizontally
+scrollable classic top tabs instead of the managed rail/compact popup. The
+useful Legacy layout remains a UX reference only; it grants no format-1
+compatibility promise.
 
 Project Work Bar V1 is the first persistent project-level chrome shared by all
 nine destinations. It keeps the index-derived friendly project name (using only

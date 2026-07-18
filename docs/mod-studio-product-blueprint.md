@@ -88,7 +88,12 @@ dialogs. NPC and Quest creation—including the recommended Quest plus opening
 line—belongs to Story; dialog and Voice work belongs to Localization & Voice;
 DataAssets belong to Content; export remains in the Project menu. Normal chrome
 uses “Mod Studio project” rather than schema-revision terminology. The nine
-stable shell destinations remain intact and Legacy remains the usability floor.
+stable shell destinations now appear as direct, horizontally scrollable classic
+top tabs at every supported width; the former desktop rail and compact popup
+are gone. Programmatic navigation reveals an off-screen selected tab, while
+lazy mounting, per-project state, and secondary-route memory remain intact.
+The old Legacy layout remains the usability floor, not a supported project
+format or compatibility surface.
 The persistent **Project Work Bar V1** now keeps the friendly project name and
 current area visible above every destination and exposes the common
 continuations **Undo**, **Search**, **Create**, and **Problems**. Undo reuses the
