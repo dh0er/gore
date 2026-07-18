@@ -10,9 +10,9 @@ use std::io::{self, Write};
 use serde::Serialize;
 
 use crate::model_revision3::{
-    quest_collision_artifact_media_for_layer, EntityKind, EntityPayload, OggCodec, OriginRef,
-    ProjectRevision3, ProjectRevision3ValidationError, ScriptModuleStatus, VoiceTakeStatus,
-    VoiceTargetResolution,
+    quest_collision_artifact_media_for_layer, EntityKind, EntityPayload, ItemScalarTypeV1,
+    ItemScalarValueV1, OggCodec, OriginRef, ProjectRevision3, ProjectRevision3ValidationError,
+    ScriptModuleStatus, VoiceTakeStatus, VoiceTargetResolution,
 };
 use crate::{
     ContentSeal, EntityId, GameGenerationAnchor, LocaleCode, ProjectId, Sha256Digest,
@@ -154,6 +154,12 @@ pub enum Revision3ContentEntitySummaryV1 {
         module_namespace: String,
         module_relative_path: String,
         status: ScriptModuleStatus,
+    },
+    ItemPatch {
+        vanilla_class: String,
+        field_count: u64,
+        field_types: BTreeMap<String, ItemScalarTypeV1>,
+        fields: BTreeMap<String, ItemScalarValueV1>,
     },
 }
 
@@ -488,6 +494,16 @@ pub fn build_revision3_content_index_v1(
                     status: value.status,
                 }
             }
+            EntityPayload::ItemPatch(value) => Revision3ContentEntitySummaryV1::ItemPatch {
+                vanilla_class: value.vanilla_class.clone(),
+                field_count: value.fields.len() as u64,
+                field_types: value
+                    .fields
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.scalar_type()))
+                    .collect(),
+                fields: value.fields.clone(),
+            },
         };
 
         entities.push(Revision3ContentEntityV1 {

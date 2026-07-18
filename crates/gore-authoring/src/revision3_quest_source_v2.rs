@@ -528,6 +528,21 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
     // greeting edges. Restore them after the generation-bearing roundtrip before proving exact
     // split/recomposition; they do not contribute any Story collision identity.
     for (id, source_entity) in &nonquest_revision3.entities {
+        if matches!(source_entity.payload, EntityPayload::ItemPatch(_)) {
+            if migrated
+                .project
+                .entities
+                .insert(*id, source_entity.clone())
+                .is_some()
+            {
+                return Err(
+                    Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
+                        reason: format!("ItemPatch restoration collided at entity {id}"),
+                    },
+                );
+            }
+            continue;
+        }
         let EntityPayload::NpcDraft(source_npc) = &source_entity.payload else {
             continue;
         };
@@ -1050,9 +1065,9 @@ impl Write for BoundedBytesWriter {
 mod tests {
     use super::*;
     use crate::model_revision3::{
-        DialogLine, Entity as Revision3Entity, LocalizationEntry, NpcDraft, NpcDraftInput,
-        NpcGreetingBindingV1, NpcParentClassInput, QuestCollisionArtifactRef, QuestDraftInput,
-        QuestTranscriptBindingV1,
+        DialogLine, Entity as Revision3Entity, ItemPatchV1, ItemScalarValueV1, LocalizationEntry,
+        NpcDraft, NpcDraftInput, NpcGreetingBindingV1, NpcParentClassInput,
+        QuestCollisionArtifactRef, QuestDraftInput, QuestTranscriptBindingV1,
     };
     use crate::{
         AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, QuestTransitionPlanV1, SchemaRevisionV3,
@@ -1432,6 +1447,43 @@ mod tests {
             revision2_npc.payload,
             crate::Revision2EntityPayload::NpcDraft(_)
         ));
+    }
+
+    #[test]
+    fn native_item_patches_survive_exact_quest_collision_source_split_and_recomposition() {
+        let (mut project, head) = exact_project();
+        let item_id = id(30);
+        project.entities.insert(
+            item_id,
+            Revision3Entity {
+                id: item_id,
+                display_name: "Apple patch".to_owned(),
+                origin: OriginRef::Vanilla {
+                    generation: project.target.clone(),
+                    catalog_layer: "base-game.items.g1r.v1".to_owned(),
+                    canonical_selector: "ItFo_Apple".to_owned(),
+                    source_seal: seal(0x52, 1_024),
+                },
+                revision: 3,
+                payload: EntityPayload::ItemPatch(ItemPatchV1 {
+                    vanilla_class: "ItFo_Apple".to_owned(),
+                    fields: BTreeMap::from([(
+                        "m_Value".to_owned(),
+                        ItemScalarValueV1::Integer(17),
+                    )]),
+                }),
+            },
+        );
+        project.validate_closed_model().unwrap();
+
+        let prepared = prepare_exact_revision3_quest_collision_source_v2(&project, head)
+            .expect("native ItemPatch is retained around the Story-only projection");
+        assert_eq!(prepared.prior_quest_count(), 1);
+        assert!(!prepared
+            .nonquest_basis()
+            .project()
+            .entities
+            .contains_key(&item_id));
     }
 
     #[test]

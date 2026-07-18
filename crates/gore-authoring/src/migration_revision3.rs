@@ -132,10 +132,10 @@ fn migrate_entity(source: &revision2::Entity) -> revision3::Entity {
             revision3::EntityPayload::LocalizationEntry(value.clone())
         }
         revision2::EntityPayload::DialogLine(value) => {
-            revision3::EntityPayload::DialogLine(value.clone())
+            revision3::EntityPayload::DialogLine(value.clone().into())
         }
         revision2::EntityPayload::VoiceSlot(value) => {
-            revision3::EntityPayload::VoiceSlot(value.clone())
+            revision3::EntityPayload::VoiceSlot(value.clone().into())
         }
         revision2::EntityPayload::VoiceTake(value) => {
             revision3::EntityPayload::VoiceTake(value.clone())
@@ -145,12 +145,12 @@ fn migrate_entity(source: &revision2::Entity) -> revision3::Entity {
                 generator_id: value.generator_id.clone(),
                 generator_version: value.generator_version,
                 input: value.input.clone(),
-                script_module: value.script_module.clone(),
+                script_module: value.script_module.clone().into(),
                 greetings: Vec::new(),
             })
         }
         revision2::EntityPayload::ScriptModule(value) => {
-            revision3::EntityPayload::ScriptModule(value.clone())
+            revision3::EntityPayload::ScriptModule(value.clone().into())
         }
         revision2::EntityPayload::QuestDraft(_) => {
             unreachable!("Quest presence is rejected before migration")
@@ -159,7 +159,7 @@ fn migrate_entity(source: &revision2::Entity) -> revision3::Entity {
     revision3::Entity {
         id: source.id,
         display_name: source.display_name.clone(),
-        origin: source.origin.clone(),
+        origin: source.origin.clone().into(),
         revision: source.revision,
         payload,
     }

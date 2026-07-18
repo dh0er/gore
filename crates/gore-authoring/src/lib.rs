@@ -28,6 +28,7 @@ mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
 mod story_transaction_revision3_dialog_voice_slot_creation;
 mod story_transaction_revision3_dialog_voice_slot_removal;
+mod story_transaction_revision3_item_patch;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_npc_greeting;
 mod story_transaction_revision3_npc_profile;
@@ -106,11 +107,13 @@ pub use model_revision2::{
     VoiceTargetResolution as Revision2VoiceTargetResolution,
 };
 pub use model_revision3::{
-    Entity as Revision3Entity, EntityKind as Revision3EntityKind,
-    EntityPayload as Revision3EntityPayload, NpcDraft as Revision3NpcDraft,
-    NpcDraftInput as Revision3NpcDraftInput, NpcGreetingBindingV1 as Revision3NpcGreetingBindingV1,
-    OriginRef as Revision3OriginRef, ProjectRevision3, ProjectRevision3JsonError,
-    ProjectRevision3ValidationError, QuestCollisionArtifactRef, QuestDraft as Revision3QuestDraft,
+    DialogLine as Revision3DialogLine, Entity as Revision3Entity,
+    EntityKind as Revision3EntityKind, EntityPayload as Revision3EntityPayload,
+    ItemFiniteFloatErrorV1, ItemFiniteFloatV1, ItemPatchV1, ItemScalarTypeV1, ItemScalarValueV1,
+    NpcDraft as Revision3NpcDraft, NpcDraftInput as Revision3NpcDraftInput,
+    NpcGreetingBindingV1 as Revision3NpcGreetingBindingV1, OriginRef as Revision3OriginRef,
+    ProjectRevision3, ProjectRevision3JsonError, ProjectRevision3ValidationError,
+    QuestCollisionArtifactRef, QuestDraft as Revision3QuestDraft,
     QuestDraftInput as Revision3QuestDraftInput, QuestGiverInput as Revision3QuestGiverInput,
     QuestParentInput as Revision3QuestParentInput,
     QuestTranscriptBindingV1 as Revision3QuestTranscriptBindingV1, QuestTransitionConditionAtomV1,
@@ -118,17 +121,20 @@ pub use model_revision3::{
     QuestTransitionEffectV1, QuestTransitionNodeV1, QuestTransitionPlanV1,
     QuestTransitionPredicateV1, QuestTransitionStateTestV1, QuestTransitionV1, SchemaRevisionV3,
     ScriptModule as Revision3ScriptModule, TypedRef as Revision3TypedRef,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_QUEST_TRANSITION_EFFECTS_V1,
-    MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1, MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1,
-    MAX_REVISION3_ASSETS, MAX_REVISION3_BASE_SNAPSHOT_BYTES, MAX_REVISION3_ENTITIES,
-    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_NPC_GREETING_BINDINGS_V1,
-    MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_FORMAT,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
-    QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION, QUEST_COLLISION_CATALOG_LAYER,
-    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    VoiceSlot as Revision3VoiceSlot, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    MAX_QUEST_TRANSITION_EFFECTS_V1, MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1,
+    MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1, MAX_REVISION3_ASSETS,
+    MAX_REVISION3_BASE_SNAPSHOT_BYTES, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    MAX_REVISION3_ITEM_CLASS_BYTES_V1, MAX_REVISION3_ITEM_ENUM_TYPE_BYTES_V1,
+    MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1, MAX_REVISION3_ITEM_PATCH_FIELDS_V1,
+    MAX_REVISION3_ITEM_STRING_BYTES_V1, MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1,
+    MAX_REVISION3_NPC_GREETING_BINDINGS_V1, MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
+    MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
+    QUEST_COLLISION_ARTIFACT_FORMAT, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION,
+    QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
+    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
@@ -261,6 +267,14 @@ pub use story_transaction_revision3_dialog_voice_slot_removal::{
     Revision3DialogVoiceSlotRemovalTargetAuthorityV1,
     Revision3DialogVoiceSlotRemovalTargetResolutionV1,
     MAX_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_item_patch::{
+    apply_revision3_item_patch_transaction_v1, Revision3ItemPatchBuildStatusV1,
+    Revision3ItemPatchChangeV1, Revision3ItemPatchConflictV1, Revision3ItemPatchErrorV1,
+    Revision3ItemPatchEvaluationV1, Revision3ItemPatchMutationV1, Revision3ItemPatchOutcomeV1,
+    Revision3ItemPatchPublicationStatusV1, Revision3ItemPatchRejectionV1,
+    Revision3ItemPatchRequestJsonErrorV1, Revision3ItemPatchRequestV1,
+    Revision3ItemPatchRuntimeStatusV1, MAX_REVISION3_ITEM_PATCH_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_npc::{
     apply_revision3_npc_draft_transaction_v1, Revision3NpcCatalogAuthorityV1,

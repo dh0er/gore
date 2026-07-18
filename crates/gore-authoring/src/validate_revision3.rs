@@ -7,12 +7,16 @@ use sha2::{Digest as _, Sha256};
 use crate::model_revision3::{
     quest_collision_artifact_media_for_layer, revision3_voice_target_key_v1, EntityKind,
     EntityPayload, OriginRef, ProjectRevision3, ProjectRevision3ValidationError,
-    ScriptModuleStatus, VoiceTargetResolution, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
-    MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
-    MAX_REVISION3_NPC_GREETING_BINDINGS_V1, MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
-    MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    ScriptModuleStatus, VoiceTargetResolution, MAX_CATALOG_LAYER_BYTES,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
+    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_ITEM_CLASS_BYTES_V1,
+    MAX_REVISION3_ITEM_ENUM_TYPE_BYTES_V1, MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1,
+    MAX_REVISION3_ITEM_PATCH_FIELDS_V1, MAX_REVISION3_ITEM_STRING_BYTES_V1,
+    MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1, MAX_REVISION3_NPC_GREETING_BINDINGS_V1,
+    MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1, MAX_REVISION3_REFERENCED_ASSET_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use crate::story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
@@ -96,6 +100,7 @@ impl ProjectRevision3 {
         // Finish the complete cheap per-entity size preflight before following any cross-entity
         // Story/module or asset reference.
         self.validate_voice_entities()?;
+        self.validate_item_patches()?;
         for (key, entity) in &self.entities {
             match &entity.payload {
                 EntityPayload::NpcDraft(npc) => self.validate_npc(*key, entity, npc)?,
@@ -124,6 +129,128 @@ impl ProjectRevision3 {
             return Err(ProjectRevision3ValidationError::OrphanNpcScriptModule {
                 module: *module_id,
             });
+        }
+        Ok(())
+    }
+
+    fn validate_item_patches(&self) -> Result<(), ProjectRevision3ValidationError> {
+        let invalid = |item_patch: EntityId, reason: String| {
+            ProjectRevision3ValidationError::InvalidItemPatch { item_patch, reason }
+        };
+        let mut targets = BTreeMap::<String, EntityId>::new();
+
+        for (id, entity) in &self.entities {
+            let EntityPayload::ItemPatch(patch) = &entity.payload else {
+                continue;
+            };
+            if entity.display_name.trim().is_empty()
+                || entity.display_name.len() > MAX_REVISION3_ITEM_CLASS_BYTES_V1
+                || entity.display_name.chars().any(char::is_control)
+            {
+                return Err(invalid(
+                    *id,
+                    "display name is not bounded printable text".to_owned(),
+                ));
+            }
+            let OriginRef::Vanilla {
+                generation,
+                catalog_layer,
+                canonical_selector,
+                source_seal,
+            } = &entity.origin
+            else {
+                return Err(invalid(
+                    *id,
+                    "origin must be exact sealed vanilla catalog provenance".to_owned(),
+                ));
+            };
+            if generation != &self.target {
+                return Err(invalid(
+                    *id,
+                    "origin generation does not match the project target".to_owned(),
+                ));
+            }
+            if source_seal.byte_len == 0 {
+                return Err(invalid(*id, "origin source seal has zero bytes".to_owned()));
+            }
+            if !valid_catalog_component(catalog_layer, MAX_CATALOG_LAYER_BYTES) {
+                return Err(invalid(
+                    *id,
+                    "catalog layer is not bounded canonical text".to_owned(),
+                ));
+            }
+            if !valid_item_identifier(&patch.vanilla_class, MAX_REVISION3_ITEM_CLASS_BYTES_V1) {
+                return Err(invalid(
+                    *id,
+                    "vanilla class is not one canonical AngelScript identifier".to_owned(),
+                ));
+            }
+            if canonical_selector != &patch.vanilla_class {
+                return Err(invalid(
+                    *id,
+                    "origin canonical selector does not equal the patched vanilla class".to_owned(),
+                ));
+            }
+            if patch.fields.is_empty() || patch.fields.len() > MAX_REVISION3_ITEM_PATCH_FIELDS_V1 {
+                return Err(invalid(
+                    *id,
+                    format!(
+                        "field map must contain 1..={} entries",
+                        MAX_REVISION3_ITEM_PATCH_FIELDS_V1
+                    ),
+                ));
+            }
+
+            let mut string_bytes = 0usize;
+            for (name, value) in &patch.fields {
+                if !valid_item_identifier(name, MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1) {
+                    return Err(invalid(
+                        *id,
+                        format!("field {name:?} is not one bounded canonical identifier"),
+                    ));
+                }
+                match value {
+                    crate::model_revision3::ItemScalarValueV1::String(value) => {
+                        if value.len() > MAX_REVISION3_ITEM_STRING_BYTES_V1
+                            || value.chars().any(|character| character == '\0')
+                        {
+                            return Err(invalid(
+                                *id,
+                                format!("string field {name} exceeds its closed value budget"),
+                            ));
+                        }
+                        string_bytes = string_bytes.saturating_add(value.len());
+                    }
+                    crate::model_revision3::ItemScalarValueV1::Enum { enum_type, .. } => {
+                        if !valid_qualified_item_identifier(
+                            enum_type,
+                            MAX_REVISION3_ITEM_ENUM_TYPE_BYTES_V1,
+                        ) {
+                            return Err(invalid(
+                                *id,
+                                format!("enum field {name} has an invalid declared enum type"),
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+                if string_bytes > MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1 {
+                    return Err(invalid(
+                        *id,
+                        "item string fields exceed their aggregate byte budget".to_owned(),
+                    ));
+                }
+            }
+
+            // Catalog layer and source seal prove which observation informed the edit, but
+            // neither creates another runtime target. One project generation/class has one patch.
+            let target_key = canonical_selector.clone();
+            if let Some(existing_patch) = targets.insert(target_key, *id) {
+                return Err(ProjectRevision3ValidationError::DuplicateItemPatchTarget {
+                    item_patch: *id,
+                    existing_patch,
+                });
+            }
         }
         Ok(())
     }
@@ -740,6 +867,33 @@ impl ProjectRevision3 {
         }
         Ok(())
     }
+}
+
+fn valid_catalog_component(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_bytes
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_item_identifier(value: &str, max_bytes: usize) -> bool {
+    if value.is_empty() || value.len() > max_bytes || !value.is_ascii() {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+}
+
+fn valid_qualified_item_identifier(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_bytes
+        && value
+            .split("::")
+            .all(|segment| valid_item_identifier(segment, max_bytes))
 }
 
 fn valid_voice_logical_name(value: &str) -> bool {

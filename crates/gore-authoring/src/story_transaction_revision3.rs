@@ -331,6 +331,13 @@ pub fn apply_revision3_quest_draft_transaction_v2(
         Err(Revision3QuestFreeBasisError::ResidualQuestState { entity }) => {
             reject!(Revision3QuestDraftInsertConflictV2::ResidualQuestBasis { entity });
         }
+        Err(error @ Revision3QuestFreeBasisError::NativeReferenceNotRepresentable { .. }) => {
+            reject!(
+                Revision3QuestDraftInsertConflictV2::InvalidBasisStoryState {
+                    reason: error.to_string(),
+                }
+            );
+        }
     };
     let existing_story = match collect_project_story_collision_identities(&revision2_basis) {
         Ok(identities) => identities,

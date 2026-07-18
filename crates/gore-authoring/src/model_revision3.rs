@@ -1,8 +1,9 @@
 //! Closed schema-revision-3 model for content-addressed Quest collision evidence.
 //!
-//! Revision 3 reuses revision-2 value/entity payloads whose wire shape did not change. Its Quest
-//! Draft is separate and retains only a bounded reference to an immutable collision artifact;
-//! multi-megabyte collision arrays are not representable in this schema.
+//! Revision 3 owns its entity kinds, references, provenance, and every reference-bearing payload.
+//! A few leaf value objects are shared implementation primitives. Its Quest Draft retains only a
+//! bounded reference to immutable collision evidence; multi-megabyte collision arrays are not
+//! representable in this schema.
 //!
 //! This foundation is also available through [`crate::ProjectDocument`] for bounded parsing and
 //! canonical serialization. Dispatch alone grants no Store, build, deployment, or runtime
@@ -23,10 +24,10 @@ use crate::{
 };
 
 pub use crate::model_revision2::{
-    DialogLine, EntityKind, LocalizationEntry, NpcDraftInput, NpcParentClassInput, OggCodec,
-    OggMetadata, OriginRef, QuestGiverInput, QuestParentInput, ScriptAuthoringStatus, ScriptModule,
-    ScriptModuleStatus, ScriptRuntimeStatus, TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot,
-    VoiceTake, VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
+    LocalizationEntry, NpcDraftInput, NpcParentClassInput, OggCodec, OggMetadata, QuestGiverInput,
+    QuestParentInput, ScriptAuthoringStatus, ScriptModuleStatus, ScriptRuntimeStatus,
+    VoiceMemberProof, VoiceOperation, VoiceTake, VoiceTakeStatus, VoiceTarget,
+    VoiceTargetResolution,
 };
 
 pub const QUEST_COLLISION_ARTIFACT_FORMAT: &str = "quest_collision_capability";
@@ -64,7 +65,327 @@ pub const REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION: u32 = 4;
 pub const MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_EFFECTS_V1: usize = 8;
-const MAX_CATALOG_LAYER_BYTES: usize = 128;
+pub(crate) const MAX_CATALOG_LAYER_BYTES: usize = 128;
+
+/// Closed entity kinds owned by schema revision 3.
+///
+/// This is intentionally not a revision-2 re-export. Revision 3 is the only managed authoring
+/// schema and may add native payloads without widening any older wire model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    LocalizationEntry,
+    DialogLine,
+    VoiceSlot,
+    VoiceTake,
+    NpcDraft,
+    QuestDraft,
+    ScriptModule,
+    ItemPatch,
+}
+
+/// Revision-3 project-qualified authored reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypedRef {
+    pub project_id: ProjectId,
+    pub id: EntityId,
+    pub expected_kind: EntityKind,
+}
+
+impl TypedRef {
+    pub const fn new(project_id: ProjectId, id: EntityId, expected_kind: EntityKind) -> Self {
+        Self {
+            project_id,
+            id,
+            expected_kind,
+        }
+    }
+
+    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::TypedRef> {
+        Some(crate::model_revision2::TypedRef::new(
+            self.project_id,
+            self.id,
+            self.expected_kind.to_revision2()?,
+        ))
+    }
+}
+
+impl From<crate::model_revision2::TypedRef> for TypedRef {
+    fn from(value: crate::model_revision2::TypedRef) -> Self {
+        Self {
+            project_id: value.project_id,
+            id: value.id,
+            expected_kind: EntityKind::from_revision2(value.expected_kind),
+        }
+    }
+}
+
+impl EntityKind {
+    pub(crate) const fn to_revision2(self) -> Option<crate::model_revision2::EntityKind> {
+        use crate::model_revision2::EntityKind as Revision2;
+        Some(match self {
+            Self::LocalizationEntry => Revision2::LocalizationEntry,
+            Self::DialogLine => Revision2::DialogLine,
+            Self::VoiceSlot => Revision2::VoiceSlot,
+            Self::VoiceTake => Revision2::VoiceTake,
+            Self::NpcDraft => Revision2::NpcDraft,
+            Self::QuestDraft => Revision2::QuestDraft,
+            Self::ScriptModule => Revision2::ScriptModule,
+            Self::ItemPatch => return None,
+        })
+    }
+
+    pub(crate) const fn from_revision2(value: crate::model_revision2::EntityKind) -> Self {
+        use crate::model_revision2::EntityKind as Revision2;
+        match value {
+            Revision2::LocalizationEntry => Self::LocalizationEntry,
+            Revision2::DialogLine => Self::DialogLine,
+            Revision2::VoiceSlot => Self::VoiceSlot,
+            Revision2::VoiceTake => Self::VoiceTake,
+            Revision2::NpcDraft => Self::NpcDraft,
+            Revision2::QuestDraft => Self::QuestDraft,
+            Revision2::ScriptModule => Self::ScriptModule,
+        }
+    }
+}
+
+/// Durable revision-3 entity provenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OriginRef {
+    New {
+        authored_runtime_id: String,
+    },
+    Vanilla {
+        generation: GameGenerationAnchor,
+        catalog_layer: String,
+        canonical_selector: String,
+        source_seal: ContentSeal,
+    },
+    Imported {
+        importer: String,
+        source_seal: ContentSeal,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_identity: Option<String>,
+    },
+    Generated {
+        generator_id: String,
+        generator_version: u32,
+        owner: TypedRef,
+    },
+}
+
+impl OriginRef {
+    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::OriginRef> {
+        Some(match self {
+            Self::New {
+                authored_runtime_id,
+            } => crate::model_revision2::OriginRef::New {
+                authored_runtime_id: authored_runtime_id.clone(),
+            },
+            Self::Vanilla {
+                generation,
+                catalog_layer,
+                canonical_selector,
+                source_seal,
+            } => crate::model_revision2::OriginRef::Vanilla {
+                generation: generation.clone(),
+                catalog_layer: catalog_layer.clone(),
+                canonical_selector: canonical_selector.clone(),
+                source_seal: source_seal.clone(),
+            },
+            Self::Imported {
+                importer,
+                source_seal,
+                external_identity,
+            } => crate::model_revision2::OriginRef::Imported {
+                importer: importer.clone(),
+                source_seal: source_seal.clone(),
+                external_identity: external_identity.clone(),
+            },
+            Self::Generated {
+                generator_id,
+                generator_version,
+                owner,
+            } => crate::model_revision2::OriginRef::Generated {
+                generator_id: generator_id.clone(),
+                generator_version: *generator_version,
+                owner: owner.to_revision2()?,
+            },
+        })
+    }
+}
+
+impl From<crate::model_revision2::OriginRef> for OriginRef {
+    fn from(value: crate::model_revision2::OriginRef) -> Self {
+        match value {
+            crate::model_revision2::OriginRef::New {
+                authored_runtime_id,
+            } => Self::New {
+                authored_runtime_id,
+            },
+            crate::model_revision2::OriginRef::Vanilla {
+                generation,
+                catalog_layer,
+                canonical_selector,
+                source_seal,
+            } => Self::Vanilla {
+                generation,
+                catalog_layer,
+                canonical_selector,
+                source_seal,
+            },
+            crate::model_revision2::OriginRef::Imported {
+                importer,
+                source_seal,
+                external_identity,
+            } => Self::Imported {
+                importer,
+                source_seal,
+                external_identity,
+            },
+            crate::model_revision2::OriginRef::Generated {
+                generator_id,
+                generator_version,
+                owner,
+            } => Self::Generated {
+                generator_id,
+                generator_version,
+                owner: owner.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DialogLine {
+    pub localization: TypedRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_hint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_unique_btree_map")]
+    pub voice_slots: BTreeMap<LocaleCode, TypedRef>,
+}
+
+impl DialogLine {
+    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::DialogLine> {
+        Some(crate::model_revision2::DialogLine {
+            localization: self.localization.to_revision2()?,
+            speaker_hint: self.speaker_hint.clone(),
+            voice_slots: self
+                .voice_slots
+                .iter()
+                .map(|(locale, reference)| Some((locale.clone(), reference.to_revision2()?)))
+                .collect::<Option<_>>()?,
+        })
+    }
+}
+
+impl From<crate::model_revision2::DialogLine> for DialogLine {
+    fn from(value: crate::model_revision2::DialogLine) -> Self {
+        Self {
+            localization: value.localization.into(),
+            speaker_hint: value.speaker_hint,
+            voice_slots: value
+                .voice_slots
+                .into_iter()
+                .map(|(locale, reference)| (locale, reference.into()))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceSlot {
+    pub locale: LocaleCode,
+    pub target_resolution: VoiceTargetResolution,
+    #[serde(default)]
+    pub candidates: Vec<TypedRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<TypedRef>,
+}
+
+impl VoiceSlot {
+    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::VoiceSlot> {
+        Some(crate::model_revision2::VoiceSlot {
+            locale: self.locale.clone(),
+            target_resolution: self.target_resolution.clone(),
+            candidates: self
+                .candidates
+                .iter()
+                .map(TypedRef::to_revision2)
+                .collect::<Option<_>>()?,
+            selected: match &self.selected {
+                Some(reference) => Some(reference.to_revision2()?),
+                None => None,
+            },
+        })
+    }
+}
+
+impl From<crate::model_revision2::VoiceSlot> for VoiceSlot {
+    fn from(value: crate::model_revision2::VoiceSlot) -> Self {
+        Self {
+            locale: value.locale,
+            target_resolution: value.target_resolution,
+            candidates: value.candidates.into_iter().map(Into::into).collect(),
+            selected: value.selected.map(Into::into),
+        }
+    }
+}
+
+/// Deterministically generated source owned by exactly one revision-3 NPC or Quest draft.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptModule {
+    pub generator_id: String,
+    pub generator_version: u32,
+    pub owner: TypedRef,
+    pub module_namespace: String,
+    pub module_relative_path: String,
+    pub source: String,
+    pub source_sha256: Sha256Digest,
+    pub input_fingerprint: Sha256Digest,
+    pub status: ScriptModuleStatus,
+}
+
+impl From<crate::model_revision2::ScriptModule> for ScriptModule {
+    fn from(value: crate::model_revision2::ScriptModule) -> Self {
+        Self {
+            generator_id: value.generator_id,
+            generator_version: value.generator_version,
+            owner: TypedRef {
+                project_id: value.owner.project_id,
+                id: value.owner.id,
+                expected_kind: EntityKind::from_revision2(value.owner.expected_kind),
+            },
+            module_namespace: value.module_namespace,
+            module_relative_path: value.module_relative_path,
+            source: value.source,
+            source_sha256: value.source_sha256,
+            input_fingerprint: value.input_fingerprint,
+            status: value.status,
+        }
+    }
+}
+
+impl ScriptModule {
+    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::ScriptModule> {
+        Some(crate::model_revision2::ScriptModule {
+            generator_id: self.generator_id.clone(),
+            generator_version: self.generator_version,
+            owner: self.owner.to_revision2()?,
+            module_namespace: self.module_namespace.clone(),
+            module_relative_path: self.module_relative_path.clone(),
+            source: self.source.clone(),
+            source_sha256: self.source_sha256,
+            input_fingerprint: self.input_fingerprint,
+            status: self.status,
+        })
+    }
+}
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -322,13 +643,21 @@ pub struct NpcDraft {
 }
 
 impl NpcDraft {
-    fn revision2_generation_core(&self) -> crate::model_revision2::NpcDraft {
-        crate::model_revision2::NpcDraft {
+    fn revision2_generation_core(
+        &self,
+    ) -> Result<crate::model_revision2::NpcDraft, crate::model_revision2::StoryRegenerationError>
+    {
+        let script_module = self.script_module.to_revision2().ok_or_else(|| {
+            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
+                "NPC ScriptModule reference declares an ItemPatch kind".to_owned(),
+            )
+        })?;
+        Ok(crate::model_revision2::NpcDraft {
             generator_id: self.generator_id.clone(),
             generator_version: self.generator_version,
             input: self.input.clone(),
-            script_module: self.script_module.clone(),
-        }
+            script_module,
+        })
     }
 
     /// Rebuild the exact owned module from durable generation intent only.
@@ -338,8 +667,14 @@ impl NpcDraft {
         &self,
         owner: TypedRef,
     ) -> Result<ScriptModule, crate::model_revision2::StoryRegenerationError> {
-        self.revision2_generation_core()
+        let owner = owner.to_revision2().ok_or_else(|| {
+            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
+                "NPC generator owner declares an ItemPatch kind".to_owned(),
+            )
+        })?;
+        self.revision2_generation_core()?
             .regenerate_script_module(owner)
+            .map(Into::into)
     }
 
     pub(crate) fn regenerate_script_module_with_identity(
@@ -349,8 +684,14 @@ impl NpcDraft {
         (ScriptModule, crate::model_revision2::GeneratedStoryIdentity),
         crate::model_revision2::StoryRegenerationError,
     > {
-        self.revision2_generation_core()
+        let owner = owner.to_revision2().ok_or_else(|| {
+            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
+                "NPC generator owner declares an ItemPatch kind".to_owned(),
+            )
+        })?;
+        self.revision2_generation_core()?
             .regenerate_script_module_with_identity(owner)
+            .map(|(module, identity)| (module.into(), identity))
     }
 }
 
@@ -363,6 +704,119 @@ pub struct QuestDraft {
     pub script_module: TypedRef,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transcript: Vec<QuestTranscriptBindingV1>,
+}
+
+pub const MAX_REVISION3_ITEM_PATCH_FIELDS_V1: usize = 256;
+pub const MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1: usize = 128;
+pub const MAX_REVISION3_ITEM_CLASS_BYTES_V1: usize = 256;
+pub const MAX_REVISION3_ITEM_ENUM_TYPE_BYTES_V1: usize = 256;
+pub const MAX_REVISION3_ITEM_STRING_BYTES_V1: usize = 16 * 1024;
+pub const MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1: usize = 64 * 1024;
+
+/// Finite canonical binary64 value used by one item scalar override.
+///
+/// The field is private so NaN, infinities, and negative zero cannot be constructed. Negative
+/// zero is normalized to positive zero; this keeps equality and canonical JSON deterministic.
+#[derive(Debug, Clone, Copy)]
+pub struct ItemFiniteFloatV1(f64);
+
+impl ItemFiniteFloatV1 {
+    pub fn new(value: f64) -> Result<Self, ItemFiniteFloatErrorV1> {
+        if !value.is_finite() {
+            return Err(ItemFiniteFloatErrorV1::NotFinite);
+        }
+        Ok(Self(if value == 0.0 { 0.0 } else { value }))
+    }
+
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl PartialEq for ItemFiniteFloatV1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for ItemFiniteFloatV1 {}
+
+impl Serialize for ItemFiniteFloatV1 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ItemFiniteFloatV1 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(f64::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ItemFiniteFloatErrorV1 {
+    #[error("item float must be finite")]
+    NotFinite,
+}
+
+/// Closed scalar value set accepted by managed item patches.
+///
+/// The externally tagged representation cannot carry arrays, objects, nulls, or an untyped JSON
+/// number. Enum values retain their declared enum type plus the exact signed backing integer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum ItemScalarValueV1 {
+    Integer(i64),
+    Float(ItemFiniteFloatV1),
+    Boolean(bool),
+    String(String),
+    Enum { enum_type: String, backing: i64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemScalarTypeV1 {
+    Integer,
+    Float,
+    Boolean,
+    String,
+    Enum,
+}
+
+impl ItemScalarValueV1 {
+    pub const fn scalar_type(&self) -> ItemScalarTypeV1 {
+        match self {
+            Self::Integer(_) => ItemScalarTypeV1::Integer,
+            Self::Float(_) => ItemScalarTypeV1::Float,
+            Self::Boolean(_) => ItemScalarTypeV1::Boolean,
+            Self::String(_) => ItemScalarTypeV1::String,
+            Self::Enum { .. } => ItemScalarTypeV1::Enum,
+        }
+    }
+}
+
+/// One project-owned patch of scalar defaults on exactly one sealed vanilla item class.
+///
+/// The matching [`Entity::origin`] must be [`OriginRef::Vanilla`], target the containing project
+/// generation, and carry this exact `vanilla_class` as its canonical selector. The ordered map is
+/// the complete desired patch, not an append-only command log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemPatchV1 {
+    pub vanilla_class: String,
+    #[serde(default, deserialize_with = "deserialize_unique_btree_map")]
+    pub fields: BTreeMap<String, ItemScalarValueV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,6 +834,7 @@ pub enum EntityPayload {
     NpcDraft(NpcDraft),
     QuestDraft(QuestDraft),
     ScriptModule(ScriptModule),
+    ItemPatch(ItemPatchV1),
 }
 
 impl EntityPayload {
@@ -392,6 +847,7 @@ impl EntityPayload {
             Self::NpcDraft(_) => EntityKind::NpcDraft,
             Self::QuestDraft(_) => EntityKind::QuestDraft,
             Self::ScriptModule(_) => EntityKind::ScriptModule,
+            Self::ItemPatch(_) => EntityKind::ItemPatch,
         }
     }
 }
@@ -592,6 +1048,18 @@ pub enum ProjectRevision3ValidationError {
     DuplicateVoiceTarget {
         slot: EntityId,
         existing_slot: EntityId,
+    },
+    #[error("revision-3 ItemPatch {item_patch} is invalid: {reason}")]
+    InvalidItemPatch {
+        item_patch: EntityId,
+        reason: String,
+    },
+    #[error(
+        "revision-3 ItemPatch {item_patch} duplicates the vanilla runtime target of {existing_patch}"
+    )]
+    DuplicateItemPatchTarget {
+        item_patch: EntityId,
+        existing_patch: EntityId,
     },
     #[error("revision-3 canonical serializer emitted non-UTF-8 bytes")]
     NonUtf8Serialization,

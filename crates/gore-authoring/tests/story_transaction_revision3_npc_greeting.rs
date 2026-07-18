@@ -5,12 +5,13 @@ use gore_authoring::{
     apply_revision3_npc_greeting_edit_transaction_v1, build_revision3_content_index_v1,
     migrate_revision2_to_revision3, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
     GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3,
-    ProjectRevision3ValidationError, Revision2Entity, Revision2EntityPayload, Revision2NpcDraft,
-    Revision2NpcDraftInput, Revision2NpcParentClassInput, Revision2OriginRef,
-    Revision3ContentEntitySummaryV1, Revision3ContentReferenceRoleV1,
-    Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogLineInsertRequestV1,
-    Revision3DialogLocalizationActionV1, Revision3DialogLocalizationIntentV1, Revision3Entity,
-    Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
+    ProjectRevision3ValidationError, Revision2Entity, Revision2EntityKind, Revision2EntityPayload,
+    Revision2NpcDraft, Revision2NpcDraftInput, Revision2NpcParentClassInput, Revision2OriginRef,
+    Revision2ScriptModule, Revision2TypedRef, Revision3ContentEntitySummaryV1,
+    Revision3ContentReferenceRoleV1, Revision3DialogEmptyVoiceSlotIntentV1,
+    Revision3DialogLineInsertRequestV1, Revision3DialogLocalizationActionV1,
+    Revision3DialogLocalizationIntentV1, Revision3Entity, Revision3EntityKind,
+    Revision3EntityPayload, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
     Revision3NpcGreetingBuildStatusV1, Revision3NpcGreetingEditConflictV1,
     Revision3NpcGreetingEditEvaluationV1, Revision3NpcGreetingEditOutcomeV1,
     Revision3NpcGreetingEditRequestJsonErrorV1, Revision3NpcGreetingEditRequestV1,
@@ -294,7 +295,11 @@ fn empty_greetings_preserve_pre_feature_npc_and_project_canonical_bytes() {
         generator_id: r3.generator_id.clone(),
         generator_version: r3.generator_version,
         input: r3.input.clone(),
-        script_module: r3.script_module.clone(),
+        script_module: Revision2TypedRef::new(
+            r3.script_module.project_id,
+            r3.script_module.id,
+            Revision2EntityKind::ScriptModule,
+        ),
     };
     assert_eq!(
         serde_json::to_vec(r3).unwrap(),
@@ -317,7 +322,11 @@ fn revision2_npc_migration_produces_empty_r3_greetings_without_wire_drift() {
         generator_id: r3_npc.generator_id.clone(),
         generator_version: r3_npc.generator_version,
         input: r3_npc.input.clone(),
-        script_module: r3_npc.script_module.clone(),
+        script_module: Revision2TypedRef::new(
+            r3_npc.script_module.project_id,
+            r3_npc.script_module.id,
+            Revision2EntityKind::ScriptModule,
+        ),
     };
     let source = ProjectRevision2 {
         format: FormatV2,
@@ -345,11 +354,33 @@ fn revision2_npc_migration_produces_empty_r3_greetings_without_wire_drift() {
                 Revision2Entity {
                     id: module_id,
                     display_name: project.entities[&module_id].display_name.clone(),
-                    origin: project.entities[&module_id].origin.clone(),
+                    origin: Revision2OriginRef::Generated {
+                        generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
+                        generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+                        owner: Revision2TypedRef::new(
+                            project.project_id,
+                            npc_id,
+                            Revision2EntityKind::NpcDraft,
+                        ),
+                    },
                     revision: project.entities[&module_id].revision,
                     payload: match &project.entities[&module_id].payload {
                         Revision3EntityPayload::ScriptModule(module) => {
-                            Revision2EntityPayload::ScriptModule(module.clone())
+                            Revision2EntityPayload::ScriptModule(Revision2ScriptModule {
+                                generator_id: module.generator_id.clone(),
+                                generator_version: module.generator_version,
+                                owner: Revision2TypedRef::new(
+                                    module.owner.project_id,
+                                    module.owner.id,
+                                    Revision2EntityKind::NpcDraft,
+                                ),
+                                module_namespace: module.module_namespace.clone(),
+                                module_relative_path: module.module_relative_path.clone(),
+                                source: module.source.clone(),
+                                source_sha256: module.source_sha256,
+                                input_fingerprint: module.input_fingerprint,
+                                status: module.status,
+                            })
                         }
                         _ => unreachable!(),
                     },

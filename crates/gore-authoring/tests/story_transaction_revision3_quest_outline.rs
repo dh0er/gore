@@ -5,7 +5,7 @@ use gore_authoring::{
     AssetMeta, AssetStoreIndex, ContentSeal, DraftQuestField, DraftQuestSkeletonError, EntityId,
     FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
     QuestCollisionArtifactRef, QuestCollisionCatalogInput, QuestTransitionPlanV1,
-    Revision2DialogLine, Revision2LocalizationEntry, Revision3Entity, Revision3EntityKind,
+    Revision2LocalizationEntry, Revision3DialogLine, Revision3Entity, Revision3EntityKind,
     Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
     Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV1,
     Revision3QuestOutlineEditConflictV1, Revision3QuestOutlineEditErrorV1,
@@ -240,7 +240,7 @@ fn attach_transcript(
                 authored_runtime_id: "GORE_OUTLINE_TRANSCRIPT_LINE".to_owned(),
             },
             revision: 4,
-            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+            payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
                 localization: Revision3TypedRef::new(
                     project.project_id,
                     localization_id,

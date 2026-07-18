@@ -1229,6 +1229,9 @@ pub(crate) fn project_revision3_basis_to_revision2(
         Revision3QuestFreeBasisError::ResidualQuestState { entity } => {
             Revision3QuestInspectionError::ResidualQuestBasis { entity }
         }
+        error @ Revision3QuestFreeBasisError::NativeReferenceNotRepresentable { .. } => {
+            Revision3QuestInspectionError::InvalidBasisProject(error.to_string())
+        }
     })
 }
 

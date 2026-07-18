@@ -196,7 +196,8 @@ fn validate_signed_wire_values(project: &gore_authoring::ProjectRevision3) -> Re
             | Revision3EntityPayload::DialogLine(_)
             | Revision3EntityPayload::VoiceSlot(_)
             | Revision3EntityPayload::NpcDraft(_)
-            | Revision3EntityPayload::ScriptModule(_) => {}
+            | Revision3EntityPayload::ScriptModule(_)
+            | Revision3EntityPayload::ItemPatch(_) => {}
         }
     }
     Ok(())

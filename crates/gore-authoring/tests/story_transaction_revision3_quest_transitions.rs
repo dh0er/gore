@@ -7,7 +7,7 @@ use gore_authoring::{
     ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
     QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
     QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
-    QuestTransitionStateTestV1, Revision2DialogLine, Revision2LocalizationEntry, Revision3Entity,
+    QuestTransitionStateTestV1, Revision2LocalizationEntry, Revision3DialogLine, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
     Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
     Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditBuildStatusV1,
@@ -328,7 +328,7 @@ fn attach_transcript(
                 authored_runtime_id: "GORE_TRANSITION_TRANSCRIPT_LINE".to_owned(),
             },
             revision: 4,
-            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+            payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
                 localization: Revision3TypedRef::new(
                     project.project_id,
                     localization_id,

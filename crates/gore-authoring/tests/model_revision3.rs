@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::model_revision2::{
-    Entity as Revision2Entity, EntityPayload as Revision2EntityPayload,
-    OriginRef as Revision2OriginRef, ProjectRevision2, QuestCollisionCatalogInput,
-    QuestDraft as Revision2QuestDraft, QuestDraftInput as Revision2QuestDraftInput,
-    SchemaRevisionV2,
+    Entity as Revision2Entity, EntityKind as Revision2EntityKind,
+    EntityPayload as Revision2EntityPayload, OriginRef as Revision2OriginRef, ProjectRevision2,
+    QuestCollisionCatalogInput, QuestDraft as Revision2QuestDraft,
+    QuestDraftInput as Revision2QuestDraftInput, SchemaRevisionV2,
+    ScriptModule as Revision2ScriptModule, TypedRef as Revision2TypedRef,
 };
 use gore_authoring::{
     migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
@@ -592,10 +593,10 @@ fn revision2_quest(id: EntityId) -> Revision2Entity {
                     symbols: BTreeSet::new(),
                 },
             },
-            script_module: Revision3TypedRef::new(
+            script_module: Revision2TypedRef::new(
                 project_id(2),
                 entity_id(99),
-                Revision3EntityKind::ScriptModule,
+                Revision2EntityKind::ScriptModule,
             ),
         }),
     }
@@ -623,11 +624,11 @@ fn any_revision2_quest_requires_explicit_repinning_and_returns_no_candidate() {
 fn revision2_script_module(
     module_id: EntityId,
     owner_id: EntityId,
-    owner_kind: Revision3EntityKind,
+    owner_kind: Revision2EntityKind,
     generator_id: &str,
     generator_version: u32,
 ) -> Revision2Entity {
-    let owner = Revision3TypedRef::new(project_id(2), owner_id, owner_kind);
+    let owner = Revision2TypedRef::new(project_id(2), owner_id, owner_kind);
     let source = "// residual revision-2 module\n".to_owned();
     Revision2Entity {
         id: module_id,
@@ -638,7 +639,7 @@ fn revision2_script_module(
             owner: owner.clone(),
         },
         revision: 0,
-        payload: Revision2EntityPayload::ScriptModule(Revision3ScriptModule {
+        payload: Revision2EntityPayload::ScriptModule(Revision2ScriptModule {
             generator_id: generator_id.into(),
             generator_version,
             owner,
@@ -662,7 +663,7 @@ fn orphan_quest_owned_revision2_module_requires_explicit_repinning() {
         revision2_script_module(
             module_id,
             missing_owner,
-            Revision3EntityKind::QuestDraft,
+            Revision2EntityKind::QuestDraft,
             LOGICAL_NPC_CLONE_GENERATOR_ID,
             1,
         ),
@@ -692,7 +693,7 @@ fn quest_generator_marker_requires_repin_even_with_non_quest_owner_or_version_dr
             revision2_script_module(
                 module_id,
                 owner_id,
-                Revision3EntityKind::NpcDraft,
+                Revision2EntityKind::NpcDraft,
                 DRAFT_QUEST_GENERATOR_ID,
                 generator_version,
             ),
@@ -714,7 +715,7 @@ fn mismatched_quest_origin_marker_cannot_hide_behind_non_quest_module_fields() {
     let mut entity = revision2_script_module(
         module_id,
         owner_id,
-        Revision3EntityKind::NpcDraft,
+        Revision2EntityKind::NpcDraft,
         LOGICAL_NPC_CLONE_GENERATOR_ID,
         1,
     );

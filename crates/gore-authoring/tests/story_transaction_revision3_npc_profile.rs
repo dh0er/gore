@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     apply_revision3_npc_profile_edit_transaction_v1, AssetMeta, AssetStoreIndex, ContentSeal,
     EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
-    Revision2DialogLine, Revision2LocalizationEntry, Revision2NpcDraftInput,
-    Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision2LocalizationEntry, Revision2NpcDraftInput, Revision2NpcParentClassInput,
+    Revision3DialogLine, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
     Revision3NpcCatalogSelectionV1, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
     Revision3NpcProfileCatalogContextV1, Revision3NpcProfileEditBuildStatusV1,
     Revision3NpcProfileEditCatalogAuthorityV1, Revision3NpcProfileEditCollisionAuthorityV1,
@@ -542,7 +542,7 @@ fn profile_name_and_archetype_edits_preserve_ordered_npc_greetings_and_shared_li
                 authored_runtime_id: "GORE_PROFILE_GREETING_LINE".to_owned(),
             },
             revision: 3,
-            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+            payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
                 localization: Revision3TypedRef::new(
                     project.project_id,
                     localization_id,
