@@ -2299,40 +2299,41 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get projectExportActionTitle => 'Export project copy…';
+  String get projectExportActionTitle => 'Create project backup…';
 
   @override
   String get projectExportActionDescription =>
-      'Write an exact portable copy of the current saved project checkpoint.';
+      'Write an exact restorable backup of the current saved project checkpoint.';
 
   @override
   String get projectExportActionDirtyBlocked =>
-      'Save or discard the open localization edits before exporting a project copy.';
+      'Save or discard the open localization edits before creating a project backup.';
 
   @override
-  String get projectExportDialogTitle => 'Export project copy';
+  String get projectExportDialogTitle => 'Create project backup';
 
   @override
-  String get projectExportPortableCopyTitle => 'Portable project copy';
+  String get projectExportPortableCopyTitle =>
+      'Restorable Mod Studio project backup';
 
   @override
   String get projectExportPortableCopyDescription =>
-      'This writes the exact current saved project checkpoint to a new .goremod file. The open project stays current and unchanged.';
+      'This writes the exact current saved project checkpoint to a new .goremod file. It can be restored into a new project folder later; the open project stays current and unchanged.';
 
   @override
   String get projectExportCapabilityBoundary =>
-      'This copy is not a playable mod, build, deployment, or restorable backup. It does not read or change the game or any save.';
+      'This backup is not a playable mod, build, deployment, or runtime qualification. Creating it does not read or change the game or any save.';
 
   @override
   String get projectExportKeepOriginal =>
-      'Importing this managed copy is not available yet. Keep the original project folder.';
+      'A restore preserves this project\'s identity and history. Use Clone or Save As for a separate project identity when those workflows become available.';
 
   @override
-  String get projectExportFileNameLabel => 'New project-copy file';
+  String get projectExportFileNameLabel => 'New project-backup file';
 
   @override
   String get projectExportFileNameHelper =>
-      'Use a new portable file name ending in .goremod.';
+      'Use a new backup file name ending in .goremod.';
 
   @override
   String get projectExportChooseDestination => 'Choose destination folder';
@@ -2350,10 +2351,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get projectExportClose => 'Close';
 
   @override
-  String get projectExportSubmit => 'Export copy';
+  String get projectExportSubmit => 'Create backup';
 
   @override
-  String get projectExportExporting => 'Exporting…';
+  String get projectExportExporting => 'Creating backup…';
 
   @override
   String get projectExportParentRequired =>
@@ -2373,7 +2374,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get projectExportFileNameRequired =>
-      'Enter a new project-copy file name.';
+      'Enter a new project-backup file name.';
 
   @override
   String get projectExportFileNameTooLong =>
@@ -2401,7 +2402,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get projectExportStale =>
-      'The project changed before export started. No output was created. Close this window and open Export project copy again.';
+      'The project changed before backup creation started. No output was created. Close this window and open Create project backup again.';
 
   @override
   String get projectExportRequiresReopen =>
@@ -2409,33 +2410,33 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get projectExportUnsupported =>
-      'This managed project session cannot export exact portable copies. Nothing was created.';
+      'This managed project session cannot create exact restorable backups. Nothing was created.';
 
   @override
   String get projectExportFailedBeforeStart =>
-      'The project copy could not be prepared exactly. Nothing was created.';
+      'The project backup could not be prepared exactly. Nothing was created.';
 
   @override
   String get projectExportPrepublicationFailed =>
-      'Export stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.';
+      'Backup creation stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.';
 
   @override
   String projectExportMayExist(String output) {
-    return 'The export did not return a verified receipt. Do not retry. Close this window and check the destination: $output';
+    return 'Backup creation did not return a verified receipt. Do not retry. Close this window and check the destination: $output';
   }
 
   @override
   String projectExportResultMismatch(String output) {
-    return 'The completed export does not match this checkpoint or destination. Do not retry; inspect the destination: $output';
+    return 'The completed backup does not match this checkpoint or destination. Do not retry; inspect the destination: $output';
   }
 
   @override
   String get projectExportPublished =>
-      'The exact portable project copy was created as a new local file.';
+      'The exact restorable project backup was created as a new local file.';
 
   @override
   String get projectExportPublishedCleanupWarning =>
-      'The exact project copy was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.';
+      'The exact restorable project backup was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.';
 
   @override
   String projectExportPublicationUncertain(String output) {
@@ -2451,6 +2452,167 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get projectExportCurrentProjectUnchanged =>
       'The current project remains open and unchanged. The game and saves were not touched.';
+
+  @override
+  String get projectRestoreActionTitle => 'Restore project backup…';
+
+  @override
+  String get projectRestoreActionDescription =>
+      'Verify an exact .goremod backup, restore it into a new folder, and open that project safely.';
+
+  @override
+  String get projectRestoreDialogTitle => 'Restore project backup';
+
+  @override
+  String get projectRestoreNoticeTitle => 'Restore into a new project folder';
+
+  @override
+  String get projectRestoreNoticeDescription =>
+      'Choose a restorable Mod Studio .goremod backup. Studio verifies the complete archive before creating a new project folder and preserves the backed-up project identity and history.';
+
+  @override
+  String get projectRestoreCapabilityBoundary =>
+      'Restore does not build, deploy, launch, or qualify the mod at runtime. It does not read or change the game or any save.';
+
+  @override
+  String get projectRestoreChooseBackup => 'Choose backup file';
+
+  @override
+  String get projectRestoreNoBackup => 'No verified backup selected';
+
+  @override
+  String get projectRestoreInspecting => 'Verifying backup…';
+
+  @override
+  String get projectRestoreVerified =>
+      'This exact V2 project backup is complete and restorable.';
+
+  @override
+  String get projectRestoreSource => 'Backup file';
+
+  @override
+  String get projectRestoreProjectRevision => 'Project revision';
+
+  @override
+  String get projectRestoreArchiveBytes => 'Archive bytes';
+
+  @override
+  String get projectRestoreStoreObjects => 'Stored project objects';
+
+  @override
+  String get projectRestoreUnsupportedReviewCopy =>
+      'This is an older review-only project copy and cannot be restored. Choose a V2 backup created with Create project backup.';
+
+  @override
+  String get projectRestoreInvalidSource =>
+      'The selected file is not a valid exact project backup. Nothing was created.';
+
+  @override
+  String get projectRestoreInspectionFailed =>
+      'The backup could not be verified completely. Nothing was created.';
+
+  @override
+  String get projectRestoreUnavailable =>
+      'Exact project restore is unavailable on this system. Nothing was created.';
+
+  @override
+  String get projectRestoreChooseDestinationParent => 'Choose parent folder';
+
+  @override
+  String get projectRestoreNoDestinationParent => 'No parent folder selected';
+
+  @override
+  String get projectRestoreFolderNameLabel => 'New project folder name';
+
+  @override
+  String get projectRestoreFolderNameHelper =>
+      'Studio creates this new folder; it must not already exist.';
+
+  @override
+  String get projectRestoreNewFolder => 'New project folder';
+
+  @override
+  String get projectRestoreFolderNameRequired =>
+      'Enter a new project folder name.';
+
+  @override
+  String get projectRestoreFolderNameTooLong => 'The folder name is too long.';
+
+  @override
+  String get projectRestoreFolderNameInvalid =>
+      'Use one ordinary folder name without path separators, control characters, a trailing dot, or a trailing space.';
+
+  @override
+  String get projectRestoreFolderNameReserved =>
+      'That folder name is reserved by Windows.';
+
+  @override
+  String get projectRestoreDestinationExists =>
+      'That destination already exists. Choose a new folder name; existing content is never overwritten.';
+
+  @override
+  String get projectRestoreDestinationLink =>
+      'The new project destination is a link. Choose a different folder name.';
+
+  @override
+  String get projectRestoreDestinationInvalid =>
+      'The destination was rejected before a project receipt was created. Nothing was opened. Choose a different new folder after verifying the backup again.';
+
+  @override
+  String get projectRestoreInspectionExpired =>
+      'The backup changed after verification. Nothing was opened. Verify the backup again before choosing another destination.';
+
+  @override
+  String get projectRestoreMaterializationFailed =>
+      'Restore did not return a verified project receipt. Nothing was opened. Do not reuse this attempt; inspect the chosen destination before starting again.';
+
+  @override
+  String projectRestorePublicationUncertain(String destination) {
+    return 'Studio cannot prove whether the project folder ‘$destination’ was published. Nothing was opened. Do not retry this restore; inspect that destination first.';
+  }
+
+  @override
+  String get projectRestoreStale =>
+      'This restore window is no longer current. Nothing was opened. If materialization had started, inspect the chosen destination before trying anything else.';
+
+  @override
+  String get projectRestoreCancel => 'Cancel';
+
+  @override
+  String get projectRestoreClose => 'Close';
+
+  @override
+  String get projectRestoreSubmit => 'Restore and open';
+
+  @override
+  String get projectRestoreRestoring => 'Restoring…';
+
+  @override
+  String get projectRestoreSucceeded =>
+      'The exact project backup was restored into the new folder.';
+
+  @override
+  String get projectRestoreSucceededCleanupWarning =>
+      'The exact project backup was restored, but private temporary cleanup was incomplete. The restored project is valid; do not repeat the restore.';
+
+  @override
+  String get projectRestoreOpened => 'Project backup restored and opened.';
+
+  @override
+  String get projectRestoreOpenedCleanupWarning =>
+      'Project backup restored and opened. Private temporary cleanup was incomplete; do not repeat the restore.';
+
+  @override
+  String get projectRestoreOpening => 'Opening the restored project safely…';
+
+  @override
+  String projectRestoreOpenFailed(String destination) {
+    return 'The project folder ‘$destination’ was restored, but Studio could not prove it safe to open. Any previously open project remains current; otherwise no project was opened. Do not repeat the restore; inspect or open the restored folder separately.';
+  }
+
+  @override
+  String get projectRestoreCandidateCleanupWarning =>
+      'No project was adopted. Studio could not completely clean up the rejected candidate session. Restart Mod Studio before opening the restored destination manually.';
 
   @override
   String get managedVoiceTakeRemoveAction => 'Remove from this line…';

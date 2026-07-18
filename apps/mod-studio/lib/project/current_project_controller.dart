@@ -28,6 +28,7 @@ import 'revision3_quest_transcript_authoring.dart';
 import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_project_history.dart';
+import 'revision3_project_import.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_media_qa_service.dart';
 import 'revision3_voice_take_preview_authoring.dart';
@@ -211,6 +212,20 @@ final class Revision3ProjectExportFailedException
   final String? code;
   final bool publicationMayExist;
   final bool retryWithNewDestination;
+}
+
+/// A natively confirmed import was fully opened, but the opened candidate did
+/// not reproduce the receipt's exact destination, identity, revision, or head.
+///
+/// The candidate is closed without displacing the current project. Callers
+/// must not fall back to an ordinary path-based open because doing so would
+/// discard the receipt binding that makes import adoption safe.
+final class Revision3ProjectImportAdoptionMismatchException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectImportAdoptionMismatchException()
+    : super(
+        'the imported managed project could not be bound to its exact native receipt',
+      );
 }
 
 const _revision3ProjectExportSafePrepublicationCodes = <String>{
@@ -925,6 +940,21 @@ abstract interface class ManagedRevision3ProjectExportLease {
   });
 }
 
+/// Optional restorable V2 exact-snapshot export authority. This remains
+/// separate from the frozen V1 review-copy capability so neither authority can
+/// be inferred from the other.
+abstract interface class ManagedRevision3RestorableProjectExportLease {
+  bool get supportsRestorableSnapshotExport;
+
+  /// Permanently remove mutation/export authority after a post-call result
+  /// cannot be bound to the requested checkpoint or publication terminal.
+  void markRequiresReopenAfterPublicationUncertainty();
+
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String output,
+  });
+}
+
 /// Optional exact-current Story Draft deletion authority. The explicit
 /// capability bit and fail-closed latch keep unrelated alternate leases and
 /// test doubles from accidentally claiming destructive authoring support.
@@ -1065,6 +1095,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
         ManagedRevision3ProjectExportLease,
+        ManagedRevision3RestorableProjectExportLease,
         ManagedRevision3StoryDraftRemovalLease {
   const _ManagedRevision3SessionLease(this._session);
 
@@ -1125,6 +1156,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   bool get supportsExactSnapshotExport => _session.supportsExactSnapshotExport;
+
+  @override
+  bool get supportsRestorableSnapshotExport =>
+      _session.supportsRestorableSnapshotExport;
 
   @override
   bool get supportsStoryDraftRemoval => _session.supportsStoryDraftRemoval;
@@ -1202,6 +1237,11 @@ final class _ManagedRevision3SessionLease
   Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
     required String output,
   }) => _session.exportExactSnapshotV1(output: output);
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String output,
+  }) => _session.exportExactSnapshotV2(output: output);
 
   @override
   Directory get root => _session.root;
@@ -2368,6 +2408,42 @@ final class CurrentProjectCoordinator
       await _adopt(candidate, candidateState);
       adopted = true;
       return candidateState as ManagedRevision3CurrentProjectState;
+    } catch (error, stackTrace) {
+      if (candidateLease != null && !adopted) {
+        await _closeUnadopted(
+          _OwnedManagedRevision3CurrentProject(candidateLease),
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  });
+
+  /// Fully open one natively confirmed imported project and adopt it only when
+  /// the opened candidate reproduces the receipt's complete session identity.
+  ///
+  /// The destination comparison is lexical and platform-aware after both
+  /// spellings are normalized to absolute paths. The current lease remains
+  /// authoritative until every receipt field has matched. Opener failures,
+  /// poisoned candidates, and mismatches close an unadopted candidate exactly
+  /// once and leave the visible current-project state unchanged.
+  Future<ManagedRevision3CurrentProjectState> openImportedManagedRevision3(
+    Revision3ProjectImportedReceipt receipt,
+  ) => _enqueue(() async {
+    ManagedRevision3CurrentProjectLease? candidateLease;
+    var adopted = false;
+    try {
+      candidateLease = await _openManagedRevision3(
+        Directory(receipt.destination),
+      );
+      final candidate = _OwnedManagedRevision3CurrentProject(candidateLease);
+      final candidateState =
+          _stateOf(candidate) as ManagedRevision3CurrentProjectState;
+      if (!_importedRevision3CandidateMatchesReceipt(candidateState, receipt)) {
+        throw const Revision3ProjectImportAdoptionMismatchException();
+      }
+      await _adopt(candidate, candidateState);
+      adopted = true;
+      return candidateState;
     } catch (error, stackTrace) {
       if (candidateLease != null && !adopted) {
         await _closeUnadopted(
@@ -5599,6 +5675,144 @@ final class CurrentProjectCoordinator
     }
   });
 
+  /// Export one immutable, restorable V2 copy from the exact visible managed
+  /// checkpoint. V1 review-copy authority is deliberately not accepted here.
+  /// The current project remains unchanged and uncertain publication is never
+  /// retried automatically.
+  Future<AuthoringRevision3ExactSnapshotExportResultV2>
+  exportCurrentRevision3ExactSnapshotV2({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectExportRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ProjectExportStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3RestorableProjectExportLease) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    final exportLease = lease as ManagedRevision3RestorableProjectExportLease;
+    if (!exportLease.supportsRestorableSnapshotExport) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    try {
+      final result = await exportLease.exportExactSnapshotV2(output: output);
+      if (result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectId != lease.projectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.projectRevision != lease.projectRevision ||
+          result.output != output ||
+          !result.isRestorableProjectCopy ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        exportLease.markRequiresReopenAfterPublicationUncertainty();
+        throw const Revision3ProjectExportRequiresReopenException(
+          publicationMayExist: true,
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (error is Revision3ProjectExportRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          exportLease.markRequiresReopenAfterPublicationUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (error is Revision3ProjectExportFailedException) {
+        if (!error.publicationMayExist) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+        if (!lease.requiresReopen) {
+          exportLease.markRequiresReopenAfterPublicationUncertainty();
+        }
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: true,
+            code: error.code,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ManagedProjectHeadConflictException) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: false,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ManagedRevision3ExactSnapshotExportPrepublicationException) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: false,
+            code: error.code,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3ProjectExportSafePrepublicationCodes.contains(error.code)) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportFailedException(
+            cause: error,
+            code: error.code,
+            publicationMayExist: false,
+            retryWithNewDestination:
+                _revision3ProjectExportDestinationRetryCodes.contains(
+                  error.code,
+                ),
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ArgumentError) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportFailedException(
+            cause: error,
+            publicationMayExist: false,
+          ),
+          stackTrace,
+        );
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: true,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      exportLease.markRequiresReopenAfterPublicationUncertainty();
+      Error.throwWithStackTrace(
+        Revision3ProjectExportRequiresReopenException(
+          publicationMayExist: true,
+          cause: error,
+        ),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
   /// Build one reviewed DataAsset stage from the exact visible managed
   /// checkpoint. The Store is not mutated; every terminal publication outcome,
   /// including uncertainty after rename, remains a successful sealed result.
@@ -6484,3 +6698,22 @@ Future<void> _closeOwned(_OwnedCurrentProject owned) => switch (owned) {
   _OwnedLegacyCurrentProject(:final lease) => lease.close(),
   _OwnedManagedRevision3CurrentProject(:final lease) => lease.close(),
 };
+
+bool _importedRevision3CandidateMatchesReceipt(
+  ManagedRevision3CurrentProjectState candidate,
+  Revision3ProjectImportedReceipt receipt,
+) {
+  String expectedRoot;
+  String candidateRoot;
+  try {
+    expectedRoot = p.normalize(p.absolute(receipt.destination));
+    candidateRoot = p.normalize(p.absolute(candidate.root.path));
+  } catch (_) {
+    return false;
+  }
+  return p.equals(candidateRoot, expectedRoot) &&
+      candidate.projectId == receipt.projectId &&
+      candidate.projectRevision == receipt.projectRevision &&
+      candidate.head.canonicalJson == receipt.head.canonicalJson &&
+      !candidate.requiresReopen;
+}

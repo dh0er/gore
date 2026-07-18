@@ -23,6 +23,7 @@ import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:gore_mod/project/revision3_project_history.dart';
+import 'package:gore_mod/project/revision3_project_import.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
@@ -540,6 +541,7 @@ void main() {
       for (final key in const [
         Key('managed-project-entry-create'),
         Key('managed-project-entry-open'),
+        Key('managed-project-entry-restore'),
       ]) {
         final entry = find.byKey(key);
         expect(entry, findsOneWidget);
@@ -765,7 +767,7 @@ void main() {
       final parent = Directory.systemTemp.createTempSync('gore_home_export_');
       addTearDown(() => parent.deleteSync(recursive: true));
       final completion =
-          Completer<AuthoringRevision3ExactSnapshotExportResult>();
+          Completer<AuthoringRevision3ExactSnapshotExportResultV2>();
       late String pendingOutput;
       final managed = _FakeExportManagedLease(
         root: Directory(r'C:\mods\managed-project-export'),
@@ -907,7 +909,540 @@ void main() {
   );
 
   testWidgets(
-    'dirty managed project text guards Open and Close without losing the draft',
+    'project backup restore adopts only the exact receipt and preserves both cleanup warnings',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final parent = Directory.systemTemp.createTempSync('gore_home_restore_');
+      addTearDown(() {
+        if (parent.existsSync()) parent.deleteSync(recursive: true);
+      });
+      final source = p.join(parent.path, 'asghan-backup.goremod');
+      File(source).writeAsBytesSync(const <int>[1]);
+      const projectId = 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd';
+      const projectRevision = 7;
+      final head = _head(projectRevision);
+      final destination = p.join(
+        parent.path,
+        'restored-project-r$projectRevision',
+      );
+      final candidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectId: projectId,
+        projectRevision: projectRevision,
+        head: head,
+      );
+      final legacy = _FakeLegacyLease(
+        path: 'legacy-before-restore.goremod',
+        closeError: StateError(r'cleanup failed at C:\private\legacy.lock'),
+      );
+      var openerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (root) async {
+          openerCalls++;
+          expect(root.path, destination);
+          return candidate;
+        },
+      );
+      var sourcePickerCalls = 0;
+      var inspectorCalls = 0;
+      var importerCalls = 0;
+      String? parentPickerLabel;
+      Revision3ProjectImportDestinationRequest? receivedRequest;
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (label) async {
+          parentPickerLabel = label;
+          return parent.path;
+        },
+        pickProjectBackup: () async {
+          sourcePickerCalls++;
+          return source;
+        },
+        inspectProjectBackup: (selectedSource) async {
+          inspectorCalls++;
+          expect(selectedSource, source);
+          return _homeProjectImportInspectionResponse(
+            source: source,
+            projectId: projectId,
+            projectRevision: projectRevision,
+            head: head,
+          );
+        },
+        restoreProjectBackup: (request) async {
+          importerCalls++;
+          receivedRequest = request;
+          return _homeProjectImportDestinationResponse(
+            request: request,
+            projectId: projectId,
+            projectRevision: projectRevision,
+            head: head,
+            outcome: 'imported_with_cleanup_warning',
+          );
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      expect(
+        find.byKey(const Key('managed-project-entry-restore')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('managed-project-entry-restore')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.byKey(const Key('revision3-project-import-dialog')),
+        findsOneWidget,
+      );
+      final l10n = AppLocalizations.of(
+        tester.element(
+          find.byKey(const Key('revision3-project-import-dialog')),
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-source')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('asghan-backup.goremod'), findsOneWidget);
+      expect(find.text(source), findsNothing);
+      expect(find.text('8192'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-parent')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(parentPickerLabel, l10n.projectRestoreChooseDestinationParent);
+      expect(find.text(destination), findsOneWidget);
+
+      await tester.ensureVisible(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      for (var index = 0; index < 5; index++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(sourcePickerCalls, 1);
+      expect(inspectorCalls, 1);
+      expect(importerCalls, 1);
+      expect(openerCalls, 1);
+      expect(receivedRequest?.source, source);
+      expect(receivedRequest?.destination, destination);
+      expect(receivedRequest?.expectedArchive.byteLength, 8192);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.root.path, destination);
+      expect(current.projectId, projectId);
+      expect(current.projectRevision, projectRevision);
+      expect(current.head.canonicalJson, head.canonicalJson);
+      expect(legacy.closeCalls, 1);
+      expect(candidate.closeCalls, 0);
+      expect(
+        find.text(l10n.projectRestoreOpenedCleanupWarning),
+        findsOneWidget,
+      );
+      expect(find.textContaining(r'C:\private'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text(l10n.projectTransitionCleanupWarning), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'cleanup-warning restore reports safe open, native cleanup, and candidate cleanup failures',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_home_restore_open_failure_',
+      );
+      addTearDown(() {
+        if (parent.existsSync()) parent.deleteSync(recursive: true);
+      });
+      final source = p.join(parent.path, 'failed-open-backup.goremod');
+      File(source).writeAsBytesSync(const <int>[1]);
+      const projectId = 'abababababababababababababababab';
+      const projectRevision = 9;
+      final head = _head(projectRevision);
+      final destination = p.join(
+        parent.path,
+        'restored-project-r$projectRevision',
+      );
+      const candidateCleanupPrivatePath = r'C:\private\restored-candidate.lock';
+      final mismatchedCandidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectId: 'bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc',
+        projectRevision: projectRevision,
+        head: head,
+        closeError: StateError(
+          'candidate cleanup failed at $candidateCleanupPrivatePath',
+        ),
+      );
+      final legacy = _FakeLegacyLease(path: 'legacy-stays-current.goremod');
+      var openerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (root) async {
+          openerCalls++;
+          expect(root.path, destination);
+          return mismatchedCandidate;
+        },
+      );
+      var importerCalls = 0;
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => parent.path,
+        pickProjectBackup: () async => source,
+        inspectProjectBackup: (_) async => _homeProjectImportInspectionResponse(
+          source: source,
+          projectId: projectId,
+          projectRevision: projectRevision,
+          head: head,
+        ),
+        restoreProjectBackup: (request) async {
+          importerCalls++;
+          return _homeProjectImportDestinationResponse(
+            request: request,
+            projectId: projectId,
+            projectRevision: projectRevision,
+            head: head,
+            outcome: 'imported_with_cleanup_warning',
+          );
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.tap(find.byKey(const Key('managed-project-entry-restore')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-source')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-parent')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.ensureVisible(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      final l10n = AppLocalizations.of(
+        tester.element(
+          find.byKey(const Key('revision3-project-import-submit')),
+        ),
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      for (var index = 0; index < 8 && openerCalls == 0; index++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(importerCalls, 1);
+      expect(openerCalls, 1);
+      expect(mismatchedCandidate.closeCalls, 1);
+      expect(legacy.closeCalls, 0);
+      expect(coordinator.terminalCleanupFailures, hasLength(1));
+      expect(coordinator.state, isA<LegacyCurrentProjectState>());
+      expect(
+        find.text(
+          l10n.projectRestoreOpenFailed('restored-project-r$projectRevision'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining(parent.path), findsNothing);
+      expect(find.textContaining('bcbcbcbcbcbcbcbc'), findsNothing);
+      expect(find.textContaining(candidateCleanupPrivatePath), findsNothing);
+
+      final cleanupWarning = find.text(
+        l10n.projectRestoreSucceededCleanupWarning,
+      );
+      for (
+        var index = 0;
+        index < 8 && cleanupWarning.evaluate().isEmpty;
+        index++
+      ) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(cleanupWarning, findsOneWidget);
+      expect(find.textContaining(parent.path), findsNothing);
+      expect(find.textContaining(candidateCleanupPrivatePath), findsNothing);
+
+      final candidateCleanupWarning = find.text(
+        l10n.projectRestoreCandidateCleanupWarning,
+      );
+      for (
+        var index = 0;
+        index < 8 && candidateCleanupWarning.evaluate().isEmpty;
+        index++
+      ) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(candidateCleanupWarning, findsOneWidget);
+      expect(find.textContaining(candidateCleanupPrivatePath), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'receipt adoption keeps non-dismissible opening progress and project actions blocked',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_home_restore_open_progress_',
+      );
+      addTearDown(() {
+        if (parent.existsSync()) parent.deleteSync(recursive: true);
+      });
+      final source = p.join(parent.path, 'delayed-open-backup.goremod');
+      File(source).writeAsBytesSync(const <int>[1]);
+      const projectId = 'cacacacacacacacacacacacacacacaca';
+      const projectRevision = 6;
+      final head = _head(projectRevision);
+      final destination = p.join(
+        parent.path,
+        'restored-project-r$projectRevision',
+      );
+      final candidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectId: projectId,
+        projectRevision: projectRevision,
+        head: head,
+      );
+      final opener = Completer<ManagedRevision3CurrentProjectLease>();
+      var openerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) {
+          openerCalls++;
+          expect(root.path, destination);
+          return opener.future;
+        },
+      );
+      var sourcePickerCalls = 0;
+      var importerCalls = 0;
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => parent.path,
+        pickProjectBackup: () async {
+          sourcePickerCalls++;
+          return source;
+        },
+        inspectProjectBackup: (_) async => _homeProjectImportInspectionResponse(
+          source: source,
+          projectId: projectId,
+          projectRevision: projectRevision,
+          head: head,
+        ),
+        restoreProjectBackup: (request) async {
+          importerCalls++;
+          return _homeProjectImportDestinationResponse(
+            request: request,
+            projectId: projectId,
+            projectRevision: projectRevision,
+            head: head,
+            outcome: 'imported',
+          );
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.tap(find.byKey(const Key('managed-project-entry-restore')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-source')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-parent')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.ensureVisible(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      for (var index = 0; index < 5 && openerCalls == 0; index++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(importerCalls, 1);
+      expect(openerCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-project-import-opening-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widgetList<ModalBarrier>(find.byType(ModalBarrier))
+            .any((barrier) => !barrier.dismissible),
+        isTrue,
+      );
+      for (final key in const <Key>[
+        Key('managed-project-entry-create'),
+        Key('managed-project-entry-open'),
+        Key('managed-project-entry-restore'),
+        Key('managed-project-entry-settings'),
+      ]) {
+        final button = tester.widget<ButtonStyleButton>(find.byKey(key));
+        expect(button.onPressed, isNull, reason: '$key must stay disabled');
+      }
+      final projectMenu = tester.widget<PopupMenuButton<String>>(
+        find.byKey(const Key('project-menu')),
+      );
+      final restoreItem = projectMenu
+          .itemBuilder(tester.element(find.byKey(const Key('project-menu'))))
+          .whereType<PopupMenuItem<String>>()
+          .singleWhere(
+            (item) =>
+                item.key == const Key('project-restore-managed-revision3'),
+          );
+      expect(restoreItem.enabled, isFalse);
+
+      projectMenu.onSelected!('restoreManagedRevision3');
+      await tester.pump();
+      expect(sourcePickerCalls, 1);
+      expect(importerCalls, 1);
+      expect(openerCalls, 1);
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      expect(
+        find.byKey(const Key('revision3-project-import-opening-dialog')),
+        findsOneWidget,
+      );
+      expect(coordinator.state, isA<NoCurrentProjectState>());
+
+      opener.complete(candidate);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-project-import-opening-dialog')),
+        findsNothing,
+      );
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      expect(candidate.closeCalls, 0);
+      expect(
+        find.text(
+          AppLocalizations.of(
+            tester.element(find.byType(Scaffold)),
+          ).projectRestoreOpened,
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'uncertain project backup publication never opens or retries a project',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_home_restore_uncertain_',
+      );
+      addTearDown(() {
+        if (parent.existsSync()) parent.deleteSync(recursive: true);
+      });
+      final source = p.join(parent.path, 'uncertain-backup.goremod');
+      File(source).writeAsBytesSync(const <int>[1]);
+      const projectId = 'dededededededededededededededede';
+      const projectRevision = 4;
+      final head = _head(projectRevision);
+      var openerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async {
+          openerCalls++;
+          throw StateError('must not open an uncertain destination');
+        },
+      );
+      var sourcePickerCalls = 0;
+      var importerCalls = 0;
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => parent.path,
+        pickProjectBackup: () async {
+          sourcePickerCalls++;
+          return source;
+        },
+        inspectProjectBackup: (_) async => _homeProjectImportInspectionResponse(
+          source: source,
+          projectId: projectId,
+          projectRevision: projectRevision,
+          head: head,
+        ),
+        restoreProjectBackup: (request) async {
+          importerCalls++;
+          return _homeProjectImportDestinationResponse(
+            request: request,
+            projectId: projectId,
+            projectRevision: projectRevision,
+            head: head,
+            outcome: 'publication_uncertain',
+          );
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.tap(find.byKey(const Key('managed-project-entry-restore')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-source')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-import-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(importerCalls, 1);
+      expect(openerCalls, 0);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
+      expect(
+        find.textContaining('Studio cannot prove whether the project folder'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-import-submit')),
+        findsNothing,
+      );
+      final sourceButton = tester.widget<OutlinedButton>(
+        find.byKey(const Key('revision3-project-import-choose-source')),
+      );
+      expect(sourceButton.onPressed, isNull);
+      expect(sourcePickerCalls, 1);
+
+      await tester.tap(find.byKey(const Key('revision3-project-import-close')));
+      await tester.pumpAndSettle();
+      expect(openerCalls, 0);
+      expect(importerCalls, 1);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
+    },
+  );
+
+  testWidgets(
+    'dirty managed project text guards Open, Restore, and Close without losing the draft',
     (tester) async {
       await _setDesktopTestSurface(tester);
       const projectId = '91919191919191919191919191919191';
@@ -943,6 +1478,7 @@ void main() {
             throw StateError('dirty-guard test must not publish the draft'),
       );
       var pickerCalls = 0;
+      var backupPickerCalls = 0;
       final coordinator = CurrentProjectCoordinator(
         openManagedRevision3: (_) async => managed,
       );
@@ -953,6 +1489,10 @@ void main() {
         pickManaged: (_) async {
           pickerCalls++;
           return r'C:\mods\replacement-managed-project';
+        },
+        pickProjectBackup: () async {
+          backupPickerCalls++;
+          return r'C:\backups\must-not-open.goremod';
         },
       );
       addTearDown(container.dispose);
@@ -1009,6 +1549,25 @@ void main() {
 
       expect(pickerCalls, 0);
       expect(managed.closeCalls, 0);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      expect(tester.widget<TextField>(textField).controller!.text, draft);
+
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('restoreManagedRevision3');
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(backupPickerCalls, 0);
+      expect(managed.closeCalls, 0);
+      await tester.tap(
+        find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+      );
+      await tester.pumpAndSettle();
+
+      expect(backupPickerCalls, 0);
       expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
       expect(tester.widget<TextField>(textField).controller!.text, draft);
 
@@ -10195,6 +10754,9 @@ void main() {
 ProviderContainer _container({
   required CurrentProjectCoordinator coordinator,
   required ManagedRevision3DirectoryPicker pickManaged,
+  Revision3ProjectImportSourcePicker? pickProjectBackup,
+  Revision3ProjectImportNativeInspector? inspectProjectBackup,
+  Revision3ProjectImportNativeDestinationImporter? restoreProjectBackup,
   String? gamePath,
   Revision3NpcCatalogLoader? loadNpcCatalog,
   Revision3NpcArchetypeChooser? chooseNpcArchetype,
@@ -10219,6 +10781,18 @@ ProviderContainer _container({
     ),
     currentProjectCoordinatorProvider.overrideWith((ref) => coordinator),
     managedRevision3DirectoryPickerProvider.overrideWithValue(pickManaged),
+    if (pickProjectBackup != null)
+      managedRevision3ProjectBackupPickerProvider.overrideWithValue(
+        pickProjectBackup,
+      ),
+    if (inspectProjectBackup != null)
+      managedRevision3ProjectBackupInspectorProvider.overrideWithValue(
+        inspectProjectBackup,
+      ),
+    if (restoreProjectBackup != null)
+      managedRevision3ProjectBackupRestorerProvider.overrideWithValue(
+        restoreProjectBackup,
+      ),
     if (loadNpcCatalog != null)
       revision3NpcCatalogLoaderProvider.overrideWithValue(loadNpcCatalog),
     if (chooseNpcArchetype != null)
@@ -10829,7 +11403,7 @@ typedef _RecoveryCallback =
       _FakeRecoverableManagedLease lease,
     );
 typedef _ProjectExportCallback =
-    FutureOr<AuthoringRevision3ExactSnapshotExportResult> Function(
+    FutureOr<AuthoringRevision3ExactSnapshotExportResultV2> Function(
       _FakeExportManagedLease lease,
       String output,
     );
@@ -10891,6 +11465,7 @@ class _FakeManagedLease
     this.onReviewedInstalledDataAssetPublish,
     this.onContentIndexRead,
     this.contentIndexBuilder,
+    this.closeError,
   });
 
   @override
@@ -10905,6 +11480,7 @@ class _FakeManagedLease
   @override
   AuthoringWorkingHead head;
   final Object? verificationError;
+  final Object? closeError;
   final Revision3NpcDraftPublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -11080,7 +11656,11 @@ class _FakeManagedLease
   bool get requiresReopen => requiresReopenValue;
 
   @override
-  Future<void> close() async => closeCalls++;
+  Future<void> close() async {
+    closeCalls++;
+    final error = closeError;
+    if (error != null) throw error;
+  }
 
   @override
   Future<Revision3ContentIndex> readContentIndex() async {
@@ -11736,7 +12316,7 @@ final class _FakeHistoryManagedLease extends _FakeManagedLease
 }
 
 final class _FakeExportManagedLease extends _FakeManagedLease
-    implements ManagedRevision3ProjectExportLease {
+    implements ManagedRevision3RestorableProjectExportLease {
   _FakeExportManagedLease({
     required super.root,
     required super.projectId,
@@ -11750,10 +12330,10 @@ final class _FakeExportManagedLease extends _FakeManagedLease
   int exportCalls = 0;
 
   @override
-  bool get supportsExactSnapshotExport => true;
+  bool get supportsRestorableSnapshotExport => true;
 
   @override
-  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
     required String output,
   }) async {
     exportCalls++;
@@ -11979,18 +12559,18 @@ AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
   }),
 );
 
-AuthoringRevision3ExactSnapshotExportResult _homeProjectExportResult({
+AuthoringRevision3ExactSnapshotExportResultV2 _homeProjectExportResult({
   required AuthoringWorkingHead head,
   required String projectId,
   required int projectRevision,
   required String output,
-}) => AuthoringRevision3ExactSnapshotExportResult.fromJson(
+}) => AuthoringRevision3ExactSnapshotExportResultV2.fromJson(
   <String, Object?>{
     'ok': true,
     'outcome': 'exported',
-    'format': 'managed_revision3_exact_snapshot_v1',
-    'artifact_kind': 'portable_snapshot_review_copy',
-    'restore_status': 'not_supported',
+    'format': 'managed_revision3_exact_snapshot_v2',
+    'artifact_kind': 'portable_snapshot_restorable_copy',
+    'restore_status': 'supported',
     'basis_head_json': head.canonicalJson,
     'project_id': projectId,
     'project_revision': projectRevision,
@@ -12021,6 +12601,118 @@ AuthoringRevision3ExactSnapshotExportResult _homeProjectExportResult({
   expectedHead: head,
   expectedOutput: output,
 );
+
+Map<String, Object?> _homeProjectImportInspectionResponse({
+  required String source,
+  required String projectId,
+  required int projectRevision,
+  required AuthoringWorkingHead head,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'inspected_restorable_copy',
+  'source': source,
+  'format': revision3ProjectImportFormatV2,
+  'artifact_kind': revision3ProjectImportArtifactKindV2,
+  'restore_status': revision3ProjectImportRestoreStatusV2,
+  'archive': <String, Object?>{'byte_len': 8192, 'sha256': 'a' * 64},
+  'manifest': <String, Object?>{
+    'relative_name': revision3ProjectImportManifestName,
+    'byte_len': 512,
+    'sha256': 'b' * 64,
+  },
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'head_json': head.canonicalJson,
+  'closure': <String, Object?>{
+    'snapshot_objects': 1,
+    'entity_objects': 1,
+    'asset_objects': 1,
+    'archive_entries': 6,
+    'uncompressed_bytes': 4096,
+  },
+  'inspection_status': 'verified_exact',
+  'import_status': 'not_performed',
+  'project_mutation': 'not_performed',
+  'game_mutation': 'not_performed',
+  'save_mutation': 'not_performed',
+  'build_status': 'not_performed',
+  'deployment_status': 'not_performed',
+  'runtime_status': 'runtime_unqualified',
+  'publication_status': 'not_supported',
+  'retry_safe': true,
+};
+
+Map<String, Object?> _homeProjectImportDestinationResponse({
+  required Revision3ProjectImportDestinationRequest request,
+  required String projectId,
+  required int projectRevision,
+  required AuthoringWorkingHead head,
+  required String outcome,
+}) {
+  final response = <String, Object?>{
+    'ok': true,
+    'outcome': outcome,
+    'source': request.source,
+    'destination': request.destination,
+    'format': revision3ProjectImportFormatV2,
+    'artifact_kind': revision3ProjectImportArtifactKindV2,
+    'restore_status': revision3ProjectImportRestoreStatusV2,
+    'inspection_status': 'verified_exact',
+    'import_status': 'materialized',
+    'project_mutation': 'materialized',
+    'session_adoption': 'not_performed',
+    'game_mutation': 'not_performed',
+    'save_mutation': 'not_performed',
+    'build_status': 'not_performed',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': switch (outcome) {
+      'imported' => 'published',
+      'imported_with_cleanup_warning' => 'published_with_cleanup_warning',
+      'publication_uncertain' => 'publication_uncertain',
+      _ => 'published',
+    },
+    'retry_safe': false,
+    'warning': switch (outcome) {
+      'imported' => null,
+      'imported_with_cleanup_warning' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_IMPORT_CLEANUP_WARNING',
+        'message':
+            'the verified project was materialized, but private staging cleanup was incomplete',
+      },
+      'publication_uncertain' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_IMPORT_PUBLICATION_UNCERTAIN',
+        'message':
+            'project publication may have completed; do not retry automatically',
+      },
+      _ => null,
+    },
+  };
+  if (outcome != 'publication_uncertain') {
+    response.addAll(<String, Object?>{
+      'archive': <String, Object?>{
+        'byte_len': request.expectedArchive.byteLength,
+        'sha256': request.expectedArchive.sha256,
+      },
+      'manifest': <String, Object?>{
+        'relative_name': revision3ProjectImportManifestName,
+        'byte_len': 512,
+        'sha256': 'b' * 64,
+      },
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'head_json': head.canonicalJson,
+      'closure': <String, Object?>{
+        'snapshot_objects': 1,
+        'entity_objects': 1,
+        'asset_objects': 1,
+        'archive_entries': 6,
+        'uncompressed_bytes': 4096,
+      },
+    });
+  }
+  return response;
+}
 
 ({String projectJson, AuthoringWorkingHead head}) _recoverySnapshot({
   required String projectId,

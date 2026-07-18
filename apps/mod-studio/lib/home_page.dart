@@ -79,6 +79,8 @@ import 'project/revision3_project_export_dialog.dart';
 import 'project/revision3_project_global_undo.dart';
 import 'project/revision3_project_history.dart';
 import 'project/revision3_project_history_page.dart';
+import 'project/revision3_project_import.dart';
+import 'project/revision3_project_import_dialog.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
 import 'project/revision3_project_command_bar.dart';
@@ -194,6 +196,42 @@ final managedRevision3DirectoryPickerProvider =
           (confirmButtonText) =>
               getDirectoryPath(confirmButtonText: confirmButtonText),
     );
+
+/// Injectable `.goremod` selection boundary for the exact V2 restore flow.
+/// Archive inspection, destination materialization, and session adoption stay
+/// behind their own independently testable boundaries.
+final managedRevision3ProjectBackupPickerProvider =
+    Provider<Revision3ProjectImportSourcePicker>(
+      (ref) => () async {
+        final selected = await openFile(
+          acceptedTypeGroups: const <XTypeGroup>[
+            XTypeGroup(
+              label: 'Mod Studio project backup',
+              extensions: <String>['goremod'],
+            ),
+          ],
+        );
+        return selected?.path;
+      },
+    );
+
+final managedRevision3ProjectBackupInspectorProvider =
+    Provider<Revision3ProjectImportNativeInspector>((ref) {
+      final ffi = ModFfi(ref.read(coreServiceProvider));
+      return (source) =>
+          ffi.authoringStoreInspectRevision3ExactSnapshotV2(source: source);
+    });
+
+final managedRevision3ProjectBackupRestorerProvider =
+    Provider<Revision3ProjectImportNativeDestinationImporter>((ref) {
+      final ffi = ModFfi(ref.read(coreServiceProvider));
+      return (request) => ffi.authoringStoreImportRevision3ExactSnapshotV2(
+        source: request.source,
+        destination: request.destination,
+        expectedArchiveByteLength: request.expectedArchive.byteLength,
+        expectedArchiveSha256: request.expectedArchive.sha256,
+      );
+    });
 
 typedef ManagedRevision3ProjectCreatePrompt =
     Future<Revision3ProjectCreateFormResult?> Function(BuildContext context);
@@ -816,6 +854,56 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   });
 
+  Future<void> _restoreManagedRevision3Project() => _runProjectAction(() async {
+    if (!await _confirmDiscardIfDirty() || !mounted) return;
+    final l10n = AppLocalizations.of(context);
+    final Revision3ProjectImportDialogResult? restored;
+    try {
+      restored = await showRevision3ProjectImportDialog(
+        context: context,
+        pickSource: ref.read(managedRevision3ProjectBackupPickerProvider),
+        inspect: ref.read(managedRevision3ProjectBackupInspectorProvider),
+        pickExistingParentDirectory: () => ref.read(
+          managedRevision3DirectoryPickerProvider,
+        )(l10n.projectRestoreChooseDestinationParent),
+        importProject: ref.read(managedRevision3ProjectBackupRestorerProvider),
+      );
+    } catch (_) {
+      _snack(l10n.projectRestoreMaterializationFailed);
+      return;
+    }
+    final confirmed = restored;
+    if (confirmed == null || !mounted) return;
+
+    final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+    final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+    try {
+      await showRevision3ProjectImportOpeningProgress(
+        context: context,
+        open: () => coordinator.openImportedManagedRevision3(confirmed.receipt),
+      );
+    } catch (_) {
+      _snack(
+        l10n.projectRestoreOpenFailed(
+          revision3ProjectImportDestinationLabel(confirmed.receipt.destination),
+        ),
+      );
+      if (confirmed.hasCleanupWarning) {
+        _snack(l10n.projectRestoreSucceededCleanupWarning);
+      }
+      if (coordinator.terminalCleanupFailures.length > cleanupFailuresBefore) {
+        _snack(l10n.projectRestoreCandidateCleanupWarning);
+      }
+      return;
+    }
+    _snack(
+      confirmed.hasCleanupWarning
+          ? l10n.projectRestoreOpenedCleanupWarning
+          : l10n.projectRestoreOpened,
+    );
+    _showTransitionCleanupWarningIfAdded(coordinator, cleanupFailuresBefore);
+  });
+
   Future<void> _exportManagedRevision3Project(
     ManagedRevision3CurrentProjectState expected,
   ) => _runProjectAction(() async {
@@ -837,7 +925,7 @@ class _HomePageState extends ConsumerState<HomePage>
       _snack(l10n.projectExportRequiresReopen);
       return;
     }
-    await showDialog<AuthoringRevision3ExactSnapshotExportResult>(
+    await showDialog<AuthoringRevision3ExactSnapshotExportResultV2>(
       context: context,
       barrierDismissible: false,
       builder: (_) => Revision3ProjectExportDialog(
@@ -847,7 +935,7 @@ class _HomePageState extends ConsumerState<HomePage>
         )(l10n.projectExportChooseDestination),
         export: (output) => ref
             .read(currentProjectCoordinatorProvider.notifier)
-            .exportCurrentRevision3ExactSnapshot(
+            .exportCurrentRevision3ExactSnapshotV2(
               expectedRoot: current.root.path,
               expectedProjectId: current.projectId,
               expectedProjectRevision: current.projectRevision,
@@ -929,6 +1017,7 @@ class _HomePageState extends ConsumerState<HomePage>
       description: l10n.managedProjectLandingDescription,
       createLabel: l10n.projectNewManagedRevision3,
       openLabel: l10n.projectOpenManagedRevision3,
+      restoreLabel: l10n.projectRestoreActionTitle,
       legacyTitle: l10n.legacyCompatibilityToolsTitle,
       legacyDescription: l10n.legacyCompatibilityToolsDescription,
       onCreateManaged: _projectActionBusy
@@ -937,6 +1026,9 @@ class _HomePageState extends ConsumerState<HomePage>
       onOpenManaged: _projectActionBusy
           ? null
           : () => unawaited(_openManagedRevision3Project()),
+      onRestoreBackup: _projectActionBusy
+          ? null
+          : () => unawaited(_restoreManagedRevision3Project()),
     );
 
     final scaffold = Scaffold(
@@ -984,6 +1076,8 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _openProject();
                 case 'openManagedRevision3':
                   await _openManagedRevision3Project();
+                case 'restoreManagedRevision3':
+                  await _restoreManagedRevision3Project();
                 case 'save':
                   await _saveProject();
                 case 'exportManagedRevision3':
@@ -1024,6 +1118,12 @@ class _HomePageState extends ConsumerState<HomePage>
                 value: 'openManagedRevision3',
                 enabled: !_projectActionBusy,
                 child: Text(l10n.projectOpenManagedRevision3),
+              ),
+              PopupMenuItem(
+                key: const Key('project-restore-managed-revision3'),
+                value: 'restoreManagedRevision3',
+                enabled: !_projectActionBusy,
+                child: Text(l10n.projectRestoreActionTitle),
               ),
               const PopupMenuDivider(),
               PopupMenuItem(
@@ -2048,6 +2148,9 @@ class _HomePageState extends ConsumerState<HomePage>
           onOpenManaged: _projectActionBusy
               ? null
               : () => unawaited(_openManagedRevision3Project()),
+          onRestoreBackup: _projectActionBusy
+              ? null
+              : () => unawaited(_restoreManagedRevision3Project()),
           onOpenSettings: _projectActionBusy
               ? null
               : () => unawaited(_showModStudioSettingsDialog(context)),
@@ -7479,11 +7582,13 @@ class _NoCurrentProjectView extends StatelessWidget {
   const _NoCurrentProjectView({
     required this.onCreateManaged,
     required this.onOpenManaged,
+    required this.onRestoreBackup,
     required this.onOpenSettings,
   });
 
   final VoidCallback? onCreateManaged;
   final VoidCallback? onOpenManaged;
+  final VoidCallback? onRestoreBackup;
   final VoidCallback? onOpenSettings;
 
   @override
@@ -7502,9 +7607,11 @@ class _NoCurrentProjectView extends StatelessWidget {
             description: l10n.managedProjectLandingDescription,
             createLabel: l10n.projectNewManagedRevision3,
             openLabel: l10n.projectOpenManagedRevision3,
+            restoreLabel: l10n.projectRestoreActionTitle,
             settingsLabel: l10n.managedActionSettingsTitle,
             onCreateManaged: onCreateManaged,
             onOpenManaged: onOpenManaged,
+            onRestoreBackup: onRestoreBackup,
             onOpenSettings: onOpenSettings,
           ),
         ),
@@ -7520,8 +7627,10 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
     required this.description,
     required this.createLabel,
     required this.openLabel,
+    required this.restoreLabel,
     required this.onCreateManaged,
     required this.onOpenManaged,
+    required this.onRestoreBackup,
     this.settingsLabel,
     this.onOpenSettings,
     this.legacyTitle,
@@ -7536,9 +7645,11 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
   final String description;
   final String createLabel;
   final String openLabel;
+  final String restoreLabel;
   final String? settingsLabel;
   final VoidCallback? onCreateManaged;
   final VoidCallback? onOpenManaged;
+  final VoidCallback? onRestoreBackup;
   final VoidCallback? onOpenSettings;
   final String? legacyTitle;
   final String? legacyDescription;
@@ -7601,6 +7712,12 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
           onPressed: onOpenManaged,
           icon: const Icon(Icons.folder_open_outlined),
           label: Text(openLabel),
+        ),
+        OutlinedButton.icon(
+          key: const Key('managed-project-entry-restore'),
+          onPressed: onRestoreBackup,
+          icon: const Icon(Icons.settings_backup_restore_outlined),
+          label: Text(restoreLabel),
         ),
         if (settingsLabel != null)
           TextButton.icon(

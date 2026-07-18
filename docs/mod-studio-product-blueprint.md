@@ -17,7 +17,7 @@ recorded in [NPC authoring](npc-authoring.md) and
 [quest authoring](quest-authoring.md). The bounded managed-R3 Voice slice is
 recorded separately in [Voice authoring](voice-authoring.md). Snapshot project
 copy boundaries are recorded in [Managed project snapshot export](managed-project-export.md)
-and [Managed project snapshot import V2 foundation](managed-project-import.md).
+and [Managed project snapshot import V2](managed-project-import.md).
 
 ## 1. Product promise
 
@@ -57,7 +57,7 @@ exports, generated source, mini-caches, packages, bundles, releases,
 deployments, and test saves each have different purposes and never become a
 second editable project by accident.
 
-### Legacy usability is the migration baseline
+### Legacy usability is the UX baseline
 
 The managed-R3 project is the long-term data and transaction foundation, but
 the current R3 shell is not yet a usability replacement for the compact Legacy
@@ -66,15 +66,20 @@ texture, script, change, settings, and DataAsset workflows. A safer backend does
 not justify making those jobs harder to find or spreading a small number of
 actions across status cards and disconnected modal dialogs.
 
-Migration therefore follows a strict parity rule: keep a useful Legacy workflow
-available until its managed replacement is at least as clear, direct, and
-capable. R3 should converge on coherent workspaces where related browsing,
-editing, validation, and next actions happen in place. The canonical information
-architecture names product responsibilities; it does not require every
-responsibility to become a separate dashboard-like landing page. Prefer
-progressive disclosure inside a small number of productive surfaces over more
-navigation, cards, and modal launchers. Technical IDs, evidence, and diagnostics
-remain available through details or Expert mode without dominating normal work.
+This is a strict UX parity rule, not a project-format migration promise. Mod
+Studio has never been released and has no active legacy projects: managed R3 is
+the only project model and Snapshot V2 is the only backup/restore format. Old
+internal project formats may be deleted without readers, converters, dual-write,
+or fallback paths. Keep the useful compact tabs as UI components until their R3
+data sources are at least as clear, direct, and capable; do not keep their old
+storage backend merely because their layout is useful. R3 should converge on
+coherent workspaces where related browsing, editing, validation, and next
+actions happen in place. The canonical information architecture names product
+responsibilities; it does not require every responsibility to become a separate
+dashboard-like landing page. Prefer progressive disclosure inside a small
+number of productive surfaces over more navigation, cards, and modal launchers.
+Technical IDs, evidence, and diagnostics remain available through details or
+Expert mode without dominating normal work.
 
 The implemented managed-project Home follows that rule: it is one compact
 five-task router for **Story**, **Dialog & Voice**, **Problems**, **Content**,
@@ -647,7 +652,7 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Managed working project** | The live editable source of truth | A Studio-owned directory with canonical V2 shards, immutable AssetStore blobs, session/current-path ownership, a serialized operation lane, and one transaction history |
 | **Autosave/recovery** | Recover unsaved work after a crash | A bounded journal/recovery snapshot tied to the exact base revision; it is automatic and is not a portable project export or release |
 | **Save / checkpoint** | Durably acknowledge the current revision | Target contract: `Ctrl+S` flushes current transaction state and creates/advances a recoverable checkpoint; **Save As** creates a separately validated identity/path. Current R3 shell: semantic transactions publish independently, `Ctrl+S` only fully verifies the exact head, and managed Save As stays disabled until native clone/fork exists. |
-| **Export** | Portable snapshot, review copy, or future-restorable copy | The current Studio workflow emits frozen review-only V1: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **project copy**, explicitly says it is not a restorable backup or playable mod, and tells the author to keep the original directory. A separate V2 backend/bridge emits the same exact closure as `portable_snapshot_restorable_copy`, inspects it read-only, and on Windows can materialize it into one absent managed directory through exact archive CAS and atomic no-clobber publication; Unix inspection/import fails closed. Confirmed materialization preserves project identity, while publication uncertainty carries no adoptable receipt. Destination selection UI, current-session adoption/recovery, and visible V2 export/import remain missing; the importer never edits ZIP members in place. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2 foundation](managed-project-import.md). |
+| **Backup / Restore** | Portable restorable project checkpoint | The current Studio workflow emits V2: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **restorable project backup**, while explicitly denying playable-mod, build, deployment, and runtime authority. On Windows the visible Restore flow verifies the complete V2 archive, asks for an existing parent plus one new absent folder, materializes through exact archive CAS and atomic no-clobber publication, and adopts only a fully opened candidate whose destination, identity, revision, and head match the native receipt. Unix inspection/import fails closed. V1 is an unreleased superseded review-copy experiment, not a compatibility contract, and is never accepted as V2. Publication uncertainty carries no receipt, opens nothing, and is never retried automatically. The importer never edits ZIP members in place. Clone/Save As and deliberate uncertainty/staging recovery remain separate. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2](managed-project-import.md). |
 | **Build** | Produce an inspectable mod artifact | Derived from an immutable project revision and named build root/profile; it does not deploy and cannot become editable source state |
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |
@@ -1045,11 +1050,12 @@ changing their authority boundaries. The first
 reviewed non-World offline build is now integrated for one selected reviewed
 managed DataAsset stage: it derives from the exact-current project, creates only
 a new receipt-owned output, then reopens and re-inspects that output. The first
-managed project-copy export is also integrated as a deterministic V1
-exact-snapshot review artifact. A separate V2 backend/bridge can export the same
-closure as a restorable-copy format, inspect it read-only, and materialize it on
-Windows into one absent exact managed directory, but has no current-session
-adoption/recovery or visible V2 UI. Exact-current managed-CAS
+managed project backup/restore flow is also integrated as deterministic V2:
+the visible backup emits the exact restorable closure, and the Windows restore
+flow inspects it read-only, materializes one absent exact directory, and adopts
+only an exact receipt-bound full reopen. Publication uncertainty opens nothing
+and is never retried; Clone/Save As and deliberate uncertainty/staging recovery
+remain missing. Exact-current managed-CAS
 Voice take preview is integrated as a read-only in-app capability. The first
 Voice production Work list is also integrated: it defaults Localization & Voice
 to evidence-backed missing-language and existing-slot next steps while keeping
@@ -1070,11 +1076,11 @@ clean pushed checkpoint and requires explicit user approval before World work.
 1. **Finish the managed phase-one substrate:** the owned R3 working directory,
    serialized session, strict bounded open/import, Ogg AssetStore I/O, exact
    revision/head publication, repair, full reopen, first Voice transaction,
-   deterministic exact-snapshot export, read-only V2 inspection, and exact
-   absent-directory V2 materialization foundations are integrated. Complete
-   visible destination import plus current-session adoption/recovery, general
-   recovery/history, cross-domain undo, and production lowering without creating
-   a parallel project state.
+   deterministic exact-snapshot V2 backup, read-only inspection, exact
+   absent-directory materialization, and receipt-bound current-session adoption
+   are integrated. Complete deliberate uncertainty/staging recovery, Clone/Save
+   As identity policy, general recovery/history, cross-domain undo, and
+   production lowering without creating a parallel project state.
 2. **Complete the first non-technical Voice slice:** extend the landed Work
    list, import, retained-take review status, Approved-take selection/clear,
    generation-bound target resolution, preview, and sealed existing-member

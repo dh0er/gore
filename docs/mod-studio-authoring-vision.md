@@ -16,9 +16,19 @@ Related evidence and operating boundaries:
 - [Cooked DataAsset fixed-leaf workflow](dataasset-authoring.md)
 - [Offline AngelScript default patching](angelscript-default-patching.md)
 - [Managed project snapshot export](managed-project-export.md)
-- [Managed project snapshot import V2 foundation](managed-project-import.md)
+- [Managed project snapshot import V2](managed-project-import.md)
 
-### Current implementation delta (2026-07-17)
+### Current implementation delta (2026-07-18)
+
+**Unreleased format policy:** Mod Studio has never been released and there are
+no active legacy projects. Managed revision 3 is the only product project model
+and Snapshot V2 is the only backup/restore format. Superseded internal project
+schemas, project readers, Snapshot V1, converters, dual-write, and fallback
+paths should be removed rather than migrated. The UI currently labelled
+`Legacy` remains a compact UX/reference surface only; preserving its useful
+tabs does not preserve its format-1 project backend. Any older migration wording
+below is superseded until the obsolete sections are deleted in the dedicated
+cleanup checkpoint.
 
 The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
@@ -461,26 +471,35 @@ proof. It does not widen that evidence to adjacent use cases.
 | Templates/clone/batch/CSV | **First Empty/NPC Draft/Quest Draft starters integrated; reusable templates and batch tools missing** | New-project creation now offers **Empty**, **NPC Draft**, and **Quest Draft** before metadata entry. Every choice first creates and adopts the same canonical empty revision-0 project through absent-head CAS; an NPC or Quest choice then opens the existing guided exact-head wizard and may publish a separate revision 1. Cancel before publication leaves the exact empty project. If publication outcome cannot be verified, Studio requires reopening instead of claiming that the project stayed empty. Copy states this two-stage boundary before creation and never calls it one atomic template transaction. Multi-domain/playable-slice templates still require a native compound prepare/publication transaction. Dependency-aware templates, clone modes, transactional bulk editing, and CSV round trip remain missing. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
 
-The managed project core exposes the V1 **Export project copy** workflow from the
-Project menu. Home deliberately does not duplicate this project-level action.
-It serializes the exact current R3 head, its recursive historical Quest-basis
-closure, and the current snapshot's bounded direct History closure into a
-deterministic, strictly reopened, no-clobber `.goremod`. History embedded in
-retained checkpoints is deliberately not followed. The three sealed terminals
-distinguish published, published-with-cleanup-warning, and
-publication-uncertain outcomes; the latter is never retried automatically. This
-operation needs no configured game, writes neither game nor save data, and does
-not adopt a new working path. Because V1 is frozen review-only and no destination
-importer exists, the UI calls it a portable review copy rather than a restorable
-backup or playable mod and tells authors to keep the original managed directory.
+The managed project core exposes the V2 **Create project backup** workflow from
+the Project menu. Home deliberately does not duplicate this project-level
+action. It serializes the exact current R3 head, its recursive historical
+Quest-basis closure, and the current snapshot's bounded direct History closure
+into a deterministic, strictly reopened, no-clobber `.goremod`. History
+embedded in retained checkpoints is deliberately not followed. The three
+sealed terminals distinguish published, published-with-cleanup-warning, and
+publication-uncertain outcomes; the latter is never retried automatically.
+This operation needs no configured game, writes neither game nor save data, and
+does not adopt a new working path. V1 is an unreleased superseded review-copy
+experiment, not a compatibility contract, and is not emitted by the visible
+backup action. With no released Studio or active legacy projects, it may be
+removed rather than migrated.
 
-A separate V2 backend/bridge foundation exports the same exact closure with the
-closed `portable_snapshot_restorable_copy` authority and inspects it read-only.
-`restore_status: supported` describes that archive contract only. Inspection is
-currently Windows-only and fails closed as unsupported on Unix. There is no V2
-Studio UI, destination materialization, project publication/adoption, build,
-deployment, or runtime authority. See [Managed project snapshot export](managed-project-export.md)
-and [Managed project snapshot import V2 foundation](managed-project-import.md).
+**Restore project backup** is visible from the Project menu in every project
+state and on the empty/Legacy landing surfaces. One dialog owns exact V2
+inspection, a real existing parent plus new absent-folder choice, and one
+single-flight native materialization. It displays bounded labels rather than
+source parent paths. Only confirmed success or cleanup warning yields a receipt;
+publication uncertainty is receipt-free, close-only, and never opened or
+retried automatically. The serialized current-project lane fully opens the
+candidate and compares normalized destination, project ID, revision, canonical
+head, and reopen state before adoption. Any mismatch leaves the current session
+unchanged and closes the candidate exactly once. Native-import and prior-session
+cleanup warnings remain distinct. Inspection/materialization is Windows-only
+and fails closed on Unix. This grants no Clone/Save As, build, deployment,
+game/save mutation, or runtime authority. See [Managed project snapshot
+export](managed-project-export.md) and [Managed project snapshot import
+V2](managed-project-import.md).
 
 ## 4. Complete authoring surfaces
 
@@ -1568,14 +1587,14 @@ been replaced by a direct exact-current NPC/Quest search/filter/list plus the
 existing Workbench; this improves access but does not make the underlying Drafts
 buildable or runtime-qualified. One reviewed managed DataAsset stage can now be
 built, reopened, and re-inspected in a receipt-owned offline output, and one
-exact R3 checkpoint can be exported through the current V1 Studio workflow as a
-deterministic review copy. A separate V2 backend can export the same closure as
-a restorable-copy artifact, inspect it read-only, and materialize it on Windows
-into one absent exact managed-project directory through archive CAS, private
-staging, head-last verification, and atomic no-clobber promotion. It preserves
-project identity and returns no adoptable receipt on publication uncertainty.
-Visible destination selection, current-session adoption/recovery, and V2 UI
-remain missing. The first Voice production
+exact R3 checkpoint can be exported through the current V2 Studio workflow as a
+deterministic restorable backup. The visible restore flow inspects it read-only,
+materializes it on Windows into one absent exact managed-project directory
+through archive CAS, private staging, head-last verification, and atomic
+no-clobber promotion, then adopts only an exact receipt-bound full reopen. It
+preserves project identity and returns no adoptable receipt on publication
+uncertainty. Clone/Save As and deliberate uncertainty/staging recovery remain
+missing. The first Voice production
 Work list is also landed:
 Localization & Voice defaults to bounded missing-language and existing-slot
 next steps while Project texts stays one switch away. Project Work Bar V1 is

@@ -23,6 +23,37 @@ final _head = AuthoringWorkingHead.fromCanonicalJson(
 );
 
 void main() {
+  testWidgets('presents the exact V2 restorable-only authority boundary', (
+    tester,
+  ) async {
+    await _openDialog(
+      tester,
+      pickParent: () async => null,
+      export: (_) async => throw StateError('must not export'),
+    );
+
+    expect(find.text('Restorable Mod Studio project backup'), findsOneWidget);
+    expect(
+      find.textContaining('can be restored into a new project folder later'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'not a playable mod, build, deployment, or runtime qualification',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('does not read or change the game or any save'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('the open project stays current and unchanged'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('not a restorable backup'), findsNothing);
+  });
+
   testWidgets('validates a portable new .goremod file and never overwrites', (
     tester,
   ) async {
@@ -71,6 +102,63 @@ void main() {
     expect(find.textContaining('never overwritten'), findsOneWidget);
     expect(_submit(tester).onPressed, isNull);
   });
+
+  testWidgets(
+    'rejects every Windows COM/LPT device spelling including superscripts',
+    (tester) async {
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_export_reserved_names_',
+      );
+      addTearDown(() => parent.deleteSync(recursive: true));
+      await _openDialog(
+        tester,
+        pickParent: () async => parent.path,
+        export: (_) async => throw StateError('must not export'),
+      );
+      await _chooseParent(tester, parent.path);
+      final fileName = find.byKey(
+        const Key('revision3-project-export-file-name'),
+      );
+
+      for (final reserved in <String>[
+        for (final prefix in <String>['COM', 'LPT'])
+          for (var number = 1; number <= 9; number++) '$prefix$number.goremod',
+        'com9.release.GoReMoD',
+        'lPt9.GOREMOD',
+        'COM¹.goremod',
+        'com².archive.GOREMOD',
+        'CoM³.goremod',
+        'LPT¹.copy.goremod',
+        'lpt².GOREMOD',
+        'LpT³.any.goremod',
+      ]) {
+        await tester.enterText(fileName, reserved);
+        await tester.pump();
+        expect(
+          find.textContaining('reserved by Windows'),
+          findsOneWidget,
+          reason: reserved,
+        );
+        expect(_submit(tester).onPressed, isNull, reason: reserved);
+      }
+
+      for (final allowed in <String>[
+        'COM0.goremod',
+        'COM10.goremod',
+        'LPT0.release.goremod',
+        'LPT10.GOREMOD',
+      ]) {
+        await tester.enterText(fileName, allowed);
+        await tester.pump();
+        expect(
+          find.textContaining('reserved by Windows'),
+          findsNothing,
+          reason: allowed,
+        );
+        expect(_submit(tester).onPressed, isNotNull, reason: allowed);
+      }
+    },
+  );
 
   testWidgets('picker cancellation is non-terminal and close cancels cleanly', (
     tester,
@@ -238,7 +326,7 @@ void main() {
       final parent = Directory.systemTemp.createTempSync('gore_export_busy_');
       addTearDown(() => parent.deleteSync(recursive: true));
       final completion =
-          Completer<AuthoringRevision3ExactSnapshotExportResult>();
+          Completer<AuthoringRevision3ExactSnapshotExportResultV2>();
       var calls = 0;
       late String output;
       await _openDialog(
@@ -409,7 +497,7 @@ Future<void> _openDialog(
           builder: (context) => FilledButton(
             key: const Key('open-project-export'),
             onPressed: () =>
-                showDialog<AuthoringRevision3ExactSnapshotExportResult>(
+                showDialog<AuthoringRevision3ExactSnapshotExportResultV2>(
                   context: context,
                   barrierDismissible: false,
                   builder: (_) => Revision3ProjectExportDialog(
@@ -440,7 +528,7 @@ FilledButton _submit(WidgetTester tester) => tester.widget<FilledButton>(
   find.byKey(const Key('revision3-project-export-submit')),
 );
 
-AuthoringRevision3ExactSnapshotExportResult _result(
+AuthoringRevision3ExactSnapshotExportResultV2 _result(
   String output, {
   AuthoringRevision3ExactSnapshotExportOutcome outcome =
       AuthoringRevision3ExactSnapshotExportOutcome.exported,
@@ -469,13 +557,13 @@ AuthoringRevision3ExactSnapshotExportResult _result(
       },
     ),
   };
-  return AuthoringRevision3ExactSnapshotExportResult.fromJson(
+  return AuthoringRevision3ExactSnapshotExportResultV2.fromJson(
     <String, Object?>{
       'ok': true,
       'outcome': wireOutcome,
-      'format': 'managed_revision3_exact_snapshot_v1',
-      'artifact_kind': 'portable_snapshot_review_copy',
-      'restore_status': 'not_supported',
+      'format': 'managed_revision3_exact_snapshot_v2',
+      'artifact_kind': 'portable_snapshot_restorable_copy',
+      'restore_status': 'supported',
       'basis_head_json': _head.canonicalJson,
       'project_id': _projectId,
       'project_revision': _revision,

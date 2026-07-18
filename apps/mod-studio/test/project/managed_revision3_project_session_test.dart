@@ -239,6 +239,51 @@ void main() {
   );
 
   test(
+    'production adapter forwards only the restorable V2 export wire',
+    () async {
+      final project = _projectJson(revision: 7, name: 'V2 Adapter');
+      final fixtureStore = _FakeRevision3Store();
+      final head = fixtureStore.register(project);
+      final projectMap = (jsonDecode(project) as Map).cast<String, Object?>();
+      final projectId = projectMap['project_id']! as String;
+      final output = p.join(fixture.path, 'adapter-restorable.goremod');
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_export_revision3_exact_snapshot_v2':
+              _restorableExportResponse(
+                head: head,
+                projectId: projectId,
+                projectRevision: 7,
+                output: output,
+              ),
+        },
+      );
+      final adapter = ModFfiManagedRevision3AuthoringStore(ModFfi(core));
+
+      final result = await adapter.exportExactSnapshotV2(
+        root: fixture.path,
+        expectedHead: head,
+        output: output,
+      );
+
+      expect(result.isRestorableProjectCopy, isTrue);
+      expect(result.projectId, projectId);
+      expect(result.projectRevision, 7);
+      expect(result.output, output);
+      expect(core.calls, hasLength(1));
+      expect(
+        core.calls.single.command,
+        'authoring_store_export_revision3_exact_snapshot_v2',
+      );
+      expect(core.calls.single.payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'output': output,
+        'root': fixture.path,
+      });
+    },
+  );
+
+  test(
     'production adapter forwards the closed localization-edit wires',
     () async {
       final project = _dialogLocalizationEditProjectJson();
@@ -1208,9 +1253,16 @@ void main() {
       final fixedHead = await session.headFile.readAsBytes();
 
       expect(session.supportsExactSnapshotExport, isFalse);
+      expect(session.supportsRestorableSnapshotExport, isFalse);
       await expectLater(
         session.exportExactSnapshotV1(
           output: p.join(fixture.path, 'unsupported.goremod'),
+        ),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'unsupported-v2.goremod'),
         ),
         throwsUnsupportedError,
       );
@@ -1527,6 +1579,241 @@ void main() {
         await expectLater(
           reentrantSession.exportExactSnapshotV1(
             output: p.join(fixture.path, 'nested.goremod'),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        return const ManagedProjectDerivedRejection<void>(null);
+      });
+      expect(reentrantStore.exportCalls, 0);
+      await reentrantSession.close();
+    },
+  );
+
+  test(
+    'restorable V2 export stays separate from V1 and preserves every sealed terminal',
+    () async {
+      for (final outcome in <String>[
+        'exported',
+        'exported_with_cleanup_warning',
+        'publication_uncertain',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'export_v2_${outcome.replaceAll('_', '-')}',
+        );
+        final store = _FakeRevision3RestorableExportStore()
+          ..nextOutcome = outcome;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 7, name: 'Restorable export'),
+        );
+        final fixedHead = await session.headFile.readAsBytes();
+        final output = p.join(fixture.path, 'v2-$outcome.goremod');
+
+        expect(session.supportsExactSnapshotExport, isFalse);
+        expect(session.supportsRestorableSnapshotExport, isTrue);
+        await expectLater(
+          session.exportExactSnapshotV1(
+            output: p.join(fixture.path, 'v1-not-inferred.goremod'),
+          ),
+          throwsUnsupportedError,
+        );
+
+        final result = await session.exportExactSnapshotV2(output: output);
+
+        expect(result.basisHead.canonicalJson, session.head.canonicalJson);
+        expect(result.projectId, session.projectId);
+        expect(result.projectRevision, session.projectRevision);
+        expect(result.output, output);
+        expect(result.isRestorableProjectCopy, isTrue);
+        expect(result.hasCleanupWarning, outcome.contains('cleanup'));
+        expect(result.publicationIsUncertain, outcome.contains('uncertain'));
+        expect(store.exportCalls, 1);
+        expect(store.exportRoots, <String>[root.path]);
+        expect(store.exportExpectedHeads, <String>[session.head.canonicalJson]);
+        expect(store.exportOutputs, <String>[output]);
+        expect(session.projectRevision, 7);
+        expect(session.requiresReopen, isFalse);
+        expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'restorable V2 export separates safe failures from mismatched or malformed receipts',
+    () async {
+      final safeRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_safe_failure',
+      );
+      final safeStore = _FakeRevision3RestorableExportStore()
+        ..nextExportError = const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: 'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+          message: 'fake output already exists',
+        );
+      final safeSession = await ManagedRevision3AuthoringProjectSession.create(
+        root: safeRoot,
+        store: safeStore,
+        projectJson: _projectJson(revision: 7, name: 'Safe V2 failure'),
+      );
+      final fixedHead = await safeSession.headFile.readAsBytes();
+
+      await expectLater(
+        safeSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'existing-v2.goremod'),
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+          ),
+        ),
+      );
+      expect(safeSession.requiresReopen, isFalse);
+      expect(
+        await safeSession.headFile.readAsBytes(),
+        orderedEquals(fixedHead),
+      );
+      expect(
+        (await safeSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'after-safe-v2.goremod'),
+        )).projectRevision,
+        7,
+      );
+      await safeSession.close();
+
+      final mismatchRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_mismatch',
+      );
+      final mismatchStore = _FakeRevision3RestorableExportStore()
+        ..nextProjectRevisionOverride = 8;
+      final mismatchSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: mismatchRoot,
+            store: mismatchStore,
+            projectJson: _projectJson(revision: 7, name: 'Mismatch V2 export'),
+          );
+
+      await expectLater(
+        mismatchSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'mismatch-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(mismatchSession.requiresReopen, isTrue);
+      await mismatchSession.close();
+
+      final malformedRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_malformed',
+      );
+      final malformedStore = _FakeRevision3RestorableExportStore()
+        ..nextExportError = const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: ModFfiException.malformedNativeResponseCode,
+          message: 'fake malformed V2 terminal response',
+        );
+      final malformedSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: malformedRoot,
+            store: malformedStore,
+            projectJson: _projectJson(revision: 7, name: 'Malformed V2 export'),
+          );
+
+      await expectLater(
+        malformedSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'malformed-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(malformedSession.requiresReopen, isTrue);
+      await malformedSession.close();
+    },
+  );
+
+  test(
+    'restorable V2 export detects pre-call drift without invoking native',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_v2_pre_drift');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'V2 export basis'),
+      );
+      final externalHead = store.register(
+        _projectJson(revision: 8, name: 'External V2 winner'),
+      );
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'pre-drift-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(store.exportCalls, 0);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'restorable V2 export shares the serialized close and reentrant lane',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_v2_queue');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Queued V2 export'),
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      store.afterExport = (_, _, _) async {
+        entered.complete();
+        await release.future;
+      };
+      final export = session.exportExactSnapshotV2(
+        output: p.join(fixture.path, 'queued-v2.goremod'),
+      );
+      await entered.future;
+      final close = session.close();
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'too-late-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectSessionClosedException>()),
+      );
+      release.complete();
+      expect((await export).projectRevision, 7);
+      await close;
+      expect(session.isClosed, isTrue);
+
+      final reentrantRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_reentrant',
+      );
+      final reentrantStore = _FakeRevision3RestorableExportStore();
+      final reentrantSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: reentrantRoot,
+            store: reentrantStore,
+            projectJson: _projectJson(revision: 7, name: 'Reentrant V2 export'),
+          );
+      await reentrantSession.deriveAndSave<void>((_) async {
+        await expectLater(
+          reentrantSession.exportExactSnapshotV2(
+            output: p.join(fixture.path, 'nested-v2.goremod'),
           ),
           throwsA(isA<ManagedProjectReentrantOperationException>()),
         );
@@ -7979,6 +8266,13 @@ typedef _AfterExactSnapshotExport =
       AuthoringRevision3ExactSnapshotExportResult result,
     );
 
+typedef _AfterExactSnapshotExportV2 =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      AuthoringRevision3ExactSnapshotExportResultV2 result,
+    );
+
 DataAssetSemanticEditIntent _semanticDataAssetIntent() {
   final response = validDataAssetInspectionResponse();
   (response['binding']! as Map<String, Object?>)['usmap_sha256'] = '3' * 64;
@@ -10969,6 +11263,120 @@ final class _FakeRevision3ExportStore extends _FakeRevision3Store
   }
 }
 
+final class _FakeRevision3RestorableExportStore extends _FakeRevision3Store
+    implements ManagedRevision3RestorableSnapshotExportStore {
+  _FakeRevision3RestorableExportStore();
+
+  int exportCalls = 0;
+  final List<String> exportRoots = <String>[];
+  final List<String> exportExpectedHeads = <String>[];
+  final List<String> exportOutputs = <String>[];
+  String nextOutcome = 'exported';
+  Object? nextExportError;
+  String? nextProjectIdOverride;
+  int? nextProjectRevisionOverride;
+  String? nextOutputOverride;
+  AuthoringWorkingHead? nextBasisHeadOverride;
+  _AfterExactSnapshotExportV2? afterExport;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    exportCalls++;
+    exportRoots.add(root);
+    exportExpectedHeads.add(expectedHead.canonicalJson);
+    exportOutputs.add(output);
+    final injectedError = nextExportError;
+    nextExportError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_export_revision3_exact_snapshot_v2',
+        code: 'AUTHORING_REVISION3_EXPORT_HEAD_CONFLICT',
+        message: 'fake native restorable snapshot export basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown restorable snapshot export checkpoint head');
+    }
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final responseHead = nextBasisHeadOverride ?? expectedHead;
+    nextBasisHeadOverride = null;
+    final responseOutput = nextOutputOverride ?? output;
+    nextOutputOverride = null;
+    final outcome = nextOutcome;
+    nextOutcome = 'exported';
+    final warning = switch (outcome) {
+      'exported' => null,
+      'exported_with_cleanup_warning' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_CLEANUP_WARNING',
+        'message':
+            'the verified snapshot was published, but private staging cleanup was incomplete',
+      },
+      'publication_uncertain' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_PUBLICATION_UNCERTAIN',
+        'message': 'publication may have completed; do not retry automatically',
+      },
+      _ => null,
+    };
+    final publicationStatus = switch (outcome) {
+      'exported' => 'published',
+      'exported_with_cleanup_warning' => 'published_with_cleanup_warning',
+      'publication_uncertain' => 'publication_uncertain',
+      _ => 'published',
+    };
+    final result = AuthoringRevision3ExactSnapshotExportResultV2.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': outcome,
+        'format': 'managed_revision3_exact_snapshot_v2',
+        'artifact_kind': 'portable_snapshot_restorable_copy',
+        'restore_status': 'supported',
+        'basis_head_json': responseHead.canonicalJson,
+        'project_id': nextProjectIdOverride ?? project['project_id'],
+        'project_revision': nextProjectRevisionOverride ?? project['revision'],
+        'output': responseOutput,
+        'archive': <String, Object?>{'byte_len': 16384, 'sha256': 'c' * 64},
+        'manifest': <String, Object?>{
+          'relative_name': 'gore-export.json',
+          'byte_len': 512,
+          'sha256': 'd' * 64,
+        },
+        'closure': <String, Object?>{
+          'snapshot_objects': 1,
+          'entity_objects': 0,
+          'asset_objects': 0,
+          'archive_entries': 4,
+          'uncompressed_bytes': 8192,
+        },
+        'publication_status': publicationStatus,
+        'retry_safe': false,
+        'warning': warning,
+        'project_mutation': 'not_performed',
+        'game_mutation': 'not_performed',
+        'save_mutation': 'not_performed',
+        'build_status': 'not_performed',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+      },
+      expectedHead: responseHead,
+      expectedOutput: responseOutput,
+    );
+    nextProjectIdOverride = null;
+    nextProjectRevisionOverride = null;
+    final hook = afterExport;
+    afterExport = null;
+    await hook?.call(root, expectedHead, result);
+    return result;
+  }
+}
+
 String _semanticReplacementHex(DataAssetSemanticEditIntent intent) =>
     _semanticReplacementWireHex(intent.replacement);
 
@@ -11999,3 +12407,42 @@ Map<String, Object?> _openedResponse(
   AuthoringWorkingHead head,
   String projectJson,
 ) => <String, Object?>{..._preparedResponse(head), 'project_json': projectJson};
+
+Map<String, Object?> _restorableExportResponse({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'exported',
+  'format': 'managed_revision3_exact_snapshot_v2',
+  'artifact_kind': 'portable_snapshot_restorable_copy',
+  'restore_status': 'supported',
+  'basis_head_json': head.canonicalJson,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'output': output,
+  'archive': <String, Object?>{'byte_len': 16384, 'sha256': 'c' * 64},
+  'manifest': <String, Object?>{
+    'relative_name': 'gore-export.json',
+    'byte_len': 512,
+    'sha256': 'd' * 64,
+  },
+  'closure': <String, Object?>{
+    'snapshot_objects': 1,
+    'entity_objects': 0,
+    'asset_objects': 0,
+    'archive_entries': 4,
+    'uncompressed_bytes': 8192,
+  },
+  'publication_status': 'published',
+  'retry_safe': false,
+  'warning': null,
+  'project_mutation': 'not_performed',
+  'game_mutation': 'not_performed',
+  'save_mutation': 'not_performed',
+  'build_status': 'not_performed',
+  'deployment_status': 'not_performed',
+  'runtime_status': 'runtime_unqualified',
+};

@@ -2319,40 +2319,41 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
-  String get projectExportActionTitle => 'Projektkopie exportieren…';
+  String get projectExportActionTitle => 'Projekt-Backup erstellen…';
 
   @override
   String get projectExportActionDescription =>
-      'Eine exakte portable Kopie des aktuell gespeicherten Projektstands schreiben.';
+      'Ein exaktes wiederherstellbares Backup des aktuell gespeicherten Projektstands schreiben.';
 
   @override
   String get projectExportActionDirtyBlocked =>
-      'Speichere oder verwirf die offenen Lokalisierungsänderungen, bevor du eine Projektkopie exportierst.';
+      'Speichere oder verwirf die offenen Lokalisierungsänderungen, bevor du ein Projekt-Backup erstellst.';
 
   @override
-  String get projectExportDialogTitle => 'Projektkopie exportieren';
+  String get projectExportDialogTitle => 'Projekt-Backup erstellen';
 
   @override
-  String get projectExportPortableCopyTitle => 'Portable Projektkopie';
+  String get projectExportPortableCopyTitle =>
+      'Wiederherstellbares Mod-Studio-Projekt-Backup';
 
   @override
   String get projectExportPortableCopyDescription =>
-      'Dies schreibt den exakten aktuell gespeicherten Projektstand in eine neue .goremod-Datei. Das offene Projekt bleibt aktuell und unverändert.';
+      'Dies schreibt den exakten aktuell gespeicherten Projektstand in eine neue .goremod-Datei. Er kann später in einen neuen Projektordner wiederhergestellt werden; das offene Projekt bleibt aktuell und unverändert.';
 
   @override
   String get projectExportCapabilityBoundary =>
-      'Diese Kopie ist kein spielbarer Mod, Build, Deployment oder wiederherstellbares Backup. Spiel und Spielstände werden weder gelesen noch verändert.';
+      'Dieses Backup ist kein spielbarer Mod, Build, Deployment oder Laufzeitnachweis. Spiel und Spielstände werden beim Erstellen weder gelesen noch verändert.';
 
   @override
   String get projectExportKeepOriginal =>
-      'Der Import dieser verwalteten Kopie ist noch nicht verfügbar. Bewahre den ursprünglichen Projektordner auf.';
+      'Eine Wiederherstellung behält Projektidentität und Verlauf bei. Verwende Klonen oder Speichern unter für eine eigene Projektidentität, sobald diese Abläufe verfügbar sind.';
 
   @override
-  String get projectExportFileNameLabel => 'Neue Projektkopie-Datei';
+  String get projectExportFileNameLabel => 'Neue Projekt-Backup-Datei';
 
   @override
   String get projectExportFileNameHelper =>
-      'Verwende einen neuen portablen Dateinamen mit der Endung .goremod.';
+      'Verwende einen neuen Backup-Dateinamen mit der Endung .goremod.';
 
   @override
   String get projectExportChooseDestination => 'Zielordner auswählen';
@@ -2370,10 +2371,10 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectExportClose => 'Schließen';
 
   @override
-  String get projectExportSubmit => 'Kopie exportieren';
+  String get projectExportSubmit => 'Backup erstellen';
 
   @override
-  String get projectExportExporting => 'Export wird erstellt…';
+  String get projectExportExporting => 'Backup wird erstellt…';
 
   @override
   String get projectExportParentRequired =>
@@ -2393,7 +2394,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get projectExportFileNameRequired =>
-      'Gib einen neuen Dateinamen für die Projektkopie ein.';
+      'Gib einen neuen Dateinamen für das Projekt-Backup ein.';
 
   @override
   String get projectExportFileNameTooLong =>
@@ -2421,7 +2422,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get projectExportStale =>
-      'Das Projekt wurde vor dem Export geändert. Es wurde keine Ausgabe erstellt. Schließe dieses Fenster und öffne Projektkopie exportieren erneut.';
+      'Das Projekt wurde vor dem Erstellen des Backups geändert. Es wurde keine Ausgabe erstellt. Schließe dieses Fenster und öffne Projekt-Backup erstellen erneut.';
 
   @override
   String get projectExportRequiresReopen =>
@@ -2429,33 +2430,33 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get projectExportUnsupported =>
-      'Diese verwaltete Projektsitzung kann keine exakten portablen Kopien exportieren. Nichts wurde erstellt.';
+      'Diese verwaltete Projektsitzung kann keine exakten wiederherstellbaren Backups erstellen. Nichts wurde erstellt.';
 
   @override
   String get projectExportFailedBeforeStart =>
-      'Die Projektkopie konnte nicht exakt vorbereitet werden. Nichts wurde erstellt.';
+      'Das Projekt-Backup konnte nicht exakt vorbereitet werden. Nichts wurde erstellt.';
 
   @override
   String get projectExportPrepublicationFailed =>
-      'Der Export wurde sicher beendet, bevor die neue lokale Datei erstellt wurde. Nichts wurde erstellt. Schließe dieses Fenster und prüfe Projekt und Ziel, bevor du es erneut versuchst.';
+      'Das Erstellen des Backups wurde sicher beendet, bevor die neue lokale Datei erstellt wurde. Nichts wurde erstellt. Schließe dieses Fenster und prüfe Projekt und Ziel, bevor du es erneut versuchst.';
 
   @override
   String projectExportMayExist(String output) {
-    return 'Der Export hat keinen verifizierten Beleg geliefert. Nicht erneut versuchen. Schließe dieses Fenster und prüfe das Ziel: $output';
+    return 'Das Erstellen des Backups hat keinen verifizierten Beleg geliefert. Nicht erneut versuchen. Schließe dieses Fenster und prüfe das Ziel: $output';
   }
 
   @override
   String projectExportResultMismatch(String output) {
-    return 'Der abgeschlossene Export stimmt nicht mit diesem Projektstand oder Ziel überein. Nicht erneut versuchen; prüfe das Ziel: $output';
+    return 'Das abgeschlossene Backup stimmt nicht mit diesem Projektstand oder Ziel überein. Nicht erneut versuchen; prüfe das Ziel: $output';
   }
 
   @override
   String get projectExportPublished =>
-      'Die exakte portable Projektkopie wurde als neue lokale Datei erstellt.';
+      'Das exakte wiederherstellbare Projekt-Backup wurde als neue lokale Datei erstellt.';
 
   @override
   String get projectExportPublishedCleanupWarning =>
-      'Die exakte Projektkopie wurde als lokale Datei erstellt, aber die interne temporäre Bereinigung blieb unvollständig. Die erstellte Datei ist gültig; nicht erneut versuchen.';
+      'Das exakte wiederherstellbare Projekt-Backup wurde als lokale Datei erstellt, aber die interne temporäre Bereinigung blieb unvollständig. Die erstellte Datei ist gültig; nicht erneut versuchen.';
 
   @override
   String projectExportPublicationUncertain(String output) {
@@ -2471,6 +2472,171 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get projectExportCurrentProjectUnchanged =>
       'Das aktuelle Projekt bleibt offen und unverändert. Spiel und Spielstände wurden nicht berührt.';
+
+  @override
+  String get projectRestoreActionTitle => 'Projekt-Backup wiederherstellen…';
+
+  @override
+  String get projectRestoreActionDescription =>
+      'Ein exaktes .goremod-Backup prüfen, in einen neuen Ordner wiederherstellen und dieses Projekt sicher öffnen.';
+
+  @override
+  String get projectRestoreDialogTitle => 'Projekt-Backup wiederherstellen';
+
+  @override
+  String get projectRestoreNoticeTitle =>
+      'In einen neuen Projektordner wiederherstellen';
+
+  @override
+  String get projectRestoreNoticeDescription =>
+      'Wähle ein wiederherstellbares Mod-Studio-.goremod-Backup. Das Studio prüft das vollständige Archiv, bevor es einen neuen Projektordner erstellt, und behält Projektidentität und Verlauf des Backups bei.';
+
+  @override
+  String get projectRestoreCapabilityBoundary =>
+      'Die Wiederherstellung baut, deployt oder startet den Mod nicht und weist keine Laufzeitfunktion nach. Spiel und Spielstände werden weder gelesen noch verändert.';
+
+  @override
+  String get projectRestoreChooseBackup => 'Backup-Datei auswählen';
+
+  @override
+  String get projectRestoreNoBackup => 'Kein verifiziertes Backup ausgewählt';
+
+  @override
+  String get projectRestoreInspecting => 'Backup wird geprüft…';
+
+  @override
+  String get projectRestoreVerified =>
+      'Dieses exakte V2-Projekt-Backup ist vollständig und wiederherstellbar.';
+
+  @override
+  String get projectRestoreSource => 'Backup-Datei';
+
+  @override
+  String get projectRestoreProjectRevision => 'Projektrevision';
+
+  @override
+  String get projectRestoreArchiveBytes => 'Archivgröße in Bytes';
+
+  @override
+  String get projectRestoreStoreObjects => 'Gespeicherte Projektobjekte';
+
+  @override
+  String get projectRestoreUnsupportedReviewCopy =>
+      'Dies ist eine ältere reine Prüfkopie und kann nicht wiederhergestellt werden. Wähle ein V2-Backup, das mit Projekt-Backup erstellen erzeugt wurde.';
+
+  @override
+  String get projectRestoreInvalidSource =>
+      'Die ausgewählte Datei ist kein gültiges exaktes Projekt-Backup. Nichts wurde erstellt.';
+
+  @override
+  String get projectRestoreInspectionFailed =>
+      'Das Backup konnte nicht vollständig verifiziert werden. Nichts wurde erstellt.';
+
+  @override
+  String get projectRestoreUnavailable =>
+      'Die exakte Projektwiederherstellung ist auf diesem System nicht verfügbar. Nichts wurde erstellt.';
+
+  @override
+  String get projectRestoreChooseDestinationParent => 'Elternordner auswählen';
+
+  @override
+  String get projectRestoreNoDestinationParent =>
+      'Kein Elternordner ausgewählt';
+
+  @override
+  String get projectRestoreFolderNameLabel => 'Name des neuen Projektordners';
+
+  @override
+  String get projectRestoreFolderNameHelper =>
+      'Das Studio erstellt diesen neuen Ordner; er darf noch nicht existieren.';
+
+  @override
+  String get projectRestoreNewFolder => 'Neuer Projektordner';
+
+  @override
+  String get projectRestoreFolderNameRequired =>
+      'Gib einen Namen für den neuen Projektordner ein.';
+
+  @override
+  String get projectRestoreFolderNameTooLong => 'Der Ordnername ist zu lang.';
+
+  @override
+  String get projectRestoreFolderNameInvalid =>
+      'Verwende genau einen normalen Ordnernamen ohne Pfadtrenner, Steuerzeichen, abschließenden Punkt oder abschließendes Leerzeichen.';
+
+  @override
+  String get projectRestoreFolderNameReserved =>
+      'Dieser Ordnername ist unter Windows reserviert.';
+
+  @override
+  String get projectRestoreDestinationExists =>
+      'Dieses Ziel existiert bereits. Wähle einen neuen Ordnernamen; vorhandene Inhalte werden niemals überschrieben.';
+
+  @override
+  String get projectRestoreDestinationLink =>
+      'Das neue Projektziel ist ein Link. Wähle einen anderen Ordnernamen.';
+
+  @override
+  String get projectRestoreDestinationInvalid =>
+      'Das Ziel wurde abgelehnt, bevor ein Projektbeleg erstellt wurde. Nichts wurde geöffnet. Wähle nach erneuter Backup-Prüfung einen anderen neuen Ordner.';
+
+  @override
+  String get projectRestoreInspectionExpired =>
+      'Das Backup wurde nach der Prüfung verändert. Nichts wurde geöffnet. Prüfe es erneut, bevor du ein anderes Ziel auswählst.';
+
+  @override
+  String get projectRestoreMaterializationFailed =>
+      'Die Wiederherstellung hat keinen verifizierten Projektbeleg geliefert. Nichts wurde geöffnet. Verwende diesen Versuch nicht erneut und prüfe das gewählte Ziel, bevor du neu beginnst.';
+
+  @override
+  String projectRestorePublicationUncertain(String destination) {
+    return 'Das Studio kann nicht beweisen, ob der Projektordner ‚$destination‘ veröffentlicht wurde. Nichts wurde geöffnet. Wiederhole diese Wiederherstellung nicht; prüfe zuerst dieses Ziel.';
+  }
+
+  @override
+  String get projectRestoreStale =>
+      'Dieses Wiederherstellungsfenster ist nicht mehr aktuell. Nichts wurde geöffnet. Falls die Materialisierung begonnen hatte, prüfe das gewählte Ziel, bevor du etwas erneut versuchst.';
+
+  @override
+  String get projectRestoreCancel => 'Abbrechen';
+
+  @override
+  String get projectRestoreClose => 'Schließen';
+
+  @override
+  String get projectRestoreSubmit => 'Wiederherstellen und öffnen';
+
+  @override
+  String get projectRestoreRestoring => 'Wiederherstellung läuft…';
+
+  @override
+  String get projectRestoreSucceeded =>
+      'Das exakte Projekt-Backup wurde in den neuen Ordner wiederhergestellt.';
+
+  @override
+  String get projectRestoreSucceededCleanupWarning =>
+      'Das exakte Projekt-Backup wurde wiederhergestellt, aber die private temporäre Bereinigung blieb unvollständig. Das wiederhergestellte Projekt ist gültig; wiederhole die Wiederherstellung nicht.';
+
+  @override
+  String get projectRestoreOpened =>
+      'Projekt-Backup wurde wiederhergestellt und geöffnet.';
+
+  @override
+  String get projectRestoreOpenedCleanupWarning =>
+      'Projekt-Backup wurde wiederhergestellt und geöffnet. Die private temporäre Bereinigung blieb unvollständig; wiederhole die Wiederherstellung nicht.';
+
+  @override
+  String get projectRestoreOpening =>
+      'Das wiederhergestellte Projekt wird sicher geöffnet…';
+
+  @override
+  String projectRestoreOpenFailed(String destination) {
+    return 'Der Projektordner ‚$destination‘ wurde wiederhergestellt, aber das Studio konnte nicht beweisen, dass er sicher geöffnet werden kann. Ein zuvor geöffnetes Projekt bleibt aktuell; andernfalls wurde kein Projekt geöffnet. Wiederhole die Wiederherstellung nicht; prüfe oder öffne den wiederhergestellten Ordner separat.';
+  }
+
+  @override
+  String get projectRestoreCandidateCleanupWarning =>
+      'Es wurde kein Projekt übernommen. Das Studio konnte die abgelehnte Kandidatensitzung nicht vollständig bereinigen. Starte Mod Studio neu, bevor du das wiederhergestellte Ziel manuell öffnest.';
 
   @override
   String get managedVoiceTakeRemoveAction => 'Aus dieser Zeile entfernen…';

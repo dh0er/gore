@@ -383,6 +383,7 @@ void main() {
     );
     expect(exported.hasCleanupWarning, isFalse);
     expect(exported.publicationIsUncertain, isFalse);
+    expect(exported.isRestorableProjectCopy, isTrue);
     expect(exported.warning, isNull);
     expect(exported.basisHead.canonicalJson, head.canonicalJson);
     expect(exported.projectId, _projectId);
@@ -485,6 +486,11 @@ void main() {
     final mutations = <Map<String, Object?> Function()>[
       () => _responseV2()..['retry_safe'] = true,
       () => _responseV2()..['project_mutation'] = 'performed',
+      () => _responseV2()..['game_mutation'] = 'performed',
+      () => _responseV2()..['save_mutation'] = 'performed',
+      () => _responseV2()..['build_status'] = 'built',
+      () => _responseV2()..['deployment_status'] = 'deployed',
+      () => _responseV2()..['runtime_status'] = 'runtime_qualified',
       () => _responseV2()..['publication_status'] = 'publication_uncertain',
       () => _responseV2()
         ..['warning'] = <String, Object?>{

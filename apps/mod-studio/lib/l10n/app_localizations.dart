@@ -3947,61 +3947,61 @@ abstract class AppLocalizations {
   /// No description provided for @projectExportActionTitle.
   ///
   /// In en, this message translates to:
-  /// **'Export project copy…'**
+  /// **'Create project backup…'**
   String get projectExportActionTitle;
 
   /// No description provided for @projectExportActionDescription.
   ///
   /// In en, this message translates to:
-  /// **'Write an exact portable copy of the current saved project checkpoint.'**
+  /// **'Write an exact restorable backup of the current saved project checkpoint.'**
   String get projectExportActionDescription;
 
   /// No description provided for @projectExportActionDirtyBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Save or discard the open localization edits before exporting a project copy.'**
+  /// **'Save or discard the open localization edits before creating a project backup.'**
   String get projectExportActionDirtyBlocked;
 
   /// No description provided for @projectExportDialogTitle.
   ///
   /// In en, this message translates to:
-  /// **'Export project copy'**
+  /// **'Create project backup'**
   String get projectExportDialogTitle;
 
   /// No description provided for @projectExportPortableCopyTitle.
   ///
   /// In en, this message translates to:
-  /// **'Portable project copy'**
+  /// **'Restorable Mod Studio project backup'**
   String get projectExportPortableCopyTitle;
 
   /// No description provided for @projectExportPortableCopyDescription.
   ///
   /// In en, this message translates to:
-  /// **'This writes the exact current saved project checkpoint to a new .goremod file. The open project stays current and unchanged.'**
+  /// **'This writes the exact current saved project checkpoint to a new .goremod file. It can be restored into a new project folder later; the open project stays current and unchanged.'**
   String get projectExportPortableCopyDescription;
 
   /// No description provided for @projectExportCapabilityBoundary.
   ///
   /// In en, this message translates to:
-  /// **'This copy is not a playable mod, build, deployment, or restorable backup. It does not read or change the game or any save.'**
+  /// **'This backup is not a playable mod, build, deployment, or runtime qualification. Creating it does not read or change the game or any save.'**
   String get projectExportCapabilityBoundary;
 
   /// No description provided for @projectExportKeepOriginal.
   ///
   /// In en, this message translates to:
-  /// **'Importing this managed copy is not available yet. Keep the original project folder.'**
+  /// **'A restore preserves this project\'s identity and history. Use Clone or Save As for a separate project identity when those workflows become available.'**
   String get projectExportKeepOriginal;
 
   /// No description provided for @projectExportFileNameLabel.
   ///
   /// In en, this message translates to:
-  /// **'New project-copy file'**
+  /// **'New project-backup file'**
   String get projectExportFileNameLabel;
 
   /// No description provided for @projectExportFileNameHelper.
   ///
   /// In en, this message translates to:
-  /// **'Use a new portable file name ending in .goremod.'**
+  /// **'Use a new backup file name ending in .goremod.'**
   String get projectExportFileNameHelper;
 
   /// No description provided for @projectExportChooseDestination.
@@ -4037,13 +4037,13 @@ abstract class AppLocalizations {
   /// No description provided for @projectExportSubmit.
   ///
   /// In en, this message translates to:
-  /// **'Export copy'**
+  /// **'Create backup'**
   String get projectExportSubmit;
 
   /// No description provided for @projectExportExporting.
   ///
   /// In en, this message translates to:
-  /// **'Exporting…'**
+  /// **'Creating backup…'**
   String get projectExportExporting;
 
   /// No description provided for @projectExportParentRequired.
@@ -4073,7 +4073,7 @@ abstract class AppLocalizations {
   /// No description provided for @projectExportFileNameRequired.
   ///
   /// In en, this message translates to:
-  /// **'Enter a new project-copy file name.'**
+  /// **'Enter a new project-backup file name.'**
   String get projectExportFileNameRequired;
 
   /// No description provided for @projectExportFileNameTooLong.
@@ -4115,7 +4115,7 @@ abstract class AppLocalizations {
   /// No description provided for @projectExportStale.
   ///
   /// In en, this message translates to:
-  /// **'The project changed before export started. No output was created. Close this window and open Export project copy again.'**
+  /// **'The project changed before backup creation started. No output was created. Close this window and open Create project backup again.'**
   String get projectExportStale;
 
   /// No description provided for @projectExportRequiresReopen.
@@ -4127,43 +4127,43 @@ abstract class AppLocalizations {
   /// No description provided for @projectExportUnsupported.
   ///
   /// In en, this message translates to:
-  /// **'This managed project session cannot export exact portable copies. Nothing was created.'**
+  /// **'This managed project session cannot create exact restorable backups. Nothing was created.'**
   String get projectExportUnsupported;
 
   /// No description provided for @projectExportFailedBeforeStart.
   ///
   /// In en, this message translates to:
-  /// **'The project copy could not be prepared exactly. Nothing was created.'**
+  /// **'The project backup could not be prepared exactly. Nothing was created.'**
   String get projectExportFailedBeforeStart;
 
   /// No description provided for @projectExportPrepublicationFailed.
   ///
   /// In en, this message translates to:
-  /// **'Export stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.'**
+  /// **'Backup creation stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.'**
   String get projectExportPrepublicationFailed;
 
   /// No description provided for @projectExportMayExist.
   ///
   /// In en, this message translates to:
-  /// **'The export did not return a verified receipt. Do not retry. Close this window and check the destination: {output}'**
+  /// **'Backup creation did not return a verified receipt. Do not retry. Close this window and check the destination: {output}'**
   String projectExportMayExist(String output);
 
   /// No description provided for @projectExportResultMismatch.
   ///
   /// In en, this message translates to:
-  /// **'The completed export does not match this checkpoint or destination. Do not retry; inspect the destination: {output}'**
+  /// **'The completed backup does not match this checkpoint or destination. Do not retry; inspect the destination: {output}'**
   String projectExportResultMismatch(String output);
 
   /// No description provided for @projectExportPublished.
   ///
   /// In en, this message translates to:
-  /// **'The exact portable project copy was created as a new local file.'**
+  /// **'The exact restorable project backup was created as a new local file.'**
   String get projectExportPublished;
 
   /// No description provided for @projectExportPublishedCleanupWarning.
   ///
   /// In en, this message translates to:
-  /// **'The exact project copy was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.'**
+  /// **'The exact restorable project backup was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.'**
   String get projectExportPublishedCleanupWarning;
 
   /// No description provided for @projectExportPublicationUncertain.
@@ -4189,6 +4189,276 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The current project remains open and unchanged. The game and saves were not touched.'**
   String get projectExportCurrentProjectUnchanged;
+
+  /// No description provided for @projectRestoreActionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project backup…'**
+  String get projectRestoreActionTitle;
+
+  /// No description provided for @projectRestoreActionDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify an exact .goremod backup, restore it into a new folder, and open that project safely.'**
+  String get projectRestoreActionDescription;
+
+  /// No description provided for @projectRestoreDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project backup'**
+  String get projectRestoreDialogTitle;
+
+  /// No description provided for @projectRestoreNoticeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore into a new project folder'**
+  String get projectRestoreNoticeTitle;
+
+  /// No description provided for @projectRestoreNoticeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a restorable Mod Studio .goremod backup. Studio verifies the complete archive before creating a new project folder and preserves the backed-up project identity and history.'**
+  String get projectRestoreNoticeDescription;
+
+  /// No description provided for @projectRestoreCapabilityBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore does not build, deploy, launch, or qualify the mod at runtime. It does not read or change the game or any save.'**
+  String get projectRestoreCapabilityBoundary;
+
+  /// No description provided for @projectRestoreChooseBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose backup file'**
+  String get projectRestoreChooseBackup;
+
+  /// No description provided for @projectRestoreNoBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'No verified backup selected'**
+  String get projectRestoreNoBackup;
+
+  /// No description provided for @projectRestoreInspecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Verifying backup…'**
+  String get projectRestoreInspecting;
+
+  /// No description provided for @projectRestoreVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'This exact V2 project backup is complete and restorable.'**
+  String get projectRestoreVerified;
+
+  /// No description provided for @projectRestoreSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup file'**
+  String get projectRestoreSource;
+
+  /// No description provided for @projectRestoreProjectRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Project revision'**
+  String get projectRestoreProjectRevision;
+
+  /// No description provided for @projectRestoreArchiveBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive bytes'**
+  String get projectRestoreArchiveBytes;
+
+  /// No description provided for @projectRestoreStoreObjects.
+  ///
+  /// In en, this message translates to:
+  /// **'Stored project objects'**
+  String get projectRestoreStoreObjects;
+
+  /// No description provided for @projectRestoreUnsupportedReviewCopy.
+  ///
+  /// In en, this message translates to:
+  /// **'This is an older review-only project copy and cannot be restored. Choose a V2 backup created with Create project backup.'**
+  String get projectRestoreUnsupportedReviewCopy;
+
+  /// No description provided for @projectRestoreInvalidSource.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected file is not a valid exact project backup. Nothing was created.'**
+  String get projectRestoreInvalidSource;
+
+  /// No description provided for @projectRestoreInspectionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The backup could not be verified completely. Nothing was created.'**
+  String get projectRestoreInspectionFailed;
+
+  /// No description provided for @projectRestoreUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project restore is unavailable on this system. Nothing was created.'**
+  String get projectRestoreUnavailable;
+
+  /// No description provided for @projectRestoreChooseDestinationParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose parent folder'**
+  String get projectRestoreChooseDestinationParent;
+
+  /// No description provided for @projectRestoreNoDestinationParent.
+  ///
+  /// In en, this message translates to:
+  /// **'No parent folder selected'**
+  String get projectRestoreNoDestinationParent;
+
+  /// No description provided for @projectRestoreFolderNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'New project folder name'**
+  String get projectRestoreFolderNameLabel;
+
+  /// No description provided for @projectRestoreFolderNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio creates this new folder; it must not already exist.'**
+  String get projectRestoreFolderNameHelper;
+
+  /// No description provided for @projectRestoreNewFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'New project folder'**
+  String get projectRestoreNewFolder;
+
+  /// No description provided for @projectRestoreFolderNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new project folder name.'**
+  String get projectRestoreFolderNameRequired;
+
+  /// No description provided for @projectRestoreFolderNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name is too long.'**
+  String get projectRestoreFolderNameTooLong;
+
+  /// No description provided for @projectRestoreFolderNameInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Use one ordinary folder name without path separators, control characters, a trailing dot, or a trailing space.'**
+  String get projectRestoreFolderNameInvalid;
+
+  /// No description provided for @projectRestoreFolderNameReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That folder name is reserved by Windows.'**
+  String get projectRestoreFolderNameReserved;
+
+  /// No description provided for @projectRestoreDestinationExists.
+  ///
+  /// In en, this message translates to:
+  /// **'That destination already exists. Choose a new folder name; existing content is never overwritten.'**
+  String get projectRestoreDestinationExists;
+
+  /// No description provided for @projectRestoreDestinationLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The new project destination is a link. Choose a different folder name.'**
+  String get projectRestoreDestinationLink;
+
+  /// No description provided for @projectRestoreDestinationInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination was rejected before a project receipt was created. Nothing was opened. Choose a different new folder after verifying the backup again.'**
+  String get projectRestoreDestinationInvalid;
+
+  /// No description provided for @projectRestoreInspectionExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'The backup changed after verification. Nothing was opened. Verify the backup again before choosing another destination.'**
+  String get projectRestoreInspectionExpired;
+
+  /// No description provided for @projectRestoreMaterializationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore did not return a verified project receipt. Nothing was opened. Do not reuse this attempt; inspect the chosen destination before starting again.'**
+  String get projectRestoreMaterializationFailed;
+
+  /// No description provided for @projectRestorePublicationUncertain.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio cannot prove whether the project folder ‘{destination}’ was published. Nothing was opened. Do not retry this restore; inspect that destination first.'**
+  String projectRestorePublicationUncertain(String destination);
+
+  /// No description provided for @projectRestoreStale.
+  ///
+  /// In en, this message translates to:
+  /// **'This restore window is no longer current. Nothing was opened. If materialization had started, inspect the chosen destination before trying anything else.'**
+  String get projectRestoreStale;
+
+  /// No description provided for @projectRestoreCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get projectRestoreCancel;
+
+  /// No description provided for @projectRestoreClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get projectRestoreClose;
+
+  /// No description provided for @projectRestoreSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore and open'**
+  String get projectRestoreSubmit;
+
+  /// No description provided for @projectRestoreRestoring.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring…'**
+  String get projectRestoreRestoring;
+
+  /// No description provided for @projectRestoreSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project backup was restored into the new folder.'**
+  String get projectRestoreSucceeded;
+
+  /// No description provided for @projectRestoreSucceededCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project backup was restored, but private temporary cleanup was incomplete. The restored project is valid; do not repeat the restore.'**
+  String get projectRestoreSucceededCleanupWarning;
+
+  /// No description provided for @projectRestoreOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Project backup restored and opened.'**
+  String get projectRestoreOpened;
+
+  /// No description provided for @projectRestoreOpenedCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Project backup restored and opened. Private temporary cleanup was incomplete; do not repeat the restore.'**
+  String get projectRestoreOpenedCleanupWarning;
+
+  /// No description provided for @projectRestoreOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the restored project safely…'**
+  String get projectRestoreOpening;
+
+  /// No description provided for @projectRestoreOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project folder ‘{destination}’ was restored, but Studio could not prove it safe to open. Any previously open project remains current; otherwise no project was opened. Do not repeat the restore; inspect or open the restored folder separately.'**
+  String projectRestoreOpenFailed(String destination);
+
+  /// No description provided for @projectRestoreCandidateCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'No project was adopted. Studio could not completely clean up the rejected candidate session. Restart Mod Studio before opening the restored destination manually.'**
+  String get projectRestoreCandidateCleanupWarning;
 
   /// No description provided for @managedVoiceTakeRemoveAction.
   ///

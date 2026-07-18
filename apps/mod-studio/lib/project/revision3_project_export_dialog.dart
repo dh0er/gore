@@ -9,14 +9,18 @@ import '../l10n/app_localizations.dart';
 import 'current_project_controller.dart';
 
 typedef Revision3ExactProjectExporter =
-    Future<AuthoringRevision3ExactSnapshotExportResult> Function(String output);
+    Future<AuthoringRevision3ExactSnapshotExportResultV2> Function(
+      String output,
+    );
 typedef Revision3ProjectExportParentDirectoryPicker =
     Future<String?> Function();
 
-/// Writes one immutable, exact-checkpoint project copy to a brand-new archive.
+/// Writes one immutable, exact-checkpoint restorable V2 project copy to a
+/// brand-new archive.
 ///
-/// This is deliberately not presented as Build, Deploy, Backup, or Restore:
-/// the current managed project remains authoritative and unchanged.
+/// This is an export, not a build, deployment, runtime qualification, game or
+/// save operation, destination materialization, or current-session adoption.
+/// The current managed project remains authoritative and unchanged.
 class Revision3ProjectExportDialog extends StatefulWidget {
   const Revision3ProjectExportDialog({
     required this.projectRevision,
@@ -47,7 +51,7 @@ class _Revision3ProjectExportDialogState
   bool _destinationCorrectionRequired = false;
   String? _rejectedNormalizedOutput;
   String? _destinationCorrectionError;
-  AuthoringRevision3ExactSnapshotExportResult? _result;
+  AuthoringRevision3ExactSnapshotExportResultV2? _result;
 
   bool get _busy => _choosingParent || _exporting;
 
@@ -385,6 +389,9 @@ String? validateRevision3ProjectExportFileName(
   if (utf8.encode(value).length > 128) {
     return l10n.projectExportFileNameTooLong;
   }
+  if (_isWindowsReservedRevision3ProjectExportFileName(value)) {
+    return l10n.projectExportFileNameReserved;
+  }
   if (!value.runes.every((rune) => rune <= 0x7f) ||
       !RegExp(
         r'^[A-Za-z0-9][A-Za-z0-9._-]*\.goremod$',
@@ -392,21 +399,28 @@ String? validateRevision3ProjectExportFileName(
       ).hasMatch(value)) {
     return l10n.projectExportFileNameInvalid;
   }
-  final stem = value.substring(0, value.length - '.goremod'.length);
+  return null;
+}
+
+bool _isWindowsReservedRevision3ProjectExportFileName(String value) {
+  const archiveExtension = '.goremod';
+  if (!value.toLowerCase().endsWith(archiveExtension)) return false;
+
+  final stem = value.substring(0, value.length - archiveExtension.length);
+  if (stem.isEmpty) return false;
   final deviceStem = stem.split('.').first.toUpperCase();
   if (const {
-        'CON',
-        'PRN',
-        'AUX',
-        'NUL',
-        r'CLOCK$',
-        r'CONIN$',
-        r'CONOUT$',
-      }.contains(deviceStem) ||
-      RegExp(r'^(COM|LPT)[1-9]$').hasMatch(deviceStem)) {
-    return l10n.projectExportFileNameReserved;
+    'CON',
+    'PRN',
+    'AUX',
+    'NUL',
+    r'CLOCK$',
+    r'CONIN$',
+    r'CONOUT$',
+  }.contains(deviceStem)) {
+    return true;
   }
-  return null;
+  return RegExp(r'^(?:COM|LPT)[1-9¹²³]$').hasMatch(deviceStem);
 }
 
 class _ProjectExportNotice extends StatelessWidget {
@@ -444,7 +458,7 @@ class _ProjectExportNotice extends StatelessWidget {
 class _ProjectExportResult extends StatelessWidget {
   const _ProjectExportResult({required this.result, required this.copy});
 
-  final AuthoringRevision3ExactSnapshotExportResult result;
+  final AuthoringRevision3ExactSnapshotExportResultV2 result;
   final AppLocalizations copy;
 
   @override

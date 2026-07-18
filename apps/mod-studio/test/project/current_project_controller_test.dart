@@ -23,6 +23,7 @@ import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_project_history.dart';
+import 'package:gore_mod/project/revision3_project_import.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_media_qa_service.dart';
 import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
@@ -153,6 +154,298 @@ void main() {
       expect(coordinator.state, isA<LegacyCurrentProjectState>());
       expect(legacy.closeCalls, 0);
       expect(legacy.saveCalls, 0);
+    },
+  );
+
+  test(
+    'receipt-bound imported open normalizes root then adopts the exact candidate',
+    () async {
+      final destination = p
+          .join(p.absolute('receipt-import'), 'restored-project')
+          .replaceAll(r'\', '/');
+      const projectId = '91919191919191919191919191919191';
+      final head = _head(91);
+      final receipt = _importedProjectReceipt(
+        destination: destination,
+        projectId: projectId,
+        projectRevision: 9,
+        head: head,
+      );
+      final legacy = _FakeLegacyLease(path: 'before-import.goremod');
+      final candidate = _FakeManagedLease(
+        root: Directory(p.normalize(p.absolute(destination))),
+        projectIdValue: projectId,
+        projectRevision: 9,
+        head: head,
+      );
+      Directory? openedRoot;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (root) async {
+          openedRoot = root;
+          return candidate;
+        },
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+
+      final opened = await coordinator.openImportedManagedRevision3(receipt);
+
+      expect(openedRoot?.path, destination);
+      expect(
+        p.equals(opened.root.path, p.normalize(p.absolute(destination))),
+        isTrue,
+      );
+      expect(opened.projectId, projectId);
+      expect(opened.projectRevision, 9);
+      expect(opened.head.canonicalJson, head.canonicalJson);
+      expect(opened.requiresReopen, isFalse);
+      expect(legacy.closeCalls, 1);
+      expect(candidate.closeCalls, 0);
+    },
+  );
+
+  for (final mismatch in <String>[
+    'root',
+    'project ID',
+    'project revision',
+    'head',
+    'requires reopen',
+  ]) {
+    test(
+      'receipt-bound imported open rejects $mismatch mismatch and preserves current',
+      () async {
+        final destination = p.join(
+          p.absolute('receipt-import-$mismatch'),
+          'restored-project',
+        );
+        const projectId = '92929292929292929292929292929292';
+        final expectedHead = _head(92);
+        final receipt = _importedProjectReceipt(
+          destination: destination,
+          projectId: projectId,
+          projectRevision: 12,
+          head: expectedHead,
+        );
+        final legacy = _FakeLegacyLease(
+          path: 'preserved-before-import.goremod',
+          hasUnsavedChanges: true,
+        );
+        final candidate = _FakeManagedLease(
+          root: mismatch == 'root'
+              ? Directory(p.join(p.absolute('different-import'), 'project'))
+              : Directory(p.normalize(p.absolute(destination))),
+          projectIdValue: mismatch == 'project ID'
+              ? '93939393939393939393939393939393'
+              : projectId,
+          projectRevision: mismatch == 'project revision' ? 13 : 12,
+          head: mismatch == 'head' ? _head(93) : expectedHead,
+        );
+        candidate.requiresReopenValue = mismatch == 'requires reopen';
+        final coordinator = CurrentProjectCoordinator(
+          initialLegacy: legacy,
+          openManagedRevision3: (_) async => candidate,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        final before = coordinator.state;
+
+        await expectLater(
+          coordinator.openImportedManagedRevision3(receipt),
+          throwsA(isA<Revision3ProjectImportAdoptionMismatchException>()),
+        );
+
+        expect(coordinator.state, same(before));
+        expect(legacy.closeCalls, 0);
+        expect(candidate.closeCalls, 1);
+      },
+    );
+  }
+
+  test(
+    'receipt mismatch preserves an already-current managed lease exactly',
+    () async {
+      final previous = _FakeManagedLease(
+        root: Directory('current-before-import'),
+        projectIdValue: '97979797979797979797979797979797',
+        projectRevision: 7,
+        head: _head(97),
+      );
+      final destination = p.join(
+        p.absolute('managed-current-import'),
+        'project',
+      );
+      final receipt = _importedProjectReceipt(
+        destination: destination,
+        projectId: '98989898989898989898989898989898',
+        projectRevision: 8,
+        head: _head(98),
+      );
+      final candidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectIdValue: receipt.projectId,
+        projectRevision: receipt.projectRevision,
+        head: _head(99),
+      );
+      var openCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async =>
+            ++openCalls == 1 ? previous : candidate,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(previous.root);
+      final before = coordinator.state;
+
+      await expectLater(
+        coordinator.openImportedManagedRevision3(receipt),
+        throwsA(isA<Revision3ProjectImportAdoptionMismatchException>()),
+      );
+
+      expect(coordinator.state, same(before));
+      expect(previous.closeCalls, 0);
+      expect(candidate.closeCalls, 1);
+    },
+  );
+
+  test(
+    'receipt-bound imported opener failure preserves current without adoption',
+    () async {
+      final receipt = _importedProjectReceipt(
+        destination: p.join(p.absolute('failed-import-open'), 'project'),
+        projectId: '94949494949494949494949494949494',
+        projectRevision: 4,
+        head: _head(94),
+      );
+      final legacy = _FakeLegacyLease(path: 'preserved-opener.goremod');
+      final expectedError = StateError('imported candidate open failed');
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (_) async => throw expectedError,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final before = coordinator.state;
+
+      await expectLater(
+        coordinator.openImportedManagedRevision3(receipt),
+        throwsA(same(expectedError)),
+      );
+
+      expect(coordinator.state, same(before));
+      expect(legacy.closeCalls, 0);
+    },
+  );
+
+  test(
+    'receipt-bound imported candidate snapshot failure closes it exactly once',
+    () async {
+      final destination = p.join(
+        p.absolute('failed-import-snapshot'),
+        'project',
+      );
+      final receipt = _importedProjectReceipt(
+        destination: destination,
+        projectId: '95959595959595959595959595959595',
+        projectRevision: 5,
+        head: _head(95),
+      );
+      final legacy = _FakeLegacyLease(path: 'preserved-snapshot.goremod');
+      final candidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectIdValue: '95959595959595959595959595959595',
+        projectRevision: 5,
+        head: _head(95),
+        projectIdError: StateError('candidate snapshot failed'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (_) async => candidate,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final before = coordinator.state;
+
+      await expectLater(
+        coordinator.openImportedManagedRevision3(receipt),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(coordinator.state, same(before));
+      expect(legacy.closeCalls, 0);
+      expect(candidate.closeCalls, 1);
+    },
+  );
+
+  test(
+    'receipt-bound imported open shares the serialized project lane',
+    () async {
+      final events = <String>[];
+      final saveEntered = Completer<void>();
+      final releaseSave = Completer<void>();
+      final legacy = _FakeLegacyLease(
+        path: 'ordered-import.goremod',
+        onSave: () async {
+          events.add('save-enter');
+          saveEntered.complete();
+          await releaseSave.future;
+          events.add('save-exit');
+        },
+        onClose: () => events.add('legacy-close'),
+      );
+      final destination = p.join(p.absolute('ordered-import'), 'project');
+      final head = _head(96);
+      final receipt = _importedProjectReceipt(
+        destination: destination,
+        projectId: '96969696969696969696969696969696',
+        projectRevision: 6,
+        head: head,
+      );
+      final candidate = _FakeManagedLease(
+        root: Directory(destination),
+        projectIdValue: receipt.projectId,
+        projectRevision: receipt.projectRevision,
+        head: head,
+      );
+      var openCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        openManagedRevision3: (_) async {
+          openCalls++;
+          events.add('import-open');
+          return candidate;
+        },
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+
+      final save = coordinator.saveCurrent();
+      await saveEntered.future;
+      final open = coordinator.openImportedManagedRevision3(receipt);
+      await Future<void>.delayed(Duration.zero);
+      expect(openCalls, 0);
+
+      releaseSave.complete();
+      await save;
+      await open;
+      expect(events, <String>[
+        'save-enter',
+        'save-exit',
+        'import-open',
+        'legacy-close',
+      ]);
     },
   );
 
@@ -6193,6 +6486,259 @@ void main() {
   );
 
   test(
+    'restorable V2 export is exact-checkpoint bound and preserves every sealed terminal',
+    () async {
+      for (final outcome
+          in AuthoringRevision3ExactSnapshotExportOutcome.values) {
+        final output = 'C:\\Exports\\restorable-${outcome.name}.goremod';
+        final managed = _FakeRestorableExportManagedLease(
+          root: Directory('managed-restorable-export-${outcome.name}'),
+          projectIdValue: revision3VoiceFixtureProjectId,
+          projectRevision: 7,
+          head: _head(7),
+          onExport: (lease, receivedOutput) {
+            expect(receivedOutput, output);
+            return _projectExportResultV2(
+              head: lease.head,
+              projectId: lease.projectId,
+              projectRevision: lease.projectRevision,
+              output: receivedOutput,
+              outcome: outcome,
+            );
+          },
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        final visible = await coordinator.openManagedRevision3(managed.root);
+
+        final result = await coordinator.exportCurrentRevision3ExactSnapshotV2(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          output: output,
+        );
+
+        expect(result.output, output);
+        expect(result.outcome, outcome);
+        expect(result.isRestorableProjectCopy, isTrue);
+        expect(managed.exportV2Calls, 1);
+        expect(managed.exportV2Outputs, [output]);
+        expect(managed.requiresReopen, isFalse);
+        final after = coordinator.state as ManagedRevision3CurrentProjectState;
+        expect(after.projectRevision, visible.projectRevision);
+        expect(after.head.canonicalJson, visible.head.canonicalJson);
+        expect(after.requiresReopen, isFalse);
+      }
+    },
+  );
+
+  test(
+    'restorable V2 export neither infers V1 authority nor reaches stale or disabled leases',
+    () async {
+      final v1Only = _FakeExportManagedLease(
+        root: Directory('managed-v1-only-export'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (lease, output) => _projectExportResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          output: output,
+        ),
+      );
+      final v1OnlyCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => v1Only,
+      );
+      addTearDown(() async {
+        await v1OnlyCoordinator.shutdown();
+        v1OnlyCoordinator.dispose();
+      });
+      final v1Visible = await v1OnlyCoordinator.openManagedRevision3(
+        v1Only.root,
+      );
+
+      await expectLater(
+        v1OnlyCoordinator.exportCurrentRevision3ExactSnapshotV2(
+          expectedRoot: v1Visible.root.path,
+          expectedProjectId: v1Visible.projectId,
+          expectedProjectRevision: v1Visible.projectRevision,
+          expectedHead: v1Visible.head,
+          output: r'C:\Exports\v1-is-not-restorable.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportUnsupportedException>()),
+      );
+      expect(v1Only.exportCalls, 0);
+      expect(v1Only.requiresReopen, isFalse);
+
+      final disabled = _FakeRestorableExportManagedLease(
+        root: Directory('managed-v2-disabled-export'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        supportsExport: false,
+        onExport: (lease, output) => _projectExportResultV2(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          output: output,
+        ),
+      );
+      final disabledCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => disabled,
+      );
+      addTearDown(() async {
+        await disabledCoordinator.shutdown();
+        disabledCoordinator.dispose();
+      });
+      final disabledVisible = await disabledCoordinator.openManagedRevision3(
+        disabled.root,
+      );
+
+      await expectLater(
+        disabledCoordinator.exportCurrentRevision3ExactSnapshotV2(
+          expectedRoot: disabledVisible.root.path,
+          expectedProjectId: disabledVisible.projectId,
+          expectedProjectRevision: disabledVisible.projectRevision,
+          expectedHead: disabledVisible.head,
+          output: r'C:\Exports\disabled-v2.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportUnsupportedException>()),
+      );
+      await expectLater(
+        disabledCoordinator.exportCurrentRevision3ExactSnapshotV2(
+          expectedRoot: disabledVisible.root.path,
+          expectedProjectId: disabledVisible.projectId,
+          expectedProjectRevision: disabledVisible.projectRevision - 1,
+          expectedHead: _head(6),
+          output: r'C:\Exports\stale-v2.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportStaleCheckpointException>()),
+      );
+      expect(disabled.exportV2Calls, 0);
+      expect(disabled.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'restorable V2 export preserves safe destination failures without poisoning',
+    () async {
+      final nativeError = ModFfiException(
+        command: 'authoring_store_export_revision3_exact_snapshot_v2',
+        code: 'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+        message: 'output already exists',
+      );
+      final managed = _FakeRestorableExportManagedLease(
+        root: Directory('managed-restorable-safe-failure'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (_, _) => throw nativeError,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.exportCurrentRevision3ExactSnapshotV2(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          output: r'C:\Exports\existing-v2.goremod',
+        ),
+        throwsA(
+          isA<Revision3ProjectExportFailedException>()
+              .having(
+                (error) => error.publicationMayExist,
+                'publicationMayExist',
+                isFalse,
+              )
+              .having(
+                (error) => error.retryWithNewDestination,
+                'retryWithNewDestination',
+                isTrue,
+              )
+              .having((error) => error.cause, 'cause', same(nativeError)),
+        ),
+      );
+      expect(managed.exportV2Calls, 1);
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.publicationUncertaintyLatchCalls, 0);
+    },
+  );
+
+  test(
+    'restorable V2 export latches a mismatched receipt before another call',
+    () async {
+      final managed = _FakeRestorableExportManagedLease(
+        root: Directory('managed-restorable-mismatch'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (lease, output) => _projectExportResultV2(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision + 1,
+          output: output,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> export(String output) => coordinator
+          .exportCurrentRevision3ExactSnapshotV2(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            output: output,
+          )
+          .then<void>((_) {});
+
+      await expectLater(
+        export(r'C:\Exports\mismatch-v2.goremod'),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>().having(
+            (error) => error.publicationMayExist,
+            'publicationMayExist',
+            isTrue,
+          ),
+        ),
+      );
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.publicationUncertaintyLatchCalls, 1);
+      await expectLater(
+        export(r'C:\Exports\blocked-v2.goremod'),
+        throwsA(isA<Revision3ProjectExportRequiresReopenException>()),
+      );
+      expect(managed.exportV2Calls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+    },
+  );
+
+  test(
     'reviewed DataAsset build rejects a stale lease before access and accepts an exact uncertain receipt',
     () async {
       const targetPath = '/Game/Blueprints/Items/FootstepPreset';
@@ -8027,6 +8573,11 @@ typedef _ProjectExportHook =
       _FakeExportManagedLease lease,
       String output,
     );
+typedef _ProjectExportV2Hook =
+    FutureOr<AuthoringRevision3ExactSnapshotExportResultV2> Function(
+      _FakeRestorableExportManagedLease lease,
+      String output,
+    );
 typedef _HistoryRestoreHook =
     FutureOr<ManagedRevision3ProjectHistoryRestoreCheckpoint> Function(
       _FakeHistoryManagedLease lease,
@@ -8762,6 +9313,35 @@ final class _FakeExportManagedLease extends _FakeManagedLease
   }
 }
 
+final class _FakeRestorableExportManagedLease extends _FakeManagedLease
+    implements ManagedRevision3RestorableProjectExportLease {
+  _FakeRestorableExportManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required this.onExport,
+    this.supportsExport = true,
+  });
+
+  final _ProjectExportV2Hook onExport;
+  final bool supportsExport;
+  int exportV2Calls = 0;
+  final List<String> exportV2Outputs = <String>[];
+
+  @override
+  bool get supportsRestorableSnapshotExport => supportsExport;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String output,
+  }) async {
+    exportV2Calls++;
+    exportV2Outputs.add(output);
+    return onExport(this, output);
+  }
+}
+
 final class _FakeStoryDraftRemovalManagedLease extends _FakeManagedLease
     implements ManagedRevision3StoryDraftRemovalLease {
   _FakeStoryDraftRemovalManagedLease({
@@ -9493,6 +10073,80 @@ AuthoringRevision3ExactSnapshotExportResult _projectExportResult({
   );
 }
 
+AuthoringRevision3ExactSnapshotExportResultV2 _projectExportResultV2({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+  AuthoringRevision3ExactSnapshotExportOutcome outcome =
+      AuthoringRevision3ExactSnapshotExportOutcome.exported,
+}) {
+  final (outcomeName, publicationStatus, warning) = switch (outcome) {
+    AuthoringRevision3ExactSnapshotExportOutcome.exported => (
+      'exported',
+      'published',
+      null,
+    ),
+    AuthoringRevision3ExactSnapshotExportOutcome.exportedWithCleanupWarning => (
+      'exported_with_cleanup_warning',
+      'published_with_cleanup_warning',
+      <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_CLEANUP_WARNING',
+        'message':
+            'the verified snapshot was published, but private staging cleanup was incomplete',
+      },
+    ),
+    AuthoringRevision3ExactSnapshotExportOutcome.publicationUncertain => (
+      'publication_uncertain',
+      'publication_uncertain',
+      <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_PUBLICATION_UNCERTAIN',
+        'message': 'publication may have completed; do not retry automatically',
+      },
+    ),
+  };
+  return AuthoringRevision3ExactSnapshotExportResultV2.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': outcomeName,
+      'format': 'managed_revision3_exact_snapshot_v2',
+      'artifact_kind': 'portable_snapshot_restorable_copy',
+      'restore_status': 'supported',
+      'basis_head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'output': output,
+      'archive': <String, Object?>{
+        'byte_len': 300,
+        'sha256': List<String>.filled(64, 'a').join(),
+      },
+      'manifest': <String, Object?>{
+        'relative_name': 'gore-export.json',
+        'byte_len': 100,
+        'sha256': List<String>.filled(64, 'b').join(),
+      },
+      'closure': <String, Object?>{
+        'snapshot_objects': 1,
+        'entity_objects': 0,
+        'asset_objects': 0,
+        'archive_entries': 4,
+        'uncompressed_bytes': 200,
+      },
+      'publication_status': publicationStatus,
+      'retry_safe': false,
+      'warning': warning,
+      'project_mutation': 'not_performed',
+      'game_mutation': 'not_performed',
+      'save_mutation': 'not_performed',
+      'build_status': 'not_performed',
+      'deployment_status': 'not_performed',
+      'runtime_status': 'runtime_unqualified',
+    },
+    expectedHead: head,
+    expectedOutput: output,
+  );
+}
+
 AuthoringRevision3ReviewedDataAssetBuildResult _reviewedDataAssetBuildResult({
   required AuthoringWorkingHead head,
   required String projectId,
@@ -9696,6 +10350,87 @@ AuthoringWorkingHead _recoveryHead(String projectJson) {
       },
     }),
   );
+}
+
+Revision3ProjectImportedReceipt _importedProjectReceipt({
+  required String destination,
+  required String projectId,
+  required int projectRevision,
+  required AuthoringWorkingHead head,
+}) {
+  final source = p.join(p.absolute('receipt-source'), 'copy.goremod');
+  final archive = <String, Object?>{
+    'byte_len': 8192,
+    'sha256': List<String>.filled(64, 'a').join(),
+  };
+  final manifest = <String, Object?>{
+    'relative_name': revision3ProjectImportManifestName,
+    'byte_len': 512,
+    'sha256': List<String>.filled(64, 'b').join(),
+  };
+  final closure = <String, Object?>{
+    'snapshot_objects': 1,
+    'entity_objects': 1,
+    'asset_objects': 1,
+    'archive_entries': 6,
+    'uncompressed_bytes': 4096,
+  };
+  final inspection =
+      Revision3ProjectImportInspection.fromJson(<String, Object?>{
+        'ok': true,
+        'outcome': 'inspected_restorable_copy',
+        'source': source,
+        'format': revision3ProjectImportFormatV2,
+        'artifact_kind': revision3ProjectImportArtifactKindV2,
+        'restore_status': revision3ProjectImportRestoreStatusV2,
+        'archive': archive,
+        'manifest': manifest,
+        'project_id': projectId,
+        'project_revision': projectRevision,
+        'head_json': head.canonicalJson,
+        'closure': closure,
+        'inspection_status': 'verified_exact',
+        'import_status': 'not_performed',
+        'project_mutation': 'not_performed',
+        'game_mutation': 'not_performed',
+        'save_mutation': 'not_performed',
+        'build_status': 'not_performed',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+        'retry_safe': true,
+      }, expectedSource: source);
+  final plan = Revision3ProjectImportDestinationPlan.fromInspection(
+    inspection: inspection,
+    destination: destination,
+  );
+  return Revision3ProjectImportDestinationResult.fromJson(<String, Object?>{
+    'ok': true,
+    'outcome': 'imported',
+    'source': source,
+    'destination': destination,
+    'format': revision3ProjectImportFormatV2,
+    'artifact_kind': revision3ProjectImportArtifactKindV2,
+    'restore_status': revision3ProjectImportRestoreStatusV2,
+    'archive': archive,
+    'manifest': manifest,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'head_json': head.canonicalJson,
+    'closure': closure,
+    'inspection_status': 'verified_exact',
+    'import_status': 'materialized',
+    'project_mutation': 'materialized',
+    'session_adoption': 'not_performed',
+    'game_mutation': 'not_performed',
+    'save_mutation': 'not_performed',
+    'build_status': 'not_performed',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'published',
+    'retry_safe': false,
+    'warning': null,
+  }, expectedPlan: plan).receipt!;
 }
 
 AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(

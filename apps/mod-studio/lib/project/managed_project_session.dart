@@ -1211,6 +1211,17 @@ abstract interface class ManagedRevision3ExactSnapshotExportStore {
   });
 }
 
+/// Narrow capability for exporting a closed, restorable V2 project copy.
+/// Keeping this separate from the frozen V1 review-copy capability prevents
+/// either snapshot format from silently acquiring the other's authority.
+abstract interface class ManagedRevision3RestorableSnapshotExportStore {
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  });
+}
+
 /// Optional authenticated-history capability. Keeping this separate prevents
 /// checkpoint-only alternate stores and test doubles from accidentally
 /// claiming restore authority.
@@ -1361,6 +1372,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3AuthoringStore,
         ManagedRevision3ReviewedDataAssetBuildStore,
         ManagedRevision3ExactSnapshotExportStore,
+        ManagedRevision3RestorableSnapshotExportStore,
         ManagedRevision3ProjectHistoryStore,
         ManagedRevision3VoiceBatchStore,
         ManagedRevision3QuestTranscriptStore,
@@ -1869,6 +1881,17 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) => ffi.authoringStoreExportRevision3ExactSnapshotV2(
+    root: root,
+    expectedHead: expectedHead,
+    output: output,
+  );
+
+  @override
   Future<AuthoringRevision3ProjectHistoryResult> listProjectHistoryV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -2293,6 +2316,8 @@ class ManagedRevision3AuthoringProjectSession {
       _core.supportsReviewedDataAssetBuild;
   bool get supportsExactSnapshotExport =>
       _store is ManagedRevision3ExactSnapshotExportStore;
+  bool get supportsRestorableSnapshotExport =>
+      _store is ManagedRevision3RestorableSnapshotExportStore;
   bool get supportsStoryDraftRemoval =>
       _store is ManagedRevision3StoryDraftRemovalStore;
   bool get supportsVoiceTakePreview =>
@@ -4888,6 +4913,54 @@ class ManagedRevision3AuthoringProjectSession {
         return result;
       },
       operation: 'exportExactSnapshotV1',
+      handleReadError: _core._throwRevision3ExactSnapshotExportError,
+    );
+  }
+
+  /// Export the exact captured revision-3 basis as a closed, restorable V2
+  /// project copy. This is serialized with edits and does not publish a
+  /// checkpoint or mutate the session. V1 support is intentionally unrelated.
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String output,
+  }) {
+    final exportStore = _store;
+    if (exportStore is! ManagedRevision3RestorableSnapshotExportStore) {
+      return Future<AuthoringRevision3ExactSnapshotExportResultV2>.error(
+        UnsupportedError(
+          'this managed revision-3 Store cannot export restorable exact snapshots',
+        ),
+      );
+    }
+    final restorableExportStore =
+        exportStore as ManagedRevision3RestorableSnapshotExportStore;
+    return _core.readBasisSnapshot<
+      AuthoringRevision3ExactSnapshotExportResultV2
+    >(
+      (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 restorable exact snapshot export has no exact project identity',
+          );
+        }
+        final result = await restorableExportStore.exportExactSnapshotV2(
+          root: root.path,
+          expectedHead: basis.head,
+          output: output,
+        );
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.projectRevision != projectRevision ||
+            result.output != output ||
+            !result.isRestorableProjectCopy) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 restorable exact snapshot export disagrees with its exact session basis or output',
+          );
+        }
+        return result;
+      },
+      operation: 'exportExactSnapshotV2',
       handleReadError: _core._throwRevision3ExactSnapshotExportError,
     );
   }

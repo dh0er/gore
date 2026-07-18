@@ -223,6 +223,11 @@ final class AuthoringRevision3ExactSnapshotExportWarning {
   }
 }
 
+/// Frozen review-only V1 receipt retained for legacy internal callers.
+///
+/// Visible project-backup workflows must use
+/// [AuthoringRevision3ExactSnapshotExportResultV2]; the two closed authority
+/// tuples intentionally remain non-interchangeable.
 final class AuthoringRevision3ExactSnapshotExportResult {
   const AuthoringRevision3ExactSnapshotExportResult._({
     required this.outcome,

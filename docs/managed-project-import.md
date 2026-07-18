@@ -1,9 +1,9 @@
-# Managed project snapshot import V2 foundation
+# Managed project snapshot import V2
 
 Status: implementation checkpoint, July 2026. This document defines the exact
 authority of the current managed revision-3 snapshot V2 inspection and
-destination-materialization foundation. It is not yet a claim that the visible
-Mod Studio UI can import, open, or adopt a restored project.
+destination materialization plus the visible receipt-bound Studio restore and
+session-adoption workflow.
 
 ## Version boundary
 
@@ -11,19 +11,21 @@ The two snapshot versions are separate, closed contracts:
 
 | Version | Manifest authority | Current meaning |
 |---|---|---|
-| V1 | `gore.managed-project-snapshot.v1`, schema `1`, `portable_snapshot_review_copy`, `restore_status: not_supported` | Frozen review-only project copy. It remains useful for inspection by a person, but is not and will not become an importable artifact. A recognized canonical V1 manifest receives a dedicated unsupported-review-copy result instead of being accepted as V2; this does not validate the V1 closure as restorable. |
-| V2 | `gore.managed-project-snapshot.v2`, schema `2`, `portable_snapshot_restorable_copy`, `restore_status: supported` | Exact restorable-copy format. The backend can export it, inspect it read-only, and materialize it on Windows into one absent managed-project directory. No Studio session adoption or visible import UI exists yet. |
+| V1 | `gore.managed-project-snapshot.v1`, schema `1`, `portable_snapshot_review_copy`, `restore_status: not_supported` | Unreleased superseded review-copy experiment. It is not a compatibility contract and will not become an importable artifact. While the temporary recognizer remains, a canonical V1 manifest receives a dedicated unsupported-review-copy result instead of being accepted as V2; this does not validate the V1 closure as restorable. |
+| V2 | `gore.managed-project-snapshot.v2`, schema `2`, `portable_snapshot_restorable_copy`, `restore_status: supported` | Exact restorable-copy format. Studio can export it, inspect it read-only, materialize it on Windows into one absent managed-project directory, and adopt only a fully opened candidate that exactly matches the native receipt. |
 
-V1 must not be relabelled, edited, or upgraded in place. Its original managed
-project directory remains authoritative. V2 uses the same deterministic member
-layout and exact reachable Store closure as V1, but its closed manifest tuple
-explicitly declares a future restore contract.
+V1 must not be relabelled, edited, migrated, or upgraded in place. Mod Studio
+has never been released and has no active legacy projects, so no old-project
+compatibility is required; the obsolete V1 path may be deleted outright. V2
+uses the same deterministic member layout and exact reachable Store closure as
+V1, but its closed manifest tuple declares the current restore contract.
 
-`restore_status: supported` describes the V2 archive format, not a completed
-product operation. It means that a verified V2 archive carries the exact
-authenticated material consumed by the reviewed destination importer. It does
-not mean that Mod Studio selected the destination, adopted the restored path as
-its current session, or made the project build- or runtime-ready.
+`restore_status: supported` describes the V2 archive format. It means that a
+verified V2 archive carries the exact authenticated material consumed by the
+reviewed destination importer; it does not by itself grant session adoption.
+The visible workflow separately selects a destination and adopts only after an
+exact receipt-bound reopen. Neither layer makes the project build- or
+runtime-ready.
 
 See [Managed project snapshot export](managed-project-export.md) for the shared
 closure, deterministic ZIP dialect, and export publication lifecycle.
@@ -86,11 +88,23 @@ recovery operation; callers may not infer that the requested path is safe to
 open.
 
 The pure Dart inspection and destination coordinators bind the plan to one
-owner/generation lifecycle, enforce single flight and post-await stale/cancel
-guards, and carry no session-adoption callback or game path. They are not yet
-connected to a Studio screen, menu, or current-project transition. The current
-**Export project copy** UI still emits V1. V2 export, inspection, and destination
-materialization remain backend/bridge foundations.
+dialog-owned owner/generation lifecycle, enforce single flight and post-await
+stale/cancel guards, and carry no session-adoption callback or game path. The
+visible dialog displays only a bounded source filename, verifies V2 before
+enabling a destination, asks for an existing real parent plus one new absent
+folder name, and invokes native materialization once per confirmed operation.
+Only confirmed success or cleanup-warning returns a receipt to the shell.
+Publication uncertainty and every receipt-free terminal remain close-only and
+cannot reach a project opener.
+
+The app-wide current-project coordinator then opens that exact destination as a
+candidate inside its serialized ownership lane. Normalized destination,
+project ID, project revision, canonical head, and non-poisoned reopen state must
+all match the receipt before adoption. Opener failure or any mismatch closes
+the unadopted candidate exactly once and leaves the existing Legacy or managed
+project unchanged. A successfully adopted candidate stays current even if
+retiring the prior session reports a cleanup warning; native-import cleanup and
+prior-session cleanup are reported independently.
 
 ## Platform boundary
 
@@ -256,18 +270,22 @@ Confirmed publication uses either no warning or
 and must never be retried or adopted automatically. These are successful wire
 terminals with `retry_safe: false`, not ordinary error responses.
 
-## Explicitly missing next checkpoint
+## Visible workflow and remaining recovery boundary
 
-A usable Studio import still needs the visible source review and destination
-choice, explicit confirmation, progress/result copy, and integration with the
-single app-wide current-project transition lane. A confirmed receipt must be
-locked and fully opened as a candidate before it can displace the prior session;
-candidate-open or prior-session cleanup failure must preserve one unambiguous
-owner. Publication uncertainty and importer-owned staging cleanup also need a
-deliberate recovery surface rather than path guessing.
+**Restore project backup** is visible from the Project menu in every project
+state and on the empty/Legacy landing surfaces. Dirty managed or Legacy edits
+are confirmed before source selection. The whole dialog and candidate-adoption
+sequence occupies one global project-action lane, while native materialization
+additionally disables dialog close/back and duplicate submission. Read-only
+inspection can be cancelled safely; disposal invalidates late results.
+
+Publication uncertainty and importer-owned staging cleanup still need a future
+deliberate inspection/recovery surface rather than path guessing. The current
+UI truthfully names the attempted destination, opens nothing, and forbids an
+automatic retry. It does not claim to clean or classify an uncertain final
+path.
 
 The current operation preserves project identity and revision: it is Restore /
 Relocate, not Clone or Save As. Clone/fork identity policy remains separate.
-Until the adoption checkpoint lands, there is no visible V2 Import/Restore UI,
-current-session adoption, Import/Clone/Save As product claim, build, deployment,
+The landed workflow grants no Clone/Save As product claim, build, deployment,
 save/game mutation, or runtime claim.
