@@ -1,10 +1,9 @@
 //! Bounded structured AngelScript module compilation for Mod Studio.
 //!
-//! This additive route keeps the legacy `script_compile` wire intact while exposing the compiler
-//! diagnostics/capture disposition and live-install restoration result as data. The game compiler
-//! is entered only after a drift-aware pristine base has been resolved. Once entered, gore-as owns
-//! the transactional backup/stage/restore window and the response never claims a usable mini-cache
-//! unless that window closed with an exact restore.
+//! Compiler diagnostics/capture disposition and live-install restoration are exposed as data. The
+//! game compiler is entered only after a drift-aware pristine base has been resolved. Once entered,
+//! gore-as owns the transactional backup/stage/restore window and the response never claims a
+//! usable mini-cache unless that window closed with an exact restore.
 
 use std::fs::OpenOptions;
 use std::io::Write;

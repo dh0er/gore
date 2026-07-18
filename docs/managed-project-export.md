@@ -71,22 +71,19 @@ named directly by that one current vector, together with its entity, asset, and
 Quest-basis closure. It deliberately does **not** follow a history vector found
 inside a retained checkpoint or a Quest-basis snapshot. This keeps the exported
 history closure bounded by the current authority instead of reviving older
-checkpoints that the current snapshot has already truncated. Legacy/root
-snapshots omit the history field and therefore add no historical checkpoints.
+checkpoints that the current snapshot has already truncated. A current snapshot
+with no retained history adds no historical checkpoints.
 
 The history-free revision-3 Store manifest remains capped at 16 MiB. A separate
 1 MiB history-envelope reserve raises only the final revision-3 snapshot ceiling
-to 17 MiB; legacy revision-1/revision-2 snapshots retain their 16 MiB ceiling.
+to 17 MiB.
 A stricter custom Store base limit also lowers the effective revision-3 total
 limit to that base plus the fixed reserve, so deliberately constrained stores
 may reject otherwise format-valid projects.
 
-Existing history-free revision-3 snapshots keep their exact canonical bytes and
-remain readable by current Studio versions. Once a history-aware writer creates
-a snapshot containing the optional history field, older Studio binaries whose
-closed revision-3 parser rejects unknown fields cannot reopen that newer head;
-opening it requires a current reader. This is a reader-version compatibility
-boundary, not evidence of project corruption.
+Before the first release, project writer, reader, tests, and UI change together.
+Only the current managed-R3 schema is accepted; older Studio binaries and
+superseded internal project bytes are not a supported interchange contract.
 
 Objects are deduplicated by their derived Store path and content seal. The same
 digest with conflicting lengths, a path collision, cycle/resource overflow,
@@ -146,7 +143,7 @@ qualification. Game and save files are untouched. V2 is the only accepted or
 emitted backup format.
 
 **Restore project backup** is available from the Project menu in every project
-state and directly on the empty/Legacy landing surfaces. It verifies the V2
+state and directly on the empty landing surface. It verifies the V2
 archive first, asks for an existing parent plus a new absent project-folder
 name, materializes exactly once, and opens only a confirmed receipt. Any archive
 without the exact V2 authority tuple is rejected as an invalid project backup.
@@ -154,8 +151,8 @@ without the exact V2 authority tuple is rejected as an invalid project backup.
 Export is unavailable while the managed session requires recovery or while a
 visible project-text draft has not been saved or discarded. It does not require
 a configured game installation and it remains independent of build/readiness
-blockers. The obsolete format-1 project export and Save As backend is not a
-supported product contract and is removed in a separate cleanup checkpoint.
+blockers. Clone/Save As remains a future native managed-R3 operation, not an
+older-project export path.
 
 An initial or racing destination collision is a proven pre-publication failure:
 Studio keeps the dialog open and asks for a new filename or folder. Head drift,

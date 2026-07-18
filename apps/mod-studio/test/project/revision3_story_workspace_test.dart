@@ -12,6 +12,8 @@ const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
 const _blockerId = '55555555555555555555555555555555';
+const _npcModuleId = '25252525252525252525252525252525';
+const _otherNpcModuleId = '30303030303030303030303030303030';
 const _transcriptLocalizationId = '66666666666666666666666666666666';
 const _transcriptLineId = '77777777777777777777777777777777';
 const _otherNpcId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
@@ -1642,7 +1644,7 @@ void main() {
       entityId: _questId,
       projectRevision: 8,
       projectHeadCanonicalJson: 'head-8',
-      section: Revision3StoryWorkbenchSection.logic,
+      section: Revision3StoryWorkbenchSection.overview,
     );
     bool? resolved;
     selected.then((value) => resolved = value);
@@ -1672,10 +1674,6 @@ void main() {
           )
           .selected,
       isTrue,
-    );
-    expect(
-      find.byKey(Key('revision3-story-workbench-tab-logic-$_questId')),
-      findsNothing,
     );
     expect(
       tester
@@ -1710,76 +1708,69 @@ void main() {
     expect(await unresolved, isFalse);
   });
 
-  testWidgets(
-    'legacy NPC sections normalize to Profile and survive a revision reload',
-    (tester) async {
-      await _setSurfaceSize(tester, const Size(1200, 800));
-      final controller = Revision3StoryWorkspaceController();
-      addTearDown(controller.dispose);
-      var revision = 7;
-      var index = _fixture();
-      late StateSetter rebuild;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: StatefulBuilder(
-            builder: (context, setState) {
-              rebuild = setState;
-              return Scaffold(
-                body: _workspace(
-                  revision: revision,
-                  head: 'head-$revision',
-                  load: () async => index,
-                  controller: controller,
-                ),
-              );
-            },
-          ),
+  testWidgets('canonical NPC Profile survives a revision reload', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3StoryWorkspaceController();
+    addTearDown(controller.dispose);
+    var revision = 7;
+    var index = _fixture();
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: _workspace(
+                revision: revision,
+                head: 'head-$revision',
+                load: () async => index,
+                controller: controller,
+              ),
+            );
+          },
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      for (final legacy in const <Revision3StoryWorkbenchSection>[
-        Revision3StoryWorkbenchSection.story,
-        Revision3StoryWorkbenchSection.routine,
-        Revision3StoryWorkbenchSection.inventory,
-      ]) {
-        expect(
-          await controller.selectEntityAtRevision(
-            entityId: _npcId,
-            projectRevision: revision,
-            projectHeadCanonicalJson: 'head-$revision',
-            section: legacy,
-          ),
-          isTrue,
-        );
-        await tester.pump();
-        expect(
-          tester
-              .widget<Revision3StoryEntityWorkbench>(
-                find.byType(Revision3StoryEntityWorkbench),
-              )
-              .selectedSection,
-          Revision3StoryWorkbenchSection.profile,
-        );
-      }
+    expect(
+      await controller.selectEntityAtRevision(
+        entityId: _npcId,
+        projectRevision: revision,
+        projectHeadCanonicalJson: 'head-$revision',
+        section: Revision3StoryWorkbenchSection.profile,
+      ),
+      isTrue,
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Revision3StoryEntityWorkbench>(
+            find.byType(Revision3StoryEntityWorkbench),
+          )
+          .selectedSection,
+      Revision3StoryWorkbenchSection.profile,
+    );
 
-      rebuild(() {
-        revision = 8;
-        index = _fixture(revision: revision);
-      });
-      await tester.pumpAndSettle();
+    rebuild(() {
+      revision = 8;
+      index = _fixture(revision: revision);
+    });
+    await tester.pumpAndSettle();
 
-      expect(
-        tester
-            .widget<Revision3StoryEntityWorkbench>(
-              find.byType(Revision3StoryEntityWorkbench),
-            )
-            .selectedSection,
-        Revision3StoryWorkbenchSection.profile,
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+    expect(
+      tester
+          .widget<Revision3StoryEntityWorkbench>(
+            find.byType(Revision3StoryEntityWorkbench),
+          )
+          .selectedSection,
+      Revision3StoryWorkbenchSection.profile,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('controller deep-links only an exact Quest transcript row', (
     tester,
@@ -2663,7 +2654,11 @@ Revision3ContentIndex _fixture({
     if (includeNpc || includeOtherNpc)
       'npc_draft': (includeNpc ? 1 : 0) + (includeOtherNpc ? 1 : 0),
     if (includeQuest) 'quest_draft': 1,
-    if (includeQuest) 'script_module': includeBlocker ? 2 : 1,
+    if (includeQuest || includeNpc || includeOtherNpc)
+      'script_module':
+          (includeQuest ? (includeBlocker ? 2 : 1) : 0) +
+          (includeNpc ? 1 : 0) +
+          (includeOtherNpc ? 1 : 0),
   },
   'entities': <Object?>[
     if (includeNpc)
@@ -2684,21 +2679,20 @@ Revision3ContentIndex _fixture({
             'parent_character_definition': 'UCharacterDefinition_Asghan',
             'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
             'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
-            if (includeNpcGreetingLine) 'greeting_count': 1,
+            'greeting_count': includeNpcGreetingLine ? 1 : 0,
           },
         },
         'references': <Object?>[
-          if (includeNpcGreetingLine)
-            <String, Object?>{
-              'role': 'draft_script_module',
-              'qualifier': null,
-              'target': <String, Object?>{
-                'project_id': projectId,
-                'entity_id': _moduleId,
-                'expected_kind': 'script_module',
-              },
-              'resolution': 'resolved',
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _npcModuleId,
+              'expected_kind': 'script_module',
             },
+            'resolution': 'resolved',
+          },
           if (includeNpcGreetingLine)
             <String, Object?>{
               'role': 'npc_greeting_line',
@@ -2711,6 +2705,32 @@ Revision3ContentIndex _fixture({
               'resolution': 'resolved',
             },
         ],
+        'asset_references': <Object?>[],
+      },
+    if (includeNpc)
+      <String, Object?>{
+        'id': _npcModuleId,
+        'kind': 'script_module',
+        'display_name': 'Gate Guard source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'story-workspace.fixture.npc',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+            'module_relative_path': 'Project/Npcs/GateGuard.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[],
         'asset_references': <Object?>[],
       },
     if (includeOtherNpc)
@@ -2731,6 +2751,44 @@ Revision3ContentIndex _fixture({
             'parent_character_definition': 'UCharacterDefinition_Asghan',
             'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
             'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+            'greeting_count': 0,
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _otherNpcModuleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeOtherNpc)
+      <String, Object?>{
+        'id': _otherNpcModuleId,
+        'kind': 'script_module',
+        'display_name': 'Harbor Guard source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_HARBOR_GUARD_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'story-workspace.fixture.npc',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.HARBORGUARD',
+            'module_relative_path': 'Project/Npcs/HarborGuard.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
           },
         },
         'references': <Object?>[],

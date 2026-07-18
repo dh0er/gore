@@ -8,7 +8,7 @@ void main() {
     'sequential template cascades and final success completes the parent',
     () {
       final plan = Revision3QuestTransitionsAuthoringService.sequentialTemplate(
-        AuthoringRevision3QuestTransitionPlanV1.legacySeed(3),
+        AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(3),
       );
       final preview = Revision3QuestLogicPreview(plan);
       const root = AuthoringRevision3QuestTransitionNodeV1.root();
@@ -65,7 +65,9 @@ void main() {
   test(
     'predicates and negation settle to a fixed point without external access',
     () {
-      var plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(2);
+      var plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+        2,
+      );
       const root = AuthoringRevision3QuestTransitionNodeV1.root();
       final first = AuthoringRevision3QuestTransitionNodeV1.objective(1);
       final second = AuthoringRevision3QuestTransitionNodeV1.objective(2);
@@ -130,7 +132,7 @@ void main() {
   );
 
   test('marks conjunctions outside the five exclusive preview phases', () {
-    var plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(1);
+    var plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(1);
     const root = AuthoringRevision3QuestTransitionNodeV1.root();
     plan = Revision3QuestTransitionsAuthoringService.setTransition(
       plan,
@@ -165,7 +167,7 @@ void main() {
   });
 
   test('follow-up actions use generated start and terminal guards', () {
-    var plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
+    var plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(3);
     const root = AuthoringRevision3QuestTransitionNodeV1.root();
     final first = AuthoringRevision3QuestTransitionNodeV1.objective(1);
     final second = AuthoringRevision3QuestTransitionNodeV1.objective(2);
@@ -223,7 +225,7 @@ void main() {
 
   test('bounded refusal restores state and the complete trimmed trace', () {
     final plan = Revision3QuestTransitionsAuthoringService.sequentialTemplate(
-      AuthoringRevision3QuestTransitionPlanV1.legacySeed(2),
+      AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(2),
     );
     final preview = Revision3QuestLogicPreview(
       plan,
@@ -256,7 +258,7 @@ void main() {
   });
 
   test('refused reset restores the exact previously visible preview', () {
-    var plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(2);
+    var plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(2);
     const root = AuthoringRevision3QuestTransitionNodeV1.root();
     final first = AuthoringRevision3QuestTransitionNodeV1.objective(1);
     final second = AuthoringRevision3QuestTransitionNodeV1.objective(2);

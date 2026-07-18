@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    apply_revision3_quest_outline_edit_transaction_v2, regenerate_revision3_quest_module_v2,
+    apply_revision3_quest_outline_edit_transaction_v2, regenerate_revision3_quest_module,
     revision3_quest_transition_plan_basis_v1, revision3_quest_transition_plan_seal_v1, AssetMeta,
-    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-    ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
-    QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
-    QuestTransitionEffectKindV1, QuestTransitionEffectV1, QuestTransitionNodeV1,
-    QuestTransitionPlanV1, QuestTransitionPredicateV1, QuestTransitionStateTestV1,
-    Revision2LocalizationEntry, Revision3DialogLine, Revision3Entity, Revision3EntityKind,
+    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, LocalizationEntry,
+    ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
+    QuestCollisionCatalogInput, QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1,
+    QuestTransitionEdgeV1, QuestTransitionEffectKindV1, QuestTransitionEffectV1,
+    QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
+    QuestTransitionStateTestV1, Revision3DialogLine, Revision3Entity, Revision3EntityKind,
     Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
     Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV2,
     Revision3QuestOutlineEditConflictV2, Revision3QuestOutlineEditErrorV2,
@@ -19,8 +19,8 @@ use gore_authoring::{
     Revision3TypedRef, SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V2,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V2, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
-    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -64,7 +64,7 @@ fn collision_input(quest: &Revision3QuestDraft) -> QuestCollisionCatalogInput {
 }
 
 fn semantic_plan() -> QuestTransitionPlanV1 {
-    let mut plan = QuestTransitionPlanV1::legacy_seed(3).unwrap();
+    let mut plan = QuestTransitionPlanV1::default_for_objectives(3).unwrap();
     let root_start = plan
         .transitions
         .iter_mut()
@@ -110,7 +110,7 @@ fn project_with_semantic_quest() -> (ProjectRevision3, WorkingHead) {
     let plan = semantic_plan();
     let quest = Revision3QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         input: Revision3QuestDraftInput {
             target: generation.clone(),
             quest_id,
@@ -138,7 +138,7 @@ fn project_with_semantic_quest() -> (ProjectRevision3, WorkingHead) {
                 "Defeat the guard".to_owned(),
                 "Report to Asghan".to_owned(),
             ],
-            transition_plan: Some(Box::new(plan)),
+            transition_plan: Box::new(plan),
             collision_catalog: QuestCollisionArtifactRef {
                 generation: generation.clone(),
                 catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
@@ -154,7 +154,7 @@ fn project_with_semantic_quest() -> (ProjectRevision3, WorkingHead) {
         ),
         transcript: Vec::new(),
     };
-    let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
+    let module = regenerate_revision3_quest_module(&quest, collision_input(&quest)).unwrap();
     let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
     let project = ProjectRevision3 {
         format: FormatV2,
@@ -188,7 +188,7 @@ fn project_with_semantic_quest() -> (ProjectRevision3, WorkingHead) {
                     display_name: "Preserved module label".to_owned(),
                     origin: Revision3OriginRef::Generated {
                         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+                        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                         owner,
                     },
                     revision: 5,
@@ -204,12 +204,10 @@ fn project_with_semantic_quest() -> (ProjectRevision3, WorkingHead) {
                         authored_runtime_id: "GORE_UNRELATED_LOC".to_owned(),
                     },
                     revision: 9,
-                    payload: Revision3EntityPayload::LocalizationEntry(
-                        Revision2LocalizationEntry {
-                            loc_id: "GORE_UNRELATED_LOC".to_owned(),
-                            texts: BTreeMap::new(),
-                        },
-                    ),
+                    payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
+                        loc_id: "GORE_UNRELATED_LOC".to_owned(),
+                        texts: BTreeMap::new(),
+                    }),
                 },
             ),
         ]),
@@ -252,7 +250,7 @@ fn module(project: &ProjectRevision3) -> &Revision3ScriptModule {
 
 fn current_objectives(project: &ProjectRevision3) -> Vec<Revision3QuestOutlineObjectiveEditV2> {
     let quest = quest(project);
-    let plan = quest.input.transition_plan.as_deref().unwrap();
+    let plan = quest.input.transition_plan.as_ref();
     let titles = std::iter::once(quest.input.objective_title.as_str()).chain(
         quest
             .input
@@ -344,7 +342,7 @@ fn attach_transcript(
                 authored_runtime_id: "GORE_OUTLINE_V2_TRANSCRIPT_LOC_ENTITY".to_owned(),
             },
             revision: 2,
-            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+            payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
                 loc_id: "GORE_OUTLINE_V2_TRANSCRIPT_TEXT".to_owned(),
                 texts: BTreeMap::new(),
             }),
@@ -390,12 +388,7 @@ fn edit_reorders_stable_slots_and_changes_only_the_bounded_outline_and_three_rev
     let transcript = attach_transcript(&mut project, Some(2));
     let before = project.clone();
     let before_quest = quest(&before).clone();
-    let before_plan = before_quest
-        .input
-        .transition_plan
-        .as_deref()
-        .unwrap()
-        .clone();
+    let before_plan = before_quest.input.transition_plan.as_ref().clone();
     let before_module_entity = before.entities[&id(0x22)].clone();
     let mut request = request(&project, &basis_head);
     request.display_name = "Asghan's Arena Trial".to_owned();
@@ -456,7 +449,7 @@ fn edit_reorders_stable_slots_and_changes_only_the_bounded_outline_and_three_rev
         .collect();
     let mut expected_plan = before_plan.clone();
     expected_plan.objective_order = vec![3, 1, 2];
-    expected_quest.input.transition_plan = Some(Box::new(expected_plan.clone()));
+    expected_quest.input.transition_plan = Box::new(expected_plan.clone());
 
     let after_quest_entity = &outcome.project.entities[&id(0x21)];
     assert_eq!(after_quest_entity.id, before.entities[&id(0x21)].id);
@@ -505,7 +498,7 @@ fn edit_reorders_stable_slots_and_changes_only_the_bounded_outline_and_three_rev
     assert_ne!(after_module.source, before_module.source);
     assert_eq!(
         after_module,
-        &regenerate_revision3_quest_module_v2(
+        &regenerate_revision3_quest_module(
             quest(&outcome.project),
             collision_input(quest(&outcome.project)),
         )
@@ -539,8 +532,7 @@ fn reorder_with_unchanged_slot_titles_keeps_each_title_attached_to_its_stable_sl
         quest(&outcome.project)
             .input
             .transition_plan
-            .as_deref()
-            .unwrap()
+            .as_ref()
             .objective_order,
         vec![3, 1, 2]
     );
@@ -800,35 +792,10 @@ fn canonical_request_parser_rejects_malformed_unknown_duplicate_noncanonical_and
 }
 
 #[test]
-fn legacy_quest_owned_module_drift_and_revision_overflow_are_rejected() {
+fn owned_module_drift_and_revision_overflow_are_rejected() {
     let (project, basis_head) = project_with_semantic_quest();
     let mut edit = request(&project, &basis_head);
     edit.display_name = "Changed".to_owned();
-
-    let mut legacy = project.clone();
-    let Revision3EntityPayload::QuestDraft(legacy_quest) =
-        &mut legacy.entities.get_mut(&id(0x21)).unwrap().payload
-    else {
-        panic!("Quest")
-    };
-    legacy_quest.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
-    legacy_quest.input.transition_plan = None;
-    let legacy_module =
-        regenerate_revision3_quest_module_v2(legacy_quest, collision_input(legacy_quest)).unwrap();
-    let module_entity = legacy.entities.get_mut(&id(0x22)).unwrap();
-    let Revision3OriginRef::Generated {
-        generator_version, ..
-    } = &mut module_entity.origin
-    else {
-        panic!("generated")
-    };
-    *generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
-    module_entity.payload = Revision3EntityPayload::ScriptModule(legacy_module);
-    legacy.validate_closed_model().unwrap();
-    assert!(matches!(
-        rejected(&legacy, &basis_head, &edit),
-        Revision3QuestOutlineEditConflictV2::SemanticQuestRequired { .. }
-    ));
 
     let mut drifted = project.clone();
     let Revision3EntityPayload::ScriptModule(drifted_module) =

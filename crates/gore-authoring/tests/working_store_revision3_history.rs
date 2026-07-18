@@ -134,32 +134,16 @@ fn count_files(path: &Path) -> usize {
         .sum()
 }
 
-fn legacy_root_snapshot_bytes() -> Vec<u8> {
-    format!(
-        concat!(
-            "{{\"store_format\":1,\"format\":2,\"schema_revision\":3,",
-            "\"project_id\":\"{}\",\"revision\":7,",
-            "\"meta\":{{\"name\":\"Legacy root\",\"version\":\"0.1.0\",",
-            "\"author\":\"history tests\"}},",
-            "\"target\":{{\"executable\":{{\"byte_len\":171698176,\"sha256\":\"{}\"}}}},",
-            "\"authoring_locales\":[],\"entities\":{{}},\"asset_store\":{{\"assets\":{{}}}}}}"
-        ),
-        "03".repeat(16),
-        "01".repeat(32),
-    )
-    .into_bytes()
-}
-
 fn snapshot_member_name(head: &WorkingHead) -> String {
     let hex = head.snapshot.sha256.to_string();
     format!("store/snapshots/sha256/{}/{}.json", &hex[..2], &hex[2..])
 }
 
 #[test]
-fn legacy_root_bytes_stay_closed_and_first_successor_authenticates_parent() {
-    let root = TestRoot::new("legacy-root");
+fn canonical_root_has_no_history_and_first_successor_authenticates_parent() {
+    let root = TestRoot::new("canonical-root");
     let store = store(&root);
-    let root_project = project(3, 7, "Legacy root");
+    let root_project = project(3, 7, "Current root");
     let first = store
         .prepare_revision3_checkpoint(None, &root_project)
         .unwrap();
@@ -169,9 +153,7 @@ fn legacy_root_bytes_stay_closed_and_first_successor_authenticates_parent() {
     assert_eq!(first, repeated);
 
     let root_bytes = fs::read(snapshot_path(&root, &first.head)).unwrap();
-    let pinned_legacy_bytes = legacy_root_snapshot_bytes();
-    assert_eq!(root_bytes, pinned_legacy_bytes);
-    assert_eq!(first.head.snapshot, raw_seal(&pinned_legacy_bytes));
+    assert_eq!(first.head.snapshot, raw_seal(&root_bytes));
     assert!(!root_bytes
         .windows(b"\"history\":".len())
         .any(|window| window == b"\"history\":"));

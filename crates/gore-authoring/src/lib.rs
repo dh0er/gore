@@ -8,20 +8,19 @@
 mod dataasset_build;
 mod dataasset_build_receipt;
 mod dataasset_stage;
-mod document;
+mod foundation;
 mod ids;
-mod model;
-pub mod model_revision2;
 pub mod model_revision3;
 mod npc;
 mod quest;
 mod revision3_content_index;
 mod revision3_quest;
 mod revision3_quest_source_v2;
+mod revision3_story_generation;
 mod revision3_voice_build;
 mod revision3_voice_preview;
 mod story_collision;
-mod story_transaction;
+mod story_model;
 mod story_transaction_revision3;
 mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
@@ -31,7 +30,6 @@ mod story_transaction_revision3_item_patch;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_npc_greeting;
 mod story_transaction_revision3_npc_profile;
-mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transcript;
 mod story_transaction_revision3_quest_transitions;
@@ -43,8 +41,6 @@ mod story_transaction_revision3_voice_take_removal;
 mod story_transaction_revision3_voice_take_status;
 mod story_transaction_revision3_voice_target;
 mod strict_json;
-mod validate;
-mod validate_revision2;
 mod validate_revision3;
 mod working_store;
 
@@ -76,47 +72,31 @@ pub use dataasset_stage::{
     MAX_DATAASSET_STAGE_HISTORICAL_BASIS_BYTES_V1, MAX_DATAASSET_STAGE_HISTORICAL_VERIFY_BYTES_V1,
     MAX_DATAASSET_STAGE_HISTORICAL_VERIFY_OBJECTS_V1, MAX_DATAASSET_STAGE_MANIFEST_BATCH_BYTES_V1,
 };
-pub use document::{ProjectDocument, ProjectDocumentError};
+pub use foundation::{
+    ArchiveSeal, AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor,
+    LocaleCode, LocaleCodeError, ProjectMeta, MAX_PROJECT_JSON_BYTES,
+};
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
-pub use model::{
-    ArchiveSeal, AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, DialogLine, Entity, EntityKind,
-    EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, LocaleCodeError, LocalizationEntry,
-    OggCodec, OggMetadata, OriginRef, ProjectJsonError, ProjectMeta, ProjectV2, SchemaRevisionV1,
-    TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget,
-    VoiceTargetResolution, MAX_PROJECT_JSON_BYTES,
-};
-pub use model_revision2::{
-    DialogLine as Revision2DialogLine, Entity as Revision2Entity,
-    EntityKind as Revision2EntityKind, EntityPayload as Revision2EntityPayload,
-    LocalizationEntry as Revision2LocalizationEntry, NpcDraft as Revision2NpcDraft,
-    NpcDraftInput as Revision2NpcDraftInput, NpcParentClassInput as Revision2NpcParentClassInput,
-    OggCodec as Revision2OggCodec, OggMetadata as Revision2OggMetadata,
-    OriginRef as Revision2OriginRef, ProjectRevision2, QuestCollisionCatalogInput,
-    QuestDraft as Revision2QuestDraft, QuestDraftInput as Revision2QuestDraftInput,
-    QuestGiverInput as Revision2QuestGiverInput, QuestParentInput as Revision2QuestParentInput,
-    SchemaRevisionV2, ScriptAuthoringStatus, ScriptModule as Revision2ScriptModule,
-    ScriptModuleStatus, ScriptRuntimeStatus, StoryRegenerationError, TypedRef as Revision2TypedRef,
-    VoiceMemberProof as Revision2VoiceMemberProof, VoiceOperation as Revision2VoiceOperation,
-    VoiceSlot as Revision2VoiceSlot, VoiceTake as Revision2VoiceTake,
-    VoiceTakeStatus as Revision2VoiceTakeStatus, VoiceTarget as Revision2VoiceTarget,
-    VoiceTargetResolution as Revision2VoiceTargetResolution,
-};
 pub use model_revision3::{
     DialogLine as Revision3DialogLine, Entity as Revision3Entity,
     EntityKind as Revision3EntityKind, EntityPayload as Revision3EntityPayload,
     ItemFiniteFloatErrorV1, ItemFiniteFloatV1, ItemPatchV1, ItemScalarTypeV1, ItemScalarValueV1,
-    NpcDraft as Revision3NpcDraft, NpcDraftInput as Revision3NpcDraftInput,
-    NpcGreetingBindingV1 as Revision3NpcGreetingBindingV1, OriginRef as Revision3OriginRef,
-    ProjectRevision3, ProjectRevision3JsonError, ProjectRevision3ValidationError,
-    QuestCollisionArtifactRef, QuestDraft as Revision3QuestDraft,
-    QuestDraftInput as Revision3QuestDraftInput, QuestGiverInput as Revision3QuestGiverInput,
-    QuestParentInput as Revision3QuestParentInput,
+    LocalizationEntry as Revision3LocalizationEntry, NpcDraft as Revision3NpcDraft,
+    NpcDraftInput as Revision3NpcDraftInput, NpcGreetingBindingV1 as Revision3NpcGreetingBindingV1,
+    NpcParentClassInput as Revision3NpcParentClassInput, OggCodec as Revision3OggCodec,
+    OggMetadata as Revision3OggMetadata, OriginRef as Revision3OriginRef, ProjectRevision3,
+    ProjectRevision3JsonError, ProjectRevision3ValidationError, QuestCollisionArtifactRef,
+    QuestDraft as Revision3QuestDraft, QuestDraftInput as Revision3QuestDraftInput,
+    QuestGiverInput as Revision3QuestGiverInput, QuestParentInput as Revision3QuestParentInput,
     QuestTranscriptBindingV1 as Revision3QuestTranscriptBindingV1, QuestTransitionConditionAtomV1,
     QuestTransitionConditionGroupV1, QuestTransitionEdgeV1, QuestTransitionEffectKindV1,
     QuestTransitionEffectV1, QuestTransitionNodeV1, QuestTransitionPlanV1,
     QuestTransitionPredicateV1, QuestTransitionStateTestV1, QuestTransitionV1, SchemaRevisionV3,
     ScriptModule as Revision3ScriptModule, TypedRef as Revision3TypedRef,
-    VoiceSlot as Revision3VoiceSlot, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    VoiceMemberProof as Revision3VoiceMemberProof, VoiceOperation as Revision3VoiceOperation,
+    VoiceSlot as Revision3VoiceSlot, VoiceTake as Revision3VoiceTake,
+    VoiceTakeStatus as Revision3VoiceTakeStatus, VoiceTarget as Revision3VoiceTarget,
+    VoiceTargetResolution as Revision3VoiceTargetResolution, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
     MAX_QUEST_TRANSITION_EFFECTS_V1, MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1,
     MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1, MAX_REVISION3_ASSETS,
     MAX_REVISION3_BASE_SNAPSHOT_BYTES, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
@@ -125,11 +105,8 @@ pub use model_revision3::{
     MAX_REVISION3_ITEM_STRING_BYTES_V1, MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1,
     MAX_REVISION3_NPC_GREETING_BINDINGS_V1, MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
     MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
-    QUEST_COLLISION_ARTIFACT_FORMAT, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION,
-    QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
@@ -141,21 +118,15 @@ pub use npc::{
 };
 pub use quest::{
     validate_draft_quest_objective_titles, validate_draft_quest_transition_plan_v1,
-    CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver,
-    DraftQuestAdditionalObjectiveTechnicalNames, DraftQuestAuthoringStatus,
-    DraftQuestCapabilityStatus, DraftQuestCatalogLayerAnchor, DraftQuestCollisionCatalog,
-    DraftQuestCollisionKind, DraftQuestDiscoveryStatus, DraftQuestField, DraftQuestFixedShape,
-    DraftQuestGeneratedSource, DraftQuestMultiObjectiveGeneratedSource,
-    DraftQuestMultiObjectiveTechnicalNames, DraftQuestSemanticGeneratedSource,
-    DraftQuestSemanticObjectiveTechnicalNames, DraftQuestSemanticTechnicalNames,
-    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonInputV2,
-    DraftQuestSkeletonInputV3, DraftQuestSkeletonV1, DraftQuestSkeletonV2, DraftQuestSkeletonV3,
-    DraftQuestTechnicalNames, DraftQuestTransitionStatus, DRAFT_QUEST_GENERATOR_ID,
-    DRAFT_QUEST_GENERATOR_VERSION, DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION,
-    DRAFT_QUEST_SEMANTIC_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
-    MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVES,
-    MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
-    MAX_DRAFT_QUEST_TITLE_BYTES,
+    CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestAuthoringStatus,
+    DraftQuestBaseTechnicalNames, DraftQuestCapabilityStatus, DraftQuestCatalogLayerAnchor,
+    DraftQuestCollisionCatalog, DraftQuestCollisionKind, DraftQuestDiscoveryStatus,
+    DraftQuestField, DraftQuestGeneratedSource, DraftQuestObjectiveTechnicalNames,
+    DraftQuestSkeleton, DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestTechnicalNames,
+    DraftQuestTransitionStatus, DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
+    MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES, MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+    MAX_DRAFT_QUEST_OBJECTIVES, MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES,
+    MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES, MAX_DRAFT_QUEST_TITLE_BYTES,
 };
 pub use revision3_content_index::{
     build_revision3_content_index_v1, Revision3ContentAssetClassV1,
@@ -169,7 +140,7 @@ pub use revision3_content_index::{
     REVISION3_CONTENT_INDEX_SCHEMA_V1,
 };
 pub use revision3_quest::{
-    regenerate_revision3_quest_module_v2, revision3_quest_input_fingerprint_v2,
+    regenerate_revision3_quest_module, revision3_quest_input_fingerprint,
     validate_revision3_quest_free_basis, Revision3QuestFreeBasisError,
     Revision3QuestGenerationError,
 };
@@ -180,6 +151,7 @@ pub use revision3_quest_source_v2::{
     MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2, MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2,
     MAX_REVISION3_PRIOR_QUESTS_V2,
 };
+pub use revision3_story_generation::Revision3NpcRegenerationError;
 pub use revision3_voice_build::{
     plan_revision3_voice_build_v1, Revision3VoiceBuildBlockReasonV1, Revision3VoiceBuildBlockedV1,
     Revision3VoiceBuildBlockerV1, Revision3VoiceBuildEditV1, Revision3VoiceBuildPlanErrorV1,
@@ -189,22 +161,21 @@ pub use revision3_voice_build::{
 };
 pub use revision3_voice_preview::{
     bind_revision3_voice_take_preview_v1, inspect_revision3_voice_take_media_qa_v1,
-    inspect_revision3_voice_take_preview_ogg_v1, Revision3VoiceTakeMediaAssuranceV1,
-    Revision3VoiceTakeMediaDurationV1, Revision3VoiceTakeMediaQaErrorV1,
-    Revision3VoiceTakeMediaQaV1, Revision3VoiceTakePreviewBindingV1,
-    Revision3VoiceTakePreviewConflictV1, Revision3VoiceTakePreviewOggErrorV1,
+    Revision3VoiceTakeMediaAssuranceV1, Revision3VoiceTakeMediaDurationV1,
+    Revision3VoiceTakeMediaQaErrorV1, Revision3VoiceTakeMediaQaV1,
+    Revision3VoiceTakePreviewBindingV1, Revision3VoiceTakePreviewConflictV1,
     Revision3VoiceTakePreviewRequestJsonErrorV1, Revision3VoiceTakePreviewRequestV1,
     MAX_REVISION3_VOICE_TAKE_PREVIEW_REQUEST_JSON_BYTES_V1,
 };
 pub use story_collision::{
-    collect_project_story_collision_identities, collect_revision3_story_collision_identities,
-    ProjectStoryCollisionIdentities, StoryCollisionCollectionError,
+    collect_revision3_story_collision_identities, ProjectStoryCollisionIdentities,
+    StoryCollisionCollectionError,
 };
-pub use story_transaction::{
-    story_draft_insert_request_binding_sha256, NpcDraftCreateInput, QuestDraftCreateInput,
-    StoryDraftCreate, StoryDraftInsertError, StoryDraftInsertEvaluation, StoryDraftInsertJsonError,
-    StoryDraftInsertOutcome, StoryDraftInsertRejection, StoryDraftInsertRequest,
-    MAX_STORY_DRAFT_DISPLAY_NAME_BYTES, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
+pub use story_model::{
+    LocalizationEntry, NpcDraftInput, NpcParentClassInput, OggCodec, OggMetadata,
+    QuestCollisionCatalogInput, QuestGiverInput, QuestParentInput, ScriptAuthoringStatus,
+    ScriptModuleStatus, ScriptRuntimeStatus, VoiceMemberProof, VoiceOperation, VoiceTake,
+    VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
 };
 pub use story_transaction_revision3::{
     apply_revision3_quest_draft_transaction_v2, Revision3QuestArtifactAuthorityV2,
@@ -304,15 +275,6 @@ pub use story_transaction_revision3_npc_profile::{
     Revision3NpcProfileEditRejectionV1, Revision3NpcProfileEditRequestJsonErrorV1,
     Revision3NpcProfileEditRequestV1, Revision3NpcProfileEditRuntimeStatusV1,
     MAX_REVISION3_NPC_PROFILE_EDIT_REQUEST_JSON_BYTES_V1,
-};
-pub use story_transaction_revision3_quest_outline::{
-    apply_revision3_quest_outline_edit_transaction_v1, Revision3QuestOutlineEditBuildStatusV1,
-    Revision3QuestOutlineEditConflictV1, Revision3QuestOutlineEditErrorV1,
-    Revision3QuestOutlineEditEvaluationV1, Revision3QuestOutlineEditOutcomeV1,
-    Revision3QuestOutlineEditRejectionV1, Revision3QuestOutlineEditRequestJsonErrorV1,
-    Revision3QuestOutlineEditRequestV1, Revision3QuestOutlineEditRuntimeStatusV1,
-    MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V1,
-    MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_quest_outline_v2::{
     apply_revision3_quest_outline_edit_transaction_v2, Revision3QuestOutlineEditBuildStatusV2,
@@ -416,13 +378,11 @@ pub use story_transaction_revision3_voice_target::{
     MAX_REVISION3_VOICE_TARGET_MEMBER_UNCOMPRESSED_BYTES_V1,
     MAX_REVISION3_VOICE_TARGET_REQUEST_JSON_BYTES_V1,
 };
-pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
     import_revision3_exact_snapshot_v2, import_revision3_exact_snapshot_v2_with_limits,
     inspect_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2_with_limits,
-    AssetVerification, CheckpointPreparation, ImportedOgg, ImportedQuestCollisionArtifactV1,
-    ImportedQuestCollisionArtifactV2, OggImportError, OggImportFailureContext, OpenedCheckpoint,
-    OpenedDocumentCheckpoint, OpenedRevision3Checkpoint, PreparedOggImport,
+    AssetVerification, ImportedOgg, ImportedQuestCollisionArtifactV2, OggImportError,
+    OggImportFailureContext, OpenedRevision3Checkpoint, PreparedOggImport,
     PreparedRevision3HistoryRestoreV1, Revision3CheckpointHistoryV1, Revision3CheckpointParentV1,
     Revision3CheckpointPreparation, Revision3ExactSnapshotClosureV2,
     Revision3ExactSnapshotExportError, Revision3ExactSnapshotExportPublicationV2,

@@ -4,13 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gore_authoring::{
-    ArchiveSeal, AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal, DiagnosticCode,
-    DiagnosticSeverity, DialogLine, Entity, EntityId, EntityKind, EntityPayload, FormatV2,
+    ArchiveSeal, AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal, EntityId, FormatV2,
     GameGenerationAnchor, LocaleCode, LocalizationEntry, OggCodec, OggImportFailureContext,
-    OriginRef, ProjectId, ProjectMeta, ProjectV2, SchemaRevisionV1, Sha256Digest, TypedRef,
-    ValidationProfile, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus,
-    VoiceTarget, VoiceTargetResolution, WorkingHead, WorkingProjectStore, WorkingStoreError,
-    WorkingStoreLimits,
+    ProjectId, ProjectMeta, ProjectRevision3, Revision3DialogLine as DialogLine,
+    Revision3Entity as Entity, Revision3EntityKind as EntityKind,
+    Revision3EntityPayload as EntityPayload, Revision3OriginRef as OriginRef,
+    Revision3TypedRef as TypedRef, Revision3VoiceSlot as VoiceSlot, SchemaRevisionV3, Sha256Digest,
+    VoiceMemberProof, VoiceOperation, VoiceTake, VoiceTakeStatus, VoiceTarget,
+    VoiceTargetResolution, WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
+    MAX_REVISION3_SNAPSHOT_BYTES,
 };
 use sha2::{Digest, Sha256};
 
@@ -61,7 +63,7 @@ fn fake_digest(byte: u8) -> Sha256Digest {
     Sha256Digest::from_bytes([byte; 32])
 }
 
-fn base_project() -> ProjectV2 {
+fn base_project() -> ProjectRevision3 {
     let id = entity_id(1);
     let localization = Entity {
         id,
@@ -75,9 +77,9 @@ fn base_project() -> ProjectV2 {
             texts: BTreeMap::from([(locale("de"), "Hallo".into())]),
         }),
     };
-    ProjectV2 {
+    ProjectRevision3 {
         format: FormatV2,
-        schema_revision: SchemaRevisionV1,
+        schema_revision: SchemaRevisionV3,
         project_id: project_id(7),
         revision: 3,
         meta: ProjectMeta {
@@ -97,7 +99,7 @@ fn base_project() -> ProjectV2 {
     }
 }
 
-fn full_project(imported: &gore_authoring::ImportedOgg) -> ProjectV2 {
+fn full_project(imported: &gore_authoring::ImportedOgg) -> ProjectRevision3 {
     let mut project = base_project();
     let localization_id = entity_id(1);
     let take_id = entity_id(2);
@@ -328,31 +330,20 @@ fn deterministic_checkpoint_reopens_exactly_and_never_publishes_head() {
     let store = store(&root);
     let project = base_project();
 
-    let first = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
-    let second = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
+    let first = store.prepare_revision3_checkpoint(None, &project).unwrap();
+    let second = store.prepare_revision3_checkpoint(None, &project).unwrap();
 
     assert_eq!(first, second);
-    assert!(!first.blocks_build);
-    assert!(first.diagnostics.is_empty());
     assert!(!root.path().join("gore-project.json").exists());
     let reopened = store
-        .open_head_bytes(
-            &first.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production,
-        )
+        .open_revision3_head_bytes(&first.head_bytes, AssetVerification::Full)
         .unwrap();
     assert_eq!(reopened.project, project);
     assert_eq!(reopened.head, first.head);
 
-    let head_text = String::from_utf8(first.head_bytes).unwrap();
     assert_eq!(
-        head_text,
-        "{\"store_format\":1,\"snapshot\":{\"byte_len\":493,\"sha256\":\"31447eb3417ec5201ab28815738b8c7332f9f9e69ca58953ef59ba67e9282898\"}}"
+        serde_json::from_slice::<WorkingHead>(&first.head_bytes).unwrap(),
+        first.head
     );
 }
 
@@ -361,18 +352,14 @@ fn changing_one_entity_only_adds_one_entity_shard() {
     let root = TestRoot::new("entity-delta");
     let store = store(&root);
     let project = base_project();
-    store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
+    store.prepare_revision3_checkpoint(None, &project).unwrap();
     let before = count_files(&root.path().join("entities"));
 
     let mut changed = project.clone();
     let entity = changed.entities.get_mut(&entity_id(1)).unwrap();
     entity.revision += 1;
     entity.display_name = "Changed greeting".into();
-    store
-        .prepare_checkpoint(None, &changed, ValidationProfile::Production)
-        .unwrap();
+    store.prepare_revision3_checkpoint(None, &changed).unwrap();
 
     assert_eq!(count_files(&root.path().join("entities")), before + 1);
 }
@@ -407,7 +394,7 @@ fn valid_ogg_import_deduplicates_and_survives_source_deletion() {
 }
 
 #[test]
-fn prepared_ogg_is_non_publishing_until_consumed_and_legacy_import_still_deduplicates() {
+fn prepared_and_direct_ogg_imports_share_one_deduplicated_cas_object() {
     let root = TestRoot::new("ogg-prepare-install");
     let source = root.path().join("source.ogg");
     fs::write(&source, vorbis_ogg(44_100)).unwrap();
@@ -439,10 +426,10 @@ fn prepared_ogg_is_non_publishing_until_consumed_and_legacy_import_still_dedupli
     assert_eq!(count_files(&root.path().join("assets")), 1);
     assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
 
-    let legacy = store.import_ogg(&source, "legacy.ogg", None).unwrap();
-    assert_eq!(legacy.asset.sha256, installed.asset.sha256);
-    assert_eq!(legacy.ogg, installed.ogg);
-    assert!(legacy.deduplicated);
+    let direct = store.import_ogg(&source, "direct.ogg", None).unwrap();
+    assert_eq!(direct.asset.sha256, installed.asset.sha256);
+    assert_eq!(direct.ogg, installed.ogg);
+    assert!(direct.deduplicated);
     assert_eq!(count_files(&root.path().join("assets")), 1);
     assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
 }
@@ -473,7 +460,7 @@ fn snapshot_and_entity_hardlink_aliases_are_rejected_on_reopen() {
     let root = TestRoot::new("manifest-hardlink-alias");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot_path = digest_path(
         root.path(),
@@ -486,11 +473,7 @@ fn snapshot_and_entity_hardlink_aliases_are_rejected_on_reopen() {
         return;
     }
     assert!(matches!(
-        store.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::UnsafePath { .. })
     ));
     fs::remove_file(snapshot_alias).unwrap();
@@ -504,11 +487,7 @@ fn snapshot_and_entity_hardlink_aliases_are_rejected_on_reopen() {
     let shard_alias = root.path().join("entity-alias.json");
     fs::hard_link(shard_path, &shard_alias).unwrap();
     assert!(matches!(
-        store.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::UnsafePath { .. })
     ));
 }
@@ -535,7 +514,7 @@ fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
         .unwrap();
     let correct_opus = full_project(&imported_opus);
     let prepared = opus_store
-        .prepare_checkpoint(None, &correct_opus, ValidationProfile::Experimental)
+        .prepare_revision3_checkpoint(None, &correct_opus)
         .unwrap();
 
     let mut spoofed_opus = correct_opus.clone();
@@ -549,11 +528,9 @@ fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
     };
     spoofed_take.ogg.codec = OggCodec::Vorbis;
     assert!(matches!(
-        opus_store.prepare_checkpoint(
+        opus_store.prepare_revision3_checkpoint(
             None,
-            &spoofed_opus,
-            ValidationProfile::Production
-        ),
+            &spoofed_opus),
         Err(WorkingStoreError::OggMetadataMismatch {
             entity,
             declared: gore_authoring::OggMetadata {
@@ -594,11 +571,9 @@ fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
         replace_snapshot_entity_seal(&snapshot, entity_id(2), &old_seal, &spoofed_seal);
     let spoofed_head = write_candidate_snapshot(opus_root.path(), &spoofed_snapshot);
     assert!(matches!(
-        opus_store.open_head_bytes(
+        opus_store.open_revision3_head_bytes(
             &spoofed_head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+            AssetVerification::Full),
         Err(WorkingStoreError::OggMetadataMismatch { entity, .. })
             if entity == entity_id(2)
     ));
@@ -621,7 +596,7 @@ fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
     };
     drifted_take.ogg.sample_rate = 48_000;
     assert!(matches!(
-        vorbis_store.prepare_checkpoint(None, &drifted_vorbis, ValidationProfile::Production),
+        vorbis_store.prepare_revision3_checkpoint(None, &drifted_vorbis),
         Err(WorkingStoreError::OggMetadataMismatch {
             declared: gore_authoring::OggMetadata {
                 sample_rate: 48_000,
@@ -637,40 +612,6 @@ fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
 }
 
 #[test]
-fn fully_verified_opus_stays_draftable_but_never_silently_production_ready() {
-    let root = TestRoot::new("verified-opus-gate");
-    let source = root.path().join("source.ogg");
-    fs::write(&source, opus_ogg(0)).unwrap();
-    let store = store(&root);
-    let imported = store.import_ogg(&source, "opus.ogg", None).unwrap();
-    let project = full_project(&imported);
-
-    let production = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
-    let production_gate = production
-        .diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
-        .unwrap();
-    assert_eq!(production_gate.severity, DiagnosticSeverity::Error);
-    assert!(production_gate.blocks_build);
-    assert!(production.blocks_build);
-
-    let experimental = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Experimental)
-        .unwrap();
-    let experimental_gate = experimental
-        .diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
-        .unwrap();
-    assert_eq!(experimental_gate.severity, DiagnosticSeverity::Warning);
-    assert!(!experimental_gate.blocks_build);
-    assert!(!experimental.blocks_build);
-}
-
-#[test]
 fn full_project_variant_round_trips_with_physical_asset_verification() {
     let root = TestRoot::new("full-project");
     let source = root.path().join("take.ogg");
@@ -678,40 +619,13 @@ fn full_project_variant_round_trips_with_physical_asset_verification() {
     let store = store(&root);
     let imported = store.import_ogg(&source, "greeting-de.ogg", None).unwrap();
     let project = full_project(&imported);
-    assert!(project.validate().is_empty());
+    project.validate_closed_model().unwrap();
 
-    let prepared = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
+    let prepared = store.prepare_revision3_checkpoint(None, &project).unwrap();
     let reopened = store
-        .open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production,
-        )
+        .open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full)
         .unwrap();
     assert_eq!(reopened.project, project);
-    assert!(!reopened.blocks_build);
-}
-
-#[test]
-fn semantic_draft_diagnostics_are_saved_and_reported() {
-    let root = TestRoot::new("draft");
-    let store = store(&root);
-    let mut project = base_project();
-    let EntityPayload::LocalizationEntry(entry) =
-        &mut project.entities.get_mut(&entity_id(1)).unwrap().payload
-    else {
-        unreachable!();
-    };
-    entry.texts.clear();
-
-    let prepared = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
-        .unwrap();
-    assert!(prepared.blocks_build);
-    assert!(!prepared.diagnostics.is_empty());
-    assert!(!root.path().join("gore-project.json").exists());
 }
 
 #[test]
@@ -886,7 +800,7 @@ fn unknown_duplicate_and_noncanonical_head_json_are_rejected() {
     let root = TestRoot::new("strict-head");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let canonical = String::from_utf8(prepared.head_bytes).unwrap();
     let unknown = canonical.replacen(
@@ -895,11 +809,7 @@ fn unknown_duplicate_and_noncanonical_head_json_are_rejected() {
         1,
     );
     assert!(matches!(
-        store.open_head_bytes(
-            unknown.as_bytes(),
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(unknown.as_bytes(), AssetVerification::Full),
         Err(WorkingStoreError::InvalidJson { .. })
     ));
     let duplicate = canonical.replacen(
@@ -908,20 +818,12 @@ fn unknown_duplicate_and_noncanonical_head_json_are_rejected() {
         1,
     );
     assert!(matches!(
-        store.open_head_bytes(
-            duplicate.as_bytes(),
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(duplicate.as_bytes(), AssetVerification::Full),
         Err(WorkingStoreError::InvalidJson { .. })
     ));
     let spaced = format!(" {canonical}");
     assert!(matches!(
-        store.open_head_bytes(
-            spaced.as_bytes(),
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(spaced.as_bytes(), AssetVerification::Full),
         Err(WorkingStoreError::NonCanonicalJson { kind: "head" })
     ));
 }
@@ -931,7 +833,7 @@ fn unknown_duplicate_and_noncanonical_snapshot_json_are_rejected() {
     let root = TestRoot::new("strict-snapshot");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot_path = digest_path(
         root.path(),
@@ -948,13 +850,9 @@ fn unknown_duplicate_and_noncanonical_snapshot_json_are_rejected() {
     );
     let head = write_candidate_snapshot(root.path(), unknown.as_bytes());
     assert!(matches!(
-        store.open_head_bytes(
-            &head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&head, AssetVerification::Full),
         Err(WorkingStoreError::InvalidJson {
-            kind: "snapshot",
+            kind: "revision-3 snapshot",
             ..
         })
     ));
@@ -966,13 +864,9 @@ fn unknown_duplicate_and_noncanonical_snapshot_json_are_rejected() {
     );
     let head = write_candidate_snapshot(root.path(), duplicate.as_bytes());
     assert!(matches!(
-        store.open_head_bytes(
-            &head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&head, AssetVerification::Full),
         Err(WorkingStoreError::InvalidJson {
-            kind: "snapshot",
+            kind: "revision-3 snapshot",
             ..
         })
     ));
@@ -980,12 +874,10 @@ fn unknown_duplicate_and_noncanonical_snapshot_json_are_rejected() {
     let spaced = format!(" {canonical}");
     let head = write_candidate_snapshot(root.path(), spaced.as_bytes());
     assert!(matches!(
-        store.open_head_bytes(
-            &head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
-        Err(WorkingStoreError::NonCanonicalJson { kind: "snapshot" })
+        store.open_revision3_head_bytes(&head, AssetVerification::Full),
+        Err(WorkingStoreError::NonCanonicalJson {
+            kind: "revision-3 snapshot"
+        })
     ));
 }
 
@@ -994,7 +886,7 @@ fn duplicate_entity_index_keys_and_strict_entity_shards_are_rejected() {
     let root = TestRoot::new("strict-entity");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot_path = digest_path(
         root.path(),
@@ -1015,13 +907,9 @@ fn duplicate_entity_index_keys_and_strict_entity_shards_are_rejected() {
     );
     let head = write_candidate_snapshot(root.path(), duplicate_index.as_bytes());
     assert!(matches!(
-        store.open_head_bytes(
-            &head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&head, AssetVerification::Full),
         Err(WorkingStoreError::InvalidJson {
-            kind: "snapshot",
+            kind: "revision-3 snapshot",
             ..
         })
     ));
@@ -1042,12 +930,11 @@ fn duplicate_entity_index_keys_and_strict_entity_shards_are_rejected() {
         let candidate_snapshot = replace_snapshot_entity_seal(&snapshot, id, &old_seal, &seal);
         let head = write_candidate_snapshot(root.path(), &candidate_snapshot);
         assert!(matches!(
-            store.open_head_bytes(
-                &head,
-                AssetVerification::Full,
-                ValidationProfile::Production
-            ),
-            Err(WorkingStoreError::InvalidJson { kind: "entity", .. })
+            store.open_revision3_head_bytes(&head, AssetVerification::Full),
+            Err(WorkingStoreError::InvalidJson {
+                kind: "revision-3 entity",
+                ..
+            })
         ));
     }
 }
@@ -1057,7 +944,7 @@ fn missing_and_corrupt_snapshot_or_entity_objects_are_hard_failures() {
     let root = TestRoot::new("manifest-corruption");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot_path = digest_path(
         root.path(),
@@ -1068,21 +955,13 @@ fn missing_and_corrupt_snapshot_or_entity_objects_are_hard_failures() {
     let snapshot = fs::read(&snapshot_path).unwrap();
     fs::remove_file(&snapshot_path).unwrap();
     assert!(matches!(
-        store.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::MissingObject(_))
     ));
 
     fs::write(&snapshot_path, vec![0; snapshot.len()]).unwrap();
     assert!(matches!(
-        store.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::SealMismatch { .. })
     ));
 
@@ -1095,11 +974,7 @@ fn missing_and_corrupt_snapshot_or_entity_objects_are_hard_failures() {
     let shard = fs::read(&shard_path).unwrap();
     fs::write(&shard_path, vec![0; shard.len()]).unwrap();
     assert!(matches!(
-        store.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        store.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::SealMismatch { .. })
     ));
 }
@@ -1127,7 +1002,7 @@ fn expected_head_conflict_does_not_touch_fixed_head() {
     let root = TestRoot::new("head-conflict");
     let store = store(&root);
     let first = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     publish(&root, &first.head_bytes);
     let fixed_before = fs::read(root.path().join("gore-project.json")).unwrap();
@@ -1142,7 +1017,7 @@ fn expected_head_conflict_does_not_touch_fixed_head() {
     let mut changed = base_project();
     changed.revision += 1;
     assert!(matches!(
-        store.prepare_checkpoint(Some(&wrong), &changed, ValidationProfile::Production),
+        store.prepare_revision3_checkpoint(Some(&wrong), &changed),
         Err(WorkingStoreError::HeadConflict { .. })
     ));
     assert_eq!(
@@ -1157,13 +1032,13 @@ fn absent_expected_head_conflicts_with_an_existing_fixed_head() {
     let root = TestRoot::new("absent-head-conflict");
     let store = store(&root);
     let first = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     publish(&root, &first.head_bytes);
     let fixed_before = fs::read(root.path().join("gore-project.json")).unwrap();
 
     assert!(matches!(
-        store.prepare_checkpoint(None, &base_project(), ValidationProfile::Production),
+        store.prepare_revision3_checkpoint(None, &base_project()),
         Err(WorkingStoreError::HeadConflict {
             expected: None,
             actual: Some(_)
@@ -1180,14 +1055,12 @@ fn fixed_head_open_uses_the_same_strict_reconstitution_path() {
     let root = TestRoot::new("fixed-open");
     let store = store(&root);
     let project = base_project();
-    let prepared = store
-        .prepare_checkpoint(None, &project, ValidationProfile::Experimental)
-        .unwrap();
+    let prepared = store.prepare_revision3_checkpoint(None, &project).unwrap();
     publish(&root, &prepared.head_bytes);
 
     assert_eq!(store.current_head().unwrap(), Some(prepared.head.clone()));
     let opened = store
-        .open_current(AssetVerification::Full, ValidationProfile::Experimental)
+        .open_current_revision3(AssetVerification::Full)
         .unwrap();
     assert_eq!(opened.project, project);
 }
@@ -1252,11 +1125,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     let primary_store = store(&root);
     let oversized_head = vec![b' '; 64 * 1024 + 1];
     assert!(matches!(
-        primary_store.open_head_bytes(
-            &oversized_head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        primary_store.open_revision3_head_bytes(&oversized_head, AssetVerification::Full),
         Err(WorkingStoreError::LimitExceeded {
             kind: "head bytes",
             ..
@@ -1266,19 +1135,15 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     let oversized_snapshot_head = serde_json::to_vec(&WorkingHead {
         store_format: Default::default(),
         snapshot: ContentSeal {
-            byte_len: 16 * 1024 * 1024 + 1,
+            byte_len: MAX_REVISION3_SNAPSHOT_BYTES + 1,
             sha256: fake_digest(1),
         },
     })
     .unwrap();
     assert!(matches!(
-        primary_store.open_head_bytes(
-            &oversized_snapshot_head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        primary_store.open_revision3_head_bytes(&oversized_snapshot_head, AssetVerification::Full),
         Err(WorkingStoreError::LimitExceeded {
-            kind: "snapshot",
+            kind: "revision-3 snapshot",
             ..
         })
     ));
@@ -1292,7 +1157,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        entity_limited.prepare_checkpoint(None, &base_project(), ValidationProfile::Production),
+        entity_limited.prepare_revision3_checkpoint(None, &base_project()),
         Err(WorkingStoreError::LimitExceeded {
             kind: "entity bytes",
             ..
@@ -1309,9 +1174,9 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        snapshot_limited.prepare_checkpoint(None, &base_project(), ValidationProfile::Production),
+        snapshot_limited.prepare_revision3_checkpoint(None, &base_project()),
         Err(WorkingStoreError::LimitExceeded {
-            kind: "snapshot bytes",
+            kind: "revision-3 base snapshot bytes",
             ..
         })
     ));
@@ -1332,7 +1197,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        entity_count_store.prepare_checkpoint(None, &two_entities, ValidationProfile::Production),
+        entity_count_store.prepare_revision3_checkpoint(None, &two_entities),
         Err(WorkingStoreError::LimitExceeded {
             kind: "entity count",
             ..
@@ -1363,7 +1228,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        asset_count_store.prepare_checkpoint(None, &two_assets, ValidationProfile::Production),
+        asset_count_store.prepare_revision3_checkpoint(None, &two_assets),
         Err(WorkingStoreError::LimitExceeded {
             kind: "asset count",
             ..
@@ -1387,7 +1252,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        aggregate_store.prepare_checkpoint(None, &aggregate, ValidationProfile::Production),
+        aggregate_store.prepare_revision3_checkpoint(None, &aggregate),
         Err(WorkingStoreError::LimitExceeded {
             kind: "aggregate referenced asset bytes",
             ..
@@ -1407,7 +1272,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     exact_entity_store
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &project)
         .unwrap();
 
     let short_entity_store = WorkingProjectStore::at(
@@ -1419,7 +1284,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        short_entity_store.prepare_checkpoint(None, &project, ValidationProfile::Production),
+        short_entity_store.prepare_revision3_checkpoint(None, &project),
         Err(WorkingStoreError::LimitExceeded {
             kind: "aggregate referenced entity bytes",
             ..
@@ -1428,7 +1293,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
 
     let reopen_root = TestRoot::new("entity-aggregate-reopen");
     let prepared = store(&reopen_root)
-        .prepare_checkpoint(None, &project, ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &project)
         .unwrap();
     let constrained_reopen = WorkingProjectStore::at(
         reopen_root.path(),
@@ -1439,11 +1304,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
     )
     .unwrap();
     assert!(matches!(
-        constrained_reopen.open_head_bytes(
-            &prepared.head_bytes,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        constrained_reopen.open_revision3_head_bytes(&prepared.head_bytes, AssetVerification::Full),
         Err(WorkingStoreError::LimitExceeded {
             kind: "aggregate referenced entity bytes",
             ..
@@ -1452,7 +1313,7 @@ fn head_snapshot_entity_count_asset_count_and_aggregate_limits_are_enforced() {
 }
 
 #[test]
-fn phase_one_ogg_references_obey_the_per_blob_64_mib_ceiling() {
+fn revision3_ogg_references_obey_the_per_blob_64_mib_ceiling() {
     let root = TestRoot::new("indexed-ogg-limit");
     let store = store(&root);
     let mut project = base_project();
@@ -1464,7 +1325,7 @@ fn phase_one_ogg_references_obey_the_per_blob_64_mib_ceiling() {
         },
     );
     assert!(matches!(
-        store.prepare_checkpoint(None, &project, ValidationProfile::Production),
+        store.prepare_revision3_checkpoint(None, &project),
         Err(WorkingStoreError::LimitExceeded {
             kind: "Ogg bytes",
             ..
@@ -1489,7 +1350,7 @@ fn entity_aggregate_limit_precedes_missing_asset_filesystem_work() {
     let root = TestRoot::new("manifest-check-order");
     let initial_store = store(&root);
     let prepared = initial_store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot_path = digest_path(
         root.path(),
@@ -1525,11 +1386,7 @@ fn entity_aggregate_limit_precedes_missing_asset_filesystem_work() {
     .unwrap();
 
     assert!(matches!(
-        constrained.open_head_bytes(
-            &candidate_head,
-            AssetVerification::Full,
-            ValidationProfile::Production
-        ),
+        constrained.open_revision3_head_bytes(&candidate_head, AssetVerification::Full),
         Err(WorkingStoreError::LimitExceeded {
             kind: "aggregate referenced entity bytes",
             ..
@@ -1550,7 +1407,7 @@ fn indexed_but_missing_physical_asset_blocks_checkpoint_before_objects_are_writt
         },
     );
     assert!(matches!(
-        store.prepare_checkpoint(None, &project, ValidationProfile::Production),
+        store.prepare_revision3_checkpoint(None, &project),
         Err(WorkingStoreError::MissingObject(_))
     ));
     assert_eq!(count_files(&root.path().join("entities")), 0);
@@ -1611,7 +1468,7 @@ fn snapshot_object_path_uses_the_sealed_sha256_layout() {
     let root = TestRoot::new("layout");
     let store = store(&root);
     let prepared = store
-        .prepare_checkpoint(None, &base_project(), ValidationProfile::Production)
+        .prepare_revision3_checkpoint(None, &base_project())
         .unwrap();
     let snapshot = digest_path(
         root.path(),

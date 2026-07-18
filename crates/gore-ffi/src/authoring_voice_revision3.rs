@@ -267,10 +267,10 @@ where
         gore_authoring::OggCodec::Opus => "opus",
     };
     let take_status = match outcome.status {
-        gore_authoring::Revision2VoiceTakeStatus::Draft => "draft",
-        gore_authoring::Revision2VoiceTakeStatus::Recorded => "recorded",
-        gore_authoring::Revision2VoiceTakeStatus::Reviewed => "reviewed",
-        gore_authoring::Revision2VoiceTakeStatus::Approved => "approved",
+        gore_authoring::VoiceTakeStatus::Draft => "draft",
+        gore_authoring::VoiceTakeStatus::Recorded => "recorded",
+        gore_authoring::VoiceTakeStatus::Reviewed => "reviewed",
+        gore_authoring::VoiceTakeStatus::Approved => "approved",
     };
     let build_status = match outcome.build_status {
         Revision3VoiceBuildStatusV1::Blocked => "blocked",

@@ -55,7 +55,7 @@ class _Revision3ManagedCompilerCheckPanelState
   @override
   Widget build(BuildContext context) {
     final safety = ref.watch(scriptCompileInstallSafetyProvider);
-    final legacyRecoveryReport = safety.recoveryReport;
+    final recoveryReport = safety.recoveryReport;
     return Column(
       key: const Key('revision3-managed-compiler-check-panel'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -75,12 +75,9 @@ class _Revision3ManagedCompilerCheckPanelState
             onRecheck: () => unawaited(
               ref.read(scriptCompileInstallSafetyProvider.notifier).refresh(),
             ),
-            onViewRecoveryReport: legacyRecoveryReport == null
+            onViewRecoveryReport: recoveryReport == null
                 ? null
-                : () => showScriptCompileReportDialog(
-                    context,
-                    legacyRecoveryReport,
-                  ),
+                : () => showScriptCompileReportDialog(context, recoveryReport),
           ),
         ],
         const SizedBox(height: 10),

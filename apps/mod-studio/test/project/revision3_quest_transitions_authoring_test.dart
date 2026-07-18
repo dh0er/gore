@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
@@ -60,10 +62,45 @@ void main() {
     expect(seed.moduleId, revision3QuestOutlineModuleId);
   });
 
+  test('transition seed accepts canonical single-objective input', () {
+    final fixture = Revision3QuestOutlineFixture(
+      objectiveTitles: const <String>['Ask Asghan about Homer'],
+    );
+
+    final seed = _seed(fixture);
+
+    expect(seed.objectives.single.title, 'Ask Asghan about Homer');
+  });
+
+  test('transition seed rejects a present empty additional-title list', () {
+    final fixture = Revision3QuestOutlineFixture(
+      objectiveTitles: const <String>['Ask Asghan about Homer'],
+    );
+    final project = fixture.projectObject();
+    final entities = (project['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+        .cast<String, Object?>();
+    final payload = (quest['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final input = (data['input']! as Map).cast<String, Object?>();
+    input['additional_objective_titles'] = <Object?>[];
+
+    expect(
+      () => AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: jsonEncode(project),
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+      ),
+      throwsFormatException,
+    );
+  });
+
   test(
     'sequential template keeps slots stable across presentation reorder',
     () {
-      final basis = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
+      final basis = _seed(Revision3QuestOutlineFixture()).transitionPlan;
       final reordered =
           Revision3QuestTransitionsAuthoringService.reorderObjectives(
             basis,
@@ -226,7 +263,11 @@ void main() {
       expect(
         () => Revision3QuestTransitionsAuthoringService.validateEditablePlan(
           checkpoint,
-          AuthoringRevision3QuestTransitionPlanV1.legacySeed(2),
+          _seed(
+            Revision3QuestOutlineFixture(
+              objectiveTitles: const ['Find the key', 'Open the gate'],
+            ),
+          ).transitionPlan,
         ),
         throwsFormatException,
       );

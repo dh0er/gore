@@ -12,23 +12,21 @@ use std::io::{self, Write};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::QuestCollisionCatalogInput;
 use crate::model_revision3::{
     is_quest_collision_artifact_media_type, quest_collision_artifact_media_for_layer, Entity,
     EntityKind, EntityPayload, OriginRef, QuestDraft, QuestGiverInput, QuestParentInput,
     ScriptModuleStatus, TypedRef,
 };
-use crate::revision3_quest::regenerate_revision3_quest_module_v2_with_identity;
+use crate::revision3_quest::regenerate_revision3_quest_module_with_identity;
 use crate::story_collision::{
     collect_revision3_story_collision_identities_bounded, BoundedStoryCollisionCollectionError,
     StoryCollisionCollectionLimits,
 };
+use crate::QuestCollisionCatalogInput;
 use crate::{
     ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
     ProjectStoryCollisionIdentities, Sha256Digest, WorkingHead, WorkingStoreError,
-    MAX_PROJECT_JSON_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    MAX_PROJECT_JSON_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 pub const MAX_REVISION3_PRIOR_QUESTS_V2: usize = 14_285;
@@ -416,7 +414,7 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
             symbols: BTreeSet::new(),
         };
         let (regenerated, identity) =
-            regenerate_revision3_quest_module_v2_with_identity(quest, empty_collision).map_err(
+            regenerate_revision3_quest_module_with_identity(quest, empty_collision).map_err(
                 |error| Revision3QuestCollisionSourceErrorV2::PersistedModuleDrift {
                     quest: *quest_id,
                     module: module_id,
@@ -594,12 +592,7 @@ fn validate_quest_pair<'a>(
 ) -> Result<&'a Entity, Revision3QuestCollisionSourceErrorV2> {
     let module_id = quest.script_module.id;
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || !matches!(
-            quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION
-                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        )
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
     {
         return Err(Revision3QuestCollisionSourceErrorV2::ForeignGenerator {
             quest: quest_id,
@@ -1002,7 +995,7 @@ mod tests {
     };
     use crate::{
         AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, QuestTransitionPlanV1, SchemaRevisionV3,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
     };
 
     trait AmbiguousIfClone<Marker> {
@@ -1060,10 +1053,12 @@ mod tests {
                 description: "Regenerated only from the exact current project".into(),
                 objective_title: "Reject every persisted drift".into(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: target.clone(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.into(),
                     artifact: artifact.clone(),
                     source_seal: seal(8, artifact.byte_len),
                     basis_snapshot: seal(9, 4_096),
@@ -1080,7 +1075,7 @@ mod tests {
             relative_paths: BTreeSet::new(),
             symbols: BTreeSet::new(),
         };
-        let module = crate::regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+        let module = crate::regenerate_revision3_quest_module(&quest, collision).unwrap();
         let owner = TypedRef::new(project_id, quest_id, EntityKind::QuestDraft);
         let entities = BTreeMap::from([
             (
@@ -1128,7 +1123,7 @@ mod tests {
                     artifact.sha256,
                     AssetMeta {
                         byte_len: artifact.byte_len,
-                        media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.into(),
+                        media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.into(),
                     },
                 )]),
             },
@@ -1428,10 +1423,10 @@ mod tests {
             else {
                 unreachable!()
             };
-            quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-            quest.input.transition_plan = Some(Box::new(
-                QuestTransitionPlanV1::legacy_seed(1).expect("one-objective seed"),
-            ));
+            quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+            quest.input.transition_plan = Box::new(
+                QuestTransitionPlanV1::default_for_objectives(1).expect("one-objective seed"),
+            );
             quest.transcript = vec![QuestTranscriptBindingV1 {
                 line: TypedRef::new(project_id, line_id, EntityKind::DialogLine),
                 objective_slot: Some(1),
@@ -1481,7 +1476,7 @@ mod tests {
             relative_paths: BTreeSet::new(),
             symbols: BTreeSet::new(),
         };
-        let module = crate::regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+        let module = crate::regenerate_revision3_quest_module(&quest, collision).unwrap();
         let module_entity = project.entities.get_mut(&id(11)).unwrap();
         let OriginRef::Generated {
             generator_version, ..
@@ -1489,7 +1484,7 @@ mod tests {
         else {
             unreachable!()
         };
-        *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+        *generator_version = REVISION3_QUEST_GENERATOR_VERSION;
         module_entity.payload = EntityPayload::ScriptModule(module);
 
         let prepared = prepare_exact_revision3_quest_collision_source_v2(&project, head)

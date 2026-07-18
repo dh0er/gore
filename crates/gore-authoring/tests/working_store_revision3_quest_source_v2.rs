@@ -9,8 +9,7 @@ use gore_authoring::{
     QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
     Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestGiverInput,
     Revision3QuestParentInput, Revision3SnapshotManifest, Revision3TypedRef, SchemaRevisionV3,
-    Sha256Digest, WorkingProjectStore, WorkingStoreLimits, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER,
+    Sha256Digest, WorkingProjectStore, WorkingStoreLimits, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
     REVISION3_QUEST_GENERATOR_VERSION,
 };
@@ -123,7 +122,9 @@ fn add_quest(
             description: "Exact current-project source evidence".into(),
             objective_title: "Regenerate without historical authority".into(),
             additional_objective_titles: Vec::new(),
-            transition_plan: None,
+            transition_plan: Box::new(
+                gore_authoring::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+            ),
             collision_catalog: artifact,
         },
         script_module: Revision3TypedRef::new(
@@ -141,7 +142,7 @@ fn add_quest(
         relative_paths: BTreeSet::new(),
         symbols: BTreeSet::new(),
     };
-    let module = gore_authoring::regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+    let module = gore_authoring::regenerate_revision3_quest_module(&quest, collision).unwrap();
     let owner = Revision3TypedRef::new(
         project.project_id,
         quest_id,
@@ -201,7 +202,7 @@ fn exact_current_source_ignores_deleted_historical_artifact_and_basis() {
         .unwrap();
     fs::write(root.0.join("gore-project.json"), &basis.head_bytes).unwrap();
     let imported = store
-        .import_quest_collision_artifact_v1(b"{}", Some(&basis.head))
+        .import_quest_collision_artifact_v2(b"{}", &basis.head)
         .unwrap();
 
     let mut current = basis_project;
@@ -226,7 +227,7 @@ fn exact_current_source_ignores_deleted_historical_artifact_and_basis() {
     let reference = artifact_ref(
         imported.artifact.clone(),
         basis.head.snapshot.clone(),
-        QUEST_COLLISION_CATALOG_LAYER,
+        QUEST_COLLISION_CATALOG_LAYER_V2,
     );
     add_quest(&mut current, 10, 11, "First", reference.clone());
     let one_quest = store
@@ -371,48 +372,47 @@ fn historical_inspection_source_reopens_old_head_without_current_head_authority(
 }
 
 #[test]
-fn v1_and_v2_layer_media_pairs_are_exact() {
+fn revision3_layer_and_media_pair_is_exact() {
     let raw = seal(7, 2);
     let basis = seal(8, 200);
-    for (layer, media) in [
-        (
-            QUEST_COLLISION_CATALOG_LAYER,
-            QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-        ),
-        (
-            QUEST_COLLISION_CATALOG_LAYER_V2,
-            QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
-        ),
-    ] {
-        let mut project = empty_project();
-        project.asset_store.assets.insert(
-            raw.sha256,
-            AssetMeta {
-                byte_len: raw.byte_len,
-                media_type: media.into(),
-            },
-        );
-        add_quest(
-            &mut project,
-            10,
-            11,
-            "Pairing",
-            artifact_ref(raw.clone(), basis.clone(), layer),
-        );
-        assert!(project.validate_closed_model().is_ok());
+    let mut project = empty_project();
+    project.asset_store.assets.insert(
+        raw.sha256,
+        AssetMeta {
+            byte_len: raw.byte_len,
+            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.into(),
+        },
+    );
+    add_quest(
+        &mut project,
+        10,
+        11,
+        "Pairing",
+        artifact_ref(raw.clone(), basis.clone(), QUEST_COLLISION_CATALOG_LAYER_V2),
+    );
+    assert!(project.validate_closed_model().is_ok());
 
-        project
-            .asset_store
-            .assets
-            .get_mut(&raw.sha256)
-            .unwrap()
-            .media_type = if media == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE {
-            QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.into()
-        } else {
-            QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.into()
-        };
-        assert!(project.validate_closed_model().is_err());
-    }
+    project
+        .asset_store
+        .assets
+        .get_mut(&raw.sha256)
+        .unwrap()
+        .media_type = "application/octet-stream".into();
+    assert!(project.validate_closed_model().is_err());
+
+    project
+        .asset_store
+        .assets
+        .get_mut(&raw.sha256)
+        .unwrap()
+        .media_type = QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.into();
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&id(10)).unwrap().payload
+    else {
+        panic!("expected Quest")
+    };
+    quest.input.collision_catalog.catalog_layer = "unsupported.story-collisions".into();
+    assert!(project.validate_closed_model().is_err());
 }
 
 #[test]
@@ -425,7 +425,7 @@ fn persisted_module_and_runtime_case_drift_fail_closed() {
         .unwrap();
     fs::write(root.0.join("gore-project.json"), &basis.head_bytes).unwrap();
     let imported = store
-        .import_quest_collision_artifact_v1(b"{}", Some(&basis.head))
+        .import_quest_collision_artifact_v2(b"{}", &basis.head)
         .unwrap();
 
     let mut project = basis_project;
@@ -437,7 +437,7 @@ fn persisted_module_and_runtime_case_drift_fail_closed() {
     let reference = artifact_ref(
         imported.artifact,
         basis.head.snapshot.clone(),
-        QUEST_COLLISION_CATALOG_LAYER,
+        QUEST_COLLISION_CATALOG_LAYER_V2,
     );
     add_quest(&mut project, 10, 11, "Same", reference.clone());
     add_quest(&mut project, 20, 21, "Other", reference);
@@ -459,7 +459,7 @@ fn persisted_module_and_runtime_case_drift_fail_closed() {
         symbols: BTreeSet::new(),
     };
     let regenerated =
-        gore_authoring::regenerate_revision3_quest_module_v2(&second, collision).unwrap();
+        gore_authoring::regenerate_revision3_quest_module(&second, collision).unwrap();
     project.entities.get_mut(&id(20)).unwrap().payload = Revision3EntityPayload::QuestDraft(second);
     project.entities.get_mut(&id(21)).unwrap().payload =
         Revision3EntityPayload::ScriptModule(regenerated);

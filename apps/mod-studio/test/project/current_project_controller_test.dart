@@ -2845,15 +2845,29 @@ void main() {
     () async {
       final fixture = Revision3QuestOutlineFixture();
       final index = fixture.contentIndex();
+      final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: fixture.projectJson,
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+      );
       final input = Revision3QuestOutlineEditInput.forQuest(
         index: index,
         quest: index.entityById(revision3QuestOutlineQuestId)!,
+        seed: seed,
         displayName: 'Find Homer safely',
         title: 'Find Homer safely',
-        objectiveTitles: const [
-          'Inspect the old gate',
-          'Ask Asghan about Homer',
-          'Report to Diego',
+        objectives: const <Revision3QuestOutlineObjectiveEdit>[
+          Revision3QuestOutlineObjectiveEdit(slot: 3, title: 'Report to Diego'),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 1,
+            title: 'Ask Asghan about Homer',
+          ),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 2,
+            title: 'Inspect the old gate',
+          ),
         ],
       );
       final managed = _FakeManagedLease(
@@ -2907,15 +2921,29 @@ void main() {
     () async {
       final fixture = Revision3QuestOutlineFixture();
       final index = fixture.contentIndex();
+      final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: fixture.projectJson,
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+      );
       final input = Revision3QuestOutlineEditInput.forQuest(
         index: index,
         quest: index.entityById(revision3QuestOutlineQuestId)!,
+        seed: seed,
         displayName: 'Find Homer safely',
         title: 'Find Homer safely',
-        objectiveTitles: const [
-          'Inspect the old gate',
-          'Ask Asghan about Homer',
-          'Report to Diego',
+        objectives: const <Revision3QuestOutlineObjectiveEdit>[
+          Revision3QuestOutlineObjectiveEdit(slot: 3, title: 'Report to Diego'),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 1,
+            title: 'Ask Asghan about Homer',
+          ),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 2,
+            title: 'Inspect the old gate',
+          ),
         ],
       );
       final managed = _FakeManagedLease(
@@ -8655,7 +8683,7 @@ class _FakeManagedLease
 
   @override
   Future<Revision3QuestOutlineEditPublication>
-  prepareAndPublishQuestOutlineEditV1({
+  prepareAndPublishQuestOutlineEditV2({
     required Revision3QuestOutlineEditInput input,
   }) async {
     questOutlinePublishCalls++;

@@ -660,6 +660,7 @@ Revision3ContentIndex _contentIndex(
   List<String> names, {
   bool includeAsset = false,
 }) {
+  const moduleId = 'ffffffffffffffffffffffffffffffff';
   final entities = <Object?>[
     for (var index = 0; index < names.length; index++)
       <String, Object?>{
@@ -679,6 +680,44 @@ Revision3ContentIndex _contentIndex(
             'parent_character_definition': 'CharacterDefinition_$index',
             'parent_ai_agent_config': 'AIAgentConfig_$index',
             'parent_spawn_definition': 'SpawnDefinition_$index',
+            'greeting_count': 0,
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': '11111111111111111111111111111111',
+              'entity_id': moduleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (names.isNotEmpty)
+      <String, Object?>{
+        'id': moduleId,
+        'kind': 'script_module',
+        'display_name': 'Generated character source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GENERATED_CHARACTER_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'global-search.fixture.npc',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.GENERATED',
+            'module_relative_path': 'Project/Npcs/Generated.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
           },
         },
         'references': <Object?>[],
@@ -696,7 +735,7 @@ Revision3ContentIndex _contentIndex(
     'authoring_locales': <Object?>['de'],
     'entity_counts': names.isEmpty
         ? <String, Object?>{}
-        : <String, Object?>{'npc_draft': names.length},
+        : <String, Object?>{'npc_draft': names.length, 'script_module': 1},
     'entities': entities,
     'assets': includeAsset
         ? <Object?>[

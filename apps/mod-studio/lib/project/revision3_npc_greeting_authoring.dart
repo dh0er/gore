@@ -514,8 +514,7 @@ Revision3NpcGreetingProjection _npcGreetingProjectionFromIndex(
       npc.kind != Revision3ContentEntityKind.npcDraft ||
       npc.revision != expectedNpcRevision ||
       npc.problemCount != 0 ||
-      npc.summary.npcDraft == null ||
-      !npc.summary.npcDraft!.hasGreetingProjection) {
+      npc.summary.npcDraft == null) {
     throw const Revision3NpcGreetingStaleCheckpointException();
   }
   final npcFacts = npc.summary.npcDraft!;

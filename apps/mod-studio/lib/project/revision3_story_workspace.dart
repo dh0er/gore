@@ -684,10 +684,6 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         _sections.removeWhere(
           (entityId, _) => !story.any((entity) => entity.id == entityId),
         );
-        _sections.updateAll((entityId, section) {
-          final entity = story.firstWhere((entity) => entity.id == entityId);
-          return _normalizeWorkspaceSection(entity, section);
-        });
         _selectedTranscriptLines.removeWhere(
           (entityId, _) => !story.any((entity) => entity.id == entityId),
         );
@@ -815,7 +811,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       if (reveal) _filter = _StoryFilter.all;
       _selectedEntityId = entity.id;
       if (section != null) {
-        _sections[entity.id] = _normalizeWorkspaceSection(entity, section);
+        _sections[entity.id] = section;
       }
       if (selectedLineId != null) {
         _selectedTranscriptLines[entity.id] = selectedLineId;
@@ -1396,11 +1392,9 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       projectId: widget.projectId,
       index: index,
       entity: entity,
-      selectedSection: _normalizeWorkspaceSection(
-        entity,
-        _sections[entity.id] ??
-            Revision3StoryEntityWorkbench.defaultSectionFor(entity),
-      ),
+      selectedSection:
+          _sections[entity.id] ??
+          Revision3StoryEntityWorkbench.defaultSectionFor(entity),
       onSectionChanged: (section) {
         if (_isExactCurrentIndex(index)) {
           updatePresentation(() => _sections[entity.id] = section);
@@ -2256,19 +2250,6 @@ List<Revision3ContentEntity> _storyEntities(Revision3ContentIndex index) =>
 bool _isStoryEntity(Revision3ContentEntity entity) =>
     entity.kind == Revision3ContentEntityKind.npcDraft ||
     entity.kind == Revision3ContentEntityKind.questDraft;
-
-Revision3StoryWorkbenchSection _normalizeWorkspaceSection(
-  Revision3ContentEntity entity,
-  Revision3StoryWorkbenchSection section,
-) {
-  if (entity.kind == Revision3ContentEntityKind.npcDraft &&
-      (section == Revision3StoryWorkbenchSection.story ||
-          section == Revision3StoryWorkbenchSection.routine ||
-          section == Revision3StoryWorkbenchSection.inventory)) {
-    return Revision3StoryWorkbenchSection.profile;
-  }
-  return section;
-}
 
 bool _hasExactTranscriptLine(
   Revision3ContentIndex index,

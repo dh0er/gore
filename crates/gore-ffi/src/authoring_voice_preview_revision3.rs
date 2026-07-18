@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use gore_authoring::{
-    bind_revision3_voice_take_preview_v1, inspect_revision3_voice_take_preview_ogg_v1,
+    bind_revision3_voice_take_preview_v1, inspect_revision3_voice_take_media_qa_v1,
     AssetVerification, Revision3VoiceTakePreviewConflictV1,
     Revision3VoiceTakePreviewRequestJsonErrorV1, Revision3VoiceTakePreviewRequestV1, Sha256Digest,
     WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
@@ -666,8 +666,10 @@ where
     let source_bytes = store
         .read_verified_ogg_asset(&binding.asset)
         .map_err(|error| map_selected_asset_error(error, &canonical_store_root))?;
-    let actual_ogg = inspect_revision3_voice_take_preview_ogg_v1(&source_bytes)
-        .map_err(|_| asset_invalid("selected VoiceTake Ogg bytes are not valid preview input"))?;
+    let actual_ogg = inspect_revision3_voice_take_media_qa_v1(&source_bytes)
+        .map_err(|_| asset_invalid("selected VoiceTake Ogg bytes are not valid preview input"))?
+        .ogg()
+        .clone();
     if actual_ogg != binding.ogg {
         return Err(asset_invalid(
             "selected VoiceTake Ogg metadata differs from its exact project declaration",
@@ -754,11 +756,11 @@ where
     let after_bytes = store
         .read_verified_ogg_asset(&after_binding.asset)
         .map_err(|error| map_selected_asset_error(error, &canonical_store_root))?;
-    if after_bytes != source_bytes
-        || inspect_revision3_voice_take_preview_ogg_v1(&after_bytes)
-            .map_err(|_| asset_invalid("selected VoiceTake changed during preview"))?
-            != actual_ogg
-    {
+    let after_ogg = inspect_revision3_voice_take_media_qa_v1(&after_bytes)
+        .map_err(|_| asset_invalid("selected VoiceTake changed during preview"))?
+        .ogg()
+        .clone();
+    if after_bytes != source_bytes || after_ogg != actual_ogg {
         return Err(asset_invalid(
             "selected VoiceTake changed during preview materialization",
         ));

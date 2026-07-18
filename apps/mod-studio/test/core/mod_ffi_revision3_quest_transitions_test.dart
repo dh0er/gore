@@ -10,7 +10,7 @@ import '../support/revision3_quest_fixture.dart';
 const _root = r'C:\Projects\QuestTransitions.goreproj';
 
 void main() {
-  const legacyWire =
+  const canonicalWire =
       '{"objective_slots":[1],"objective_order":[1],"next_slot_ordinal":2,'
       '"transitions":[{"node":{"kind":"root"},"edge":"availability",'
       '"external_allowed":true},{"node":{"kind":"root"},"edge":"start",'
@@ -20,16 +20,16 @@ void main() {
       'true},{"node":{"kind":"objective","slot":1},"edge":"success",'
       '"external_allowed":true,"succeeds_parent":true}]}';
 
-  test('parses and preserves the frozen one-objective legacy seed', () {
+  test('parses and preserves the canonical one-objective plan', () {
     final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
-      jsonDecode(legacyWire),
+      jsonDecode(canonicalWire),
     );
 
     expect(plan.objectiveSlots, [1]);
     expect(plan.objectiveOrder, [1]);
     expect(plan.nextSlotOrdinal, 2);
     expect(plan.transitions, hasLength(5));
-    expect(plan.canonicalJson, legacyWire);
+    expect(plan.canonicalJson, canonicalWire);
     expect(plan.contentSeal.byteLength, 484);
     expect(
       plan.contentSeal.sha256,
@@ -37,8 +37,10 @@ void main() {
     );
   });
 
-  test('builds the frozen multi-objective legacy seed in slot order', () {
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
+  test('builds the default multi-objective plan in slot order', () {
+    final plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      3,
+    );
 
     expect(plan.objectiveSlots, [1, 2, 3]);
     expect(plan.objectiveOrder, [1, 2, 3]);
@@ -53,7 +55,7 @@ void main() {
   });
 
   test('keeps external triggers independent from predicates', () {
-    final wire = jsonDecode(legacyWire) as Map<String, Object?>;
+    final wire = jsonDecode(canonicalWire) as Map<String, Object?>;
     final transitions = wire['transitions']! as List<Object?>;
     final success = transitions.last! as Map<String, Object?>;
     success['predicate'] = {
@@ -97,8 +99,10 @@ void main() {
     );
   });
 
-  test('requires frozen objective slot 1 to remain active', () {
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(1);
+  test('requires objective slot 1 to remain active', () {
+    final plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      1,
+    );
 
     expect(
       () => AuthoringRevision3QuestTransitionPlanV1(
@@ -153,66 +157,10 @@ void main() {
     );
   });
 
-  test('reads a frozen v3 Quest as an exact synthetic transition seed', () {
-    final fixture = Revision3QuestOutlineFixture();
-    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-      currentProjectJson: fixture.projectJson,
-      questId: revision3QuestOutlineQuestId,
-      expectedQuestRevision: fixture.questRevision,
-      expectedModuleId: revision3QuestOutlineModuleId,
-      expectedModuleRevision: fixture.moduleRevision,
-    );
-
-    expect(seed.generatorVersion, 3);
-    expect(seed.legacySynthetic, isTrue);
-    expect(seed.objectives.map((objective) => objective.slot), [1, 2, 3]);
-    expect(
-      seed.objectives.map((objective) => objective.title),
-      fixture.objectiveTitles,
-    );
-    expect(seed.transitionPlan.canonicalJson, isNotEmpty);
-    expect(seed.transitionPlanSeal.sha256, hasLength(64));
-  });
-
-  test('allows explicit v3 to v4 upgrade with the synthetic seed', () {
-    final fixture = Revision3QuestOutlineFixture();
-    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-      currentProjectJson: fixture.projectJson,
-      questId: revision3QuestOutlineQuestId,
-      expectedQuestRevision: fixture.questRevision,
-      expectedModuleId: revision3QuestOutlineModuleId,
-      expectedModuleRevision: fixture.moduleRevision,
-    );
-
-    final request = AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
-      expectedHead: fixture.head,
-      currentProjectJson: fixture.projectJson,
-      questId: revision3QuestOutlineQuestId,
-      expectedQuestRevision: fixture.questRevision,
-      transitionPlan: seed.transitionPlan,
-    );
-
-    expect(request.upgradesLegacy, isTrue);
-    expect(request.previousGeneratorVersion, 3);
-    expect(
-      request.transitionPlan.canonicalJson,
-      seed.transitionPlan.canonicalJson,
-    );
-    expect(
-      request.expectedTransitionPlanSeal.sha256,
-      seed.transitionPlanSeal.sha256,
-    );
-    expect(
-      AuthoringRevision3QuestTransitionsEditRequestV1.fromCanonicalJson(
-        request.canonicalJson,
-        currentProjectJson: fixture.projectJson,
-      ).canonicalJson,
-      request.canonicalJson,
-    );
-  });
-
   test('treats succeeds_parent as an implicit root success action', () {
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(1);
+    final plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      1,
+    );
     final objectiveSuccess = plan.transitions.last;
     for (final terminal in <AuthoringRevision3QuestTransitionEffectKindV1>[
       AuthoringRevision3QuestTransitionEffectKindV1.succeed,
@@ -262,7 +210,9 @@ void main() {
   });
 
   test('requires automatic terminal conditions to be provably disjoint', () {
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(1);
+    final plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      1,
+    );
     const root = AuthoringRevision3QuestTransitionNodeV1.root();
     final objective = AuthoringRevision3QuestTransitionNodeV1.objective(1);
     AuthoringRevision3QuestTransitionPredicateV1 predicate(
@@ -404,8 +354,10 @@ void main() {
 
   test('reads retained v4 plan and rejects an exact plan no-op', () {
     final fixture = Revision3QuestOutlineFixture();
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
-    final projectJson = _semanticProjectJson(fixture, plan);
+    final plan = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      3,
+    );
+    final projectJson = _projectJsonWithPlan(fixture, plan);
     final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
       currentProjectJson: projectJson,
       questId: revision3QuestOutlineQuestId,
@@ -414,8 +366,6 @@ void main() {
       expectedModuleRevision: fixture.moduleRevision,
     );
 
-    expect(seed.generatorVersion, 4);
-    expect(seed.legacySynthetic, isFalse);
     expect(seed.transitionPlan.canonicalJson, plan.canonicalJson);
     expect(
       () => AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
@@ -429,35 +379,6 @@ void main() {
     );
   });
 
-  test('outline v1 rejects v4 while context seed accepts and retains it', () {
-    final fixture = Revision3QuestOutlineFixture();
-    final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
-    final projectJson = _semanticProjectJson(fixture, plan);
-
-    expect(
-      () => AuthoringRevision3QuestOutlineEditRequestV1.forProject(
-        expectedHead: fixture.head,
-        currentProjectJson: projectJson,
-        questId: revision3QuestOutlineQuestId,
-        expectedQuestRevision: fixture.questRevision,
-        displayName: 'Updated outline',
-        title: 'Updated outline',
-        objectiveTitles: fixture.objectiveTitles,
-      ),
-      throwsFormatException,
-    );
-    final context = AuthoringRevision3QuestContextSeed.forProject(
-      currentProjectJson: projectJson,
-      questId: revision3QuestOutlineQuestId,
-      expectedQuestRevision: fixture.questRevision,
-      expectedModuleId: revision3QuestOutlineModuleId,
-      expectedModuleRevision: fixture.moduleRevision,
-      expectedParentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
-      expectedGiverRuntimeUniqueName: 'OM_GRD_Asghan_263',
-    );
-    expect(context.questId, revision3QuestOutlineQuestId);
-  });
-
   test('Studio handshake requires the sorted Quest transitions command', () {
     expect(
       requiredStudioCoreCommands,
@@ -469,81 +390,79 @@ void main() {
     );
   });
 
-  test(
-    'FFI sends the minimal wire and accepts an exact v3 to v4 delta',
-    () async {
-      final fixture = Revision3QuestOutlineFixture();
-      final plan = AuthoringRevision3QuestTransitionPlanV1.legacySeed(3);
-      final request =
-          AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
-            expectedHead: fixture.head,
-            currentProjectJson: fixture.projectJson,
-            questId: revision3QuestOutlineQuestId,
-            expectedQuestRevision: fixture.questRevision,
-            transitionPlan: plan,
-          );
-      final candidate = _semanticProjectJson(fixture, plan, advance: true);
-      final response = <String, Object?>{
-        'ok': true,
-        'outcome': 'prepared_unpublished',
-        'basis_head_json': fixture.head.canonicalJson,
-        'head_json': manifestHead(5000, 'c').canonicalJson,
-        'project_json': candidate,
-        'project_id': revision3QuestOutlineProjectId,
-        'revision': fixture.projectRevision + 1,
-        'quest_id': revision3QuestOutlineQuestId,
-        'module_id': revision3QuestOutlineModuleId,
-        'quest_revision': fixture.questRevision + 1,
-        'module_revision': fixture.moduleRevision + 1,
-        'previous_generator_version': 3,
-        'upgraded_from_legacy': true,
-        'transition_plan_seal': <String, Object?>{
-          'byte_len': plan.contentSeal.byteLength,
-          'sha256': plan.contentSeal.sha256,
-        },
-        'build_status': 'blocked',
-        'runtime_status': 'runtime_unqualified',
-        'publication_status': 'not_supported',
-      };
-      final core = FakeGoreCoreFfiService(
-        responses: {
-          'authoring_store_prepare_revision3_quest_transitions_edit_v1':
-              response,
-        },
-      );
+  test('FFI sends the minimal wire and accepts an exact v4 delta', () async {
+    final fixture = Revision3QuestOutlineFixture();
+    final defaultPlan =
+        AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(3);
+    final plan = AuthoringRevision3QuestTransitionPlanV1(
+      objectiveSlots: defaultPlan.objectiveSlots,
+      objectiveOrder: const <int>[3, 1, 2],
+      nextSlotOrdinal: defaultPlan.nextSlotOrdinal,
+      transitions: defaultPlan.transitions,
+    );
+    final request = AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
+      expectedHead: fixture.head,
+      currentProjectJson: fixture.projectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      transitionPlan: plan,
+    );
+    final candidate = _projectJsonWithPlan(fixture, plan, advance: true);
+    final response = <String, Object?>{
+      'ok': true,
+      'outcome': 'prepared_unpublished',
+      'basis_head_json': fixture.head.canonicalJson,
+      'head_json': manifestHead(5000, 'c').canonicalJson,
+      'project_json': candidate,
+      'project_id': revision3QuestOutlineProjectId,
+      'revision': fixture.projectRevision + 1,
+      'quest_id': revision3QuestOutlineQuestId,
+      'module_id': revision3QuestOutlineModuleId,
+      'quest_revision': fixture.questRevision + 1,
+      'module_revision': fixture.moduleRevision + 1,
+      'transition_plan_seal': <String, Object?>{
+        'byte_len': plan.contentSeal.byteLength,
+        'sha256': plan.contentSeal.sha256,
+      },
+      'build_status': 'blocked',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    };
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'authoring_store_prepare_revision3_quest_transitions_edit_v1': response,
+      },
+    );
 
-      final prepared = await ModFfi(core)
-          .authoringStorePrepareRevision3QuestTransitionsEditV1(
-            root: _root,
-            currentProjectJson: fixture.projectJson,
-            request: request,
-          );
+    final prepared = await ModFfi(core)
+        .authoringStorePrepareRevision3QuestTransitionsEditV1(
+          root: _root,
+          currentProjectJson: fixture.projectJson,
+          request: request,
+        );
 
-      expect(prepared.previousGeneratorVersion, 3);
-      expect(prepared.upgradedFromLegacy, isTrue);
-      expect(prepared.transitionPlanSeal.sha256, plan.contentSeal.sha256);
-      expect(
-        prepared.buildStatus,
-        AuthoringRevision3QuestTransitionsBuildStatus.blocked,
-      );
-      expect(
-        prepared.runtimeStatus,
-        AuthoringRevision3QuestTransitionsRuntimeStatus.runtimeUnqualified,
-      );
-      expect(
-        prepared.publicationStatus,
-        AuthoringRevision3QuestTransitionsPublicationStatus.notSupported,
-      );
-      expect(core.calls.single.payload.keys, <String>[
-        'current_project_json',
-        'quest_transitions_request_json',
-        'root',
-      ]);
-    },
-  );
+    expect(prepared.transitionPlanSeal.sha256, plan.contentSeal.sha256);
+    expect(
+      prepared.buildStatus,
+      AuthoringRevision3QuestTransitionsBuildStatus.blocked,
+    );
+    expect(
+      prepared.runtimeStatus,
+      AuthoringRevision3QuestTransitionsRuntimeStatus.runtimeUnqualified,
+    );
+    expect(
+      prepared.publicationStatus,
+      AuthoringRevision3QuestTransitionsPublicationStatus.notSupported,
+    );
+    expect(core.calls.single.payload.keys, <String>[
+      'current_project_json',
+      'quest_transitions_request_json',
+      'root',
+    ]);
+  });
 }
 
-String _semanticProjectJson(
+String _projectJsonWithPlan(
   Revision3QuestOutlineFixture fixture,
   AuthoringRevision3QuestTransitionPlanV1 plan, {
   bool advance = false,

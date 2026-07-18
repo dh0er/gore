@@ -12,6 +12,7 @@ const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
 const _missingId = '55555555555555555555555555555555';
+const _npcModuleId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _assetSha =
@@ -35,7 +36,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Fixture project'), findsOneWidget);
-    expect(find.text('3 entities / 2 assets / revision 7'), findsOneWidget);
+    expect(find.text('4 entities / 2 assets / revision 7'), findsOneWidget);
     expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsOneWidget);
     expect(
       find.byKey(Key('revision3-content-entity-$_questId')),
@@ -461,7 +462,7 @@ void main() {
 
       expect(calls, 0);
       expect(find.byType(BottomSheet), findsNothing);
-      expect(find.text('3 entities / 2 assets / revision 8'), findsOneWidget);
+      expect(find.text('4 entities / 2 assets / revision 8'), findsOneWidget);
     },
   );
 
@@ -612,18 +613,14 @@ void main() {
       );
       expect(
         find.byKey(
-          Key(
-            'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.story.name}-$_questId',
-          ),
+          Key('revision3-story-workbench-tab-story-$_questId'),
           skipOffstage: false,
         ),
         findsNothing,
       );
       expect(
         find.byKey(
-          Key(
-            'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.logic.name}-$_questId',
-          ),
+          Key('revision3-story-workbench-tab-logic-$_questId'),
           skipOffstage: false,
         ),
         findsNothing,
@@ -662,39 +659,6 @@ void main() {
       expect(transitionCalls, 1);
     },
   );
-
-  testWidgets('fallback normalizes legacy Quest Logic deep links to Overview', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    final controller = Revision3ContentLibraryController();
-    var transitionCalls = 0;
-    await _pumpLoadedLibrary(
-      tester,
-      controller: controller,
-      editQuestTransitions: (index, quest) async => transitionCalls++,
-    );
-    final opened = await controller.openEntityById(
-      _questId,
-      storySection: Revision3StoryWorkbenchSection.logic,
-    );
-    await tester.pumpAndSettle();
-
-    expect(opened, isTrue);
-    expect(transitionCalls, 0);
-    expect(
-      tester
-          .widget<ChoiceChip>(
-            find.byKey(
-              Key(
-                'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.overview.name}-$_questId',
-              ),
-            ),
-          )
-          .selected,
-      isTrue,
-    );
-  });
 
   testWidgets('Source & checks routes the selected exact Quest separately', (
     tester,
@@ -2523,7 +2487,7 @@ void main() {
     rebuild(() => revision = 8);
     await tester.pumpAndSettle();
     expect(calls, 4);
-    expect(find.text('3 entities / 2 assets / revision 8'), findsOneWidget);
+    expect(find.text('4 entities / 2 assets / revision 8'), findsOneWidget);
   });
 }
 
@@ -2744,7 +2708,8 @@ Revision3ContentIndex _fixture({
   'entity_counts': <String, Object?>{
     if (includeNpc) 'npc_draft': 1,
     if (includeQuest) 'quest_draft': 1,
-    if (includeQuest) 'script_module': 1,
+    if (includeQuest || includeNpc)
+      'script_module': (includeQuest ? 1 : 0) + (includeNpc ? 1 : 0),
   },
   'entities': <Object?>[
     if (includeNpc)
@@ -2765,6 +2730,44 @@ Revision3ContentIndex _fixture({
             'parent_character_definition': 'UCharacterDefinition_Asghan',
             'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
             'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+            'greeting_count': 0,
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': _npcModuleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeNpc)
+      <String, Object?>{
+        'id': _npcModuleId,
+        'kind': 'script_module',
+        'display_name': 'Gate Guard source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'content-library.fixture.npc',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+            'module_relative_path': 'Project/Npcs/GateGuard.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
           },
         },
         'references': <Object?>[],

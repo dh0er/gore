@@ -12,16 +12,16 @@ use std::fmt;
 use std::io::{self, Write};
 
 use gore_authoring::{
-    regenerate_revision3_quest_module_v2, AssetMeta, ContentSeal as AuthoringContentSeal,
+    regenerate_revision3_quest_module, AssetMeta, ContentSeal as AuthoringContentSeal,
     DraftQuestCollisionKind, DraftQuestSkeletonError, EntityId, ProjectId, ProjectRevision3,
-    ProjectRevision3JsonError, QuestCollisionArtifactRef, Revision3Entity as Entity,
-    Revision3EntityKind as EntityKind, Revision3EntityPayload as EntityPayload,
-    Revision3OriginRef as OriginRef, Revision3QuestDraft as QuestDraft,
-    Revision3QuestDraftInput as QuestDraftInput, Revision3QuestGenerationError,
-    Revision3TypedRef as TypedRef, Sha256Digest as AuthoringSha256Digest, WorkingHead,
-    MAX_PROJECT_JSON_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
-    MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    ProjectRevision3JsonError, QuestCollisionArtifactRef, QuestTransitionPlanV1,
+    Revision3Entity as Entity, Revision3EntityKind as EntityKind,
+    Revision3EntityPayload as EntityPayload, Revision3OriginRef as OriginRef,
+    Revision3QuestDraft as QuestDraft, Revision3QuestDraftInput as QuestDraftInput,
+    Revision3QuestGenerationError, Revision3TypedRef as TypedRef,
+    Sha256Digest as AuthoringSha256Digest, WorkingHead, MAX_PROJECT_JSON_BYTES,
+    MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
+    MAX_REVISION3_REFERENCED_ASSET_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
@@ -432,13 +432,16 @@ pub fn apply_revision3_quest_draft_transaction_v3(
         script_module_id,
         EntityKind::ScriptModule,
     );
+    let transition_plan =
+        QuestTransitionPlanV1::default_for_objectives(additional_objective_titles.len() + 1)
+            .map_err(|error| {
+                Revision3QuestDraftInsertErrorV3::Conflict(
+                    Revision3QuestDraftConflictV3::InvalidQuestIntent { error },
+                )
+            })?;
     let quest = QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: if additional_objective_titles.is_empty() {
-            REVISION3_QUEST_GENERATOR_VERSION
-        } else {
-            REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-        },
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         input: QuestDraftInput {
             target: project.target.clone(),
             quest_id,
@@ -451,7 +454,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
             description,
             objective_title,
             additional_objective_titles,
-            transition_plan: None,
+            transition_plan: Box::new(transition_plan),
             collision_catalog: artifact_reference,
         },
         script_module: module_ref,
@@ -459,7 +462,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
     };
     let runtime_id = quest.input.technical_id.clone();
     let collision_input = capability.into_quest_collision_input();
-    let module = match regenerate_revision3_quest_module_v2(&quest, collision_input) {
+    let module = match regenerate_revision3_quest_module(&quest, collision_input) {
         Ok(module) => module,
         Err(Revision3QuestGenerationError::InvalidQuestIntent(
             DraftQuestSkeletonError::GeneratedNameCollision { kind, name },

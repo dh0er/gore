@@ -102,7 +102,7 @@ class _Revision3QuestContextEditDialogState
         _loading = false;
         _checkpointLocked = true;
         _error =
-            'The Quest\'s current family or giver is unavailable in this game catalog. This editor cannot guess a replacement; a later migration tool is required.';
+            'The Quest\'s current family or giver is unavailable in this game catalog. This editor cannot guess a replacement.';
       });
     } catch (_) {
       if (!mounted || generation != _loadGeneration) return;

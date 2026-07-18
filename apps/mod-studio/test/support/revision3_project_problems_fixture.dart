@@ -230,6 +230,7 @@ Map<String, Object?> _npcWithMissingModuleReference() => <String, Object?>{
       'parent_character_definition': 'UCharacterDefinition_Asghan',
       'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
       'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+      'greeting_count': 0,
     },
   },
   'references': <Object?>[

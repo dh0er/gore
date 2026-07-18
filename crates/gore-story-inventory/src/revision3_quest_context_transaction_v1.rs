@@ -11,7 +11,7 @@ use std::fmt;
 use std::io::{self, Write};
 
 use gore_authoring::{
-    regenerate_revision3_quest_module_v2, ContentSeal as AuthoringContentSeal,
+    regenerate_revision3_quest_module, ContentSeal as AuthoringContentSeal,
     DraftQuestSkeletonError, EntityId, ProjectId, ProjectRevision3, ProjectRevision3JsonError,
     QuestCollisionCatalogInput, Revision3EntityKind as EntityKind,
     Revision3EntityPayload as EntityPayload, Revision3QuestDraft as QuestDraft,
@@ -405,13 +405,13 @@ pub fn apply_revision3_quest_context_edit_transaction_v1(
     };
 
     let collision_input = empty_collision_input(&quest);
-    let regenerated_existing =
-        regenerate_revision3_quest_module_v2(&quest, collision_input.clone()).map_err(|error| {
-            invalid_closure_owned(
-                request.quest_id,
-                format!("deterministic regeneration failed: {error}"),
-            )
-        })?;
+    let regenerated_existing = regenerate_revision3_quest_module(&quest, collision_input.clone())
+        .map_err(|error| {
+        invalid_closure_owned(
+            request.quest_id,
+            format!("deterministic regeneration failed: {error}"),
+        )
+    })?;
     if existing_module != regenerated_existing {
         return Err(Revision3QuestContextEditErrorV1::Conflict(
             Revision3QuestContextEditConflictV1::OwnedModuleDrift {
@@ -433,7 +433,7 @@ pub fn apply_revision3_quest_context_edit_transaction_v1(
     edited_quest.input.description = request.description;
     edited_quest.input.parent_quest = parent;
     edited_quest.input.giver = giver;
-    let edited_module = match regenerate_revision3_quest_module_v2(&edited_quest, collision_input) {
+    let edited_module = match regenerate_revision3_quest_module(&edited_quest, collision_input) {
         Ok(module) => module,
         Err(Revision3QuestGenerationError::InvalidQuestIntent(error)) => {
             return Err(Revision3QuestContextEditErrorV1::Conflict(

@@ -11828,7 +11828,7 @@ class _FakeManagedLease
 
   @override
   Future<Revision3QuestOutlineEditPublication>
-  prepareAndPublishQuestOutlineEditV1({
+  prepareAndPublishQuestOutlineEditV2({
     required Revision3QuestOutlineEditInput input,
   }) async {
     questOutlinePublishCalls++;
@@ -13788,6 +13788,97 @@ Map<String, Object?> _dialogLineEntityReference({
   'resolution': 'resolved',
 };
 
+Map<String, Object?> _homeNpcContentEntity({
+  required String projectId,
+  required String npcId,
+  required String moduleId,
+  required String displayName,
+  required int revision,
+  required String uniqueName,
+  required String moduleNamespace,
+  required String parentCharacterDefinition,
+  required String parentAiAgentConfig,
+  required String parentSpawnDefinition,
+}) => <String, Object?>{
+  'id': npcId,
+  'kind': 'npc_draft',
+  'display_name': displayName,
+  'revision': revision,
+  'origin': <String, Object?>{'type': 'new', 'authored_runtime_id': uniqueName},
+  'summary': <String, Object?>{
+    'kind': 'npc_draft',
+    'data': <String, Object?>{
+      'unique_name': uniqueName,
+      'module_namespace': moduleNamespace,
+      'parent_character_definition': parentCharacterDefinition,
+      'parent_ai_agent_config': parentAiAgentConfig,
+      'parent_spawn_definition': parentSpawnDefinition,
+      'greeting_count': 0,
+    },
+  },
+  'references': <Object?>[
+    _dialogLineEntityReference(
+      projectId: projectId,
+      role: 'draft_script_module',
+      entityId: moduleId,
+      expectedKind: 'script_module',
+    ),
+  ],
+  'asset_references': <Object?>[],
+};
+
+Map<String, Object?> _homeNpcScriptModuleContentEntity({
+  required String projectId,
+  required String npcId,
+  required String moduleId,
+  required String displayName,
+  required int revision,
+  required String moduleNamespace,
+}) => <String, Object?>{
+  'id': moduleId,
+  'kind': 'script_module',
+  'display_name': displayName,
+  'revision': revision,
+  'origin': <String, Object?>{
+    'type': 'generated',
+    'generator_id': revision3NpcFixtureGeneratorId,
+    'generator_version': revision3NpcFixtureGeneratorVersion,
+    'owner': <String, Object?>{
+      'project_id': projectId,
+      'entity_id': npcId,
+      'expected_kind': 'npc_draft',
+    },
+  },
+  'summary': <String, Object?>{
+    'kind': 'script_module',
+    'data': <String, Object?>{
+      'generator_id': revision3NpcFixtureGeneratorId,
+      'generator_version': revision3NpcFixtureGeneratorVersion,
+      'module_namespace': moduleNamespace,
+      'module_relative_path': '${moduleNamespace.replaceAll('.', '/')}.as',
+      'status': <String, Object?>{
+        'authoring': 'offline_draft',
+        'runtime': 'runtime_unqualified',
+      },
+    },
+  },
+  'references': <Object?>[
+    _dialogLineEntityReference(
+      projectId: projectId,
+      role: 'origin_owner',
+      entityId: npcId,
+      expectedKind: 'npc_draft',
+    ),
+    _dialogLineEntityReference(
+      projectId: projectId,
+      role: 'script_owner',
+      entityId: npcId,
+      expectedKind: 'npc_draft',
+    ),
+  ],
+  'asset_references': <Object?>[],
+};
+
 Revision3ContentIndex _globalSearchContentIndex({
   required String projectId,
   required int revision,
@@ -13806,56 +13897,49 @@ Revision3ContentIndex _globalSearchContentIndex({
     },
   },
   'authoring_locales': <Object?>[],
-  'entity_counts': <String, Object?>{'npc_draft': 2},
+  'entity_counts': <String, Object?>{'npc_draft': 2, 'script_module': 2},
   'entities': <Object?>[
-    <String, Object?>{
-      'id': '91919191919191919191919191919191',
-      'kind': 'npc_draft',
-      'display_name': 'First Sentinel',
-      'revision': 1,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': 'FIRST_SENTINEL',
-      },
-      'summary': <String, Object?>{
-        'kind': 'npc_draft',
-        'data': <String, Object?>{
-          'unique_name': 'FIRST_SENTINEL',
-          'module_namespace': 'Test_Global_Search',
-          'parent_character_definition':
-              'UCharacterDefinition_Human_OM_GRD_Gardist_261',
-          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Gardist_261',
-          'parent_spawn_definition':
-              'USpawnAIAgentDefinition_OM_GRD_Gardist_261',
-        },
-      },
-      'references': <Object?>[],
-      'asset_references': <Object?>[],
-    },
-    <String, Object?>{
-      'id': targetEntityId,
-      'kind': 'npc_draft',
-      'display_name': 'Asghan Sentinel',
-      'revision': 1,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': 'ASGHAN_SENTINEL',
-      },
-      'summary': <String, Object?>{
-        'kind': 'npc_draft',
-        'data': <String, Object?>{
-          'unique_name': 'ASGHAN_SENTINEL',
-          'module_namespace': 'Test_Global_Search',
-          'parent_character_definition':
-              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
-          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
-          'parent_spawn_definition':
-              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
-        },
-      },
-      'references': <Object?>[],
-      'asset_references': <Object?>[],
-    },
+    _homeNpcContentEntity(
+      projectId: projectId,
+      npcId: '91919191919191919191919191919191',
+      moduleId: '91919191919191919191919191919192',
+      displayName: 'First Sentinel',
+      revision: 1,
+      uniqueName: 'FIRST_SENTINEL',
+      moduleNamespace: 'Test_Global_Search.FirstSentinel',
+      parentCharacterDefinition:
+          'UCharacterDefinition_Human_OM_GRD_Gardist_261',
+      parentAiAgentConfig: 'UAIAgentConfig_Human_OM_GRD_Gardist_261',
+      parentSpawnDefinition: 'USpawnAIAgentDefinition_OM_GRD_Gardist_261',
+    ),
+    _homeNpcScriptModuleContentEntity(
+      projectId: projectId,
+      npcId: '91919191919191919191919191919191',
+      moduleId: '91919191919191919191919191919192',
+      displayName: 'First Sentinel Script',
+      revision: 1,
+      moduleNamespace: 'Test_Global_Search.FirstSentinel',
+    ),
+    _homeNpcContentEntity(
+      projectId: projectId,
+      npcId: targetEntityId,
+      moduleId: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      displayName: 'Asghan Sentinel',
+      revision: 1,
+      uniqueName: 'ASGHAN_SENTINEL',
+      moduleNamespace: 'Test_Global_Search.TargetSentinel',
+      parentCharacterDefinition: 'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+      parentAiAgentConfig: 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+      parentSpawnDefinition: 'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+    ),
+    _homeNpcScriptModuleContentEntity(
+      projectId: projectId,
+      npcId: targetEntityId,
+      moduleId: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+      displayName: 'Target Sentinel Script',
+      revision: 1,
+      moduleNamespace: 'Test_Global_Search.TargetSentinel',
+    ),
   ],
   'assets': <Object?>[],
 });
@@ -13955,6 +14039,7 @@ _npcManagedCompilerFixture() {
             'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
             'parent_spawn_definition':
                 'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+            'greeting_count': 0,
           },
         },
         'references': <Object?>[referenceToModule],
@@ -14258,32 +14343,28 @@ Revision3ContentIndex _npcInspectionIndex({
     },
   },
   'authoring_locales': <Object?>[],
-  'entity_counts': <String, Object?>{'npc_draft': 1},
+  'entity_counts': <String, Object?>{'npc_draft': 1, 'script_module': 1},
   'entities': <Object?>[
-    <String, Object?>{
-      'id': revision3NpcInspectionNpcId,
-      'kind': 'npc_draft',
-      'display_name': 'Inspection Guard',
-      'revision': 2,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': revision3NpcInspectionUniqueName,
-      },
-      'summary': <String, Object?>{
-        'kind': 'npc_draft',
-        'data': <String, Object?>{
-          'unique_name': revision3NpcInspectionUniqueName,
-          'module_namespace': revision3NpcInspectionModuleNamespace,
-          'parent_character_definition':
-              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
-          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
-          'parent_spawn_definition':
-              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
-        },
-      },
-      'references': <Object?>[],
-      'asset_references': <Object?>[],
-    },
+    _homeNpcContentEntity(
+      projectId: projectId,
+      npcId: revision3NpcInspectionNpcId,
+      moduleId: revision3NpcInspectionModuleId,
+      displayName: 'Inspection Guard',
+      revision: 2,
+      uniqueName: revision3NpcInspectionUniqueName,
+      moduleNamespace: revision3NpcInspectionModuleNamespace,
+      parentCharacterDefinition: 'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+      parentAiAgentConfig: 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+      parentSpawnDefinition: 'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+    ),
+    _homeNpcScriptModuleContentEntity(
+      projectId: projectId,
+      npcId: revision3NpcInspectionNpcId,
+      moduleId: revision3NpcInspectionModuleId,
+      displayName: 'Inspection Guard Script',
+      revision: 3,
+      moduleNamespace: revision3NpcInspectionModuleNamespace,
+    ),
   ],
   'assets': <Object?>[],
 });
@@ -14309,33 +14390,29 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
   'entity_counts': <String, Object?>{
     'npc_draft': 1,
     'quest_draft': 1,
-    'script_module': 1,
+    'script_module': 2,
   },
   'entities': <Object?>[
-    <String, Object?>{
-      'id': revision3NpcInspectionNpcId,
-      'kind': 'npc_draft',
-      'display_name': 'Inspection Guard',
-      'revision': 2,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': revision3NpcInspectionUniqueName,
-      },
-      'summary': <String, Object?>{
-        'kind': 'npc_draft',
-        'data': <String, Object?>{
-          'unique_name': revision3NpcInspectionUniqueName,
-          'module_namespace': revision3NpcInspectionModuleNamespace,
-          'parent_character_definition':
-              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
-          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
-          'parent_spawn_definition':
-              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
-        },
-      },
-      'references': <Object?>[],
-      'asset_references': <Object?>[],
-    },
+    _homeNpcContentEntity(
+      projectId: projectId,
+      npcId: revision3NpcInspectionNpcId,
+      moduleId: revision3NpcInspectionModuleId,
+      displayName: 'Inspection Guard',
+      revision: 2,
+      uniqueName: revision3NpcInspectionUniqueName,
+      moduleNamespace: revision3NpcInspectionModuleNamespace,
+      parentCharacterDefinition: 'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+      parentAiAgentConfig: 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+      parentSpawnDefinition: 'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+    ),
+    _homeNpcScriptModuleContentEntity(
+      projectId: projectId,
+      npcId: revision3NpcInspectionNpcId,
+      moduleId: revision3NpcInspectionModuleId,
+      displayName: 'Inspection Guard Script',
+      revision: 3,
+      moduleNamespace: revision3NpcInspectionModuleNamespace,
+    ),
     <String, Object?>{
       'id': revision3QuestOutlineQuestId,
       'kind': 'quest_draft',
@@ -14403,6 +14480,16 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
       'references': <Object?>[
         <String, Object?>{
           'role': 'origin_owner',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': projectId,
+            'entity_id': revision3QuestOutlineQuestId,
+            'expected_kind': 'quest_draft',
+          },
+          'resolution': 'resolved',
+        },
+        <String, Object?>{
+          'role': 'script_owner',
           'qualifier': null,
           'target': <String, Object?>{
             'project_id': projectId,

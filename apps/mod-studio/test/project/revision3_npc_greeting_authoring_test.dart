@@ -65,35 +65,19 @@ void main() {
     );
   });
 
-  test(
-    'legacy NPC projection stays readable but grants no greeting authority',
-    () async {
-      final legacy = _contentIndexJson();
-      final npc = ((legacy['entities']! as List)[0] as Map)
-          .cast<String, Object?>();
-      final summary = (npc['summary']! as Map).cast<String, Object?>();
-      final data = (summary['data']! as Map).cast<String, Object?>();
-      data.remove('greeting_count');
-      final references = npc['references']! as List;
-      references.removeWhere(
-        (value) => (value as Map)['role'] == 'npc_greeting_line',
-      );
-      final index = Revision3ContentIndex.fromJsonObject(legacy);
-      expect(index.entityById(_npcId)!.summary.npcDraft!.greetingCount, 0);
-      expect(
-        index.entityById(_npcId)!.summary.npcDraft!.hasGreetingProjection,
-        isFalse,
-      );
+  test('ContentIndex requires the current NPC greeting projection', () {
+    final missingCount = _contentIndexJson();
+    final npc = ((missingCount['entities']! as List)[0] as Map)
+        .cast<String, Object?>();
+    final summary = (npc['summary']! as Map).cast<String, Object?>();
+    final data = (summary['data']! as Map).cast<String, Object?>();
+    data.remove('greeting_count');
 
-      await expectLater(
-        _service(
-          index: index,
-          head: _head(4096, 'b'),
-        ).load(npcId: _npcId, expectedNpcRevision: 4),
-        throwsA(isA<Revision3NpcGreetingStaleCheckpointException>()),
-      );
-    },
-  );
+    expect(
+      () => Revision3ContentIndex.fromJsonObject(missingCount),
+      throwsFormatException,
+    );
+  });
 
   test(
     'projection never exposes NPC or generated-module technical identity',

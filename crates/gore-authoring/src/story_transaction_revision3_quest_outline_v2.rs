@@ -12,16 +12,16 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model_revision2::QuestCollisionCatalogInput;
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, QuestDraft, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
-use crate::revision3_quest::regenerate_revision3_quest_module_v2;
+use crate::revision3_quest::regenerate_revision3_quest_module;
 use crate::story_transaction_revision3_quest_transitions::{
     revision3_quest_transition_plan_basis_v1, revision3_quest_transition_plan_seal_v1,
 };
 use crate::strict_json::reject_duplicate_object_keys;
+use crate::QuestCollisionCatalogInput;
 use crate::{
     validate_draft_quest_objective_titles, ContentSeal, DraftQuestSkeletonError, EntityId,
     GameGenerationAnchor, ProjectId, ProjectRevision3, ProjectRevision3JsonError, WorkingHead,
@@ -135,9 +135,9 @@ pub enum Revision3QuestOutlineEditConflictV2 {
     #[error("Quest entity {quest} revision cannot be incremented")]
     QuestRevisionOverflow { quest: EntityId },
     #[error(
-        "outline v2 requires the semantic Quest generator {expected_id}@{expected_version}, got {actual_id}@{actual_version}"
+        "Quest generator contract mismatch: expected {expected_id}@{expected_version}, got {actual_id}@{actual_version}"
     )]
-    SemanticQuestRequired {
+    GeneratorContractMismatch {
         expected_id: &'static str,
         expected_version: u32,
         actual_id: String,
@@ -331,14 +331,16 @@ pub fn apply_revision3_quest_outline_edit_transaction_v2(
         });
     };
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || quest.generator_version != REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
     {
-        reject!(Revision3QuestOutlineEditConflictV2::SemanticQuestRequired {
-            expected_id: REVISION3_QUEST_GENERATOR_ID,
-            expected_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
-            actual_id: quest.generator_id.clone(),
-            actual_version: quest.generator_version,
-        });
+        reject!(
+            Revision3QuestOutlineEditConflictV2::GeneratorContractMismatch {
+                expected_id: REVISION3_QUEST_GENERATOR_ID,
+                expected_version: REVISION3_QUEST_GENERATOR_VERSION,
+                actual_id: quest.generator_id.clone(),
+                actual_version: quest.generator_version,
+            }
+        );
     }
     let quest = quest.clone();
 
@@ -430,7 +432,7 @@ pub fn apply_revision3_quest_outline_edit_transaction_v2(
 
     let collision_input = empty_collision_input(&quest);
     let regenerated_existing =
-        match regenerate_revision3_quest_module_v2(&quest, collision_input.clone()) {
+        match regenerate_revision3_quest_module(&quest, collision_input.clone()) {
             Ok(module) => module,
             Err(error) => {
                 reject!(Revision3QuestOutlineEditConflictV2::InvalidQuestClosure {
@@ -455,12 +457,6 @@ pub fn apply_revision3_quest_outline_edit_transaction_v2(
             });
         }
     };
-    if basis.legacy_synthetic {
-        reject!(Revision3QuestOutlineEditConflictV2::InvalidQuestClosure {
-            quest: request.quest_id,
-            reason: "semantic Quest unexpectedly produced a synthetic legacy plan".to_owned(),
-        });
-    }
     if request.expected_transition_plan_seal != basis.seal {
         reject!(
             Revision3QuestOutlineEditConflictV2::TransitionPlanSealConflict {
@@ -554,8 +550,8 @@ pub fn apply_revision3_quest_outline_edit_transaction_v2(
     edited_quest.input.title = request.quest_title.clone();
     edited_quest.input.objective_title = requested_titles[0].clone();
     edited_quest.input.additional_objective_titles = requested_titles[1..].to_vec();
-    edited_quest.input.transition_plan = Some(Box::new(edited_plan.clone()));
-    let edited_module = match regenerate_revision3_quest_module_v2(&edited_quest, collision_input) {
+    edited_quest.input.transition_plan = Box::new(edited_plan.clone());
+    let edited_module = match regenerate_revision3_quest_module(&edited_quest, collision_input) {
         Ok(module) => module,
         Err(crate::Revision3QuestGenerationError::InvalidQuestIntent(error)) => {
             reject!(Revision3QuestOutlineEditConflictV2::InvalidOutlineText { error });

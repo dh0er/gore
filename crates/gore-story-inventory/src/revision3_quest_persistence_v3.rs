@@ -6,7 +6,7 @@
 //! artifact, publication, or head-CAS authority.
 
 use gore_authoring::{
-    regenerate_revision3_quest_module_v2, AssetMeta, AssetVerification,
+    regenerate_revision3_quest_module, AssetMeta, AssetVerification,
     ContentSeal as AuthoringContentSeal, EntityId, ImportedQuestCollisionArtifactV2,
     ProjectRevision3, ProjectRevision3JsonError, Revision3CheckpointPreparation,
     Revision3EntityKind as EntityKind, Revision3EntityPayload as EntityPayload,
@@ -341,11 +341,7 @@ fn validate_candidate_delta(
         || quest_entity.revision != 0
         || !is_valid_revision3_quest_draft_display_name_v3(&quest_entity.display_name)
         || quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || !matches!(
-            quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION
-                | gore_authoring::REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-        )
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
         || quest.input.target != candidate.target
         || quest.input.quest_id != quest_id
         || quest.script_module != expected_module_ref
@@ -404,7 +400,7 @@ fn validate_candidate_delta(
     let collision_input = artifact
         .structural_collision_input()
         .map_err(Revision3QuestDraftPersistenceErrorV3::Artifact)?;
-    let regenerated = regenerate_revision3_quest_module_v2(quest, collision_input)
+    let regenerated = regenerate_revision3_quest_module(quest, collision_input)
         .map_err(Revision3QuestDraftPersistenceErrorV3::Generation)?;
     if &regenerated != persisted_module {
         return Err(Revision3QuestDraftPersistenceValidationErrorV3::ScriptModuleMismatch.into());

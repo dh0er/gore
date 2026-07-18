@@ -274,13 +274,6 @@ class _Revision3QuestTransitionsEditDialogState
                     ),
                   )
                 else if (checkpoint != null && plan != null) ...[
-                  if (checkpoint.seed.legacySynthetic) ...[
-                    const Text(
-                      'This Quest still uses its original fixed behavior. Apply a template or configure a cell to create an editable behavior plan.',
-                      key: Key('revision3-quest-transitions-legacy-note'),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
                   Align(
                     alignment: Alignment.centerLeft,
                     child: OutlinedButton.icon(

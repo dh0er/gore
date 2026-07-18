@@ -1492,11 +1492,11 @@ fn verify_exact_zip64_footer(
 ) -> Result<(), Revision3ExactSnapshotExportError> {
     const ZIP64_EOCD_BYTES: usize = 56;
     const ZIP64_LOCATOR_BYTES: usize = 20;
-    const LEGACY_EOCD_BYTES: usize = 22;
-    let mut footer = [0u8; ZIP64_EOCD_BYTES + ZIP64_LOCATOR_BYTES + LEGACY_EOCD_BYTES];
+    const CLASSIC_EOCD_BYTES: usize = 22;
+    let mut footer = [0u8; ZIP64_EOCD_BYTES + ZIP64_LOCATOR_BYTES + CLASSIC_EOCD_BYTES];
     read_exact_file_at(file, &mut footer, footer_offset).map_err(staged_verification_error)?;
     let locator = ZIP64_EOCD_BYTES;
-    let legacy = locator + ZIP64_LOCATOR_BYTES;
+    let classic_eocd = locator + ZIP64_LOCATOR_BYTES;
     if le_u32(&footer, 0) != 0x0606_4b50
         || le_u64(&footer, 4) != 44
         || le_u16(&footer, 12) != ZIP_VERSION_45
@@ -1511,17 +1511,17 @@ fn verify_exact_zip64_footer(
         || le_u32(&footer, locator + 4) != 0
         || le_u64(&footer, locator + 8) != footer_offset
         || le_u32(&footer, locator + 16) != 1
-        || le_u32(&footer, legacy) != 0x0605_4b50
-        || le_u16(&footer, legacy + 4) != 0
-        || le_u16(&footer, legacy + 6) != 0
-        || le_u16(&footer, legacy + 8) != entry_count.min(u16::MAX as u64) as u16
-        || le_u16(&footer, legacy + 10) != entry_count.min(u16::MAX as u64) as u16
-        || le_u32(&footer, legacy + 12) != central_size.min(u32::MAX as u64) as u32
-        || le_u32(&footer, legacy + 16) != central_offset.min(u32::MAX as u64) as u32
-        || le_u16(&footer, legacy + 20) != 0
+        || le_u32(&footer, classic_eocd) != 0x0605_4b50
+        || le_u16(&footer, classic_eocd + 4) != 0
+        || le_u16(&footer, classic_eocd + 6) != 0
+        || le_u16(&footer, classic_eocd + 8) != entry_count.min(u16::MAX as u64) as u16
+        || le_u16(&footer, classic_eocd + 10) != entry_count.min(u16::MAX as u64) as u16
+        || le_u32(&footer, classic_eocd + 12) != central_size.min(u32::MAX as u64) as u32
+        || le_u32(&footer, classic_eocd + 16) != central_offset.min(u32::MAX as u64) as u32
+        || le_u16(&footer, classic_eocd + 20) != 0
     {
         return Err(layout_error(
-            "ZIP64 EOCD, locator, or legacy EOCD differs from the exact dialect".to_owned(),
+            "ZIP64 EOCD, locator, or classic EOCD differs from the exact dialect".to_owned(),
         ));
     }
     Ok(())
@@ -2194,7 +2194,7 @@ mod tests {
         QuestCollisionArtifactRef, Revision3EntityKind, Revision3OriginRef, Revision3QuestDraft,
         Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
         Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus,
-        QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
         REVISION3_QUEST_GENERATOR_VERSION,
     };
 
@@ -2349,10 +2349,12 @@ mod tests {
                 description: "Retain the complete historical export basis.".to_owned(),
                 objective_title: "Verify the closure".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    crate::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                     artifact,
                     source_seal: seal(5, artifact_byte_len),
                     basis_snapshot,
@@ -2493,7 +2495,7 @@ mod tests {
         let artifact_bytes =
             serde_json::to_vec(&serde_json::json!({"padding": "closure"})).unwrap();
         let imported = store
-            .import_quest_collision_artifact_v1(&artifact_bytes, Some(&basis.head))
+            .import_quest_collision_artifact_v2(&artifact_bytes, &basis.head)
             .unwrap();
         let project = quest_project(
             8,
@@ -2714,8 +2716,8 @@ mod tests {
                 v2.receipt().archive.sha256.to_string()
             ),
             (
-                12_250,
-                "737338770096675a2582ae36ef2978e969170a37e9dd76717add6a5a44fa6ca8".to_owned()
+                13_276,
+                "8d7e2bec782d30c375a87397ea2cba1e2d028e6a268278cdafc41922dbdb0538".to_owned()
             )
         );
         assert!(v2.receipt().closure.snapshot_objects > 1);
@@ -2783,7 +2785,7 @@ mod tests {
         let central_extra = central_name + members[0].name.len();
         let footer = footer as usize;
         let locator = footer + 56;
-        let legacy = locator + 20;
+        let classic_eocd = locator + 20;
         let mutations = [
             ("local-version", local + 4),
             ("local-flags", local + 6),
@@ -2798,7 +2800,7 @@ mod tests {
             ("central-extra-value", central_extra + 4),
             ("zip64-record-size", footer + 4),
             ("zip64-locator-disk", locator + 4),
-            ("legacy-comment-length", legacy + 20),
+            ("classic-eocd-comment-length", classic_eocd + 20),
         ];
         for (label, offset) in mutations {
             let mut changed = original.clone();
@@ -2981,7 +2983,7 @@ mod tests {
 
         let artifact_bytes = serde_json::to_vec(&serde_json::json!({"padding": "basis"})).unwrap();
         let artifact = store
-            .import_quest_collision_artifact_v1(&artifact_bytes, Some(&first.head))
+            .import_quest_collision_artifact_v2(&artifact_bytes, &first.head)
             .unwrap();
         let second_project = quest_project(
             8,
@@ -3009,7 +3011,7 @@ mod tests {
 
         let orphan_bytes = serde_json::to_vec(&serde_json::json!({"padding": "orphan"})).unwrap();
         let orphan_artifact = store
-            .import_quest_collision_artifact_v1(&orphan_bytes, Some(&current.head))
+            .import_quest_collision_artifact_v2(&orphan_bytes, &current.head)
             .unwrap();
         let orphan_project = quest_project(
             10,

@@ -30,11 +30,9 @@ final class AuthoringRevision3QuestTransitionsSeed {
     required this.questRevision,
     required this.moduleId,
     required this.moduleRevision,
-    required this.generatorVersion,
     required this.objectives,
     required this.transitionPlan,
     required this.transitionPlanSeal,
-    required this.legacySynthetic,
   });
 
   factory AuthoringRevision3QuestTransitionsSeed.forProject({
@@ -67,11 +65,9 @@ final class AuthoringRevision3QuestTransitionsSeed {
       questRevision: basis.questRevision,
       moduleId: basis.moduleId,
       moduleRevision: basis.moduleRevision,
-      generatorVersion: basis.generatorVersion,
       objectives: basis.objectives,
       transitionPlan: basis.transitionPlan,
       transitionPlanSeal: basis.transitionPlan.contentSeal,
-      legacySynthetic: basis.legacySynthetic,
     );
   }
 
@@ -82,11 +78,9 @@ final class AuthoringRevision3QuestTransitionsSeed {
   final int questRevision;
   final String moduleId;
   final int moduleRevision;
-  final int generatorVersion;
   final List<AuthoringRevision3QuestTransitionObjectiveV1> objectives;
   final AuthoringRevision3QuestTransitionPlanV1 transitionPlan;
   final AuthoringDraftContentSeal transitionPlanSeal;
-  final bool legacySynthetic;
 }
 
 /// Exact-head, exact-entity-CAS-bound intent for one semantic transition edit.
@@ -103,8 +97,6 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
     required this.transitionPlan,
     required this.moduleId,
     required this.expectedModuleRevision,
-    required this.previousGeneratorVersion,
-    required this.upgradesLegacy,
   });
 
   factory AuthoringRevision3QuestTransitionsEditRequestV1.forProject({
@@ -224,8 +216,6 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
       ),
       moduleId: '',
       expectedModuleRevision: 0,
-      previousGeneratorVersion: 0,
-      upgradesLegacy: false,
     );
     final current = _authoringRequireCanonicalRevision3ProjectJson(
       currentProjectJson,
@@ -247,8 +237,6 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
       transitionPlan: parsed.transitionPlan,
       moduleId: basis.moduleId,
       expectedModuleRevision: basis.moduleRevision,
-      previousGeneratorVersion: basis.generatorVersion,
-      upgradesLegacy: basis.legacySynthetic,
     );
     bound._requireExactProjectBinding(current, basis);
     return bound;
@@ -265,8 +253,6 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
   final AuthoringRevision3QuestTransitionPlanV1 transitionPlan;
   final String moduleId;
   final int expectedModuleRevision;
-  final int previousGeneratorVersion;
-  final bool upgradesLegacy;
 
   void _requireExactCurrent(
     ({Map<String, Object?> project, String projectId, int revision}) current,
@@ -285,10 +271,8 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
       int questRevision,
       String moduleId,
       int moduleRevision,
-      int generatorVersion,
       List<AuthoringRevision3QuestTransitionObjectiveV1> objectives,
       AuthoringRevision3QuestTransitionPlanV1 transitionPlan,
-      bool legacySynthetic,
     })
     basis,
   ) {
@@ -298,8 +282,6 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
         expectedQuestRevision != basis.questRevision ||
         moduleId != basis.moduleId ||
         expectedModuleRevision != basis.moduleRevision ||
-        previousGeneratorVersion != basis.generatorVersion ||
-        upgradesLegacy != basis.legacySynthetic ||
         !_questTransitionsSameInts(
           transitionPlan.objectiveSlots,
           basis.transitionPlan.objectiveSlots,
@@ -313,8 +295,7 @@ final class AuthoringRevision3QuestTransitionsEditRequestV1 {
         'authoring revision-3 Quest transitions request does not bind the exact current Quest',
       );
     }
-    if (!basis.legacySynthetic &&
-        transitionPlan.canonicalJson == basis.transitionPlan.canonicalJson) {
+    if (transitionPlan.canonicalJson == basis.transitionPlan.canonicalJson) {
       throw const FormatException(
         'authoring revision-3 Quest transitions request does not change the plan',
       );
@@ -340,8 +321,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
     required this.moduleId,
     required this.questRevision,
     required this.moduleRevision,
-    required this.previousGeneratorVersion,
-    required this.upgradedFromLegacy,
     required this.transitionPlanSeal,
     required this.buildStatus,
     required this.runtimeStatus,
@@ -357,8 +336,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
   final String moduleId;
   final int questRevision;
   final int moduleRevision;
-  final int previousGeneratorVersion;
-  final bool upgradedFromLegacy;
   final AuthoringDraftContentSeal transitionPlanSeal;
   final AuthoringRevision3QuestTransitionsBuildStatus buildStatus;
   final AuthoringRevision3QuestTransitionsRuntimeStatus runtimeStatus;
@@ -385,8 +362,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
       'module_id',
       'quest_revision',
       'module_revision',
-      'previous_generator_version',
-      'upgraded_from_legacy',
       'transition_plan_seal',
       'build_status',
       'runtime_status',
@@ -450,18 +425,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
       min: 1,
       max: _maxAuthoringStoryAppliedRevision,
     );
-    final previousGeneratorVersion = _authoringRequiredInt(
-      json,
-      'previous_generator_version',
-      min: _authoringRevision3QuestGeneratorVersion,
-      max: _authoringRevision3SemanticQuestGeneratorVersion,
-    );
-    final upgradedFromLegacy = json['upgraded_from_legacy'];
-    if (upgradedFromLegacy is! bool) {
-      throw const FormatException(
-        'authoring revision-3 Quest transitions response has an invalid upgrade flag',
-      );
-    }
     final transitionPlanSeal = AuthoringDraftContentSeal.fromJson(
       _authoringRequiredObject(
         json['transition_plan_seal'],
@@ -476,8 +439,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
         moduleId != request.moduleId ||
         questRevision != request.expectedQuestRevision + 1 ||
         moduleRevision != request.expectedModuleRevision + 1 ||
-        previousGeneratorVersion != request.previousGeneratorVersion ||
-        upgradedFromLegacy != request.upgradesLegacy ||
         !_questTransitionsSameSeal(
           transitionPlanSeal,
           request.transitionPlan.contentSeal,
@@ -503,8 +464,6 @@ final class AuthoringRevision3QuestTransitionsEditPreparation {
       moduleId: moduleId,
       questRevision: questRevision,
       moduleRevision: moduleRevision,
-      previousGeneratorVersion: previousGeneratorVersion,
-      upgradedFromLegacy: upgradedFromLegacy,
       transitionPlanSeal: transitionPlanSeal,
       buildStatus: switch (json['build_status']) {
         'blocked' => AuthoringRevision3QuestTransitionsBuildStatus.blocked,
@@ -1071,14 +1030,14 @@ final class AuthoringRevision3QuestTransitionPlanV1 {
     );
   }
 
-  /// Effective transition plan of one frozen generator-v2/v3 Quest.
-  factory AuthoringRevision3QuestTransitionPlanV1.legacySeed(
+  /// Creates the canonical lifecycle used when a new Quest is authored.
+  factory AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
     int objectiveCount,
   ) {
     if (objectiveCount < 1 ||
         objectiveCount > _maxAuthoringRevision3QuestObjectives) {
       throw const FormatException(
-        'a legacy Quest transition seed requires 1 to 8 objectives',
+        'a Quest transition plan requires 1 to 8 objectives',
       );
     }
     final slots = List<int>.generate(objectiveCount, (index) => index + 1);
@@ -1543,9 +1502,6 @@ void _questTransitionsRequireExactDelta(
     questId: request.questId,
   );
   if (candidateQuest.entity['revision'] != questRevision ||
-      candidateBasis.generatorVersion !=
-          _authoringRevision3SemanticQuestGeneratorVersion ||
-      candidateBasis.legacySynthetic ||
       candidateBasis.transitionPlan.canonicalJson !=
           request.transitionPlan.canonicalJson) {
     throw const FormatException(
@@ -1600,7 +1556,7 @@ void _questTransitionsRequireExactDelta(
       candidateModule.data['generator_id'] !=
           _authoringRevision3QuestGeneratorId ||
       candidateModule.data['generator_version'] !=
-          _authoringRevision3SemanticQuestGeneratorVersion) {
+          _authoringRevision3QuestGeneratorVersion) {
     throw const FormatException(
       'authoring revision-3 Quest transitions candidate module contract is not exact',
     );
@@ -1674,10 +1630,8 @@ void _questTransitionsRequireExactDelta(
   int questRevision,
   String moduleId,
   int moduleRevision,
-  int generatorVersion,
   List<AuthoringRevision3QuestTransitionObjectiveV1> objectives,
   AuthoringRevision3QuestTransitionPlanV1 transitionPlan,
-  bool legacySynthetic,
 })
 _questTransitionsRequireBasis(
   Map<String, Object?> project, {
@@ -1706,7 +1660,7 @@ _questTransitionsRequireBasis(
     quest.data,
     'generator_version',
     min: _authoringRevision3QuestGeneratorVersion,
-    max: _authoringRevision3SemanticQuestGeneratorVersion,
+    max: _authoringRevision3QuestGeneratorVersion,
   );
   final scriptRef = _authoringRequiredObject(
     quest.data['script_module'],
@@ -1736,8 +1690,6 @@ _questTransitionsRequireBasis(
     quest.data['input'],
     'revision-3 Quest transitions input',
   );
-  final hasAdditional = input.containsKey('additional_objective_titles');
-  final hasPlan = input.containsKey('transition_plan');
   _authoringExactFields(input, <String>{
     'target',
     'quest_id',
@@ -1749,8 +1701,9 @@ _questTransitionsRequireBasis(
     'title',
     'description',
     'objective_title',
-    if (hasAdditional) 'additional_objective_titles',
-    if (hasPlan) 'transition_plan',
+    if (input.containsKey('additional_objective_titles'))
+      'additional_objective_titles',
+    'transition_plan',
     'collision_catalog',
   }, 'revision-3 Quest transitions input');
   if (input['quest_id'] != questId ||
@@ -1760,7 +1713,7 @@ _questTransitionsRequireBasis(
     );
   }
   final firstTitle = _questTransitionsLiteral(input, 'objective_title');
-  final additional = hasAdditional
+  final additional = input.containsKey('additional_objective_titles')
       ? _authoringRevision3QuestObjectiveTitleList(
           input['additional_objective_titles'],
           firstTitle: firstTitle,
@@ -1769,25 +1722,14 @@ _questTransitionsRequireBasis(
         )
       : const <String>[];
   final titles = <String>[firstTitle, ...additional];
-  if (switch (generatorVersion) {
-    _authoringRevision3QuestGeneratorVersion =>
-      hasAdditional || hasPlan || titles.length != 1,
-    _authoringRevision3MultiObjectiveQuestGeneratorVersion =>
-      !hasAdditional || hasPlan || titles.length < 2,
-    _authoringRevision3SemanticQuestGeneratorVersion => !hasPlan,
-    _ => true,
-  }) {
+  if (generatorVersion != _authoringRevision3QuestGeneratorVersion) {
     throw const FormatException(
-      'revision-3 Quest transitions input does not match its generator version',
+      'revision-3 Quest transitions require generator version 4',
     );
   }
-  final legacySynthetic =
-      generatorVersion != _authoringRevision3SemanticQuestGeneratorVersion;
-  final plan = legacySynthetic
-      ? AuthoringRevision3QuestTransitionPlanV1.legacySeed(titles.length)
-      : AuthoringRevision3QuestTransitionPlanV1.fromJson(
-          input['transition_plan'],
-        );
+  final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
+    input['transition_plan'],
+  );
   if (plan.objectiveOrder.length != titles.length) {
     throw const FormatException(
       'revision-3 Quest transition plan does not cover every objective title',
@@ -1805,7 +1747,6 @@ _questTransitionsRequireBasis(
       'revision',
       max: _maxAuthoringStoryBaseRevision,
     ),
-    generatorVersion: generatorVersion,
     objectives:
         List<AuthoringRevision3QuestTransitionObjectiveV1>.unmodifiable([
           for (var index = 0; index < titles.length; index++)
@@ -1815,7 +1756,6 @@ _questTransitionsRequireBasis(
             ),
         ]),
     transitionPlan: plan,
-    legacySynthetic: legacySynthetic,
   );
 }
 

@@ -756,7 +756,7 @@ _questTranscriptRequireBasis(
     data,
     'generator_version',
     min: _authoringRevision3QuestGeneratorVersion,
-    max: _authoringRevision3SemanticQuestGeneratorVersion,
+    max: _authoringRevision3QuestGeneratorVersion,
   );
   final moduleRef = _authoringRequiredObject(
     data['script_module'],
@@ -783,7 +783,7 @@ _questTranscriptRequireBasis(
     'revision-3 Quest transcript Quest input',
   );
   final objectiveSlots = <int>{};
-  if (generatorVersion == _authoringRevision3SemanticQuestGeneratorVersion) {
+  if (generatorVersion == _authoringRevision3QuestGeneratorVersion) {
     if (!input.containsKey('transition_plan')) {
       throw const FormatException(
         'revision-3 semantic Quest transcript has no transition plan',

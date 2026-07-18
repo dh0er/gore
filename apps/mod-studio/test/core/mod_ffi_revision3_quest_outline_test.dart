@@ -14,10 +14,6 @@ void main() {
   test('Studio handshake requires the sorted Quest outline command', () {
     expect(
       requiredStudioCoreCommands,
-      contains('authoring_store_prepare_revision3_quest_outline_edit_v1'),
-    );
-    expect(
-      requiredStudioCoreCommands,
       contains('authoring_store_prepare_revision3_quest_outline_edit_v2'),
     );
     expect(
@@ -25,175 +21,6 @@ void main() {
       orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
     );
   });
-
-  test('request is exact-project bound and carries outline intent only', () {
-    final fixture = Revision3QuestOutlineFixture();
-    final request = fixture.request();
-    final wire = jsonDecode(request.canonicalJson) as Map<String, Object?>;
-
-    expect(wire.keys, <String>[
-      'expected_head',
-      'expected_project_id',
-      'expected_revision',
-      'expected_target',
-      'quest_id',
-      'expected_quest_revision',
-      'display_name',
-      'title',
-      'objective_titles',
-    ]);
-    expect(wire, isNot(contains('module_id')));
-    expect(wire, isNot(contains('game_root')));
-    expect(wire, isNot(contains('collision_catalog')));
-    expect(request.moduleId, revision3QuestOutlineModuleId);
-    expect(request.expectedModuleRevision, 5);
-  });
-
-  test('request rejects count changes, whitespace and no-op edits', () {
-    final fixture = Revision3QuestOutlineFixture();
-    expect(
-      () => fixture.request(objectiveTitles: const ['Only one']),
-      throwsFormatException,
-    );
-    expect(
-      () => fixture.request(displayName: ' Padded name '),
-      throwsFormatException,
-    );
-    expect(
-      () => fixture.request(
-        displayName: fixture.displayName,
-        title: fixture.title,
-        objectiveTitles: fixture.objectiveTitles,
-      ),
-      throwsFormatException,
-    );
-  });
-
-  test('FFI sends no game root and accepts exact sealed delta', () async {
-    final fixture = Revision3QuestOutlineFixture();
-    final request = fixture.request();
-    final basisProjectBytes = utf8.encode(fixture.projectJson);
-    final basisProjectSha = crypto.sha256.convert(basisProjectBytes).toString();
-    expect(fixture.head.snapshotByteLength, isNot(basisProjectBytes.length));
-    expect(fixture.head.snapshotSha256, isNot(basisProjectSha));
-    final core = FakeGoreCoreFfiService(
-      responses: {
-        'authoring_store_prepare_revision3_quest_outline_edit_v1': fixture
-            .response(),
-      },
-    );
-
-    final prepared = await ModFfi(core)
-        .authoringStorePrepareRevision3QuestOutlineEditV1(
-          root: _root,
-          currentProjectJson: fixture.projectJson,
-          request: request,
-        );
-
-    expect(prepared.projectId, revision3QuestOutlineProjectId);
-    expect(prepared.revision, 8);
-    expect(prepared.questId, revision3QuestOutlineQuestId);
-    expect(prepared.moduleId, revision3QuestOutlineModuleId);
-    expect(prepared.questRevision, 5);
-    expect(prepared.moduleRevision, 6);
-    final candidateProjectBytes = utf8.encode(prepared.projectJson);
-    final candidateProjectSha = crypto.sha256
-        .convert(candidateProjectBytes)
-        .toString();
-    expect(
-      prepared.head.snapshotByteLength,
-      isNot(candidateProjectBytes.length),
-    );
-    expect(prepared.head.snapshotSha256, isNot(candidateProjectSha));
-    expect(
-      prepared.buildStatus,
-      AuthoringRevision3QuestOutlineBuildStatus.blocked,
-    );
-    expect(
-      prepared.runtimeStatus,
-      AuthoringRevision3QuestOutlineRuntimeStatus.runtimeUnqualified,
-    );
-    expect(
-      prepared.publicationStatus,
-      AuthoringRevision3QuestOutlinePublicationStatus.notSupported,
-    );
-    final call = core.calls.single;
-    expect(
-      call.command,
-      'authoring_store_prepare_revision3_quest_outline_edit_v1',
-    );
-    expect(call.payload.keys, <String>[
-      'current_project_json',
-      'quest_outline_request_json',
-      'root',
-    ]);
-  });
-
-  test('outline edit preserves optional Quest transcript metadata', () async {
-    final fixture = Revision3QuestOutlineFixture(includeTranscript: true);
-    final prepared =
-        await ModFfi(
-          FakeGoreCoreFfiService(
-            responses: {
-              'authoring_store_prepare_revision3_quest_outline_edit_v1': fixture
-                  .response(),
-            },
-          ),
-        ).authoringStorePrepareRevision3QuestOutlineEditV1(
-          root: _root,
-          currentProjectJson: fixture.projectJson,
-          request: fixture.request(),
-        );
-
-    final basis = jsonDecode(fixture.projectJson) as Map<String, Object?>;
-    final candidate = jsonDecode(prepared.projectJson) as Map<String, Object?>;
-    Map<String, Object?> questData(Map<String, Object?> project) {
-      final entities = (project['entities']! as Map).cast<String, Object?>();
-      final quest = (entities[revision3QuestOutlineQuestId]! as Map)
-          .cast<String, Object?>();
-      final payload = (quest['payload']! as Map).cast<String, Object?>();
-      return (payload['data']! as Map).cast<String, Object?>();
-    }
-
-    expect(questData(candidate)['transcript'], questData(basis)['transcript']);
-  });
-
-  test(
-    'FFI rejects an unrelated candidate delta as malformed native data',
-    () async {
-      final fixture = Revision3QuestOutlineFixture();
-      final response = fixture.response();
-      final candidate =
-          jsonDecode(response['project_json']! as String)
-              as Map<String, Object?>;
-      (candidate['meta']! as Map<String, Object?>)['name'] = 'Smuggled change';
-      final candidateJson = jsonEncode(candidate);
-      response['project_json'] = candidateJson;
-      response['head_json'] = headFor(candidateJson).canonicalJson;
-
-      await expectLater(
-        ModFfi(
-          FakeGoreCoreFfiService(
-            responses: {
-              'authoring_store_prepare_revision3_quest_outline_edit_v1':
-                  response,
-            },
-          ),
-        ).authoringStorePrepareRevision3QuestOutlineEditV1(
-          root: _root,
-          currentProjectJson: fixture.projectJson,
-          request: fixture.request(),
-        ),
-        throwsA(
-          isA<ModFfiException>().having(
-            (error) => error.code,
-            'code',
-            ModFfiException.malformedNativeResponseCode,
-          ),
-        ),
-      );
-    },
-  );
 
   test('V2 request carries exact stable slots and transition-plan seal', () {
     final fixture = Revision3QuestOutlineFixture();
@@ -224,6 +51,35 @@ void main() {
     expect(wire, isNot(contains('transition_plan')));
   });
 
+  test('V2 request accepts canonical single-objective Quest input', () {
+    final fixture = Revision3QuestOutlineFixture(
+      objectiveTitles: const <String>['Ask Asghan about Homer'],
+    );
+    final seal = AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+      1,
+    ).contentSeal;
+
+    final request = AuthoringRevision3QuestOutlineEditRequestV2.forProject(
+      expectedHead: fixture.head,
+      currentProjectJson: fixture.projectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      expectedModuleId: revision3QuestOutlineModuleId,
+      expectedModuleRevision: fixture.moduleRevision,
+      expectedTransitionPlanSeal: seal,
+      displayName: 'Find Homer safely',
+      questTitle: 'Secure the old gate',
+      objectives: const <AuthoringRevision3QuestOutlineObjectiveEditV2>[
+        AuthoringRevision3QuestOutlineObjectiveEditV2(
+          slot: 1,
+          title: 'Ask Asghan about Homer',
+        ),
+      ],
+    );
+
+    expect(request.objectives.single.slot, 1);
+  });
+
   test('V2 FFI accepts only the exact slot-preserving candidate', () async {
     final fixture = Revision3QuestOutlineFixture();
     final request = _semanticRequest(fixture);
@@ -237,7 +93,7 @@ void main() {
     final prepared = await ModFfi(core)
         .authoringStorePrepareRevision3QuestOutlineEditV2(
           root: _root,
-          currentProjectJson: fixture.semanticProjectJson,
+          currentProjectJson: fixture.projectJson,
           request: request,
         );
 
@@ -283,7 +139,7 @@ void main() {
         ),
       ).authoringStorePrepareRevision3QuestOutlineEditV2(
         root: _root,
-        currentProjectJson: fixture.semanticProjectJson,
+        currentProjectJson: fixture.projectJson,
         request: request,
       ),
       throwsA(
@@ -301,7 +157,7 @@ AuthoringRevision3QuestOutlineEditRequestV2 _semanticRequest(
   Revision3QuestOutlineFixture fixture,
 ) {
   final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-    currentProjectJson: fixture.semanticProjectJson,
+    currentProjectJson: fixture.projectJson,
     questId: revision3QuestOutlineQuestId,
     expectedQuestRevision: fixture.questRevision,
     expectedModuleId: revision3QuestOutlineModuleId,
@@ -309,7 +165,7 @@ AuthoringRevision3QuestOutlineEditRequestV2 _semanticRequest(
   );
   return AuthoringRevision3QuestOutlineEditRequestV2.forProject(
     expectedHead: fixture.head,
-    currentProjectJson: fixture.semanticProjectJson,
+    currentProjectJson: fixture.projectJson,
     questId: revision3QuestOutlineQuestId,
     expectedQuestRevision: fixture.questRevision,
     expectedModuleId: revision3QuestOutlineModuleId,
@@ -338,7 +194,7 @@ Map<String, Object?> _semanticResponse(
   Revision3QuestOutlineFixture fixture,
   AuthoringRevision3QuestOutlineEditRequestV2 request,
 ) {
-  final candidate = (jsonDecode(fixture.semanticProjectJson) as Map)
+  final candidate = (jsonDecode(fixture.projectJson) as Map)
       .cast<String, Object?>();
   candidate['revision'] = fixture.projectRevision + 1;
   final entities = (candidate['entities']! as Map).cast<String, Object?>();
@@ -351,9 +207,13 @@ Map<String, Object?> _semanticResponse(
   final input = (questData['input']! as Map).cast<String, Object?>();
   input['title'] = request.questTitle;
   input['objective_title'] = request.objectives.first.title;
-  input['additional_objective_titles'] = [
-    for (final objective in request.objectives.skip(1)) objective.title,
-  ];
+  if (request.objectives.length > 1) {
+    input['additional_objective_titles'] = [
+      for (final objective in request.objectives.skip(1)) objective.title,
+    ];
+  } else {
+    input.remove('additional_objective_titles');
+  }
   final plan = (input['transition_plan']! as Map).cast<String, Object?>();
   plan['objective_order'] = [
     for (final objective in request.objectives) objective.slot,

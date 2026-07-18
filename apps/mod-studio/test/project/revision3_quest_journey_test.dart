@@ -1,12 +1,9 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_quest_journey.dart';
 import 'package:gore_mod/project/revision3_quest_transcript_authoring.dart';
 
-import '../support/revision3_quest_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 
 typedef _TranscriptBinding = ({int lineIndex, int? objectiveSlot});
@@ -19,7 +16,6 @@ void main() {
     'V4 composes stable objectives, root behavior, authored dialog order and sharing',
     () async {
       final parts = await _JourneyFixture(
-        generatorVersion: 4,
         bindings: const <_TranscriptBinding>[
           (lineIndex: 1, objectiveSlot: 3),
           (lineIndex: 0, objectiveSlot: null),
@@ -35,7 +31,6 @@ void main() {
       expect(journey.checkpointIdentity, parts.head.canonicalJson);
       expect(journey.questId, revision3QuestOutlineQuestId);
       expect(journey.moduleId, revision3QuestOutlineModuleId);
-      expect(journey.legacySyntheticBehavior, isFalse);
       expect(
         journey.rootBehavior.orderedTransitions.map(
           (transition) => transition.edge,
@@ -51,7 +46,7 @@ void main() {
       );
       expect(
         journey.objectives.map((objective) => objective.stableObjectiveSlot),
-        <int?>[1, 2, 3],
+        <int>[1, 2, 3],
       );
       expect(
         journey.objectives.map((objective) => objective.title),
@@ -94,108 +89,42 @@ void main() {
     },
   );
 
-  test(
-    'derives two persisted Draft stages plus conditional legacy migration',
-    () async {
-      final completeParts = await _JourneyFixture(
-        generatorVersion: 4,
-        bindings: const <_TranscriptBinding>[
-          (lineIndex: 0, objectiveSlot: null),
-        ],
-      ).load();
-      final complete = completeParts.compose().draftSetup;
+  test('derives the two persisted Draft setup stages', () async {
+    final completeParts = await _JourneyFixture(
+      bindings: const <_TranscriptBinding>[(lineIndex: 0, objectiveSlot: null)],
+    ).load();
+    final complete = completeParts.compose().draftSetup;
 
-      expect(complete.questDetailsComplete, isTrue);
-      expect(complete.openingDialogComplete, isTrue);
-      expect(complete.legacyBehaviorReviewRequired, isFalse);
-      expect(complete.draftSetupComplete, isTrue);
-      expect(complete.openingDialogLineCount, 1);
-      expect(complete.openingTextLanguageCount, 1);
-      expect(complete.openingVoiceTakeCount, 0);
-      expect(complete.openingSelectedVoiceTakeCount, 0);
-      expect(
-        complete.recommendedStep,
-        Revision3QuestDraftSetupStepKind.openingDialog,
-        reason:
-            'complete Draft setup conservatively continues to dialog review',
-      );
-
-      final emptyLegacyParts = await _JourneyFixture(
-        generatorVersion: 3,
-        bindings: const <_TranscriptBinding>[],
-      ).load();
-      final emptyLegacy = emptyLegacyParts.compose().draftSetup;
-      expect(emptyLegacy.questDetailsComplete, isTrue);
-      expect(emptyLegacy.openingDialogComplete, isFalse);
-      expect(emptyLegacy.legacyBehaviorReviewRequired, isTrue);
-      expect(emptyLegacy.draftSetupComplete, isFalse);
-      expect(
-        emptyLegacy.recommendedStep,
-        Revision3QuestDraftSetupStepKind.openingDialog,
-      );
-
-      final dialogLegacyParts = await _JourneyFixture(
-        generatorVersion: 3,
-        bindings: const <_TranscriptBinding>[
-          (lineIndex: 0, objectiveSlot: null),
-        ],
-      ).load();
-      final dialogLegacy = dialogLegacyParts.compose().draftSetup;
-      expect(dialogLegacy.openingDialogComplete, isTrue);
-      expect(dialogLegacy.legacyBehaviorReviewRequired, isTrue);
-      expect(
-        dialogLegacy.recommendedStep,
-        Revision3QuestDraftSetupStepKind.legacyBehavior,
-      );
-    },
-  );
-
-  for (final generatorVersion in <int>[2, 3]) {
-    test(
-      'generator V$generatorVersion keeps synthetic behavior but never invents transcript grouping',
-      () async {
-        final objectiveTitles = generatorVersion == 2
-            ? const <String>['Find the gate key']
-            : const <String>[
-                'Ask Asghan about Homer',
-                'Inspect the old gate',
-                'Report the secured gate',
-              ];
-        final parts = await _JourneyFixture(
-          generatorVersion: generatorVersion,
-          objectiveTitles: objectiveTitles,
-          bindings: const <_TranscriptBinding>[
-            (lineIndex: 0, objectiveSlot: null),
-            (lineIndex: 1, objectiveSlot: null),
-          ],
-        ).load();
-
-        final journey = parts.compose();
-
-        expect(journey.legacySyntheticBehavior, isTrue);
-        expect(journey.objectives, hasLength(objectiveTitles.length));
-        expect(
-          journey.objectives.map((objective) => objective.stableObjectiveSlot),
-          everyElement(isNull),
-        );
-        expect(
-          journey.objectives.expand((objective) => objective.dialogLines),
-          isEmpty,
-        );
-        expect(journey.generalDialogLines.map((line) => line.lineId), <String>[
-          _lineId(0),
-          _lineId(1),
-        ]);
-        expect(journey.objectives.first.behavior.availability.node.slot, 1);
-      },
+    expect(complete.questDetailsComplete, isTrue);
+    expect(complete.openingDialogComplete, isTrue);
+    expect(complete.draftSetupComplete, isTrue);
+    expect(complete.openingDialogLineCount, 1);
+    expect(complete.openingTextLanguageCount, 1);
+    expect(complete.openingVoiceTakeCount, 0);
+    expect(complete.openingSelectedVoiceTakeCount, 0);
+    expect(
+      complete.recommendedStep,
+      Revision3QuestDraftSetupStepKind.openingDialog,
+      reason: 'complete Draft setup conservatively continues to dialog review',
     );
-  }
+
+    final emptyParts = await _JourneyFixture(
+      bindings: const <_TranscriptBinding>[],
+    ).load();
+    final empty = emptyParts.compose().draftSetup;
+    expect(empty.questDetailsComplete, isTrue);
+    expect(empty.openingDialogComplete, isFalse);
+    expect(empty.draftSetupComplete, isFalse);
+    expect(
+      empty.recommendedStep,
+      Revision3QuestDraftSetupStepKind.openingDialog,
+    );
+  });
 
   test(
     'fails closed on project, entity, module, seed and transcript drift',
     () async {
       final fixture = _JourneyFixture(
-        generatorVersion: 4,
         bindings: const <_TranscriptBinding>[
           (lineIndex: 0, objectiveSlot: 1),
           (lineIndex: 1, objectiveSlot: null),
@@ -206,21 +135,18 @@ void main() {
       final stale = isA<Revision3QuestJourneyStaleCheckpointException>();
 
       final laterSeed = _JourneyFixture(
-        generatorVersion: 4,
         projectRevision: 8,
         bindings: fixture.bindings,
       ).seed();
       expect(() => parts.compose(seed: laterSeed), throwsA(stale));
 
       final changedModuleSeed = _JourneyFixture(
-        generatorVersion: 4,
         moduleRevision: 6,
         bindings: fixture.bindings,
       ).seed();
       expect(() => parts.compose(seed: changedModuleSeed), throwsA(stale));
 
       final changedQuestSeed = _JourneyFixture(
-        generatorVersion: 4,
         questRevision: 5,
         bindings: fixture.bindings,
       ).seed();
@@ -239,7 +165,6 @@ void main() {
       );
 
       final changedTitles = await _JourneyFixture(
-        generatorVersion: 4,
         objectiveTitles: const <String>[
           'Ask Diego about Homer',
           'Inspect the old gate',
@@ -250,7 +175,6 @@ void main() {
       expect(() => changedTitles.compose(seed: parts.seed), throwsA(stale));
 
       final reversedTranscript = await _JourneyFixture(
-        generatorVersion: 4,
         bindings: fixture.bindings.reversed.toList(growable: false),
       ).load();
       expect(
@@ -263,7 +187,6 @@ void main() {
   test('accepts exactly 256 rows without localization reads', () async {
     var localizationReads = 0;
     final parts = await _JourneyFixture(
-      generatorVersion: 4,
       bindings: List<_TranscriptBinding>.generate(
         revision3QuestJourneyMaxDialogLines,
         (index) => (lineIndex: index, objectiveSlot: null),
@@ -279,7 +202,6 @@ void main() {
 
   test('rejects 257 transcript rows at the exact ContentIndex boundary', () {
     final fixture = _JourneyFixture(
-      generatorVersion: 4,
       bindings: List<_TranscriptBinding>.generate(
         revision3QuestJourneyMaxDialogLines + 1,
         (index) => (lineIndex: index, objectiveSlot: null),
@@ -326,7 +248,6 @@ final class _JourneyParts {
 
 final class _JourneyFixture {
   const _JourneyFixture({
-    required this.generatorVersion,
     required this.bindings,
     this.projectRevision = 7,
     this.questRevision = 4,
@@ -339,7 +260,6 @@ final class _JourneyFixture {
     this.sharedLineIndex,
   });
 
-  final int generatorVersion;
   final int projectRevision;
   final int questRevision;
   final int moduleRevision;
@@ -356,12 +276,7 @@ final class _JourneyFixture {
 
   AuthoringRevision3QuestTransitionsSeed seed() =>
       AuthoringRevision3QuestTransitionsSeed.forProject(
-        currentProjectJson: switch (generatorVersion) {
-          2 => _legacyV2ProjectJson(outline),
-          3 => outline.projectJson,
-          4 => outline.semanticProjectJson,
-          _ => throw StateError('unsupported test generator'),
-        },
+        currentProjectJson: outline.projectJson,
         questId: revision3QuestOutlineQuestId,
         expectedQuestRevision: questRevision,
         expectedModuleId: revision3QuestOutlineModuleId,
@@ -432,10 +347,6 @@ final class _JourneyFixture {
     )) {
       throw StateError('invalid test line index');
     }
-    if (generatorVersion < 4 &&
-        bindings.any((binding) => binding.objectiveSlot != null)) {
-      throw StateError('legacy test bindings cannot carry objective slots');
-    }
     final hasSharedLine = sharedLineIndex != null;
     if (hasSharedLine &&
         (sharedLineIndex! < 0 || sharedLineIndex! >= lineCount)) {
@@ -489,11 +400,10 @@ final class _JourneyFixture {
       'objective_title': objectiveTitles.first,
       if (objectiveTitles.length > 1)
         'additional_objective_titles': objectiveTitles.skip(1).toList(),
-      if (generatorVersion == 4)
-        'objective_slots': List<int>.generate(
-          objectiveTitles.length,
-          (index) => index + 1,
-        ),
+      'objective_slots': List<int>.generate(
+        objectiveTitles.length,
+        (index) => index + 1,
+      ),
       'transcript_count': bindings.length,
       'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
       'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
@@ -524,7 +434,7 @@ final class _JourneyFixture {
       'technical_id': 'GORE_SHARED_REVIEW',
       'title': 'Review shared report',
       'objective_title': 'Review the report',
-      if (generatorVersion == 4) 'objective_slots': <Object?>[1],
+      'objective_slots': <Object?>[1],
       'transcript_count': 1,
       'module_namespace': 'PROJECT.QUESTS.SHAREDREVIEW',
       'parent_runtime_class': 'UQuest_SwampCamp',
@@ -553,13 +463,10 @@ final class _JourneyFixture {
     kind: 'script_module',
     displayName: '$namespace Script',
     revision: id == revision3QuestOutlineModuleId ? moduleRevision : 1,
-    origin: _generatedOrigin(
-      ownerId: ownerId,
-      generatorVersion: generatorVersion,
-    ),
+    origin: _generatedOrigin(ownerId: ownerId),
     summaryData: <String, Object?>{
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': generatorVersion,
+      'generator_version': 4,
       'module_namespace': namespace,
       'module_relative_path': '${namespace.replaceAll('.', '/')}.as',
       'status': <String, Object?>{
@@ -606,28 +513,6 @@ final class _JourneyFixture {
   );
 }
 
-String _legacyV2ProjectJson(Revision3QuestOutlineFixture fixture) {
-  final project = fixture.projectObject();
-  final entities = (project['entities']! as Map).cast<String, Object?>();
-  final quest = (entities[revision3QuestOutlineQuestId]! as Map)
-      .cast<String, Object?>();
-  final questPayload = (quest['payload']! as Map).cast<String, Object?>();
-  final questData = (questPayload['data']! as Map).cast<String, Object?>();
-  questData['generator_version'] = 2;
-  final input = (questData['input']! as Map).cast<String, Object?>();
-  input.remove('additional_objective_titles');
-
-  final module = (entities[revision3QuestOutlineModuleId]! as Map)
-      .cast<String, Object?>();
-  final origin = (module['origin']! as Map).cast<String, Object?>();
-  origin['generator_version'] = 2;
-  final modulePayload = (module['payload']! as Map).cast<String, Object?>();
-  final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
-  moduleData['generator_version'] = 2;
-  moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
-  return jsonEncode(project);
-}
-
 Map<String, Object?> _entity({
   required String id,
   required String kind,
@@ -652,19 +537,17 @@ Map<String, Object?> _entity({
   'asset_references': <Object?>[],
 };
 
-Map<String, Object?> _generatedOrigin({
-  required String ownerId,
-  required int generatorVersion,
-}) => <String, Object?>{
-  'type': 'generated',
-  'generator_id': 'gore-authoring.draft-quest-skeleton',
-  'generator_version': generatorVersion,
-  'owner': <String, Object?>{
-    'project_id': revision3QuestOutlineProjectId,
-    'entity_id': ownerId,
-    'expected_kind': 'quest_draft',
-  },
-};
+Map<String, Object?> _generatedOrigin({required String ownerId}) =>
+    <String, Object?>{
+      'type': 'generated',
+      'generator_id': 'gore-authoring.draft-quest-skeleton',
+      'generator_version': 4,
+      'owner': <String, Object?>{
+        'project_id': revision3QuestOutlineProjectId,
+        'entity_id': ownerId,
+        'expected_kind': 'quest_draft',
+      },
+    };
 
 Map<String, Object?> _reference({
   required String role,

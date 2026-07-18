@@ -262,7 +262,7 @@ fn exact_existing_managed_localization_is_reused_byte_for_byte() {
             origin: OriginRef::Imported {
                 importer: "tests".to_owned(),
                 source_seal: seal(0x44, 77),
-                external_identity: Some("legacy:greeting".to_owned()),
+                external_identity: Some("import:greeting".to_owned()),
             },
             revision: 4,
             payload: EntityPayload::LocalizationEntry(LocalizationEntry {

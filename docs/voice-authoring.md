@@ -6,9 +6,9 @@ offline sealed replacement bundle. The complete path remains deliberately
 narrow: it can replace proven existing archive members, but it does not deploy
 the bundle or claim that the result has been heard and qualified in game.
 
-The older compatibility-project Voice editor and deployment engine remain a
-separate path. Managed-R3 content is never silently copied into that project or
-treated as deployed compatibility state.
+The older Voice browser and replacement UI may supply standalone browsing and
+preview tools while those jobs are rehosted. It is not another project path:
+all authored Voice state belongs to the managed-R3 project.
 
 ## Visible Studio workflow
 

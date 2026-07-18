@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::model_revision3::{DialogLine, LocalizationEntry};
 use gore_authoring::{
     apply_revision3_quest_transcript_edit_transaction_v1, build_revision3_content_index_v1,
-    regenerate_revision3_quest_module_v2, AssetMeta, AssetStoreIndex, ContentSeal, EntityId,
-    FormatV2, GameGenerationAnchor, LocaleCode, ProjectId, ProjectMeta, ProjectRevision3,
+    regenerate_revision3_quest_module, AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
+    GameGenerationAnchor, LocaleCode, ProjectId, ProjectMeta, ProjectRevision3,
     QuestCollisionArtifactRef, QuestCollisionCatalogInput, QuestTransitionPlanV1,
     Revision3ContentEntitySummaryV1, Revision3ContentReferenceRoleV1,
     Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogLineInsertRequestV1,
@@ -19,7 +19,7 @@ use gore_authoring::{
     MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
     MAX_REVISION3_QUEST_TRANSCRIPT_REQUEST_JSON_BYTES_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 const QUEST: u8 = 0x21;
@@ -126,7 +126,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
     let module_id = id(MODULE);
     let quest = Revision3QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         input: Revision3QuestDraftInput {
             target: generation.clone(),
             quest_id,
@@ -151,7 +151,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
             description: "Authoring-only dialog order".to_owned(),
             objective_title: "First".to_owned(),
             additional_objective_titles: vec!["Second".to_owned()],
-            transition_plan: Some(Box::new(QuestTransitionPlanV1::legacy_seed(2).unwrap())),
+            transition_plan: Box::new(QuestTransitionPlanV1::default_for_objectives(2).unwrap()),
             collision_catalog: QuestCollisionArtifactRef {
                 generation: generation.clone(),
                 catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
@@ -167,7 +167,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
         ),
         transcript: Vec::new(),
     };
-    let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
+    let module = regenerate_revision3_quest_module(&quest, collision_input(&quest)).unwrap();
     let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
     let mut entities = BTreeMap::from([
         (
@@ -189,7 +189,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
                 display_name: "Transcript Quest module".to_owned(),
                 origin: Revision3OriginRef::Generated {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                     owner,
                 },
                 revision: 5,
@@ -648,42 +648,18 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
 }
 
 #[test]
-fn legacy_quests_reject_objective_slots_but_allow_unassigned_transcript() {
-    let (mut project, basis_head) = project();
-    let quest_id = id(QUEST);
-    let module_id = id(MODULE);
-    let Revision3EntityPayload::QuestDraft(quest) =
-        &mut project.entities.get_mut(&quest_id).unwrap().payload
-    else {
-        panic!("fixture Quest kind")
-    };
-    quest.generator_version = 3;
-    quest.input.transition_plan = None;
-    let regenerated = regenerate_revision3_quest_module_v2(quest, collision_input(quest)).unwrap();
-    let module_entity = project.entities.get_mut(&module_id).unwrap();
-    let Revision3EntityPayload::ScriptModule(module) = &mut module_entity.payload else {
-        panic!("fixture module kind")
-    };
-    *module = regenerated;
-    let Revision3OriginRef::Generated {
-        generator_version, ..
-    } = &mut module_entity.origin
-    else {
-        panic!("fixture module origin")
-    };
-    *generator_version = 3;
-    project.validate_closed_model().unwrap();
-
+fn inactive_objective_slots_are_rejected_but_unassigned_transcript_is_allowed() {
+    let (project, basis_head) = project();
     let slotted = request(
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![binding(&project, LINE_A, Some(1))],
+            bindings: vec![binding(&project, LINE_A, Some(99))],
         },
     );
     assert!(matches!(
         rejected(evaluate(&project, &basis_head, &slotted)),
-        Revision3QuestTranscriptEditConflictV1::LegacyObjectiveSlot { slot: 1, .. }
+        Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { slot: 99, .. }
     ));
 
     let unassigned = request(

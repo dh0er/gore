@@ -738,7 +738,6 @@ final class Revision3ContentNpcDraftSummary {
     required this.parentAiAgentConfig,
     required this.parentSpawnDefinition,
     required this.greetingCount,
-    required this.hasGreetingProjection,
   });
 
   final String uniqueName;
@@ -747,7 +746,6 @@ final class Revision3ContentNpcDraftSummary {
   final String parentAiAgentConfig;
   final String parentSpawnDefinition;
   final int greetingCount;
-  final bool hasGreetingProjection;
 }
 
 final class Revision3ContentSummary {
@@ -911,14 +909,13 @@ final class Revision3ContentSummary {
             '${status.name} · ${codec.name} · ${channels}ch · $sampleRate Hz';
         terms.addAll([status.name, codec.name]);
       case Revision3ContentEntityKind.npcDraft:
-        final hasGreetingCount = data.containsKey('greeting_count');
         _requireKeys(data, <String>[
           'unique_name',
           'module_namespace',
           'parent_character_definition',
           'parent_ai_agent_config',
           'parent_spawn_definition',
-          if (hasGreetingCount) 'greeting_count',
+          'greeting_count',
         ], '$context data');
         primary = _string(data['unique_name'], '$context unique_name');
         final namespace = _string(
@@ -942,9 +939,10 @@ final class Revision3ContentSummary {
           parentAiAgentConfig,
           parentSpawnDefinition,
         ];
-        final greetingCount = hasGreetingCount
-            ? _integer(data['greeting_count'], '$context greeting_count')
-            : 0;
+        final greetingCount = _integer(
+          data['greeting_count'],
+          '$context greeting_count',
+        );
         if (greetingCount > 256) {
           throw FormatException('$context greeting list exceeds 256 lines');
         }
@@ -955,7 +953,6 @@ final class Revision3ContentSummary {
           parentAiAgentConfig: parentAiAgentConfig,
           parentSpawnDefinition: parentSpawnDefinition,
           greetingCount: greetingCount,
-          hasGreetingProjection: hasGreetingCount,
         );
         secondary = namespace;
         terms.addAll([namespace, ...parents]);
@@ -1112,16 +1109,6 @@ void _validateNpcProjectionFacts(Revision3ContentEntity entity) {
   final facts = entity.summary.npcDraft;
   if (facts == null) {
     throw FormatException('content NPC ${entity.id} has no structured summary');
-  }
-  if (!facts.hasGreetingProjection) {
-    if (entity.references.any(
-      (reference) => reference.role == 'npc_greeting_line',
-    )) {
-      throw FormatException(
-        'content NPC ${entity.id} has greeting references without projected greeting facts',
-      );
-    }
-    return;
   }
   final modules = <Revision3ContentReference>[];
   final greetings = <Revision3ContentReference>[];

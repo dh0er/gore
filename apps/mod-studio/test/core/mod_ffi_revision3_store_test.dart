@@ -77,6 +77,10 @@ Map<String, Object?> _validQuestInput({
   'objective_title': 'Finish Adapter Quest',
   if (additionalObjectiveTitles.isNotEmpty)
     'additional_objective_titles': additionalObjectiveTitles,
+  'transition_plan':
+      AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+        additionalObjectiveTitles.length + 1,
+      ).toJson(),
   'collision_catalog': <String, Object?>{
     'generation': _generation(),
     'catalog_layer':
@@ -111,7 +115,6 @@ String _validQuestCandidateProjectJson({
   final input = _validQuestInput(
     additionalObjectiveTitles: additionalObjectiveTitles,
   );
-  final generatorVersion = additionalObjectiveTitles.isEmpty ? 2 : 3;
   final source = revision3QuestGeneratedSource(
     technicalId: 'GORE_ADAPTER_QUEST',
     textHelper: 'GoreAdapterQuestText',
@@ -147,7 +150,7 @@ String _validQuestCandidateProjectJson({
           'kind': 'quest_draft',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': generatorVersion,
+            'generator_version': 4,
             'input': input,
             'script_module': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
@@ -163,7 +166,7 @@ String _validQuestCandidateProjectJson({
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': generatorVersion,
+          'generator_version': 4,
           'owner': <String, Object?>{
             'project_id': '00000000000000000000000000000003',
             'id': _questId,
@@ -175,7 +178,7 @@ String _validQuestCandidateProjectJson({
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': generatorVersion,
+            'generator_version': 4,
             'owner': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
               'id': _questId,
@@ -272,6 +275,7 @@ void main() {
         'authoring_store_materialize_revision3_voice_take_preview_v1',
         'authoring_store_open_revision3',
         'authoring_store_open_revision3_head_bytes',
+        'authoring_store_plan_revision3_voice_batch_v1',
         'authoring_store_plan_revision3_voice_v1',
         'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
         'authoring_store_prepare_remove_revision3_story_draft_v1',
@@ -289,11 +293,11 @@ void main() {
         'authoring_store_prepare_revision3_npc_profile_edit_v1',
         'authoring_store_prepare_revision3_quest_context_edit_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
-        'authoring_store_prepare_revision3_quest_outline_edit_v1',
         'authoring_store_prepare_revision3_quest_outline_edit_v2',
         'authoring_store_prepare_revision3_quest_transcript_v1',
         'authoring_store_prepare_revision3_quest_transitions_edit_v1',
         'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+        'authoring_store_prepare_revision3_voice_batch_v1',
         'authoring_store_prepare_revision3_voice_take_removal_v1',
         'authoring_store_prepare_revision3_voice_take_selection_v1',
         'authoring_store_prepare_revision3_voice_take_status_v1',
@@ -761,7 +765,7 @@ void main() {
             '"authoring":"published"',
           ),
       (response) => response['project_json'] = _validQuestCandidateProjectJson()
-          .replaceFirst('"generator_version":2', '"generator_version":3'),
+          .replaceFirst('"generator_version":4', '"generator_version":3'),
       (response) => response['project_json'] = _validQuestCandidateProjectJson()
           .replaceFirst(
             '"authored_runtime_id":"GORE_ADAPTER_QUEST"',

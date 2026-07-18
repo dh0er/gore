@@ -283,8 +283,10 @@ void main() {
               builder: (context, setState) {
                 rebuild = setState;
                 return Revision3ProjectProblemsView(
+                  projectRoot: 'managed-root',
                   projectId: current.projectId,
                   projectRevision: revision,
+                  projectHeadCanonicalJson: 'head-$revision',
                   loadContent: () => contentCalls++ == 0
                       ? staleContent.future
                       : currentContent.future,
@@ -706,8 +708,10 @@ Widget _host({
 }) => MaterialApp(
   home: Scaffold(
     body: Revision3ProjectProblemsView(
+      projectRoot: 'managed-root',
       projectId: fixture.projectId,
       projectRevision: fixture.projectRevision,
+      projectHeadCanonicalJson: 'head-${fixture.projectRevision}',
       loadContent: loadContent ?? () async => fixture.contentIndex,
       loadDataAssetStages: loadStages ?? () async => fixture.dataAssetStages,
       gameConfigured: gameConfigured,

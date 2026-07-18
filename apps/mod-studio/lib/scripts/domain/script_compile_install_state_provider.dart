@@ -28,17 +28,15 @@ final class ScriptCompileRecoveryEvidence {
     required this.code,
     required this.message,
     required this.installRestore,
-    this.legacyReport,
+    this.report,
   });
 
   final String code;
   final String message;
   final ScriptCompileInstallRestore installRestore;
-  final ScriptCompileReport? legacyReport;
+  final ScriptCompileReport? report;
 
-  factory ScriptCompileRecoveryEvidence.fromLegacyReport(
-    ScriptCompileReport report,
-  ) {
+  factory ScriptCompileRecoveryEvidence.fromReport(ScriptCompileReport report) {
     final failure = report.failure;
     return ScriptCompileRecoveryEvidence(
       code: failure?.code ?? 'COMPILE_INSTALL_RECOVERY_REQUIRED',
@@ -46,7 +44,7 @@ final class ScriptCompileRecoveryEvidence {
           failure?.message ??
           'The previous compiler attempt requires installation recovery.',
       installRestore: report.installRestore,
-      legacyReport: report,
+      report: report,
     );
   }
 }
@@ -75,8 +73,7 @@ final class ScriptCompileInstallSafetyState {
   final ScriptCompileRecoveryEvidence? recoveryEvidence;
   final String? errorMessage;
 
-  /// Compatibility accessor for the legacy Script-tab report dialog.
-  ScriptCompileReport? get recoveryReport => recoveryEvidence?.legacyReport;
+  ScriptCompileReport? get recoveryReport => recoveryEvidence?.report;
 
   bool get recoveryRequired => recoveryEvidence != null;
 
@@ -162,7 +159,7 @@ final class ScriptCompileInstallSafetyController
     required String gameRoot,
   }) {
     if (!report.recoveryRequired) return;
-    final evidence = ScriptCompileRecoveryEvidence.fromLegacyReport(report);
+    final evidence = ScriptCompileRecoveryEvidence.fromReport(report);
     _recordRecoveryForRoot(gameRoot, evidence);
   }
 

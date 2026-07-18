@@ -10,7 +10,6 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model_revision2::QuestCollisionCatalogInput;
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, ProjectRevision3, ScriptModule, ScriptModuleStatus,
 };
@@ -18,8 +17,9 @@ use crate::revision3_content_index::{
     build_revision3_content_index_v1, Revision3ContentIndexErrorV1,
     Revision3ContentReferenceResolutionV1, Revision3ContentReferenceRoleV1,
 };
-use crate::revision3_quest::regenerate_revision3_quest_module_v2;
+use crate::revision3_quest::regenerate_revision3_quest_module;
 use crate::strict_json::reject_duplicate_object_keys;
+use crate::QuestCollisionCatalogInput;
 use crate::{EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3JsonError, WorkingHead};
 
 /// Maximum exact canonical Story Draft removal request size.
@@ -354,8 +354,7 @@ pub fn apply_revision3_story_draft_removal_transaction_v1(
             }
             (Revision3StoryDraftRemovalKindV1::QuestDraft, EntityPayload::QuestDraft(draft)) => {
                 let regenerated =
-                    match regenerate_revision3_quest_module_v2(draft, empty_collision_input(draft))
-                    {
+                    match regenerate_revision3_quest_module(draft, empty_collision_input(draft)) {
                         Ok(module) => module,
                         Err(error) => reject!(
                             Revision3StoryDraftRemovalConflictV1::PayloadOriginGeneratorMismatch {
@@ -979,7 +978,9 @@ mod tests {
                 description: "A removable quest".to_owned(),
                 objective_title: "Leave no trace".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    crate::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
                     catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
@@ -996,7 +997,7 @@ mod tests {
             transcript: Vec::new(),
         };
         let module =
-            regenerate_revision3_quest_module_v2(&draft, empty_collision_input(&draft)).unwrap();
+            regenerate_revision3_quest_module(&draft, empty_collision_input(&draft)).unwrap();
         project.entities.insert(
             draft_id,
             Entity {

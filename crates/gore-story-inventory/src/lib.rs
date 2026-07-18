@@ -24,7 +24,6 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
-mod quest_capability;
 mod quest_capability_v2;
 mod revision3_quest_context_transaction_v1;
 mod revision3_quest_persistence_v3;
@@ -42,18 +41,11 @@ extern crate self as gore_story_inventory;
 #[path = "../../gore-story-build/src/revision3_quest.rs"]
 mod revision3_quest_s3_test_subject;
 
-pub use quest_capability::{
-    reopen_quest_collision_capability_artifact_v1, PreparedQuestCollisionArtifactFinalizeError,
-    PreparedQuestCollisionArtifactV1, QuestCollisionBuildStatus,
-    QuestCollisionCapabilityArtifactError, QuestCollisionCapabilityArtifactV1,
-    QuestCollisionCapabilityArtifactVerificationError, QuestCollisionCapabilityError,
-    QuestCollisionCoverage, QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
-    VerifiedQuestCollisionCapability, BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
-};
 pub use quest_capability_v2::{
     reopen_quest_collision_capability_artifact_v2, PreparedQuestCollisionArtifactFinalizeErrorV2,
-    PreparedQuestCollisionArtifactV2, QuestCollisionCapabilityArtifactErrorV2,
-    QuestCollisionCapabilityArtifactV2,
+    PreparedQuestCollisionArtifactV2, QuestCollisionBuildStatus,
+    QuestCollisionCapabilityArtifactErrorV2, QuestCollisionCapabilityArtifactV2,
+    QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
     Revision3QuestCollisionCapabilityArtifactVerificationErrorV2,
     Revision3QuestCollisionCapabilityErrorV2, Revision3QuestCollisionCoverageV2,
     Revision3QuestCollisionInspectionVerificationErrorV2,
@@ -821,29 +813,19 @@ pub enum StoryInventoryError {
 mod tests {
     use super::*;
     use gore_as::cache::header::CACHE_MAGIC;
-    use gore_authoring::model_revision2::{
-        Entity as AuthoringEntity, EntityKind as AuthoringEntityKind,
-        EntityPayload as AuthoringEntityPayload, LocalizationEntry as AuthoringLocalizationEntry,
-        NpcDraft as AuthoringNpcDraft, NpcDraftInput as AuthoringNpcDraftInput,
-        NpcParentClassInput, OriginRef, ProjectRevision2, SchemaRevisionV2, TypedRef,
-    };
     use gore_authoring::{
-        apply_revision3_quest_transition_plan_transaction_v1,
-        revision3_quest_transition_plan_basis_v1, AssetMeta, AssetStoreIndex, AssetVerification,
-        ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
-        GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef,
-        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision2LocalizationEntry,
-        Revision3DialogLine, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-        Revision3NpcDraft, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
-        Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditEvaluationV1,
-        Revision3QuestTransitionPlanEditRequestV1, Revision3TypedRef,
+        AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal as AuthoringContentSeal,
+        EntityId as AuthoringEntityId, FormatV2, GameGenerationAnchor, NpcParentClassInput,
+        ProjectId, ProjectMeta, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
+        QuestTransitionPlanV1, Revision3DialogLine, Revision3Entity, Revision3EntityKind,
+        Revision3EntityPayload, Revision3LocalizationEntry, Revision3NpcDraft,
+        Revision3NpcDraftInput, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+        Revision3QuestTranscriptBindingV1, Revision3TypedRef,
         Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
         WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
         MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
-        QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-        REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
+        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
     };
     use gore_story_catalog::{known_generation_v1, known_generation_v2};
     use sha2::Sha256;
@@ -853,10 +835,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::revision3_quest_s3_test_subject::{
-        prepare_revision3_quest_source_inspection, prepare_revision3_quest_source_inspection_v3,
-        regenerate_revision3_quest_module, QuestInspectionBuildStatus,
-        QuestInspectionPublicationStatus, QuestInspectionRuntimeQualification,
-        QuestInspectionScope, Revision3QuestInspectionError, Revision3QuestSourceInspectionPlanV2,
+        prepare_revision3_quest_source_inspection_v3, regenerate_revision3_quest_module,
+        QuestInspectionBuildStatus, QuestInspectionPublicationStatus,
+        QuestInspectionRuntimeQualification, QuestInspectionScope, Revision3QuestInspectionError,
         Revision3QuestSourceInspectionPlanV3,
     };
 
@@ -998,24 +979,6 @@ mod tests {
         AuthoringEntityId::from_bytes([value; 16])
     }
 
-    fn empty_authoring_project() -> ProjectRevision2 {
-        ProjectRevision2 {
-            format: FormatV2,
-            schema_revision: SchemaRevisionV2,
-            project_id: authoring_project_id(1),
-            revision: 4,
-            meta: ProjectMeta {
-                name: "verified collision capability".into(),
-                version: "0.1.0".into(),
-                author: "test".into(),
-            },
-            target: authoring_target(),
-            authoring_locales: BTreeSet::new(),
-            entities: Default::default(),
-            asset_store: AssetStoreIndex::default(),
-        }
-    }
-
     fn empty_revision3_authoring_project() -> gore_authoring::ProjectRevision3 {
         gore_authoring::ProjectRevision3 {
             format: FormatV2,
@@ -1051,72 +1014,6 @@ mod tests {
         }
     }
 
-    fn add_authoring_npc(
-        project: &mut ProjectRevision2,
-        module_namespace: &str,
-        unique_name: &str,
-    ) {
-        let owner_id = authoring_entity_id(10);
-        let module_id = authoring_entity_id(11);
-        let owner = TypedRef::new(project.project_id, owner_id, AuthoringEntityKind::NpcDraft);
-        let draft = AuthoringNpcDraft {
-            generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.into(),
-            generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-            input: AuthoringNpcDraftInput {
-                target: project.target.clone(),
-                module_namespace: module_namespace.into(),
-                unique_name: unique_name.into(),
-                parent_character_definition: npc_parent(
-                    &project.target,
-                    10,
-                    "UCharacterDefinition_Human_Base",
-                ),
-                parent_ai_agent_config: npc_parent(
-                    &project.target,
-                    11,
-                    "UAIAgentConfig_Human_Base",
-                ),
-                parent_spawn_definition: npc_parent(
-                    &project.target,
-                    12,
-                    "USpawnAIAgentDefinition_Base",
-                ),
-            },
-            script_module: TypedRef::new(
-                project.project_id,
-                module_id,
-                AuthoringEntityKind::ScriptModule,
-            ),
-        };
-        let script = draft.regenerate_script_module(owner.clone()).unwrap();
-        project.entities.insert(
-            owner_id,
-            AuthoringEntity {
-                id: owner_id,
-                display_name: unique_name.into(),
-                origin: OriginRef::New {
-                    authored_runtime_id: unique_name.into(),
-                },
-                revision: 0,
-                payload: AuthoringEntityPayload::NpcDraft(draft),
-            },
-        );
-        project.entities.insert(
-            module_id,
-            AuthoringEntity {
-                id: module_id,
-                display_name: format!("{unique_name} script"),
-                origin: OriginRef::Generated {
-                    generator_id: script.generator_id.clone(),
-                    generator_version: script.generator_version,
-                    owner,
-                },
-                revision: 0,
-                payload: AuthoringEntityPayload::ScriptModule(script),
-            },
-        );
-    }
-
     fn add_revision3_authoring_npc(
         project: &mut gore_authoring::ProjectRevision3,
         module_namespace: &str,
@@ -1129,7 +1026,7 @@ mod tests {
         let draft = Revision3NpcDraft {
             generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.into(),
             generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-            input: AuthoringNpcDraftInput {
+            input: Revision3NpcDraftInput {
                 target: project.target.clone(),
                 module_namespace: module_namespace.into(),
                 unique_name: unique_name.into(),
@@ -1550,345 +1447,26 @@ mod tests {
         assert!(error.to_string().contains("invalid length"));
     }
 
-    #[test]
-    fn capability_is_deterministic_closed_and_honest_about_unsupported_layers() {
-        let catalog = trusted_catalog();
-        let project = empty_authoring_project();
-        let first = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
-        let second =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
-
-        assert_eq!(first, second);
-        assert_eq!(first.project_id(), project.project_id);
-        assert_eq!(first.project_revision(), project.revision);
-        assert_eq!(first.project_target(), &project.target);
-        assert_eq!(first.canonical_project(), second.canonical_project());
-        assert_eq!(first.combined_source_seal(), second.combined_source_seal());
-        assert_eq!(
-            first.coverage(),
-            QuestCollisionCoverage::BaseGameAndExactProjectOnly
-        );
-        assert_eq!(
-            first.runtime_qualification(),
-            QuestCollisionRuntimeQualification::RuntimeUnqualified
-        );
-        assert_eq!(first.build_status(), QuestCollisionBuildStatus::Blocked);
-        assert_eq!(
-            first.publication_status(),
-            QuestCollisionPublicationStatus::NotSupported
-        );
-        assert_eq!(
-            first.catalog_layer(),
-            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
-        );
-        assert!(!first.catalog_layer().contains("resolved-loadout"));
-        assert!(first.contains_module("GORE.ALPHA"));
-        assert!(first.contains_relative_path("Gore/Alpha.as"));
-        assert!(first.contains_symbol("UAlpha"));
-
-        let input = first.into_quest_collision_input(&project).unwrap();
-        assert_eq!(
-            input.catalog_layer,
-            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
-        );
-        assert_eq!(input.generation, project.target);
-        assert!(input.modules.contains("gore.alpha"));
-        assert!(input.relative_paths.contains("gore/alpha.as"));
-        assert!(input.symbols.contains("ualpha"));
-    }
-
-    #[test]
-    fn capability_unions_exact_project_regeneration_and_seals_revision() {
-        let catalog = trusted_catalog();
-        let empty = empty_authoring_project();
-        let empty_capability =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &empty).unwrap();
-        let mut project = empty.clone();
-        add_authoring_npc(&mut project, "Project.Npcs.NewOne", "ProjectNpc");
-        let capability =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
-
-        assert!(capability.contains_module("PROJECT.NPCS.NEWONE"));
-        assert!(capability.contains_relative_path("Project/Npcs/NewOne.as"));
-        assert!(capability.contains_symbol("UCharacterDefinition_Human_ProjectNpc"));
-        assert!(capability.contains_symbol("UAIAgentConfig_Human_ProjectNpc"));
-        assert!(capability.contains_symbol("USpawnAIAgentDefinition_ProjectNpc"));
-        assert_ne!(
-            capability.combined_source_seal(),
-            empty_capability.combined_source_seal()
-        );
-
-        let mut next_revision = empty;
-        next_revision.revision += 1;
-        let next =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &next_revision).unwrap();
-        assert_ne!(
-            empty_capability.combined_source_seal(),
-            next.combined_source_seal()
-        );
-    }
-
-    #[test]
-    fn parent_and_giver_resolution_comes_only_from_the_exact_catalog() {
-        let catalog = trusted_catalog();
-        let selections = catalog.authoring_selections().unwrap();
-        let expected_parent = selections.quest_parents.first().unwrap();
-        let expected_giver = selections.npcs.first().unwrap();
-        let capability = VerifiedQuestCollisionCapability::bind(
-            artifact(),
-            &catalog,
-            &empty_authoring_project(),
-        )
-        .unwrap();
-
-        let parent = capability
-            .resolve_parent(&expected_parent.catalog_id)
-            .unwrap();
-        assert!(capability.authorizes_parent(&parent));
-        assert_eq!(
-            parent.canonical_selector,
-            expected_parent.quest_class.authoring_selector
-        );
-        assert_eq!(
-            parent.runtime_class,
-            expected_parent.quest_class.runtime_class
-        );
-        let giver = capability
-            .resolve_giver(&expected_giver.catalog_id)
-            .unwrap();
-        assert!(capability.authorizes_giver(&giver));
-        assert_eq!(
-            giver.canonical_selector,
-            expected_giver.quest_giver.authoring_selector
-        );
-        assert_eq!(
-            giver.runtime_unique_name,
-            expected_giver.quest_giver.runtime_unique_name
-        );
-        assert!(matches!(
-            capability.resolve_parent("not-in-catalog"),
-            Err(QuestCollisionCapabilityError::UnknownParent(_))
-        ));
-        assert!(matches!(
-            capability.resolve_giver("not-in-catalog"),
-            Err(QuestCollisionCapabilityError::UnknownGiver(_))
-        ));
-        let mut forged_parent = parent;
-        forged_parent.runtime_class.push_str("_Forged");
-        assert!(!capability.authorizes_parent(&forged_parent));
-        let mut forged_giver = giver;
-        forged_giver.runtime_unique_name.push_str("_Forged");
-        assert!(!capability.authorizes_giver(&forged_giver));
-    }
-
-    #[test]
-    fn base_project_collisions_fail_closed_in_every_domain() {
-        let catalog = trusted_catalog();
-        let mut project = empty_authoring_project();
-        add_authoring_npc(&mut project, "Project.Npcs.Collision", "CollisionNpc");
-        let cases = [
-            ("module", "project.npcs.collision"),
-            ("relative path", "project/npcs/collision.as"),
-            ("symbol", "ucharacterdefinition_human_collisionnpc"),
-        ];
-
-        for (kind, value) in cases {
-            let base = artifact_with_extra_collision(kind, value);
-            assert!(matches!(
-                VerifiedQuestCollisionCapability::bind(base, &catalog, &project),
-                Err(QuestCollisionCapabilityError::BaseProjectCollision {
-                    kind: actual_kind,
-                    value: actual_value,
-                    ..
-                }) if actual_kind == kind && actual_value == value
-            ));
-        }
-    }
-
-    #[test]
-    fn catalog_target_and_project_drift_are_rejected() {
-        let catalog = trusted_catalog();
-        let project = empty_authoring_project();
-
-        let mut wrong_catalog_binding = artifact();
-        wrong_catalog_binding.wire.inventory.story_catalog_seal = seal(b"other catalog");
-        let payload =
-            canonical_json(&wrong_catalog_binding.wire.inventory, "test payload").unwrap();
-        wrong_catalog_binding.wire.payload_seal = seal_bytes(&payload);
-        assert!(matches!(
-            VerifiedQuestCollisionCapability::bind(wrong_catalog_binding, &catalog, &project),
-            Err(QuestCollisionCapabilityError::CatalogBindingMismatch)
-        ));
-
-        let mut wrong_target = project.clone();
-        wrong_target.target.executable.sha256 = AuthoringSha256Digest::from_bytes([0x99; 32]);
-        assert!(matches!(
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &wrong_target),
-            Err(QuestCollisionCapabilityError::TargetMismatch)
-        ));
-
-        let capability =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
-        let mut changed_head = project;
-        changed_head.revision += 1;
-        assert!(matches!(
-            capability.into_quest_collision_input(&changed_head),
-            Err(QuestCollisionCapabilityError::ProjectDrift)
-        ));
-    }
-
-    #[test]
-    fn source_bound_bridge_returns_the_capability_needed_by_the_quest_generator() {
-        let catalog = trusted_catalog();
-        let project = empty_authoring_project();
-        let stored = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
-            .unwrap()
-            .into_artifact()
-            .unwrap();
-        let reopened = reopen_quest_collision_capability_artifact_v1(
-            stored.canonical_json(),
-            stored.artifact_seal(),
-            stored.source_seal(),
-        )
-        .unwrap();
-
-        let authoritative = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
-            .unwrap()
-            .verify_artifact_exact(&reopened)
-            .unwrap();
-        let input = authoritative.into_quest_collision_input(&project).unwrap();
-        assert_eq!(
-            input.catalog_layer,
-            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
-        );
-        assert_eq!(input.source_seal.byte_len, reopened.source_seal().byte_len);
-        assert!(!input.modules.is_empty());
-        assert!(!input.relative_paths.is_empty());
-        assert!(!input.symbols.is_empty());
-    }
-
-    #[test]
-    fn prepared_capsule_is_byte_exact_with_the_legacy_api_and_finalizes_once() {
-        let catalog = trusted_catalog();
-        let project = empty_authoring_project();
-        let legacy = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
-            .unwrap()
-            .into_artifact()
-            .unwrap();
-        let prepared = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
-            .unwrap()
-            .prepare_artifact()
-            .unwrap();
-
-        assert_eq!(prepared.artifact(), &legacy);
-        assert_eq!(
-            prepared.artifact().canonical_json(),
-            legacy.canonical_json()
-        );
-        let (materialized, input) = prepared.finalize(&project).unwrap();
-
-        assert_eq!(materialized, legacy);
-        assert_eq!(
-            input.catalog_layer,
-            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
-        );
-        assert_eq!(
-            input.source_seal.byte_len,
-            materialized.source_seal().byte_len
-        );
-        assert!(!input.modules.is_empty());
-        assert!(!input.relative_paths.is_empty());
-        assert!(!input.symbols.is_empty());
-    }
-
-    #[test]
-    fn prepared_finalize_consumes_and_rejects_every_exact_project_head_drift_gate() {
-        let catalog = trusted_catalog();
-        let project = empty_authoring_project();
-
-        let mut changed_id = project.clone();
-        changed_id.project_id = authoring_project_id(2);
-        let mut changed_revision = project.clone();
-        changed_revision.revision += 1;
-        let mut changed_target = project.clone();
-        changed_target.target.executable.sha256 = AuthoringSha256Digest::from_bytes([0xa3; 32]);
-        let mut changed_canonical_snapshot = project.clone();
-        changed_canonical_snapshot.meta.name.push_str(" drift");
-
-        for changed_head in [
-            changed_id,
-            changed_revision,
-            changed_target,
-            changed_canonical_snapshot,
-        ] {
-            let prepared = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
-                .unwrap()
-                .prepare_artifact()
-                .unwrap();
-            let error = prepared.finalize(&changed_head).unwrap_err();
-            assert!(matches!(
-                error,
-                PreparedQuestCollisionArtifactFinalizeError::Project(
-                    QuestCollisionCapabilityError::ProjectDrift
-                )
-            ));
-            // `finalize` takes the capsule by value, so this failure path cannot be retried or
-            // converted back into authority with the now-rejected prepared value.
-        }
-    }
-
     struct S3Fixture {
         _root: S3TestRoot,
         store: WorkingProjectStore,
         catalog: StoryCatalogFile,
-        collision_source: gore_authoring::ProjectRevision3,
         project: gore_authoring::ProjectRevision3,
         quest_id: AuthoringEntityId,
-    }
-
-    impl S3Fixture {
-        fn fresh_capability(&self) -> VerifiedQuestCollisionCapability {
-            VerifiedQuestCollisionCapability::bind_revision3(
-                artifact(),
-                &self.catalog,
-                &self.collision_source,
-            )
-            .unwrap()
-        }
-
-        fn canonical(&self, project: &gore_authoring::ProjectRevision3) -> String {
-            project.to_canonical_json().unwrap()
-        }
     }
 
     fn s3_fixture(label: &str) -> S3Fixture {
         let root = S3TestRoot::new(label);
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let collision_source = empty_revision3_authoring_project();
-        let basis = collision_source.clone();
-        let basis_checkpoint = store.prepare_revision3_checkpoint(None, &basis).unwrap();
-
-        let collision_artifact = VerifiedQuestCollisionCapability::bind_revision3(
+        let basis = empty_revision3_authoring_project();
+        let basis_head = publish_revision3_head(&root, &store, &basis);
+        let selection = VerifiedRevision3QuestCollisionCapabilityV2::bind(
             artifact(),
             &catalog,
-            &collision_source,
-        )
-        .unwrap()
-        .into_artifact()
-        .unwrap();
-        let imported = store
-            .import_quest_collision_artifact_v1(collision_artifact.canonical_json(), None)
-            .unwrap();
-        assert_eq!(
-            imported.artifact,
-            authoring_seal(collision_artifact.artifact_seal())
-        );
-
-        let selection = VerifiedQuestCollisionCapability::bind_revision3(
-            artifact(),
-            &catalog,
-            &collision_source,
+            store
+                .prepare_current_revision3_quest_collision_source_v2(&basis_head)
+                .unwrap(),
         )
         .unwrap();
         let parent = selection
@@ -1897,6 +1475,15 @@ mod tests {
         let giver = selection
             .resolve_giver("g1r:npc:om_grd_asghan_263")
             .unwrap();
+        let (collision_artifact, collision_input) =
+            selection.prepare_artifact().unwrap().finalize().unwrap();
+        let imported = store
+            .import_quest_collision_artifact_v2(collision_artifact.canonical_json(), &basis_head)
+            .unwrap();
+        assert_eq!(
+            imported.artifact,
+            authoring_seal(collision_artifact.artifact_seal())
+        );
 
         let quest_id = authoring_entity_id(0x71);
         let module_id = authoring_entity_id(0x72);
@@ -1924,13 +1511,15 @@ mod tests {
                 description: "Prove that the gate is secure.".to_owned(),
                 objective_title: "Report to Asghan".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                     artifact: imported.artifact,
                     source_seal: authoring_seal(collision_artifact.source_seal()),
-                    basis_snapshot: basis_checkpoint.head.snapshot,
+                    basis_snapshot: basis_head.snapshot,
                 },
             },
             script_module: Revision3TypedRef::new(
@@ -1940,14 +1529,6 @@ mod tests {
             ),
             transcript: Vec::new(),
         };
-        let collision_input = VerifiedQuestCollisionCapability::bind_revision3(
-            artifact(),
-            &catalog,
-            &collision_source,
-        )
-        .unwrap()
-        .into_revision3_quest_collision_input(&collision_source)
-        .unwrap();
         let module = regenerate_revision3_quest_module(&quest, collision_input).unwrap();
         let owner = Revision3TypedRef::new(
             project.project_id,
@@ -1986,7 +1567,6 @@ mod tests {
             _root: root,
             store,
             catalog,
-            collision_source,
             project,
             quest_id,
         }
@@ -2019,7 +1599,7 @@ mod tests {
                     authored_runtime_id: "GORE_CONTEXT_TRANSCRIPT_LOC_ENTITY".to_owned(),
                 },
                 revision: 2,
-                payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                payload: Revision3EntityPayload::LocalizationEntry(Revision3LocalizationEntry {
                     loc_id: "GORE_CONTEXT_TRANSCRIPT_TEXT".to_owned(),
                     texts: BTreeMap::new(),
                 }),
@@ -2063,7 +1643,10 @@ mod tests {
         store: &WorkingProjectStore,
         project: &gore_authoring::ProjectRevision3,
     ) -> WorkingHead {
-        let prepared = store.prepare_revision3_checkpoint(None, project).unwrap();
+        let current = store.current_head().unwrap();
+        let prepared = store
+            .prepare_revision3_checkpoint(current.as_ref(), project)
+            .unwrap();
         fs::write(root.0.join("gore-project.json"), &prepared.head_bytes).unwrap();
         prepared.head
     }
@@ -2252,7 +1835,7 @@ mod tests {
             before_module.module_relative_path
         );
         assert_eq!(after_module.status, before_module.status);
-        let expected_module = gore_authoring::regenerate_revision3_quest_module_v2(
+        let expected_module = gore_authoring::regenerate_revision3_quest_module(
             after_quest,
             QuestCollisionCatalogInput {
                 generation: after_quest.input.collision_catalog.generation.clone(),
@@ -2297,14 +1880,8 @@ mod tests {
         head: &WorkingHead,
         outcome: &Revision3QuestDraftInsertOutcomeV3,
     ) {
-        // C1 deliberately has no V2 store persistence API. The existing lower storage primitive
-        // is format-agnostic at the byte CAS boundary; ignore its legacy metadata and retain the
-        // V2 metadata already placed in the candidate project by the transaction.
         let imported = store
-            .import_quest_collision_artifact_v1(
-                outcome.collision_artifact.canonical_json(),
-                Some(head),
-            )
+            .import_quest_collision_artifact_v2(outcome.collision_artifact.canonical_json(), head)
             .unwrap();
         assert_eq!(
             imported.artifact,
@@ -2668,7 +2245,9 @@ mod tests {
                     .to_owned(),
                 objective_title: "Report to Asghan again".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: first.input.collision_catalog,
             },
             script_module: Revision3TypedRef::new(
@@ -2862,6 +2441,7 @@ mod tests {
     #[test]
     fn revision3_v2_capability_unions_npc_and_two_prior_quests_deterministically() {
         let mut fixture = s3_fixture("v2-two-prior");
+        publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
 
         let mut npc_revision3 = empty_revision3_authoring_project();
         add_revision3_authoring_npc(
@@ -2921,49 +2501,6 @@ mod tests {
             second_artifact.canonical_json(),
             first_artifact.canonical_json()
         );
-    }
-
-    #[test]
-    fn revision3_v2_artifact_is_domain_and_schema_distinct_from_v1() {
-        let root = S3TestRoot::new("v2-domain");
-        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
-        let catalog = trusted_catalog();
-        let revision2 = empty_authoring_project();
-        let project = empty_revision3_authoring_project();
-        let head = publish_revision3_head(&root, &store, &project);
-        let v1 = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &revision2)
-            .unwrap()
-            .into_artifact()
-            .unwrap();
-        let v2 = VerifiedRevision3QuestCollisionCapabilityV2::bind(
-            artifact(),
-            &catalog,
-            store
-                .prepare_current_revision3_quest_collision_source_v2(&head)
-                .unwrap(),
-        )
-        .unwrap()
-        .into_artifact()
-        .unwrap();
-
-        assert_ne!(v1.catalog_layer(), v2.catalog_layer());
-        assert_ne!(v1.source_seal(), v2.source_seal());
-        assert!(matches!(
-            reopen_quest_collision_capability_artifact_v2(
-                v1.canonical_json(),
-                v1.artifact_seal(),
-                v1.source_seal(),
-            ),
-            Err(QuestCollisionCapabilityArtifactErrorV2::SourceSealMismatch)
-        ));
-        assert!(matches!(
-            reopen_quest_collision_capability_artifact_v1(
-                v2.canonical_json(),
-                v2.artifact_seal(),
-                v2.source_seal(),
-            ),
-            Err(QuestCollisionCapabilityArtifactError::SourceSealMismatch)
-        ));
     }
 
     #[test]
@@ -3359,103 +2896,7 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn s3_store_to_fresh_capability_to_exact_source_plan_is_end_to_end() {
-        let fixture = s3_fixture("happy");
-        let canonical = fixture.canonical(&fixture.project);
-        let prepared =
-            prepare_revision3_quest_source_inspection(&fixture.store, &canonical, fixture.quest_id)
-                .unwrap();
-        assert_eq!(
-            prepared.collision_source_project(),
-            &fixture.collision_source
-        );
-        let plan = prepared.lower(fixture.fresh_capability()).unwrap();
-        assert_eq!(plan.scope, QuestInspectionScope::SourceInspectionOnly);
-        assert_eq!(plan.build_status, QuestInspectionBuildStatus::Blocked);
-        assert_eq!(
-            plan.runtime_qualification,
-            QuestInspectionRuntimeQualification::RuntimeUnqualified
-        );
-        assert_eq!(
-            plan.publication_status,
-            QuestInspectionPublicationStatus::NotSupported
-        );
-        assert_eq!(plan.module.quest.id, fixture.quest_id);
-        assert!(plan
-            .module
-            .generated
-            .source
-            .contains("UQuest_GORE_S3_ASGHAN_TRIAL"));
-
-        let plan_json = plan.to_canonical_json().unwrap();
-        assert_eq!(
-            Revision3QuestSourceInspectionPlanV2::from_json(&plan_json).unwrap(),
-            plan
-        );
-        plan.verify_against_sources(&fixture.store, &canonical, fixture.fresh_capability())
-            .unwrap();
-        assert!(plan.content_seal().unwrap().byte_len > 0);
-
-        let mut oversized_input = plan.clone();
-        oversized_input.module.draft_input.byte_len = u64::MAX;
-        assert!(matches!(
-            oversized_input.to_canonical_json(),
-            Err(Revision3QuestInspectionError::PlanInvariant(_))
-        ));
-    }
-
-    #[test]
-    fn s3_semantic_v4_quest_reopens_as_an_exact_source_plan() {
-        let mut fixture = s3_fixture("semantic-v4-source-plan");
-        let transition_plan = QuestTransitionPlanV1::legacy_seed(1).unwrap();
-        let module_id = {
-            let quest = s3_quest_mut(&mut fixture.project, fixture.quest_id);
-            quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-            quest.input.transition_plan = Some(Box::new(transition_plan.clone()));
-            quest.script_module.id
-        };
-        let Revision3OriginRef::Generated {
-            generator_version, ..
-        } = &mut fixture.project.entities.get_mut(&module_id).unwrap().origin
-        else {
-            panic!("expected generated semantic module origin")
-        };
-        *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-        regenerate_s3_pair_after_intent_change(&mut fixture.project, fixture.quest_id);
-        publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
-
-        let canonical = fixture.canonical(&fixture.project);
-        let plan =
-            prepare_revision3_quest_source_inspection(&fixture.store, &canonical, fixture.quest_id)
-                .unwrap()
-                .lower(fixture.fresh_capability())
-                .unwrap();
-
-        assert_eq!(
-            plan.module.generated.generator_version,
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        );
-        let Revision3EntityPayload::ScriptModule(module) =
-            &fixture.project.entities[&module_id].payload
-        else {
-            panic!("expected generated semantic module")
-        };
-        assert_eq!(&plan.module.generated, module);
-        let Revision3EntityPayload::QuestDraft(quest) =
-            &fixture.project.entities[&fixture.quest_id].payload
-        else {
-            panic!("expected semantic Quest")
-        };
-        assert_eq!(
-            quest.input.transition_plan.as_deref(),
-            Some(&transition_plan)
-        );
-        plan.verify_against_sources(&fixture.store, &canonical, fixture.fresh_capability())
-            .unwrap();
-    }
-
-    fn assert_current_persisted_v2_artifact_plan_v3(label: &str, upgrade_to_semantic_v4: bool) {
+    fn assert_current_persisted_v2_artifact_plan_v3(label: &str) {
         let root = S3TestRoot::new(label);
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
@@ -3479,45 +2920,6 @@ mod tests {
         .unwrap();
         project = persisted.project;
         head = persisted.checkpoint.head;
-
-        if upgrade_to_semantic_v4 {
-            let quest_entity = &project.entities[&request.quest_id];
-            let Revision3EntityPayload::QuestDraft(quest) = &quest_entity.payload else {
-                panic!("expected persisted Quest Draft")
-            };
-            assert_eq!(
-                quest.generator_version,
-                REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-            );
-            let basis = revision3_quest_transition_plan_basis_v1(quest).unwrap();
-            assert!(basis.legacy_synthetic);
-            let edit = Revision3QuestTransitionPlanEditRequestV1 {
-                expected_head: head.clone(),
-                expected_project_id: project.project_id,
-                expected_revision: project.revision,
-                expected_target: project.target.clone(),
-                quest_id: request.quest_id,
-                expected_quest_revision: quest_entity.revision,
-                expected_transition_plan_seal: basis.seal,
-                transition_plan: basis.plan,
-            };
-            let Revision3QuestTransitionPlanEditEvaluationV1::Applied(edited) =
-                apply_revision3_quest_transition_plan_transaction_v1(
-                    &head,
-                    &project.to_canonical_json().unwrap(),
-                    &edit.to_canonical_json().unwrap(),
-                )
-                .unwrap()
-            else {
-                panic!("expected semantic transition-plan upgrade")
-            };
-            let checkpoint = store
-                .prepare_revision3_checkpoint(Some(&head), &edited.project)
-                .unwrap();
-            fs::write(root.0.join("gore-project.json"), &checkpoint.head_bytes).unwrap();
-            project = edited.project;
-            head = checkpoint.head;
-        }
 
         let fixed_head_before = store.current_head().unwrap().unwrap();
         assert_eq!(fixed_head_before, head);
@@ -3553,11 +2955,7 @@ mod tests {
         assert_eq!(plan.provenance.project_revision, project.revision);
         assert_eq!(
             plan.module.generated.generator_version,
-            if upgrade_to_semantic_v4 {
-                REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-            } else {
-                REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-            }
+            REVISION3_QUEST_GENERATOR_VERSION
         );
         let plan_json = plan.to_canonical_json().unwrap();
         assert_eq!(
@@ -3602,12 +3000,7 @@ mod tests {
 
     #[test]
     fn current_v3_persistence_artifact_reopens_as_plan_v3() {
-        assert_current_persisted_v2_artifact_plan_v3("plan-v3-production", false);
-    }
-
-    #[test]
-    fn current_v3_persistence_semantic_v4_reopens_as_plan_v3() {
-        assert_current_persisted_v2_artifact_plan_v3("plan-v3-semantic-v4", true);
+        assert_current_persisted_v2_artifact_plan_v3("plan-v3-production");
     }
 
     #[test]
@@ -3672,90 +3065,6 @@ mod tests {
             QuestCollisionCatalogInput,
             Revision3QuestCollisionInspectionVerificationErrorV2,
         > = VerifiedRevision3QuestCollisionInspectionCapabilityV2::verify_artifact_for_quest;
-    }
-
-    #[test]
-    fn s3_raw_semantic_basis_and_persisted_module_drift_fail_before_plan() {
-        let fixture = s3_fixture("drift");
-
-        let mut raw = fixture.project.clone();
-        let (raw_sha256, raw_byte_len) = {
-            let raw_ref = &mut s3_quest_mut(&mut raw, fixture.quest_id)
-                .input
-                .collision_catalog
-                .artifact;
-            raw_ref.sha256 = AuthoringSha256Digest::from_bytes([0xa1; 32]);
-            (raw_ref.sha256, raw_ref.byte_len)
-        };
-        raw.asset_store.assets.insert(
-            raw_sha256,
-            AssetMeta {
-                byte_len: raw_byte_len,
-                media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.to_owned(),
-            },
-        );
-        assert!(matches!(
-            prepare_revision3_quest_source_inspection(
-                &fixture.store,
-                &fixture.canonical(&raw),
-                fixture.quest_id,
-            ),
-            Err(Revision3QuestInspectionError::ArtifactUnavailable { .. })
-        ));
-
-        let mut semantic = fixture.project.clone();
-        s3_quest_mut(&mut semantic, fixture.quest_id)
-            .input
-            .collision_catalog
-            .source_seal
-            .sha256 = AuthoringSha256Digest::from_bytes([0xa2; 32]);
-        assert!(matches!(
-            prepare_revision3_quest_source_inspection(
-                &fixture.store,
-                &fixture.canonical(&semantic),
-                fixture.quest_id,
-            ),
-            Err(Revision3QuestInspectionError::InvalidArtifact(
-                QuestCollisionCapabilityArtifactError::SourceSealMismatch
-            ))
-        ));
-
-        let mut basis = fixture.project.clone();
-        s3_quest_mut(&mut basis, fixture.quest_id)
-            .input
-            .collision_catalog
-            .basis_snapshot
-            .sha256 = AuthoringSha256Digest::from_bytes([0xa3; 32]);
-        assert!(matches!(
-            prepare_revision3_quest_source_inspection(
-                &fixture.store,
-                &fixture.canonical(&basis),
-                fixture.quest_id,
-            ),
-            Err(Revision3QuestInspectionError::BasisUnavailable { .. })
-        ));
-
-        let mut module = fixture.project.clone();
-        let module_id = s3_quest_mut(&mut module, fixture.quest_id).script_module.id;
-        let Revision3EntityPayload::ScriptModule(persisted) =
-            &mut module.entities.get_mut(&module_id).unwrap().payload
-        else {
-            panic!("expected S3 ScriptModule")
-        };
-        persisted.source.push_str("\n// persisted drift\n");
-        persisted.source_sha256 =
-            AuthoringSha256Digest::from_bytes(Sha256::digest(persisted.source.as_bytes()).into());
-        let module_json = fixture.canonical(&module);
-        let prepared = prepare_revision3_quest_source_inspection(
-            &fixture.store,
-            &module_json,
-            fixture.quest_id,
-        )
-        .unwrap();
-        assert!(matches!(
-            prepared.lower(fixture.fresh_capability()),
-            Err(Revision3QuestInspectionError::PersistedModuleDrift { .. })
-        ));
     }
 
     #[test]
@@ -3939,10 +3248,7 @@ mod tests {
                 else {
                     panic!("expected persisted multi-objective Quest module")
                 };
-                assert_eq!(
-                    quest.generator_version,
-                    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                );
+                assert_eq!(quest.generator_version, REVISION3_QUEST_GENERATOR_VERSION);
                 assert_eq!(
                     quest.input.additional_objective_titles,
                     ["Inspect the gate", "Report to Asghan"]
@@ -4445,7 +3751,7 @@ mod tests {
                     authored_runtime_id: "GORE_AUTHORITY_QUEST_1".to_owned(),
                 },
                 revision: 0,
-                payload: Revision3EntityPayload::LocalizationEntry(AuthoringLocalizationEntry {
+                payload: Revision3EntityPayload::LocalizationEntry(Revision3LocalizationEntry {
                     loc_id: "GORE_NONSTORY_RUNTIME_WITNESS".to_owned(),
                     texts: Default::default(),
                 }),
@@ -4556,10 +3862,17 @@ mod tests {
         let basis_parent = basis_quest.input.parent_quest.clone();
         let basis_giver = basis_quest.input.giver.clone();
         let alternate_parent = alternate_test_parent(before, fixture.quest_id);
-        let viper = fixture
-            .fresh_capability()
-            .resolve_giver("g1r:npc:om_stt_viper_302")
-            .unwrap();
+        let viper = VerifiedRevision3QuestCollisionCapabilityV2::bind(
+            artifact(),
+            &fixture.catalog,
+            fixture
+                .store
+                .prepare_current_revision3_quest_collision_source_v2(&head)
+                .unwrap(),
+        )
+        .unwrap()
+        .resolve_giver("g1r:npc:om_stt_viper_302")
+        .unwrap();
 
         let mut description_request =
             context_edit_request_v1(before, &head, &fixture.catalog, fixture.quest_id);
@@ -4685,10 +3998,11 @@ mod tests {
             if objective_count == 8 {
                 let module_id = {
                     let quest = s3_quest_mut(&mut fixture.project, fixture.quest_id);
-                    quest.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
                     quest.input.additional_objective_titles = (2..=8)
                         .map(|ordinal| format!("Objective {ordinal}"))
                         .collect();
+                    quest.input.transition_plan =
+                        Box::new(QuestTransitionPlanV1::default_for_objectives(8).unwrap());
                     quest.script_module.id
                 };
                 let Revision3OriginRef::Generated {
@@ -4697,7 +4011,7 @@ mod tests {
                 else {
                     panic!("expected generated multi-objective module origin")
                 };
-                *generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+                *generator_version = REVISION3_QUEST_GENERATOR_VERSION;
                 regenerate_s3_pair_after_intent_change(&mut fixture.project, fixture.quest_id);
             }
             let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
@@ -4745,11 +4059,11 @@ mod tests {
     #[test]
     fn revision3_context_edit_preserves_semantic_v4_transition_plan() {
         let mut fixture = s3_fixture("context-edit-semantic-v4");
-        let transition_plan = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+        let transition_plan = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
         let module_id = {
             let quest = s3_quest_mut(&mut fixture.project, fixture.quest_id);
-            quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-            quest.input.transition_plan = Some(Box::new(transition_plan.clone()));
+            quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+            quest.input.transition_plan = Box::new(transition_plan.clone());
             quest.script_module.id
         };
         let Revision3OriginRef::Generated {
@@ -4758,7 +4072,7 @@ mod tests {
         else {
             panic!("expected generated semantic module origin")
         };
-        *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+        *generator_version = REVISION3_QUEST_GENERATOR_VERSION;
         regenerate_s3_pair_after_intent_change(&mut fixture.project, fixture.quest_id);
 
         let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
@@ -4795,12 +4109,9 @@ mod tests {
         };
         assert_eq!(
             after_quest.generator_version,
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
+            REVISION3_QUEST_GENERATOR_VERSION
         );
-        assert_eq!(
-            after_quest.input.transition_plan.as_deref(),
-            Some(&transition_plan)
-        );
+        assert_eq!(after_quest.input.transition_plan.as_ref(), &transition_plan);
     }
 
     #[test]
@@ -4944,20 +4255,14 @@ mod tests {
     }
 
     #[test]
-    fn revision3_context_edit_rejects_all_revision_overflows() {
+    fn revision3_context_edit_rejects_entity_revision_overflows() {
         #[derive(Clone, Copy)]
         enum OverflowKind {
-            Project,
             Quest,
             Module,
         }
-        for kind in [
-            OverflowKind::Project,
-            OverflowKind::Quest,
-            OverflowKind::Module,
-        ] {
+        for kind in [OverflowKind::Quest, OverflowKind::Module] {
             let label = match kind {
-                OverflowKind::Project => "project",
                 OverflowKind::Quest => "quest",
                 OverflowKind::Module => "module",
             };
@@ -4971,7 +4276,6 @@ mod tests {
                 quest.script_module.id
             };
             match kind {
-                OverflowKind::Project => fixture.project.revision = u64::MAX,
                 OverflowKind::Quest => {
                     fixture
                         .project
@@ -5004,12 +4308,6 @@ mod tests {
             )
             .unwrap_err();
             match kind {
-                OverflowKind::Project => assert!(matches!(
-                    error,
-                    Revision3QuestContextEditErrorV1::Conflict(
-                        Revision3QuestContextEditConflictV1::ProjectRevisionOverflow
-                    )
-                )),
                 OverflowKind::Quest => assert!(matches!(
                     error,
                     Revision3QuestContextEditErrorV1::Conflict(
@@ -5062,54 +4360,5 @@ mod tests {
                 ..
             }) if quest == fixture.quest_id && module == module_id
         ));
-    }
-
-    #[test]
-    #[ignore = "requires exact pinned executable, Shipping Cache, and Binds Cache paths"]
-    fn configured_real_combined_artifact_golden() {
-        let executable = std::env::var_os("GORE_STORY_INVENTORY_REAL_EXE")
-            .expect("set GORE_STORY_INVENTORY_REAL_EXE for the ignored real golden");
-        let shipping_path = std::env::var_os("GORE_STORY_INVENTORY_REAL_SHIPPING")
-            .expect("set GORE_STORY_INVENTORY_REAL_SHIPPING for the ignored real golden");
-        let binds_path = std::env::var_os("GORE_STORY_INVENTORY_REAL_BINDS")
-            .expect("set GORE_STORY_INVENTORY_REAL_BINDS for the ignored real golden");
-        let shipping = std::fs::read(&shipping_path).unwrap();
-        let binds = std::fs::read(&binds_path).unwrap();
-        let catalog = gore_story_catalog::build_known_catalog_with_shipping_snapshot(
-            std::path::Path::new(&executable),
-            &shipping,
-            std::path::Path::new(&binds_path),
-            gore_story_catalog::GenerationInputLimits::default(),
-        )
-        .unwrap();
-        let base = build_base_game_inventory(&catalog, &shipping, &binds).unwrap();
-        assert_eq!(base.payload_seal().byte_len, 3_517_746);
-
-        let project = empty_authoring_project();
-        let artifact = VerifiedQuestCollisionCapability::bind(base, &catalog, &project)
-            .unwrap()
-            .into_artifact()
-            .unwrap();
-        assert_eq!(artifact.canonical_json().len(), 3_517_569);
-        assert_eq!(
-            artifact.artifact_seal().sha256.to_string(),
-            "89d87887f531e6ea837bf4f00adcb987cb85f8bec5afb2b07d1343b8b407422f"
-        );
-        assert_eq!(
-            artifact.source_seal().sha256.to_string(),
-            "945f60dd495fad5bb19864ba270566b64325751c82607309b99e7ec71ad2f8f9"
-        );
-        let reopened = reopen_quest_collision_capability_artifact_v1(
-            artifact.canonical_json(),
-            artifact.artifact_seal(),
-            artifact.source_seal(),
-        )
-        .unwrap();
-        let fresh_base = build_base_game_inventory(&catalog, &shipping, &binds).unwrap();
-        let authoritative = VerifiedQuestCollisionCapability::bind(fresh_base, &catalog, &project)
-            .unwrap()
-            .verify_artifact_exact(&reopened)
-            .unwrap();
-        assert_eq!(authoritative.combined_source_seal(), artifact.source_seal());
     }
 }

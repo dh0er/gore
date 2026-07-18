@@ -30,34 +30,6 @@ void main() {
   );
 
   test(
-    'edit input binds the exact selected Quest and owned module revisions',
-    () {
-      final index = Revision3QuestOutlineFixture().contentIndex();
-      final quest = index.entityById(revision3QuestOutlineQuestId)!;
-      final input = Revision3QuestOutlineEditInput.forQuest(
-        index: index,
-        quest: quest,
-        displayName: 'Find Homer safely',
-        title: 'Find Homer safely',
-        objectiveTitles: const <String>[
-          'Inspect the old gate',
-          'Ask Asghan about Homer',
-          'Report to Diego',
-        ],
-      );
-
-      expect(input.questId, revision3QuestOutlineQuestId);
-      expect(input.expectedQuestRevision, 4);
-      expect(input.moduleId, revision3QuestOutlineModuleId);
-      expect(input.expectedModuleRevision, 5);
-      expect(input.usesStableObjectiveSlots, isFalse);
-      expect(input.objectiveSlots, isNull);
-      expect(input.expectedTransitionPlanSeal, isNull);
-      expect(() => input.objectiveTitles.clear(), throwsUnsupportedError);
-    },
-  );
-
-  test(
     'friendly validation rejects padding, unsafe text and count changes',
     () {
       expect(
@@ -87,19 +59,19 @@ void main() {
     },
   );
 
-  test('semantic edit retains every stable objective slot and plan seal', () {
+  test('edit binds exact entities, stable objective slots and plan seal', () {
     final fixture = Revision3QuestOutlineFixture();
-    final index = fixture.contentIndex(questGeneratorVersion: 4);
+    final index = fixture.contentIndex();
     final quest = index.entityById(revision3QuestOutlineQuestId)!;
     final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-      currentProjectJson: fixture.semanticProjectJson,
+      currentProjectJson: fixture.projectJson,
       questId: revision3QuestOutlineQuestId,
       expectedQuestRevision: fixture.questRevision,
       expectedModuleId: revision3QuestOutlineModuleId,
       expectedModuleRevision: fixture.moduleRevision,
     );
 
-    final input = Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+    final input = Revision3QuestOutlineEditInput.forQuest(
       index: index,
       quest: quest,
       seed: seed,
@@ -121,16 +93,19 @@ void main() {
       ],
     );
 
-    expect(input.usesStableObjectiveSlots, isTrue);
+    expect(input.questId, revision3QuestOutlineQuestId);
+    expect(input.expectedQuestRevision, 4);
+    expect(input.moduleId, revision3QuestOutlineModuleId);
+    expect(input.expectedModuleRevision, 5);
     expect(input.objectiveSlots, [3, 1, 2]);
-    expect(input.expectedTransitionPlanSeal, isNotNull);
     expect(
-      input.expectedTransitionPlanSeal?.sha256,
+      input.expectedTransitionPlanSeal.sha256,
       seed.transitionPlanSeal.sha256,
     );
-    expect(() => input.objectiveSlots!.add(4), throwsUnsupportedError);
+    expect(() => input.objectiveSlots.add(4), throwsUnsupportedError);
+    expect(() => input.objectiveTitles.clear(), throwsUnsupportedError);
     expect(
-      () => Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+      () => Revision3QuestOutlineEditInput.forQuest(
         index: index,
         quest: quest,
         seed: seed,
@@ -153,5 +128,21 @@ void main() {
       ),
       throwsFormatException,
     );
+  });
+
+  test('single-objective current project omits optional extra titles', () {
+    final fixture = Revision3QuestOutlineFixture(
+      objectiveTitles: const <String>['Ask Asghan about Homer'],
+    );
+
+    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+      currentProjectJson: fixture.projectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      expectedModuleId: revision3QuestOutlineModuleId,
+      expectedModuleRevision: fixture.moduleRevision,
+    );
+
+    expect(seed.objectives.single.title, 'Ask Asghan about Homer');
   });
 }

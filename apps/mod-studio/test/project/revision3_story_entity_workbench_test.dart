@@ -9,6 +9,7 @@ const _projectA = '11111111111111111111111111111111';
 const _questId = '22222222222222222222222222222222';
 const _npcId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
+const _npcModuleId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -36,29 +37,16 @@ void main() {
         Revision3StoryWorkbenchSection.problemsChecks,
       ],
     );
-    expect(
-      Revision3StoryEntityWorkbench.supportsSection(
-        quest,
-        Revision3StoryWorkbenchSection.story,
-      ),
-      isTrue,
-    );
-    expect(
-      Revision3StoryEntityWorkbench.supportsSection(
-        quest,
-        Revision3StoryWorkbenchSection.logic,
-      ),
-      isTrue,
-    );
-    for (final legacySection in const <Revision3StoryWorkbenchSection>[
-      Revision3StoryWorkbenchSection.story,
-      Revision3StoryWorkbenchSection.routine,
-      Revision3StoryWorkbenchSection.inventory,
-    ]) {
+    for (final section in Revision3StoryEntityWorkbench.sectionsFor(quest)) {
       expect(
-        Revision3StoryEntityWorkbench.supportsSection(npc, legacySection),
+        Revision3StoryEntityWorkbench.supportsSection(quest, section),
         isTrue,
-        reason: '${legacySection.name} remains a safe legacy input',
+      );
+    }
+    for (final section in Revision3StoryEntityWorkbench.sectionsFor(npc)) {
+      expect(
+        Revision3StoryEntityWorkbench.supportsSection(npc, section),
+        isTrue,
       );
     }
   });
@@ -103,7 +91,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('fallback Overview invokes both legacy Quest context editors', (
+  testWidgets('fallback Overview invokes both Quest context editors', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
@@ -459,14 +447,14 @@ void main() {
           findsOneWidget,
         );
       }
-      for (final removedSection in const <Revision3StoryWorkbenchSection>[
-        Revision3StoryWorkbenchSection.story,
-        Revision3StoryWorkbenchSection.routine,
-        Revision3StoryWorkbenchSection.inventory,
+      for (final removedSection in const <String>[
+        'story',
+        'routine',
+        'inventory',
       ]) {
         expect(
           find.byKey(
-            Key('revision3-story-workbench-tab-${removedSection.name}-$_npcId'),
+            Key('revision3-story-workbench-tab-$removedSection-$_npcId'),
           ),
           findsNothing,
         );
@@ -712,95 +700,6 @@ void main() {
     },
   );
 
-  for (final legacySection in const <Revision3StoryWorkbenchSection>[
-    Revision3StoryWorkbenchSection.story,
-    Revision3StoryWorkbenchSection.logic,
-  ]) {
-    testWidgets(
-      'legacy ${legacySection.name} selection normalizes to Quest Journey',
-      (tester) async {
-        await _setSurfaceSize(tester, const Size(1000, 720));
-        final index = _fixture();
-
-        await _pumpWorkbench(
-          tester,
-          index: index,
-          selectedSection: legacySection,
-          questJourney: const Center(child: Text('Canonical Quest Journey')),
-        );
-
-        expect(
-          tester
-              .widget<ChoiceChip>(
-                find.byKey(
-                  Key('revision3-story-workbench-tab-overview-$_questId'),
-                ),
-              )
-              .selected,
-          isTrue,
-        );
-        expect(
-          find.byKey(
-            Key('revision3-story-workbench-section-overview-$_questId'),
-          ),
-          findsOneWidget,
-        );
-        expect(find.text('Canonical Quest Journey'), findsOneWidget);
-        expect(
-          find.byKey(
-            Key(
-              'revision3-story-workbench-tab-${legacySection.name}-$_questId',
-            ),
-          ),
-          findsNothing,
-        );
-      },
-    );
-  }
-
-  for (final legacySection in const <Revision3StoryWorkbenchSection>[
-    Revision3StoryWorkbenchSection.story,
-    Revision3StoryWorkbenchSection.routine,
-    Revision3StoryWorkbenchSection.inventory,
-  ]) {
-    testWidgets(
-      'legacy NPC ${legacySection.name} selection normalizes to Profile',
-      (tester) async {
-        await _setSurfaceSize(tester, const Size(1000, 720));
-        final index = _fixture();
-
-        await _pumpWorkbench(
-          tester,
-          index: index,
-          entityId: _npcId,
-          selectedSection: legacySection,
-          npcDialogVoice: const Text('Exact NPC greeting editor'),
-        );
-
-        expect(
-          tester
-              .widget<ChoiceChip>(
-                find.byKey(
-                  Key('revision3-story-workbench-tab-profile-$_npcId'),
-                ),
-              )
-              .selected,
-          isTrue,
-        );
-        expect(
-          find.byKey(Key('revision3-story-workbench-section-profile-$_npcId')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(
-            Key('revision3-story-workbench-tab-${legacySection.name}-$_npcId'),
-          ),
-          findsNothing,
-        );
-      },
-    );
-  }
-
   testWidgets('same-project entity revisions retain a valid selected tab', (
     tester,
   ) async {
@@ -1007,7 +906,7 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
       'entity_counts': <String, Object?>{
         'npc_draft': 1,
         'quest_draft': 1,
-        'script_module': 1,
+        'script_module': 2,
       },
       'entities': <Object?>[
         <String, Object?>{
@@ -1045,6 +944,31 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'asset_references': <Object?>[],
         },
         <String, Object?>{
+          'id': _npcModuleId,
+          'kind': 'script_module',
+          'display_name': 'Gate Guard source',
+          'revision': 0,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+          },
+          'summary': <String, Object?>{
+            'kind': 'script_module',
+            'data': <String, Object?>{
+              'generator_id': 'workbench.fixture.npc',
+              'generator_version': 1,
+              'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+              'module_relative_path': 'Project/Npcs/GateGuard.as',
+              'status': <String, Object?>{
+                'authoring': 'offline_draft',
+                'runtime': 'runtime_unqualified',
+              },
+            },
+          },
+          'references': <Object?>[],
+          'asset_references': <Object?>[],
+        },
+        <String, Object?>{
           'id': _npcId,
           'kind': 'npc_draft',
           'display_name': 'Gate Guard',
@@ -1061,9 +985,21 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               'parent_character_definition': 'UCharacterDefinition_Asghan',
               'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
               'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+              'greeting_count': 0,
             },
           },
-          'references': <Object?>[],
+          'references': <Object?>[
+            <String, Object?>{
+              'role': 'draft_script_module',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': _projectA,
+                'entity_id': _npcModuleId,
+                'expected_kind': 'script_module',
+              },
+              'resolution': 'resolved',
+            },
+          ],
           'asset_references': <Object?>[],
         },
         <String, Object?>{

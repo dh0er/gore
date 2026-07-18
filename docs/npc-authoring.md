@@ -359,8 +359,8 @@ independently, mutations are single-flight, and stale/reopen-required authority
 fails closed.
 
 `NpcDraft.greetings` is optional authoring metadata outside the deterministic
-NPC generator input. Empty and migrated projects omit it and retain their old
-canonical bytes. Nonempty lists contain at most 256 unique, ordered,
+NPC generator input. Empty greeting lists omit it. Nonempty lists contain at
+most 256 unique, ordered,
 same-project DialogLine references. The content index emits the generated
 ScriptModule relationship first, then `npc_greeting_line` references in authored
 order plus an exact `greeting_count`. Detaching a binding never deletes the

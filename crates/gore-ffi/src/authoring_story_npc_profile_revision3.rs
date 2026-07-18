@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use gore_authoring::{
     apply_revision3_npc_profile_edit_transaction_v1, AssetVerification,
-    ContentSeal as AuthoringContentSeal, GameGenerationAnchor, Revision2NpcParentClassInput,
+    ContentSeal as AuthoringContentSeal, GameGenerationAnchor, NpcParentClassInput,
     Revision3EntityKind, Revision3EntityPayload, Revision3NpcCatalogSelectionV1,
     Revision3NpcProfileCatalogContextV1, Revision3NpcProfileEditBuildStatusV1,
     Revision3NpcProfileEditCatalogAuthorityV1, Revision3NpcProfileEditCollisionAuthorityV1,
@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::authoring_story_inventory::{read_source_no_follow, SourceReadError};
+use crate::authoring_source_io::{read_source_no_follow, SourceReadError};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_prepare_revision3_npc_profile_edit_v1";
@@ -562,8 +562,8 @@ fn require_offline_qualified_selection(selected: &AuthoringNpcSelection) -> Resu
 fn authoring_parent(
     target: &GameGenerationAnchor,
     value: &AuthoringClassSelection,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: target.clone(),
         source_seal: authoring_seal(&value.source_seal),
         catalog_layer: value.catalog_layer.clone(),
@@ -1039,8 +1039,8 @@ mod tests {
         }
     }
 
-    fn parent(value: u8, runtime_class: &str) -> Revision2NpcParentClassInput {
-        Revision2NpcParentClassInput {
+    fn parent(value: u8, runtime_class: &str) -> NpcParentClassInput {
+        NpcParentClassInput {
             generation: target(),
             source_seal: content_seal(value, 4_096),
             catalog_layer: "base-game.g1r.npc-parents.v1".to_owned(),

@@ -9,6 +9,7 @@ import 'package:gore_mod/project/revision3_project_dashboard.dart';
 import '../support/revision3_voice_content_fixture.dart';
 
 const _npcId = '77777777777777777777777777777777';
+const _npcModuleId = '7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f';
 const _questId = '88888888888888888888888888888888';
 const _missingModuleId = '99999999999999999999999999999999';
 const _assetSha =
@@ -570,9 +571,11 @@ Revision3ContentIndex _fixture({
   if (includeStoryDrafts) {
     counts['npc_draft'] = 1;
     counts['quest_draft'] = 1;
+    counts['script_module'] = 1;
   } else {
     counts.remove('npc_draft');
     counts.remove('quest_draft');
+    counts.remove('script_module');
   }
 
   final entities = List<Object?>.from(json['entities']! as List<Object?>);
@@ -595,6 +598,43 @@ Revision3ContentIndex _fixture({
             'parent_character_definition': 'UCharacterDefinition_Asghan',
             'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
             'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+            'greeting_count': 0,
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': revision3VoiceContentProjectId,
+              'entity_id': _npcModuleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+      <String, Object?>{
+        'id': _npcModuleId,
+        'kind': 'script_module',
+        'display_name': 'Fixture guard source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'FIXTURE_GUARD_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'dashboard.fixture.npc',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.FIXTURE_GUARD',
+            'module_relative_path': 'Project/Npcs/FixtureGuard.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
           },
         },
         'references': <Object?>[],

@@ -3123,170 +3123,6 @@ void main() {
   }
 
   test(
-    'Quest outline edit publishes through full reopen CAS without a game root',
-    () async {
-      final outline = Revision3QuestOutlineFixture();
-      final root = await _projectRoot(fixture, suffix: 'quest_outline');
-      final store = _FakeRevision3Store(sealRegisteredHeads: true);
-      final session = await ManagedRevision3AuthoringProjectSession.create(
-        root: root,
-        store: store,
-        projectJson: outline.projectJson,
-      );
-
-      final published = await session.prepareAndPublishQuestOutlineEditV1(
-        questId: revision3QuestOutlineQuestId,
-        expectedQuestRevision: outline.questRevision,
-        expectedModuleId: revision3QuestOutlineModuleId,
-        expectedModuleRevision: outline.moduleRevision,
-        displayName: 'Find Homer safely',
-        title: 'Find Homer safely',
-        objectiveTitles: const [
-          'Inspect the old gate',
-          'Ask Asghan about Homer',
-          'Report to Diego',
-        ],
-      );
-
-      expect(store.questOutlinePrepareCalls, 1);
-      expect(published.projectRevision, 8);
-      expect(published.questRevision, 5);
-      expect(published.moduleRevision, 6);
-      expect(session.projectRevision, 8);
-      expect(session.projectJson, published.projectJson);
-      expect(
-        await session.headFile.readAsString(),
-        published.head.canonicalJson,
-      );
-      expect(
-        store.headVerifications,
-        everyElement(AuthoringAssetVerification.full),
-      );
-
-      await session.close();
-      final reopened = await ManagedRevision3AuthoringProjectSession.open(
-        root: root,
-        store: store,
-      );
-      expect(reopened.projectRevision, 8);
-      expect(reopened.projectJson, published.projectJson);
-      await reopened.close();
-    },
-  );
-
-  test(
-    'Quest outline semantic rejection retries but integrity failure poisons',
-    () async {
-      final outline = Revision3QuestOutlineFixture();
-      final retryRoot = await _projectRoot(
-        fixture,
-        suffix: 'quest_outline_retry',
-      );
-      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
-      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
-        root: retryRoot,
-        store: retryStore,
-        projectJson: outline.projectJson,
-      );
-      retryStore.nextQuestOutlineError = const ModFfiException(
-        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
-        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_NO_CHANGES',
-        message: 'fake semantic no-op',
-      );
-      await expectLater(
-        retrySession.prepareAndPublishQuestOutlineEditV1(
-          questId: revision3QuestOutlineQuestId,
-          expectedQuestRevision: outline.questRevision,
-          expectedModuleId: revision3QuestOutlineModuleId,
-          expectedModuleRevision: outline.moduleRevision,
-          displayName: 'Find Homer safely',
-          title: 'Find Homer safely',
-          objectiveTitles: const [
-            'Inspect the old gate',
-            'Ask Asghan about Homer',
-            'Report to Diego',
-          ],
-        ),
-        throwsA(
-          isA<ModFfiException>().having(
-            (error) => error.code,
-            'code',
-            'AUTHORING_REVISION3_QUEST_OUTLINE_NO_CHANGES',
-          ),
-        ),
-      );
-      expect(retrySession.requiresReopen, isFalse);
-      await retrySession.prepareAndPublishQuestOutlineEditV1(
-        questId: revision3QuestOutlineQuestId,
-        expectedQuestRevision: outline.questRevision,
-        expectedModuleId: revision3QuestOutlineModuleId,
-        expectedModuleRevision: outline.moduleRevision,
-        displayName: 'Find Homer safely',
-        title: 'Find Homer safely',
-        objectiveTitles: const [
-          'Inspect the old gate',
-          'Ask Asghan about Homer',
-          'Report to Diego',
-        ],
-      );
-      await retrySession.close();
-
-      final poisonRoot = await _projectRoot(
-        fixture,
-        suffix: 'quest_outline_poison',
-      );
-      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
-      final poisonSession =
-          await ManagedRevision3AuthoringProjectSession.create(
-            root: poisonRoot,
-            store: poisonStore,
-            projectJson: outline.projectJson,
-          );
-      poisonStore.nextQuestOutlineError = const ModFfiException(
-        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
-        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_PROJECT_INVALID',
-        message: 'fake integrity failure',
-      );
-      await expectLater(
-        poisonSession.prepareAndPublishQuestOutlineEditV1(
-          questId: revision3QuestOutlineQuestId,
-          expectedQuestRevision: outline.questRevision,
-          expectedModuleId: revision3QuestOutlineModuleId,
-          expectedModuleRevision: outline.moduleRevision,
-          displayName: 'Find Homer safely',
-          title: 'Find Homer safely',
-          objectiveTitles: const [
-            'Inspect the old gate',
-            'Ask Asghan about Homer',
-            'Report to Diego',
-          ],
-        ),
-        throwsA(isA<ManagedProjectVerificationException>()),
-      );
-      expect(poisonSession.requiresReopen, isTrue);
-      final calls = poisonStore.questOutlinePrepareCalls;
-      await expectLater(
-        poisonSession.prepareAndPublishQuestOutlineEditV1(
-          questId: revision3QuestOutlineQuestId,
-          expectedQuestRevision: outline.questRevision,
-          expectedModuleId: revision3QuestOutlineModuleId,
-          expectedModuleRevision: outline.moduleRevision,
-          displayName: 'Another name',
-          title: 'Another title',
-          objectiveTitles: const [
-            'Inspect the old gate',
-            'Ask Asghan about Homer',
-            'Report to Diego',
-          ],
-        ),
-        throwsA(isA<ManagedProjectVerificationException>()),
-      );
-      expect(poisonStore.questOutlinePrepareCalls, calls);
-      await poisonSession.close();
-    },
-  );
-
-  test(
     'Quest transitions seed stays private and edit publishes through full reopen CAS',
     () async {
       final fixtureProject = Revision3QuestOutlineFixture();
@@ -3305,9 +3141,15 @@ void main() {
         expectedModuleRevision: fixtureProject.moduleRevision,
       );
       expect(seed.projectRevision, fixtureProject.projectRevision);
-      expect(seed.legacySynthetic, isTrue);
       expect(seed.objectives, hasLength(3));
       expect(store.questTransitionsPrepareCalls, 0);
+
+      final editedPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: seed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: seed.transitionPlan.nextSlotOrdinal,
+        transitions: seed.transitionPlan.transitions,
+      );
 
       final published = await session.prepareAndPublishQuestTransitionsEditV1(
         questId: revision3QuestOutlineQuestId,
@@ -3315,7 +3157,7 @@ void main() {
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision,
         expectedTransitionPlanSeal: seed.transitionPlanSeal,
-        transitionPlan: seed.transitionPlan,
+        transitionPlan: editedPlan,
       );
 
       expect(store.questTransitionsPrepareCalls, 1);
@@ -3323,11 +3165,9 @@ void main() {
       expect(published.projectRevision, fixtureProject.projectRevision + 1);
       expect(published.questRevision, fixtureProject.questRevision + 1);
       expect(published.moduleRevision, fixtureProject.moduleRevision + 1);
-      expect(published.previousGeneratorVersion, 3);
-      expect(published.upgradedFromLegacy, isTrue);
       expect(
         published.transitionPlanSeal.sha256,
-        seed.transitionPlan.contentSeal.sha256,
+        editedPlan.contentSeal.sha256,
       );
       expect(
         published.buildStatus,
@@ -3351,20 +3191,19 @@ void main() {
         everyElement(AuthoringAssetVerification.full),
       );
 
-      final semanticSeed = await session.readQuestTransitionsSeedV1(
+      final updatedSeed = await session.readQuestTransitionsSeedV1(
         questId: revision3QuestOutlineQuestId,
         expectedQuestRevision: fixtureProject.questRevision + 1,
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision + 1,
       );
-      expect(semanticSeed.legacySynthetic, isFalse);
-      final originalTransitions = semanticSeed.transitionPlan.canonicalJson;
+      final originalTransitions = updatedSeed.transitionPlan.canonicalJson;
       final outlined = await session.prepareAndPublishQuestOutlineEditV2(
         questId: revision3QuestOutlineQuestId,
         expectedQuestRevision: fixtureProject.questRevision + 1,
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision + 1,
-        expectedTransitionPlanSeal: semanticSeed.transitionPlanSeal,
+        expectedTransitionPlanSeal: updatedSeed.transitionPlanSeal,
         displayName: 'Find Homer safely',
         title: 'Secure the old gate',
         objectiveSlots: const [3, 1, 2],
@@ -3395,14 +3234,17 @@ void main() {
         'Inspect the old gate',
       ]);
       final originalPlan = jsonDecode(originalTransitions) as Map;
-      final editedPlan =
+      final editedPlanJson =
           jsonDecode(editedSeed.transitionPlan.canonicalJson) as Map;
-      expect(editedPlan['objective_slots'], originalPlan['objective_slots']);
       expect(
-        editedPlan['next_slot_ordinal'],
+        editedPlanJson['objective_slots'],
+        originalPlan['objective_slots'],
+      );
+      expect(
+        editedPlanJson['next_slot_ordinal'],
         originalPlan['next_slot_ordinal'],
       );
-      expect(editedPlan['transitions'], originalPlan['transitions']);
+      expect(editedPlanJson['transitions'], originalPlan['transitions']);
 
       await session.close();
       final reopened = await ManagedRevision3AuthoringProjectSession.open(
@@ -3434,6 +3276,12 @@ void main() {
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision,
       );
+      final retryPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: retrySeed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: retrySeed.transitionPlan.nextSlotOrdinal,
+        transitions: retrySeed.transitionPlan.transitions,
+      );
       retryStore.nextQuestTransitionsError = const ModFfiException(
         command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
         code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
@@ -3446,7 +3294,7 @@ void main() {
           expectedModuleId: revision3QuestOutlineModuleId,
           expectedModuleRevision: fixtureProject.moduleRevision,
           expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
-          transitionPlan: retrySeed.transitionPlan,
+          transitionPlan: retryPlan,
         ),
         throwsA(
           isA<ModFfiException>().having(
@@ -3463,7 +3311,7 @@ void main() {
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision,
         expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
-        transitionPlan: retrySeed.transitionPlan,
+        transitionPlan: retryPlan,
       );
       await retrySession.close();
 
@@ -3484,6 +3332,12 @@ void main() {
         expectedModuleId: revision3QuestOutlineModuleId,
         expectedModuleRevision: fixtureProject.moduleRevision,
       );
+      final poisonPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: poisonSeed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: poisonSeed.transitionPlan.nextSlotOrdinal,
+        transitions: poisonSeed.transitionPlan.transitions,
+      );
       poisonStore.nextQuestTransitionsError = const ModFfiException(
         command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
         code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_STORE_INVARIANT',
@@ -3496,7 +3350,7 @@ void main() {
           expectedModuleId: revision3QuestOutlineModuleId,
           expectedModuleRevision: fixtureProject.moduleRevision,
           expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
-          transitionPlan: poisonSeed.transitionPlan,
+          transitionPlan: poisonPlan,
         ),
         throwsA(isA<ManagedProjectVerificationException>()),
       );
@@ -3509,7 +3363,7 @@ void main() {
           expectedModuleId: revision3QuestOutlineModuleId,
           expectedModuleRevision: fixtureProject.moduleRevision,
           expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
-          transitionPlan: poisonSeed.transitionPlan,
+          transitionPlan: poisonPlan,
         ),
         throwsA(isA<ManagedProjectVerificationException>()),
       );
@@ -8949,46 +8803,6 @@ class _FakeRevision3Store
   }
 
   @override
-  Future<AuthoringRevision3QuestOutlineEditPreparation>
-  prepareQuestOutlineEditV1({
-    required String root,
-    required String currentProjectJson,
-    required AuthoringRevision3QuestOutlineEditRequestV1 request,
-  }) async {
-    questOutlinePrepareCalls++;
-    final injected = nextQuestOutlineError;
-    nextQuestOutlineError = null;
-    if (injected != null) throw injected;
-    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
-    if (actual != request.expectedHead.canonicalJson ||
-        _projectsByHead[actual] != currentProjectJson) {
-      throw const ModFfiException(
-        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
-        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_HEAD_CONFLICT',
-        message: 'fake native Quest outline basis CAS rejected',
-      );
-    }
-    final fixture = Revision3QuestOutlineFixture();
-    if (currentProjectJson != fixture.projectJson) {
-      throw StateError('fake outline fixture received an unexpected basis');
-    }
-    final response = fixture.response(
-      displayName: request.displayName,
-      title: request.title,
-      objectiveTitles: request.objectiveTitles,
-    );
-    response['basis_head_json'] = request.expectedHead.canonicalJson;
-    final candidateProject = response['project_json']! as String;
-    final candidateHead = register(candidateProject);
-    response['head_json'] = candidateHead.canonicalJson;
-    return AuthoringRevision3QuestOutlineEditPreparation.fromJson(
-      response,
-      currentProjectJson: currentProjectJson,
-      request: request,
-    );
-  }
-
-  @override
   Future<AuthoringRevision3QuestOutlineEditPreparationV2>
   prepareQuestOutlineEditV2({
     required String root,
@@ -9132,8 +8946,6 @@ class _FakeRevision3Store
       'module_id': revision3QuestOutlineModuleId,
       'quest_revision': fixture.questRevision + 1,
       'module_revision': fixture.moduleRevision + 1,
-      'previous_generator_version': request.previousGeneratorVersion,
-      'upgraded_from_legacy': request.upgradesLegacy,
       'transition_plan_seal': <String, Object?>{
         'byte_len': request.transitionPlan.contentSeal.byteLength,
         'sha256': request.transitionPlan.contentSeal.sha256,
@@ -12110,6 +11922,10 @@ Map<String, Object?> _questInput({
   'objective_title': request.intent.objectiveTitle,
   if (request.intent.additionalObjectiveTitles.isNotEmpty)
     'additional_objective_titles': request.intent.additionalObjectiveTitles,
+  'transition_plan':
+      AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+        request.intent.additionalObjectiveTitles.length + 1,
+      ).toJson(),
   'collision_catalog': <String, Object?>{
     'generation': target,
     'catalog_layer':
@@ -12131,42 +11947,34 @@ Map<String, Object?> _questEntity({
   required String projectId,
   required AuthoringRevision3QuestDraftRequestV3 request,
   required Map<String, Object?> input,
-}) {
-  final generatorVersion = request.intent.additionalObjectiveTitles.isEmpty
-      ? 2
-      : 3;
-  return <String, Object?>{
-    'id': request.questId,
-    'display_name': request.displayName,
-    'origin': <String, Object?>{
-      'type': 'new',
-      'authored_runtime_id': request.intent.technicalId,
-    },
-    'revision': 0,
-    'payload': <String, Object?>{
-      'kind': 'quest_draft',
-      'data': <String, Object?>{
-        'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': generatorVersion,
-        'input': input,
-        'script_module': <String, Object?>{
-          'project_id': projectId,
-          'id': request.scriptModuleId,
-          'expected_kind': 'script_module',
-        },
+}) => <String, Object?>{
+  'id': request.questId,
+  'display_name': request.displayName,
+  'origin': <String, Object?>{
+    'type': 'new',
+    'authored_runtime_id': request.intent.technicalId,
+  },
+  'revision': 0,
+  'payload': <String, Object?>{
+    'kind': 'quest_draft',
+    'data': <String, Object?>{
+      'generator_id': 'gore-authoring.draft-quest-skeleton',
+      'generator_version': 4,
+      'input': input,
+      'script_module': <String, Object?>{
+        'project_id': projectId,
+        'id': request.scriptModuleId,
+        'expected_kind': 'script_module',
       },
     },
-  };
-}
+  },
+};
 
 Map<String, Object?> _questModuleEntity({
   required String projectId,
   required AuthoringRevision3QuestDraftRequestV3 request,
   required Map<String, Object?> input,
 }) {
-  final generatorVersion = request.intent.additionalObjectiveTitles.isEmpty
-      ? 2
-      : 3;
   final source = revision3QuestGeneratedSource(
     technicalId: request.intent.technicalId,
     textHelper: request.intent.textHelper,
@@ -12183,7 +11991,7 @@ Map<String, Object?> _questModuleEntity({
     'origin': <String, Object?>{
       'type': 'generated',
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': generatorVersion,
+      'generator_version': 4,
       'owner': <String, Object?>{
         'project_id': projectId,
         'id': request.questId,
@@ -12195,7 +12003,7 @@ Map<String, Object?> _questModuleEntity({
       'kind': 'script_module',
       'data': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': generatorVersion,
+        'generator_version': 4,
         'owner': <String, Object?>{
           'project_id': projectId,
           'id': request.questId,

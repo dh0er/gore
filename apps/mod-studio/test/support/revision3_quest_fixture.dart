@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 String revision3QuestInputFingerprint(Map<String, Object?> input) {
-  const domain = 'gore-story-build.revision3-quest-v2.input-fingerprint\u0000';
+  const domain = 'gore-authoring.revision3-quest.input-fingerprint\u0000';
   final inputBytes = utf8.encode(jsonEncode(input));
   final length = ByteData(8)..setUint64(0, inputBytes.length, Endian.big);
   return crypto.sha256.convert(<int>[

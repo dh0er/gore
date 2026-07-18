@@ -20,7 +20,6 @@ use gore_authoring::{
     Revision3QuestTransitionPlanBasisV1, WorkingHead, WorkingProjectStore, WorkingStoreError,
     WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V2,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -362,14 +361,6 @@ fn bind_request_to_basis(
     validate_entity_revision(module.revision)?;
     let transition =
         revision3_quest_transition_plan_basis_v1(quest).map_err(map_transition_basis_error)?;
-    if transition.legacy_synthetic
-        || transition.generator_version != REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-    {
-        return Err(Failure::new(
-            "AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUIRES_SEMANTIC_QUEST",
-            "Quest outline v2 requires an exact retained generator-v4 transition plan",
-        ));
-    }
     if request.expected_transition_plan_seal != transition.seal {
         return Err(plan_conflict(
             "the expected transition-plan seal differs from the exact retained Quest plan",
@@ -454,7 +445,6 @@ fn verify_reopened_outline(
     if entity.revision != outcome.quest_revision
         || entity.display_name != request.display_name
         || quest.input.title != request.quest_title
-        || transition.legacy_synthetic
         || transition.plan.objective_order != requested_order
         || reopened_titles != requested_titles
         || transition.plan.objective_slots != bound.transition.plan.objective_slots
@@ -686,8 +676,8 @@ fn map_transaction_conflict(error: Revision3QuestOutlineEditConflictV2) -> Failu
         | Revision3QuestOutlineEditConflictV2::MissingObjectiveSlot { .. } => {
             "AUTHORING_REVISION3_QUEST_OUTLINE_V2_SLOT_CONFLICT"
         }
-        Revision3QuestOutlineEditConflictV2::SemanticQuestRequired { .. } => {
-            "AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUIRES_SEMANTIC_QUEST"
+        Revision3QuestOutlineEditConflictV2::GeneratorContractMismatch { .. } => {
+            "AUTHORING_REVISION3_QUEST_OUTLINE_V2_GENERATOR_CONTRACT_MISMATCH"
         }
         Revision3QuestOutlineEditConflictV2::NoChanges => {
             "AUTHORING_REVISION3_QUEST_OUTLINE_V2_NO_CHANGES"
@@ -809,7 +799,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gore_authoring::{
-        regenerate_revision3_quest_module_v2, revision3_quest_transition_plan_seal_v1,
+        regenerate_revision3_quest_module, revision3_quest_transition_plan_seal_v1,
         AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
         ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
         QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
@@ -818,8 +808,8 @@ mod tests {
         Revision3Entity, Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef,
         Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestGiverInput,
         Revision3QuestOutlineObjectiveEditV2, Revision3QuestParentInput, Revision3TypedRef,
-        SchemaRevisionV3, Sha256Digest, QUEST_COLLISION_CATALOG_LAYER,
-        REVISION3_QUEST_GENERATOR_ID, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        SchemaRevisionV3, Sha256Digest, QUEST_COLLISION_CATALOG_LAYER_V2,
+        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
     };
     use tempfile::TempDir;
 
@@ -881,7 +871,7 @@ mod tests {
     }
 
     fn semantic_plan() -> QuestTransitionPlanV1 {
-        let mut plan = QuestTransitionPlanV1::legacy_seed(3).unwrap();
+        let mut plan = QuestTransitionPlanV1::default_for_objectives(3).unwrap();
         let root_start = plan
             .transitions
             .iter_mut()
@@ -938,7 +928,7 @@ mod tests {
 
         let artifact_bytes = br#"{"format":"fixture-collision-v1"}"#;
         let imported = store
-            .import_quest_collision_artifact_v1(artifact_bytes, Some(&basis.head))
+            .import_quest_collision_artifact_v2(artifact_bytes, &basis.head)
             .unwrap();
         let artifact_path = asset_path(temp.path(), imported.artifact.sha256);
 
@@ -951,7 +941,7 @@ mod tests {
         let module_id = entity_id(MODULE_ID_BYTE);
         let quest = Revision3QuestDraft {
             generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-            generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+            generator_version: REVISION3_QUEST_GENERATOR_VERSION,
             input: Revision3QuestDraftInput {
                 target: target(),
                 quest_id,
@@ -979,10 +969,10 @@ mod tests {
                     "Defeat the guard".to_owned(),
                     "Report to Asghan".to_owned(),
                 ],
-                transition_plan: Some(Box::new(semantic_plan())),
+                transition_plan: Box::new(semantic_plan()),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: target(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                     artifact: imported.artifact,
                     source_seal: seal(0x33, artifact_bytes.len() as u64),
                     basis_snapshot: basis.head.snapshot.clone(),
@@ -995,7 +985,7 @@ mod tests {
             ),
             transcript: Vec::new(),
         };
-        let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
+        let module = regenerate_revision3_quest_module(&quest, collision_input(&quest)).unwrap();
         let owner = Revision3TypedRef::new(
             project.project_id,
             quest_id,
@@ -1020,7 +1010,7 @@ mod tests {
                 display_name: "Outline-v2 fixture generated module".to_owned(),
                 origin: Revision3OriginRef::Generated {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                     owner,
                 },
                 revision: 0,
@@ -1053,7 +1043,7 @@ mod tests {
 
     fn current_objectives(project: &ProjectRevision3) -> Vec<Revision3QuestOutlineObjectiveEditV2> {
         let quest = quest(project);
-        let plan = quest.input.transition_plan.as_deref().unwrap();
+        let plan = quest.input.transition_plan.as_ref();
         let titles = std::iter::once(quest.input.objective_title.as_str()).chain(
             quest
                 .input
@@ -1269,14 +1259,9 @@ mod tests {
     }
 
     #[test]
-    fn semantic_reorder_fully_reopens_with_stable_slots_and_never_publishes_fixed_head() {
+    fn v4_reorder_fully_reopens_with_stable_slots_and_never_publishes_fixed_head() {
         let store = published_store();
-        let before_plan = quest(&store.project)
-            .input
-            .transition_plan
-            .as_deref()
-            .unwrap()
-            .clone();
+        let before_plan = quest(&store.project).input.transition_plan.as_ref().clone();
         let request = edit_request(&store);
         let response = call(&store, &request);
         assert_eq!(response["ok"], true, "{response}");
@@ -1308,7 +1293,7 @@ mod tests {
             response["project_json"]
         );
         let reopened_quest = quest(&reopened.project);
-        let reopened_plan = reopened_quest.input.transition_plan.as_deref().unwrap();
+        let reopened_plan = reopened_quest.input.transition_plan.as_ref();
         assert_eq!(reopened_plan.objective_order, vec![3, 1, 2]);
         assert_eq!(reopened_plan.objective_slots, before_plan.objective_slots);
         assert_eq!(

@@ -358,9 +358,7 @@ fn map_inspection_error(error: Revision3NpcInspectionErrorV1) -> Failure {
             "AUTHORING_REVISION3_NPC_INSPECTION_NPC_INVALID",
             "npc_id does not identify one managed revision-3 NPC Draft",
         ),
-        E::InvalidProjectDocument(_)
-        | E::NonCanonicalProjectJson
-        | E::Revision3Required
+        E::InvalidProject(_)
         | E::ForeignGenerator { .. }
         | E::ForeignGeneration { .. }
         | E::MissingScriptModule { .. }
@@ -372,8 +370,7 @@ fn map_inspection_error(error: Revision3NpcInspectionErrorV1) -> Failure {
             "AUTHORING_REVISION3_NPC_INSPECTION_PROJECT_INVALID",
             "the fully opened project is not a valid managed NPC inspection source",
         ),
-        E::SerializeProject(_)
-        | E::SerializeNpcInput(_)
+        E::SerializeNpcInput(_)
         | E::SerializeEntityEnvelope { .. }
         | E::SerializePlan(_)
         | E::InvalidPlanJson(_)
@@ -442,8 +439,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gore_authoring::{
-        AssetStoreIndex, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-        Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+        AssetStoreIndex, FormatV2, GameGenerationAnchor, NpcParentClassInput, ProjectId,
+        ProjectMeta, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
         Revision3NpcDraft, Revision3NpcDraftInput, Revision3OriginRef, Revision3TypedRef,
         SchemaRevisionV3, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
     };
@@ -483,8 +480,8 @@ mod tests {
         }
     }
 
-    fn parent(value: u8, runtime_class: &str) -> Revision2NpcParentClassInput {
-        Revision2NpcParentClassInput {
+    fn parent(value: u8, runtime_class: &str) -> NpcParentClassInput {
+        NpcParentClassInput {
             generation: target(),
             source_seal: content_seal(value, 4_096),
             catalog_layer: "base-game.g1r.npc-parents.v1".to_owned(),

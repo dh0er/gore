@@ -15,14 +15,14 @@ class Revision3QuestOutlineEditDialog extends StatefulWidget {
     required this.index,
     required this.quest,
     required this.publish,
-    this.loadTransitionSeed,
+    required this.loadTransitionSeed,
     super.key,
   });
 
   final Revision3ContentIndex index;
   final Revision3ContentEntity quest;
   final Revision3QuestOutlineEditPublisher publish;
-  final Revision3QuestTransitionsSeedLoader? loadTransitionSeed;
+  final Revision3QuestTransitionsSeedLoader loadTransitionSeed;
 
   @override
   State<Revision3QuestOutlineEditDialog> createState() =>
@@ -46,14 +46,8 @@ class _Revision3QuestOutlineEditDialogState
   Revision3ContentQuestDraftSummary get _summary =>
       widget.quest.summary.questDraft!;
 
-  bool get _usesStableObjectiveSlots =>
-      _transitionSeed?.legacySynthetic == false;
-
   bool get _objectiveEditingEnabled =>
-      !_loading &&
-      !_busy &&
-      !_checkpointLocked &&
-      (widget.loadTransitionSeed == null || _transitionSeed != null);
+      !_loading && !_busy && !_checkpointLocked && _transitionSeed != null;
 
   @override
   void initState() {
@@ -64,19 +58,21 @@ class _Revision3QuestOutlineEditDialogState
     _objectives = <_Revision3QuestOutlineObjectiveField>[
       for (var index = 0; index < summary.objectiveTitles.length; index++)
         _Revision3QuestOutlineObjectiveField(
-          slot: index + 1,
+          // Stable slots are authoritative only after the exact transition
+          // seed arrives. Zero is an internal, non-publishable loading marker.
+          slot: 0,
           controller: TextEditingController(
             text: summary.objectiveTitles[index],
           ),
         ),
     ];
-    _loading = widget.loadTransitionSeed != null;
+    _loading = true;
     _displayName.addListener(_fieldChanged);
     _title.addListener(_fieldChanged);
     for (final objective in _objectives) {
       objective.controller.addListener(_fieldChanged);
     }
-    if (_loading) _loadTransitionSeed();
+    _loadTransitionSeed();
   }
 
   @override
@@ -98,8 +94,6 @@ class _Revision3QuestOutlineEditDialogState
   }
 
   Future<void> _loadTransitionSeed() async {
-    final loader = widget.loadTransitionSeed;
-    if (loader == null) return;
     final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
@@ -132,7 +126,7 @@ class _Revision3QuestOutlineEditDialogState
           'The selected Quest script is not available in this project view.',
         );
       }
-      final seed = await loader(
+      final seed = await widget.loadTransitionSeed(
         questId: widget.quest.id,
         expectedQuestRevision: widget.quest.revision,
         expectedModuleId: module.id,
@@ -147,7 +141,7 @@ class _Revision3QuestOutlineEditDialogState
           'The Quest behavior seed disagrees with the visible objectives.',
         );
       }
-      Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+      Revision3QuestOutlineEditInput.forQuest(
         index: widget.index,
         quest: widget.quest,
         seed: seed,
@@ -212,10 +206,10 @@ class _Revision3QuestOutlineEditDialogState
       return true;
     }
     final seed = _transitionSeed;
+    if (seed == null) return true;
     for (var index = 0; index < _objectives.length; index++) {
-      final expectedSlot = seed?.objectives[index].slot ?? index + 1;
-      final expectedTitle =
-          seed?.objectives[index].title ?? _summary.objectiveTitles[index];
+      final expectedSlot = seed.objectives[index].slot;
+      final expectedTitle = seed.objectives[index].title;
       if (_objectives[index].slot != expectedSlot ||
           _objectives[index].controller.text != expectedTitle) {
         return true;
@@ -240,10 +234,7 @@ class _Revision3QuestOutlineEditDialogState
   }
 
   Future<void> _save() async {
-    if (_loading ||
-        _busy ||
-        _checkpointLocked ||
-        (widget.loadTransitionSeed != null && _transitionSeed == null)) {
+    if (_loading || _busy || _checkpointLocked || _transitionSeed == null) {
       return;
     }
     final objectiveTitles = [
@@ -260,29 +251,20 @@ class _Revision3QuestOutlineEditDialogState
     }
     final Revision3QuestOutlineEditInput input;
     try {
-      final seed = _transitionSeed;
-      input = seed == null
-          ? Revision3QuestOutlineEditInput.forQuest(
-              index: widget.index,
-              quest: widget.quest,
-              displayName: _displayName.text,
-              title: _title.text,
-              objectiveTitles: objectiveTitles,
-            )
-          : Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
-              index: widget.index,
-              quest: widget.quest,
-              seed: seed,
-              displayName: _displayName.text,
-              title: _title.text,
-              objectives: [
-                for (final objective in _objectives)
-                  Revision3QuestOutlineObjectiveEdit(
-                    slot: objective.slot,
-                    title: objective.controller.text,
-                  ),
-              ],
-            );
+      input = Revision3QuestOutlineEditInput.forQuest(
+        index: widget.index,
+        quest: widget.quest,
+        seed: _transitionSeed!,
+        displayName: _displayName.text,
+        title: _title.text,
+        objectives: [
+          for (final objective in _objectives)
+            Revision3QuestOutlineObjectiveEdit(
+              slot: objective.slot,
+              title: objective.controller.text,
+            ),
+        ],
+      );
     } on FormatException catch (error) {
       setState(() => _error = error.message);
       return;
@@ -335,9 +317,7 @@ class _Revision3QuestOutlineEditDialogState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _usesStableObjectiveSlots
-                    ? 'Rename the library entry, Quest title, or existing objectives. Reordering keeps each objective identity and its behavior connections intact.'
-                    : 'Rename the library entry, Quest title, or existing objectives. Objective count and Quest relationships stay unchanged.',
+                'Rename the library entry, Quest title, or existing objectives. Reordering keeps each objective identity and its behavior connections intact.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 12),
@@ -419,7 +399,7 @@ class _Revision3QuestOutlineEditDialogState
                 ),
               const SizedBox(height: 6),
               Text(
-                '${summary.objectiveTitles.length} existing objective${summary.objectiveTitles.length == 1 ? '' : 's'}. ${_usesStableObjectiveSlots ? 'Objective count, stable IDs and Quest relationships stay unchanged.' : 'Objective count and Quest relationships stay unchanged.'}',
+                '${summary.objectiveTitles.length} existing objective${summary.objectiveTitles.length == 1 ? '' : 's'}. Objective count, stable IDs and Quest relationships stay unchanged.',
                 key: const Key('revision3-quest-outline-fixed-context'),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -437,7 +417,6 @@ class _Revision3QuestOutlineEditDialogState
                 ),
               ],
               if (!_loading &&
-                  widget.loadTransitionSeed != null &&
                   _transitionSeed == null &&
                   !_checkpointLocked) ...[
                 const SizedBox(height: 8),
@@ -466,8 +445,7 @@ class _Revision3QuestOutlineEditDialogState
               _loading ||
                   _busy ||
                   _checkpointLocked ||
-                  (widget.loadTransitionSeed != null &&
-                      _transitionSeed == null) ||
+                  _transitionSeed == null ||
                   !_hasChanges
               ? null
               : _save,

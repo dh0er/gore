@@ -9,7 +9,7 @@ const _maxAuthoringRevision3NpcDisplayNameBytes = 256;
 const _maxAuthoringRevision3NpcCatalogIdBytes = 256;
 const _maxAuthoringRevision3NpcSourceBytes = 1024 * 1024;
 const _authoringRevision3NpcFingerprintDomain =
-    'gore-authoring.revision2.npc-draft.input-fingerprint\u0000';
+    'gore-authoring.revision3.npc-draft.input-fingerprint\u0000';
 const _authoringRevision3NpcSelectorDomain =
     'gore-story-catalog.authoring-selector-v1\u0000';
 const _authoringRevision3NpcCatalogLayer = 'base-game.g1r.scripts';

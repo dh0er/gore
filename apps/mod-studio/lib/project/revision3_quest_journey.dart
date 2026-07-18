@@ -7,16 +7,11 @@ import 'revision3_quest_transcript_authoring.dart';
 /// Hard authoring limit inherited from the revision-3 Quest transcript model.
 const revision3QuestJourneyMaxDialogLines = 256;
 
-/// The persisted stages and conditional migration of the bounded Quest Draft
-/// setup path.
+/// The persisted stages of the bounded Quest Draft setup path.
 ///
 /// These labels describe authored project facts only. They are deliberately
 /// unrelated to build, deployment, runtime, or save-game readiness.
-enum Revision3QuestDraftSetupStepKind {
-  questDetails,
-  openingDialog,
-  legacyBehavior,
-}
+enum Revision3QuestDraftSetupStepKind { questDetails, openingDialog }
 
 /// Exact-current, read-only progress for the persistent "Write a Quest" path.
 ///
@@ -27,7 +22,6 @@ final class Revision3QuestDraftSetup {
   const Revision3QuestDraftSetup._({
     required this.questDetailsComplete,
     required this.openingDialogComplete,
-    required this.legacyBehaviorReviewRequired,
     required this.openingDialogLineCount,
     required this.openingTextLanguageCount,
     required this.openingVoiceTakeCount,
@@ -43,10 +37,6 @@ final class Revision3QuestDraftSetup {
   final bool questDetailsComplete;
   final bool openingDialogComplete;
 
-  /// Legacy generator-v2/v3 Quests expose fixed synthetic behavior. They need
-  /// one explicit review/migration after their separately saved opening dialog;
-  /// modern generator-v4 creation does not show a universal behavior step.
-  final bool legacyBehaviorReviewRequired;
   final int openingDialogLineCount;
   final int openingTextLanguageCount;
   final int openingVoiceTakeCount;
@@ -55,28 +45,18 @@ final class Revision3QuestDraftSetup {
   bool complete(Revision3QuestDraftSetupStepKind step) => switch (step) {
     Revision3QuestDraftSetupStepKind.questDetails => questDetailsComplete,
     Revision3QuestDraftSetupStepKind.openingDialog => openingDialogComplete,
-    Revision3QuestDraftSetupStepKind.legacyBehavior =>
-      !legacyBehaviorReviewRequired,
   };
 
-  bool get draftSetupComplete =>
-      questDetailsComplete &&
-      openingDialogComplete &&
-      !legacyBehaviorReviewRequired;
+  bool get draftSetupComplete => questDetailsComplete && openingDialogComplete;
 
   /// The sole recommended continuation shown by the persistent setup path.
   ///
-  /// The opening dialog is always the first separately persisted continuation.
-  /// A legacy behavior migration follows only when the exact Quest still uses
-  /// synthetic fixed behavior. Otherwise Dialog & Voice remains the
-  /// conservative review continuation. That does not make Voice mandatory and
-  /// does not turn Draft completion into runtime readiness.
+  /// Dialog & Voice remains the conservative review continuation after the
+  /// opening line is authored. That does not make Voice mandatory and does not
+  /// turn Draft completion into runtime readiness.
   Revision3QuestDraftSetupStepKind get recommendedStep {
     if (!openingDialogComplete) {
       return Revision3QuestDraftSetupStepKind.openingDialog;
-    }
-    if (legacyBehaviorReviewRequired) {
-      return Revision3QuestDraftSetupStepKind.legacyBehavior;
     }
     return Revision3QuestDraftSetupStepKind.openingDialog;
   }
@@ -154,13 +134,11 @@ final class Revision3QuestJourneyObjective {
 
   final String title;
 
-  /// Slot used by the effective transition plan. For legacy generator-v2/v3
-  /// Quests this is synthetic and must not be used to group transcript rows.
+  /// Persisted stable slot used by the transition plan.
   final int transitionSlot;
 
-  /// Persisted semantic objective slot. It is intentionally null for legacy
-  /// generator-v2/v3 Quests, where no such authoring identity exists.
-  final int? stableObjectiveSlot;
+  /// Persisted semantic objective slot used to group transcript rows.
+  final int stableObjectiveSlot;
 
   final Revision3QuestJourneyNodeBehavior behavior;
   final List<Revision3QuestJourneyDialogLine> dialogLines;
@@ -185,7 +163,6 @@ final class Revision3QuestJourneyProjection {
     required this.moduleNamespace,
     required this.parentRuntimeClass,
     required this.giverRuntimeUniqueName,
-    required this.legacySyntheticBehavior,
     required this.rootBehavior,
     required this.objectives,
     required this.orderedDialogLines,
@@ -224,7 +201,7 @@ final class Revision3QuestJourneyProjection {
           owner.projectId == index.projectId &&
           owner.entityId == quest.id &&
           owner.expectedKind == Revision3ContentEntityKind.questDraft &&
-          module.origin.generatorVersion == transitionSeed.generatorVersion &&
+          module.origin.generatorVersion == 4 &&
           module.summary.primaryIdentity == summary.moduleNamespace,
     );
     final questSummary = summary!;
@@ -304,9 +281,6 @@ final class Revision3QuestJourneyProjection {
             reference.target.expectedKind ==
                 Revision3ContentEntityKind.dialogLine,
       );
-      if (transitionSeed.legacySynthetic && row.objectiveSlot != null) {
-        throw const Revision3QuestJourneyStaleCheckpointException();
-      }
       final linkedQuestIds = <String>{
         for (final backlink in index.backlinksToEntity(row.lineId))
           if (backlink.source.kind == Revision3ContentEntityKind.questDraft &&
@@ -337,9 +311,7 @@ final class Revision3QuestJourneyProjection {
             .add(line);
       }
     }
-    final stableSlots = transitionSeed.legacySynthetic
-        ? const <int>{}
-        : questSummary.objectiveSlots.toSet();
+    final stableSlots = questSummary.objectiveSlots.toSet();
     _requireJourneyBinding(rowsByStableSlot.keys.every(stableSlots.contains));
 
     final plan = transitionSeed.transitionPlan;
@@ -348,18 +320,14 @@ final class Revision3QuestJourneyProjection {
         Revision3QuestJourneyObjective._(
           title: objective.title,
           transitionSlot: objective.slot,
-          stableObjectiveSlot: transitionSeed.legacySynthetic
-              ? null
-              : objective.slot,
+          stableObjectiveSlot: objective.slot,
           behavior: _behaviorFor(
             plan,
             AuthoringRevision3QuestTransitionNodeV1.objective(objective.slot),
           ),
           dialogLines: List<Revision3QuestJourneyDialogLine>.unmodifiable(
-            transitionSeed.legacySynthetic
-                ? const <Revision3QuestJourneyDialogLine>[]
-                : rowsByStableSlot[objective.slot] ??
-                      const <Revision3QuestJourneyDialogLine>[],
+            rowsByStableSlot[objective.slot] ??
+                const <Revision3QuestJourneyDialogLine>[],
           ),
         ),
     ];
@@ -377,7 +345,6 @@ final class Revision3QuestJourneyProjection {
       moduleNamespace: questSummary.moduleNamespace,
       parentRuntimeClass: questSummary.parentRuntimeClass,
       giverRuntimeUniqueName: questSummary.giverRuntimeUniqueName,
-      legacySyntheticBehavior: transitionSeed.legacySynthetic,
       rootBehavior: _behaviorFor(
         plan,
         const AuthoringRevision3QuestTransitionNodeV1.root(),
@@ -407,10 +374,6 @@ final class Revision3QuestJourneyProjection {
   final String parentRuntimeClass;
   final String giverRuntimeUniqueName;
 
-  /// True when the effective transition plan was synthesized from a frozen
-  /// generator-v2/v3 Quest. It is project behavior, not persisted V4 slots.
-  final bool legacySyntheticBehavior;
-
   /// Authored behavior for the main Quest/root state.
   final Revision3QuestJourneyNodeBehavior rootBehavior;
   final List<Revision3QuestJourneyObjective> objectives;
@@ -435,7 +398,6 @@ final class Revision3QuestJourneyProjection {
           giverRuntimeUniqueName.trim().isNotEmpty,
       openingDialogComplete:
           opening != null && opening.authoredLocales.isNotEmpty,
-      legacyBehaviorReviewRequired: legacySyntheticBehavior,
       openingDialogLineCount: orderedDialogLines.length,
       openingTextLanguageCount: opening?.authoredLocales.length ?? 0,
       openingVoiceTakeCount: opening?.voiceTakeCount ?? 0,
@@ -460,10 +422,6 @@ void _requireObjectivesMatchSeed(
           objectives[position].slot == order[position],
     );
   }
-  if (seed.legacySynthetic) {
-    _requireJourneyBinding(summary.objectiveSlots.isEmpty);
-    return;
-  }
   _requireJourneyBinding(summary.objectiveSlots.length == objectives.length);
   for (var position = 0; position < objectives.length; position++) {
     _requireJourneyBinding(
@@ -477,12 +435,6 @@ void _requireTranscriptObjectives({
   required AuthoringRevision3QuestTransitionsSeed seed,
   required Revision3QuestTranscriptProjection transcript,
 }) {
-  if (seed.legacySynthetic) {
-    _requireJourneyBinding(
-      summary.objectiveSlots.isEmpty && transcript.objectives.isEmpty,
-    );
-    return;
-  }
   _requireJourneyBinding(
     transcript.objectives.length == seed.objectives.length,
   );

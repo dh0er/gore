@@ -11,15 +11,15 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::GeneratedStoryIdentity;
 use crate::model_revision3::{
     Entity, EntityKind, EntityPayload, NpcDraft, NpcDraftInput, NpcParentClassInput, OriginRef,
     TypedRef,
 };
+use crate::revision3_story_generation::GeneratedStoryIdentity;
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
     ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
-    ProjectRevision3JsonError, Sha256Digest, StoryRegenerationError, WorkingHead,
+    ProjectRevision3JsonError, Revision3NpcRegenerationError, Sha256Digest, WorkingHead,
     LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_REVISION3_ENTITIES,
     REVISION3_QUEST_GENERATOR_ID,
 };
@@ -580,7 +580,7 @@ fn is_zero_entity_id(value: EntityId) -> bool {
     value.as_bytes().iter().all(|byte| *byte == 0)
 }
 
-fn regeneration_reason(error: StoryRegenerationError) -> String {
+fn regeneration_reason(error: Revision3NpcRegenerationError) -> String {
     error.to_string()
 }
 

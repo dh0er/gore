@@ -220,6 +220,7 @@ Revision3ContentIndex _contentIndex(
               seed.parentCharacterDefinition.runtimeClass,
           'parent_ai_agent_config': seed.parentAiAgentConfig.runtimeClass,
           'parent_spawn_definition': seed.parentSpawnDefinition.runtimeClass,
+          'greeting_count': 0,
         },
       },
       'references': <Object?>[

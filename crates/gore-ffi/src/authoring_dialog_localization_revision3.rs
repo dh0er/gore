@@ -374,9 +374,9 @@ mod tests {
     use gore_authoring::model_revision3::LocalizationEntry as Revision3LocalizationEntry;
     use gore_authoring::{
         AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor, LocaleCode, ProjectId,
-        ProjectMeta, ProjectRevision3, Revision3DialogLine, Revision3Entity,
-        Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3TypedRef,
-        SchemaRevisionV3, Sha256Digest,
+        ProjectMeta, ProjectRevision3, Revision3DialogLine, Revision3Entity, Revision3EntityKind,
+        Revision3EntityPayload, Revision3OriginRef, Revision3TypedRef, SchemaRevisionV3,
+        Sha256Digest,
     };
     use serde_json::{json, Map};
     use tempfile::TempDir;

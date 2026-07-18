@@ -602,7 +602,7 @@ AuthoringRevision3QuestTransitionsSeed _seed(
   required String moduleId,
   required int moduleRevision,
 }) => AuthoringRevision3QuestTransitionsSeed.forProject(
-  currentProjectJson: outline.semanticProjectJson,
+  currentProjectJson: outline.projectJson,
   questId: questId,
   expectedQuestRevision: questRevision,
   expectedModuleId: moduleId,

@@ -2,17 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
     apply_revision3_npc_profile_edit_transaction_v1, AssetMeta, AssetStoreIndex, ContentSeal,
-    EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
-    Revision2LocalizationEntry, Revision2NpcDraftInput, Revision2NpcParentClassInput,
-    Revision3DialogLine, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3NpcCatalogSelectionV1, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
-    Revision3NpcProfileCatalogContextV1, Revision3NpcProfileEditBuildStatusV1,
-    Revision3NpcProfileEditCatalogAuthorityV1, Revision3NpcProfileEditCollisionAuthorityV1,
-    Revision3NpcProfileEditConflictV1, Revision3NpcProfileEditErrorV1,
-    Revision3NpcProfileEditEvaluationV1, Revision3NpcProfileEditOutcomeV1,
-    Revision3NpcProfileEditPublicationStatusV1, Revision3NpcProfileEditRequestJsonErrorV1,
-    Revision3NpcProfileEditRequestV1, Revision3NpcProfileEditRuntimeStatusV1, Revision3OriginRef,
-    Revision3TypedRef, SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
+    EntityId, FormatV2, GameGenerationAnchor, LocalizationEntry, NpcDraftInput,
+    NpcParentClassInput, ProjectId, ProjectMeta, ProjectRevision3, Revision3DialogLine,
+    Revision3Entity, Revision3EntityKind, Revision3EntityPayload, Revision3NpcCatalogSelectionV1,
+    Revision3NpcDraft, Revision3NpcGreetingBindingV1, Revision3NpcProfileCatalogContextV1,
+    Revision3NpcProfileEditBuildStatusV1, Revision3NpcProfileEditCatalogAuthorityV1,
+    Revision3NpcProfileEditCollisionAuthorityV1, Revision3NpcProfileEditConflictV1,
+    Revision3NpcProfileEditErrorV1, Revision3NpcProfileEditEvaluationV1,
+    Revision3NpcProfileEditOutcomeV1, Revision3NpcProfileEditPublicationStatusV1,
+    Revision3NpcProfileEditRequestJsonErrorV1, Revision3NpcProfileEditRequestV1,
+    Revision3NpcProfileEditRuntimeStatusV1, Revision3OriginRef, Revision3TypedRef,
+    SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
     LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
     MAX_REVISION3_NPC_PROFILE_EDIT_REQUEST_JSON_BYTES_V1,
 };
@@ -53,8 +53,8 @@ fn parent(
     seal_value: u8,
     selector_value: u8,
     runtime_class: &str,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: target.clone(),
         source_seal: seal(seal_value, 40_000 + u64::from(seal_value)),
         catalog_layer: "base-game.g1r.scripts".to_owned(),
@@ -172,7 +172,7 @@ fn project() -> ProjectRevision3 {
     let npc = Revision3NpcDraft {
         generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
         generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-        input: Revision2NpcDraftInput {
+        input: NpcDraftInput {
             target: target.clone(),
             module_namespace: "GoreMods.Npcs.GateGuard7A1B2C3D4E".to_owned(),
             unique_name: "GORE_GATE_GUARD_7A1B2C3D4E".to_owned(),
@@ -231,7 +231,7 @@ fn project() -> ProjectRevision3 {
                 authored_runtime_id: "GORE_UNRELATED_TEXT".to_owned(),
             },
             revision: 6,
-            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+            payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
                 loc_id: "GORE_UNRELATED_TEXT".to_owned(),
                 texts: BTreeMap::new(),
             }),
@@ -527,7 +527,7 @@ fn profile_name_and_archetype_edits_preserve_ordered_npc_greetings_and_shared_li
                 authored_runtime_id: "GORE_PROFILE_GREETING_LOC".to_owned(),
             },
             revision: 2,
-            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+            payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
                 loc_id: "GORE_PROFILE_GREETING".to_owned(),
                 texts: BTreeMap::new(),
             }),

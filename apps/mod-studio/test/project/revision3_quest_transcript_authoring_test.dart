@@ -954,7 +954,9 @@ String _managedProjectJson() => jsonEncode(<String, Object?>{
           'generator_version': 4,
           'input': <String, Object?>{
             'transition_plan':
-                AuthoringRevision3QuestTransitionPlanV1.legacySeed(2).toJson(),
+                AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+                  2,
+                ).toJson(),
           },
           'script_module': <String, Object?>{
             'project_id': _projectId,

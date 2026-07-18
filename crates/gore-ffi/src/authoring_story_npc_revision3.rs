@@ -13,17 +13,17 @@ use std::path::{Path, PathBuf};
 
 use gore_authoring::{
     apply_revision3_npc_draft_transaction_v1, AssetVerification,
-    ContentSeal as AuthoringContentSeal, GameGenerationAnchor,
-    PreparedRevision3QuestCollisionSourceV2, Revision2NpcParentClassInput,
-    Revision3NpcCatalogAuthorityV1, Revision3NpcCatalogSelectionV1,
-    Revision3NpcCollisionAuthorityV1, Revision3NpcCollisionInventoryV1,
-    Revision3NpcDraftBuildStatusV1, Revision3NpcDraftInsertConflictV1,
-    Revision3NpcDraftInsertErrorV1, Revision3NpcDraftInsertEvaluationV1,
-    Revision3NpcDraftInsertRequestV1, Revision3NpcDraftPublicationStatusV1,
-    Revision3NpcDraftRuntimeStatusV1, Revision3NpcSourceInspectionStatusV1,
-    Revision3QuestCollisionSourceErrorV2, Sha256Digest as AuthoringSha256Digest, WorkingHead,
-    WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
-    MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1, REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
+    ContentSeal as AuthoringContentSeal, GameGenerationAnchor, NpcParentClassInput,
+    PreparedRevision3QuestCollisionSourceV2, Revision3NpcCatalogAuthorityV1,
+    Revision3NpcCatalogSelectionV1, Revision3NpcCollisionAuthorityV1,
+    Revision3NpcCollisionInventoryV1, Revision3NpcDraftBuildStatusV1,
+    Revision3NpcDraftInsertConflictV1, Revision3NpcDraftInsertErrorV1,
+    Revision3NpcDraftInsertEvaluationV1, Revision3NpcDraftInsertRequestV1,
+    Revision3NpcDraftPublicationStatusV1, Revision3NpcDraftRuntimeStatusV1,
+    Revision3NpcSourceInspectionStatusV1, Revision3QuestCollisionSourceErrorV2,
+    Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
+    WorkingStoreLimits, MAX_PROJECT_JSON_BYTES, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
+    REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
 };
 use gore_npc_catalog::{build_npc_archetype_catalog, NpcArchetypeCatalogFile, NpcCatalogError};
 use gore_story_catalog::{
@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::authoring_story_inventory::{read_source_no_follow, SourceReadError};
+use crate::authoring_source_io::{read_source_no_follow, SourceReadError};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_prepare_revision3_npc_draft_v1";
@@ -525,8 +525,8 @@ fn native_collision_inventory(
 fn authoring_parent(
     target: &GameGenerationAnchor,
     value: &AuthoringClassSelection,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: target.clone(),
         source_seal: authoring_seal(&value.source_seal),
         catalog_layer: value.catalog_layer.clone(),

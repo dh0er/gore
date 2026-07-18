@@ -8,7 +8,7 @@ typedef Revision3QuestOutlineEditPublisher =
       required Revision3QuestOutlineEditInput input,
     });
 
-/// Exact visible Quest identity plus the only outline fields edit-v1 permits.
+/// Exact visible Quest identity plus the only outline fields the editor permits.
 ///
 /// Technical IDs, module namespace, parent, giver, objective count and every
 /// non-outline field come from the selected exact-current content projection;
@@ -22,23 +22,18 @@ final class Revision3QuestOutlineEditInput {
     required this.displayName,
     required this.title,
     required List<String> objectiveTitles,
-    List<int>? objectiveSlots,
-    AuthoringDraftContentSeal? expectedTransitionPlanSeal,
+    required List<int> objectiveSlots,
+    required this.expectedTransitionPlanSeal,
   }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles),
-       objectiveSlots = objectiveSlots == null
-           ? null
-           : List<int>.unmodifiable(objectiveSlots),
-       expectedTransitionPlanSeal = _requireStableObjectivePair(
-         objectiveSlots,
-         expectedTransitionPlanSeal,
-       );
+       objectiveSlots = List<int>.unmodifiable(objectiveSlots);
 
   factory Revision3QuestOutlineEditInput.forQuest({
     required Revision3ContentIndex index,
     required Revision3ContentEntity quest,
+    required AuthoringRevision3QuestTransitionsSeed seed,
     required String displayName,
     required String title,
-    required List<String> objectiveTitles,
+    required List<Revision3QuestOutlineObjectiveEdit> objectives,
   }) {
     if (quest.kind != Revision3ContentEntityKind.questDraft ||
         index.entityById(quest.id) != quest) {
@@ -76,56 +71,46 @@ final class Revision3QuestOutlineEditInput {
         'The selected Quest script is not available in this project view.',
       );
     }
-    if (objectiveTitles.length != summary.objectiveTitles.length) {
+    if (objectives.length != summary.objectiveTitles.length) {
       throw const FormatException(
         'This editor cannot add or remove objectives. Keep the existing count.',
       );
     }
+    final objectiveTitles = [
+      for (final objective in objectives) objective.title,
+    ];
     final validation = validateFields(
       displayName: displayName,
       title: title,
       objectiveTitles: objectiveTitles,
     );
     if (validation != null) throw FormatException(validation);
-    return Revision3QuestOutlineEditInput._(
-      questId: quest.id,
-      expectedQuestRevision: quest.revision,
-      moduleId: module.id,
-      expectedModuleRevision: module.revision,
-      displayName: displayName,
-      title: title,
-      objectiveTitles: objectiveTitles,
-    );
-  }
-
-  /// Creates a slot-preserving edit for a semantic Quest. Legacy seeds keep
-  /// using the count-preserving V1 transaction; semantic seeds carry the exact
-  /// active slot permutation and plan seal into the native V2 CAS boundary.
-  factory Revision3QuestOutlineEditInput.forQuestWithTransitionSeed({
-    required Revision3ContentIndex index,
-    required Revision3ContentEntity quest,
-    required AuthoringRevision3QuestTransitionsSeed seed,
-    required String displayName,
-    required String title,
-    required List<Revision3QuestOutlineObjectiveEdit> objectives,
-  }) {
-    final base = Revision3QuestOutlineEditInput.forQuest(
-      index: index,
-      quest: quest,
-      displayName: displayName,
-      title: title,
-      objectiveTitles: [for (final objective in objectives) objective.title],
-    );
     if (seed.projectId != index.projectId ||
         seed.projectRevision != index.projectRevision ||
-        seed.questId != base.questId ||
-        seed.questRevision != base.expectedQuestRevision ||
-        seed.moduleId != base.moduleId ||
-        seed.moduleRevision != base.expectedModuleRevision ||
-        objectives.length != seed.objectives.length) {
+        seed.questId != quest.id ||
+        seed.questRevision != quest.revision ||
+        seed.moduleId != module.id ||
+        seed.moduleRevision != module.revision ||
+        objectives.length != seed.objectives.length ||
+        summary.objectiveSlots.length != seed.objectives.length ||
+        seed.transitionPlan.objectiveOrder.length != seed.objectives.length ||
+        seed.transitionPlanSeal.byteLength !=
+            seed.transitionPlan.contentSeal.byteLength ||
+        seed.transitionPlanSeal.sha256 !=
+            seed.transitionPlan.contentSeal.sha256) {
       throw const FormatException(
         'The Quest behavior seed no longer matches this project view.',
       );
+    }
+    for (var index = 0; index < seed.objectives.length; index++) {
+      final seeded = seed.objectives[index];
+      if (summary.objectiveTitles[index] != seeded.title ||
+          summary.objectiveSlots[index] != seeded.slot ||
+          seed.transitionPlan.objectiveOrder[index] != seeded.slot) {
+        throw const FormatException(
+          'The Quest behavior seed no longer matches this project view.',
+        );
+      }
     }
     final activeSlots = seed.objectives
         .map((objective) => objective.slot)
@@ -140,15 +125,14 @@ final class Revision3QuestOutlineEditInput {
         'Keep every existing Quest objective exactly once.',
       );
     }
-    if (seed.legacySynthetic) return base;
     return Revision3QuestOutlineEditInput._(
-      questId: base.questId,
-      expectedQuestRevision: base.expectedQuestRevision,
-      moduleId: base.moduleId,
-      expectedModuleRevision: base.expectedModuleRevision,
-      displayName: base.displayName,
-      title: base.title,
-      objectiveTitles: base.objectiveTitles,
+      questId: quest.id,
+      expectedQuestRevision: quest.revision,
+      moduleId: module.id,
+      expectedModuleRevision: module.revision,
+      displayName: displayName,
+      title: title,
+      objectiveTitles: objectiveTitles,
       objectiveSlots: [for (final objective in objectives) objective.slot],
       expectedTransitionPlanSeal: seed.transitionPlanSeal,
     );
@@ -161,10 +145,8 @@ final class Revision3QuestOutlineEditInput {
   final String displayName;
   final String title;
   final List<String> objectiveTitles;
-  final List<int>? objectiveSlots;
-  final AuthoringDraftContentSeal? expectedTransitionPlanSeal;
-
-  bool get usesStableObjectiveSlots => objectiveSlots != null;
+  final List<int> objectiveSlots;
+  final AuthoringDraftContentSeal expectedTransitionPlanSeal;
 
   static String? validateFields({
     required String displayName,
@@ -230,18 +212,6 @@ final class Revision3QuestOutlineObjectiveEdit {
 
   final int slot;
   final String title;
-}
-
-AuthoringDraftContentSeal? _requireStableObjectivePair(
-  List<int>? objectiveSlots,
-  AuthoringDraftContentSeal? expectedTransitionPlanSeal,
-) {
-  if ((objectiveSlots == null) != (expectedTransitionPlanSeal == null)) {
-    throw const FormatException(
-      'Stable objective slots and their transition plan seal must be supplied together.',
-    );
-  }
-  return expectedTransitionPlanSeal;
 }
 
 final class Revision3QuestOutlineEditPublication {

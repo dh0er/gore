@@ -2080,7 +2080,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_wire_is_path_free_and_has_no_legacy_path_keys() {
+    fn canonical_wire_excludes_filesystem_path_keys() {
         let supplied_filesystem_paths = [
             r"C:\store\objects\deadbeef",
             r"D:\Games\GORE\Content\Paks",

@@ -12,9 +12,8 @@ Snapshot V2 is the sole project backup/restore contract:
 `portable_snapshot_restorable_copy`, and `restore_status: supported`. Studio can
 export it, inspect it read-only, materialize it on Windows into one absent
 managed-project directory, and adopt only a fully opened candidate that exactly
-matches the native receipt. Mod Studio has never been released and has no active
-legacy projects, so it retains no older snapshot parser, compatibility result,
-upgrade, or migration path. Any non-V2 manifest is invalid input.
+matches the native receipt. Mod Studio has never been released; Snapshot V2 is
+the sole accepted manifest, and any non-V2 input is invalid.
 
 `restore_status: supported` describes the V2 archive format. It means that a
 verified V2 archive carries the exact authenticated material consumed by the
@@ -97,10 +96,11 @@ The app-wide current-project coordinator then opens that exact destination as a
 candidate inside its serialized ownership lane. Normalized destination,
 project ID, project revision, canonical head, and non-poisoned reopen state must
 all match the receipt before adoption. Opener failure or any mismatch closes
-the unadopted candidate exactly once and leaves the existing Legacy or managed
-project unchanged. A successfully adopted candidate stays current even if
-retiring the prior session reports a cleanup warning; native-import cleanup and
-prior-session cleanup are reported independently.
+the unadopted candidate exactly once and leaves the current managed-R3 project
+unchanged; if no project was open, no project is adopted. A successfully
+adopted candidate stays current even if retiring the prior managed-R3 session
+reports a cleanup warning; native-import cleanup and prior-session cleanup are
+reported independently.
 
 ## Platform boundary
 
@@ -267,12 +267,14 @@ terminals with `retry_safe: false`, not ordinary error responses.
 
 ## Visible workflow and remaining recovery boundary
 
-**Restore project backup** is visible from the Project menu in every project
-state and on the empty/Legacy landing surfaces. Dirty managed or Legacy edits
-are confirmed before source selection. The whole dialog and candidate-adoption
-sequence occupies one global project-action lane, while native materialization
-additionally disables dialog close/back and duplicate submission. Read-only
-inspection can be cancelled safely; disposal invalidates late results.
+**Restore project backup** is visible from the Project menu in every managed-R3
+project state and on the no-project landing surface beside the classic
+standalone tools. Those tools own no project or session state. Unsaved visible
+managed-R3 editor drafts are confirmed before source selection. The whole
+dialog and candidate-adoption sequence occupies one global project-action lane,
+while native materialization additionally disables dialog close/back and
+duplicate submission. Read-only inspection can be cancelled safely; disposal
+invalidates late results.
 
 Publication uncertainty and importer-owned staging cleanup still need a future
 deliberate inspection/recovery surface rather than path guessing. The current

@@ -5,7 +5,7 @@ import 'package:gore_mod/scripts/domain/script_compile_report.dart';
 import 'package:gore_mod/scripts/ui/script_compile_install_state_banner.dart';
 
 void main() {
-  testWidgets('shows managed recovery without offering a legacy report', (
+  testWidgets('shows managed recovery without offering a compile report', (
     tester,
   ) async {
     final controller = ScriptCompileInstallSafetyController(

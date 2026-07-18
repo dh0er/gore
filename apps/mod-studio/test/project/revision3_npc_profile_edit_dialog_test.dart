@@ -582,6 +582,7 @@ final class _NpcProfileFixture {
                   'UAIAgentConfig_Human_OM_GRD_Asghan_263',
               'parent_spawn_definition':
                   'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+              'greeting_count': 0,
             },
           },
           'references': <Object?>[

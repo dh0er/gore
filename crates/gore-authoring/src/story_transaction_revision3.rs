@@ -9,12 +9,12 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model_revision2::GeneratedStoryIdentity;
 use crate::model_revision3::{
     quest_collision_artifact_media_for_layer, Entity, EntityKind, EntityPayload, OriginRef,
     QuestDraft, QuestDraftInput, TypedRef,
 };
-use crate::revision3_quest::regenerate_revision3_quest_module_v2_with_identity;
+use crate::revision3_quest::regenerate_revision3_quest_module_with_identity;
+use crate::revision3_story_generation::GeneratedStoryIdentity;
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
     collect_revision3_story_collision_identities, validate_revision3_quest_free_basis, ContentSeal,
@@ -388,6 +388,12 @@ pub fn apply_revision3_quest_draft_transaction_v2(
         request.script_module_id,
         EntityKind::ScriptModule,
     );
+    let transition_plan = match crate::QuestTransitionPlanV1::default_for_objectives(1) {
+        Ok(plan) => plan,
+        Err(error) => {
+            reject!(Revision3QuestDraftInsertConflictV2::InvalidQuestIntent { error });
+        }
+    };
     let quest = QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
         generator_version: REVISION3_QUEST_GENERATOR_VERSION,
@@ -403,7 +409,7 @@ pub fn apply_revision3_quest_draft_transaction_v2(
             description: request.intent.description,
             objective_title: request.intent.objective_title,
             additional_objective_titles: Vec::new(),
-            transition_plan: None,
+            transition_plan: Box::new(transition_plan),
             collision_catalog: request.intent.collision_catalog,
         },
         script_module: module_ref,
@@ -411,7 +417,7 @@ pub fn apply_revision3_quest_draft_transaction_v2(
     };
     let runtime_id = quest.input.technical_id.clone();
     let (module, generated_identity) =
-        match regenerate_revision3_quest_module_v2_with_identity(&quest, collision_input) {
+        match regenerate_revision3_quest_module_with_identity(&quest, collision_input) {
             Ok(generated) => generated,
             Err(Revision3QuestGenerationError::InvalidQuestIntent(error)) => {
                 if let Some(conflict) = generator_collision_conflict(&error) {

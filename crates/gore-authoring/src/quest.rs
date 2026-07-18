@@ -1,9 +1,7 @@
-//! Bounded, offline-only source generation for a discovery-shaped quest draft.
+//! Bounded, offline-only source generation for a revision-3 quest draft.
 //!
-//! Version 1 contains exactly one `UG1RQuest` root and one objective. Version 2 retains those
-//! identities and adds an ordered, bounded objective list. Both contain generated defaults and
-//! read-only lookup helpers but no transition predicate or action, dialog, effect, reward,
-//! journal, failure, filesystem, compiler, game, or save operation.
+//! The generator lowers an ordered objective graph and its validated transition plan to one
+//! deterministic AngelScript module. It performs no filesystem, compiler, game, or save action.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -18,13 +16,9 @@ use crate::model_revision3::{
 };
 use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 
-/// Stable generator identity for the discovery-only quest skeleton.
+/// Stable identity of the current quest generator.
 pub const DRAFT_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
-pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 1;
-/// Generator version for the ordered multi-objective extension. Version 1 remains frozen so
-/// existing one-objective projects regenerate byte-for-byte.
-pub const DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION: u32 = 2;
-pub const DRAFT_QUEST_SEMANTIC_GENERATOR_VERSION: u32 = 3;
+pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 4;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
 pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES: usize = 128;
@@ -73,29 +67,6 @@ impl DraftQuestCapabilityStatus {
         authoring: DraftQuestAuthoringStatus::OfflineDraft,
         discovery: DraftQuestDiscoveryStatus::RuntimeUnqualified,
         transitions: DraftQuestTransitionStatus::TransitionsRuntimeUnqualified,
-    };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DraftQuestFixedShape {
-    pub quest_base_class: &'static str,
-    pub root_kind: &'static str,
-    pub objective_kind: &'static str,
-    pub root_external_start: bool,
-    pub objective_external_start: bool,
-    pub objective_external_success: bool,
-    pub objective_succeeds_parent: bool,
-}
-
-impl DraftQuestFixedShape {
-    pub const DISCOVERY_ONLY: Self = Self {
-        quest_base_class: QUEST_BASE_CLASS,
-        root_kind: ROOT_KIND,
-        objective_kind: OBJECTIVE_KIND,
-        root_external_start: true,
-        objective_external_start: true,
-        objective_external_success: true,
-        objective_succeeds_parent: true,
     };
 }
 
@@ -492,7 +463,7 @@ impl DraftQuestCatalogLayerAnchor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestTechnicalNames {
+pub struct DraftQuestBaseTechnicalNames {
     pub module_namespace: String,
     pub module_relative_path: String,
     pub root_class: String,
@@ -500,6 +471,20 @@ pub struct DraftQuestTechnicalNames {
     pub text_helper: String,
     pub root_getter: String,
     pub objective_getter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestObjectiveTechnicalNames {
+    pub slot: u16,
+    pub objective_class: String,
+    pub objective_getter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestTechnicalNames {
+    pub base: DraftQuestBaseTechnicalNames,
+    /// Stable technical identities in ascending slot order, independent of presentation order.
+    pub objectives: Vec<DraftQuestObjectiveTechnicalNames>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,178 +500,15 @@ pub struct DraftQuestSkeletonInput {
     pub title: String,
     pub description: String,
     pub objective_title: String,
+    pub additional_objective_titles: Vec<String>,
+    pub transition_plan: QuestTransitionPlanV1,
     pub collision_catalog: DraftQuestCollisionCatalog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSkeletonV1 {
+pub struct DraftQuestSkeleton {
     input: DraftQuestSkeletonInput,
     technical_names: DraftQuestTechnicalNames,
-    input_fingerprint: Sha256Digest,
-}
-
-impl DraftQuestSkeletonV1 {
-    pub fn new(input: DraftQuestSkeletonInput) -> Result<Self, DraftQuestSkeletonError> {
-        validate_generation(DraftQuestField::GameGeneration, &input.target)?;
-        if input.quest_id.as_bytes().iter().all(|byte| *byte == 0) {
-            return Err(DraftQuestSkeletonError::ZeroEntityId);
-        }
-        if input.giver.generation != input.target {
-            return Err(DraftQuestSkeletonError::GenerationMismatch {
-                field: DraftQuestField::GiverGeneration,
-            });
-        }
-        if input.parent_quest.generation != input.target {
-            return Err(DraftQuestSkeletonError::GenerationMismatch {
-                field: DraftQuestField::ParentGeneration,
-            });
-        }
-        if input.collision_catalog.generation != input.target {
-            return Err(DraftQuestSkeletonError::GenerationMismatch {
-                field: DraftQuestField::CollisionGeneration,
-            });
-        }
-        validate_module_namespace(&input.module_namespace)?;
-        validate_technical_id(&input.technical_id)?;
-        validate_source_function_identifier(
-            DraftQuestField::TextHelper,
-            &input.text_helper,
-            MAX_IDENTIFIER_BYTES,
-        )?;
-        validate_literal_text(
-            DraftQuestField::Title,
-            &input.title,
-            MAX_DRAFT_QUEST_TITLE_BYTES,
-        )?;
-        validate_literal_text(
-            DraftQuestField::Description,
-            &input.description,
-            MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
-        )?;
-        validate_literal_text(
-            DraftQuestField::ObjectiveTitle,
-            &input.objective_title,
-            MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
-        )?;
-
-        let pascal = technical_id_pascal_case(&input.technical_id);
-        let technical_names = DraftQuestTechnicalNames {
-            module_namespace: input.module_namespace.clone(),
-            module_relative_path: format!("{}.as", input.module_namespace.replace('.', "/")),
-            root_class: format!("UQuest_{}", input.technical_id),
-            objective_class: format!("UQuest_{}_OBJ_DONE", input.technical_id),
-            text_helper: input.text_helper.clone(),
-            root_getter: format!("Get{pascal}"),
-            objective_getter: format!("Get{pascal}Objective"),
-        };
-        validate_generated_name_lengths(&technical_names)?;
-        check_generated_symbol_collisions(&technical_names)?;
-        if input
-            .parent_quest
-            .runtime_class
-            .eq_ignore_ascii_case(&technical_names.root_class)
-            || input
-                .parent_quest
-                .runtime_class
-                .eq_ignore_ascii_case(&technical_names.objective_class)
-        {
-            return Err(DraftQuestSkeletonError::ParentClassCollision {
-                class_name: input.parent_quest.runtime_class.clone(),
-            });
-        }
-        check_catalog_collisions(&input.collision_catalog, &technical_names)?;
-        let input_fingerprint = fingerprint_input(&input);
-        Ok(Self {
-            input,
-            technical_names,
-            input_fingerprint,
-        })
-    }
-
-    pub fn target(&self) -> &GameGenerationAnchor {
-        &self.input.target
-    }
-
-    pub fn quest_id(&self) -> EntityId {
-        self.input.quest_id
-    }
-
-    pub fn technical_names(&self) -> &DraftQuestTechnicalNames {
-        &self.technical_names
-    }
-
-    pub fn input_fingerprint(&self) -> Sha256Digest {
-        self.input_fingerprint
-    }
-
-    /// Generate only an in-memory source string and metadata. No external action occurs.
-    pub fn generate(&self) -> DraftQuestGeneratedSource {
-        let names = &self.technical_names;
-        let giver = self.input.giver.runtime_unique_name();
-        let source = format!(
-            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = {parent}::StaticClass();\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n    default bExternalStartTrigger = true;\n}}\n\n{root} {root_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({root}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{root}>(Quest);\n}}\n\nclass {objective} : {base}\n{{\n    default ParentQuestClass = {root}::StaticClass();\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n    default bExternalStartTrigger = true;\n    default bExternalSuccessTrigger = true;\n    default bSucceedParent = true;\n}}\n\n{objective} {objective_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({objective}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{objective}>(Quest);\n}}\n",
-            text_helper = names.text_helper,
-            root = names.root_class,
-            base = QUEST_BASE_CLASS,
-            parent = self.input.parent_quest.runtime_class(),
-            root_kind = ROOT_KIND,
-            hero = HERO_UNIQUE_NAME,
-            giver = giver,
-            title = self.input.title,
-            description = self.input.description,
-            root_getter = names.root_getter,
-            objective = names.objective_class,
-            objective_kind = OBJECTIVE_KIND,
-            objective_title = self.input.objective_title,
-            objective_getter = names.objective_getter,
-        );
-        let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
-        DraftQuestGeneratedSource {
-            target: self.input.target.clone(),
-            quest_id: self.input.quest_id,
-            generator_id: DRAFT_QUEST_GENERATOR_ID,
-            generator_version: DRAFT_QUEST_GENERATOR_VERSION,
-            giver: self.input.giver.clone(),
-            parent_quest: self.input.parent_quest.clone(),
-            collision_catalog: self.input.collision_catalog.anchor(),
-            technical_names: names.clone(),
-            fixed_shape: DraftQuestFixedShape::DISCOVERY_ONLY,
-            source,
-            source_sha256,
-            input_fingerprint: self.input_fingerprint,
-            status: DraftQuestCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-        }
-    }
-}
-
-/// Technical identities added by the ordered multi-objective generator. Objective 1 deliberately
-/// keeps the frozen version-1 class/getter names in [DraftQuestTechnicalNames].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestAdditionalObjectiveTechnicalNames {
-    pub ordinal: usize,
-    pub objective_class: String,
-    pub objective_getter: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestMultiObjectiveTechnicalNames {
-    pub base: DraftQuestTechnicalNames,
-    pub additional_objectives: Vec<DraftQuestAdditionalObjectiveTechnicalNames>,
-}
-
-/// Version-2 input extends the frozen version-1 shell without changing its serialized or emitted
-/// shape. The additional list must be non-empty; callers with one objective continue to use V1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSkeletonInputV2 {
-    pub base: DraftQuestSkeletonInput,
-    pub additional_objective_titles: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSkeletonV2 {
-    input: DraftQuestSkeletonInput,
-    additional_objective_titles: Vec<String>,
-    technical_names: DraftQuestMultiObjectiveTechnicalNames,
     input_fingerprint: Sha256Digest,
 }
 
@@ -740,8 +562,8 @@ pub fn validate_draft_quest_objective_titles(
 }
 
 impl QuestTransitionPlanV1 {
-    /// Upgrade the frozen v2/v3 objective shape without changing its emitted lifecycle behavior.
-    pub fn legacy_seed(objective_count: usize) -> Result<Self, DraftQuestSkeletonError> {
+    /// Create the deterministic default lifecycle for a newly authored objective list.
+    pub fn default_for_objectives(objective_count: usize) -> Result<Self, DraftQuestSkeletonError> {
         if objective_count == 0 {
             return Err(invalid_transition_plan(
                 "a Quest transition plan must contain at least one objective",
@@ -810,9 +632,9 @@ fn external_transition(
     }
 }
 
-/// Validate a semantic transition plan independently of source/collision inputs.
+/// Validate a transition plan independently of source and collision inputs.
 ///
-/// `objective_count` is the number of positional titles carried by the legacy input fields.
+/// `objective_count` is the number of authored objective titles.
 pub fn validate_draft_quest_transition_plan_v1(
     plan: &QuestTransitionPlanV1,
     objective_count: usize,
@@ -851,7 +673,7 @@ pub fn validate_draft_quest_transition_plan_v1(
         .collect::<BTreeSet<_>>();
     if !active_slots.contains(&1) {
         return Err(invalid_transition_plan(
-            "objective slot 1 is the frozen legacy identity and must remain active",
+            "objective slot 1 is the primary identity and must remain active",
         ));
     }
     let ordered_slots = plan
@@ -1208,242 +1030,92 @@ fn invalid_transition_plan(reason: impl Into<String>) -> DraftQuestSkeletonError
     }
 }
 
-impl DraftQuestSkeletonV2 {
-    pub fn new(input: DraftQuestSkeletonInputV2) -> Result<Self, DraftQuestSkeletonError> {
-        let DraftQuestSkeletonInputV2 {
-            base,
-            additional_objective_titles,
-        } = input;
-        let objective_count = 1usize.saturating_add(additional_objective_titles.len());
-        if objective_count > MAX_DRAFT_QUEST_OBJECTIVES {
-            return Err(DraftQuestSkeletonError::TooManyObjectives {
-                actual: objective_count,
-                max: MAX_DRAFT_QUEST_OBJECTIVES,
+impl DraftQuestSkeleton {
+    pub fn new(input: DraftQuestSkeletonInput) -> Result<Self, DraftQuestSkeletonError> {
+        validate_generation(DraftQuestField::GameGeneration, &input.target)?;
+        if input.quest_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(DraftQuestSkeletonError::ZeroEntityId);
+        }
+        if input.giver.generation != input.target {
+            return Err(DraftQuestSkeletonError::GenerationMismatch {
+                field: DraftQuestField::GiverGeneration,
             });
         }
-        if additional_objective_titles.is_empty() {
-            return Err(DraftQuestSkeletonError::EmptyValue {
-                field: DraftQuestField::AdditionalObjectiveTitle { index: 1 },
+        if input.parent_quest.generation != input.target {
+            return Err(DraftQuestSkeletonError::GenerationMismatch {
+                field: DraftQuestField::ParentGeneration,
             });
         }
-
-        validate_draft_quest_objective_titles(&base.objective_title, &additional_objective_titles)?;
-
-        // V1 closes the complete old validation/collision surface first. This is what guarantees
-        // a version-2 extension cannot weaken the frozen one-objective contract.
-        let frozen = DraftQuestSkeletonV1::new(base)?;
-        let DraftQuestSkeletonV1 {
-            input,
-            technical_names: base_names,
-            ..
-        } = frozen;
-        let mut additional_names = Vec::with_capacity(additional_objective_titles.len());
-        for ordinal in 2..=objective_count {
-            additional_names.push(DraftQuestAdditionalObjectiveTechnicalNames {
-                ordinal,
-                objective_class: format!("UQuest_{}_OBJ_{ordinal}", input.technical_id),
-                objective_getter: format!("{}{}", base_names.objective_getter, ordinal),
+        if input.collision_catalog.generation != input.target {
+            return Err(DraftQuestSkeletonError::GenerationMismatch {
+                field: DraftQuestField::CollisionGeneration,
             });
         }
+        validate_module_namespace(&input.module_namespace)?;
+        validate_technical_id(&input.technical_id)?;
+        validate_source_function_identifier(
+            DraftQuestField::TextHelper,
+            &input.text_helper,
+            MAX_IDENTIFIER_BYTES,
+        )?;
+        validate_literal_text(
+            DraftQuestField::Title,
+            &input.title,
+            MAX_DRAFT_QUEST_TITLE_BYTES,
+        )?;
+        validate_literal_text(
+            DraftQuestField::Description,
+            &input.description,
+            MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+        )?;
+        validate_draft_quest_objective_titles(
+            &input.objective_title,
+            &input.additional_objective_titles,
+        )?;
+        let objective_count = 1 + input.additional_objective_titles.len();
+        validate_draft_quest_transition_plan_v1(&input.transition_plan, objective_count)?;
 
-        validate_multi_objective_name_lengths(&additional_names)?;
-        check_multi_objective_symbol_collisions(&base_names, &additional_names)?;
-        for names in &additional_names {
-            if input
+        let pascal = technical_id_pascal_case(&input.technical_id);
+        let base_names = DraftQuestBaseTechnicalNames {
+            module_namespace: input.module_namespace.clone(),
+            module_relative_path: format!("{}.as", input.module_namespace.replace('.', "/")),
+            root_class: format!("UQuest_{}", input.technical_id),
+            objective_class: format!("UQuest_{}_OBJ_DONE", input.technical_id),
+            text_helper: input.text_helper.clone(),
+            root_getter: format!("Get{pascal}"),
+            objective_getter: format!("Get{pascal}Objective"),
+        };
+        validate_generated_name_lengths(&base_names)?;
+        check_generated_symbol_collisions(&base_names)?;
+        if input
+            .parent_quest
+            .runtime_class
+            .eq_ignore_ascii_case(&base_names.root_class)
+            || input
                 .parent_quest
                 .runtime_class
-                .eq_ignore_ascii_case(&names.objective_class)
-            {
-                return Err(DraftQuestSkeletonError::ParentClassCollision {
-                    class_name: input.parent_quest.runtime_class.clone(),
-                });
-            }
-            for symbol in [&names.objective_class, &names.objective_getter] {
-                if input
-                    .collision_catalog
-                    .contains(DraftQuestCollisionKind::Symbol, symbol)
-                {
-                    return Err(DraftQuestSkeletonError::GeneratedNameCollision {
-                        kind: DraftQuestCollisionKind::Symbol,
-                        name: symbol.clone(),
-                    });
-                }
-            }
-        }
-
-        let technical_names = DraftQuestMultiObjectiveTechnicalNames {
-            base: base_names,
-            additional_objectives: additional_names,
-        };
-        let input_fingerprint = fingerprint_multi_objective_input(
-            &input,
-            &additional_objective_titles,
-            &technical_names,
-        );
-        Ok(Self {
-            input,
-            additional_objective_titles,
-            technical_names,
-            input_fingerprint,
-        })
-    }
-
-    pub fn target(&self) -> &GameGenerationAnchor {
-        &self.input.target
-    }
-
-    pub fn quest_id(&self) -> EntityId {
-        self.input.quest_id
-    }
-
-    pub fn technical_names(&self) -> &DraftQuestMultiObjectiveTechnicalNames {
-        &self.technical_names
-    }
-
-    pub fn input_fingerprint(&self) -> Sha256Digest {
-        self.input_fingerprint
-    }
-
-    /// Emit a deterministic root followed by objectives in author order. The first objective
-    /// retains the V1 identities; only the final objective carries `bSucceedParent = true`.
-    /// This is source shape, not runtime transition qualification.
-    pub fn generate(&self) -> DraftQuestMultiObjectiveGeneratedSource {
-        let names = &self.technical_names.base;
-        let giver = self.input.giver.runtime_unique_name();
-        let mut source = format!(
-            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = {parent}::StaticClass();\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n    default bExternalStartTrigger = true;\n}}\n\n{root} {root_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({root}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{root}>(Quest);\n}}\n\n",
-            text_helper = names.text_helper,
-            root = names.root_class,
-            base = QUEST_BASE_CLASS,
-            parent = self.input.parent_quest.runtime_class(),
-            root_kind = ROOT_KIND,
-            hero = HERO_UNIQUE_NAME,
-            giver = giver,
-            title = self.input.title,
-            description = self.input.description,
-            root_getter = names.root_getter,
-        );
-
-        let objective_count = 1 + self.additional_objective_titles.len();
-        let objectives = std::iter::once((
-            names.objective_class.as_str(),
-            names.objective_getter.as_str(),
-            self.input.objective_title.as_str(),
-        ))
-        .chain(
-            self.technical_names
-                .additional_objectives
-                .iter()
-                .zip(&self.additional_objective_titles)
-                .map(|(names, title)| {
-                    (
-                        names.objective_class.as_str(),
-                        names.objective_getter.as_str(),
-                        title.as_str(),
-                    )
-                }),
-        );
-        for (zero_based_index, (objective, objective_getter, objective_title)) in
-            objectives.enumerate()
+                .eq_ignore_ascii_case(&base_names.objective_class)
         {
-            source.push_str(&format!(
-                "class {objective} : {base}\n{{\n    default ParentQuestClass = {root}::StaticClass();\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n    default bExternalStartTrigger = true;\n    default bExternalSuccessTrigger = true;\n",
-                base = QUEST_BASE_CLASS,
-                root = names.root_class,
-                objective_kind = OBJECTIVE_KIND,
-                text_helper = names.text_helper,
-            ));
-            if zero_based_index + 1 == objective_count {
-                source.push_str("    default bSucceedParent = true;\n");
-            }
-            source.push_str(&format!(
-                "}}\n\n{objective} {objective_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({objective}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{objective}>(Quest);\n}}\n",
-            ));
-            if zero_based_index + 1 != objective_count {
-                source.push('\n');
-            }
+            return Err(DraftQuestSkeletonError::ParentClassCollision {
+                class_name: input.parent_quest.runtime_class.clone(),
+            });
         }
-        let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
-        DraftQuestMultiObjectiveGeneratedSource {
-            target: self.input.target.clone(),
-            quest_id: self.input.quest_id,
-            generator_id: DRAFT_QUEST_GENERATOR_ID,
-            generator_version: DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION,
-            giver: self.input.giver.clone(),
-            parent_quest: self.input.parent_quest.clone(),
-            collision_catalog: self.input.collision_catalog.anchor(),
-            technical_names: self.technical_names.clone(),
-            fixed_shape: DraftQuestFixedShape::DISCOVERY_ONLY,
-            source,
-            source_sha256,
-            input_fingerprint: self.input_fingerprint,
-            status: DraftQuestCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-        }
-    }
-}
+        check_catalog_collisions(&input.collision_catalog, &base_names)?;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSemanticObjectiveTechnicalNames {
-    pub slot: u16,
-    pub objective_class: String,
-    pub objective_getter: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSemanticTechnicalNames {
-    pub base: DraftQuestTechnicalNames,
-    /// Stable technical identities in ascending slot order, independent of presentation order.
-    pub objectives: Vec<DraftQuestSemanticObjectiveTechnicalNames>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSkeletonInputV3 {
-    pub base: DraftQuestSkeletonInput,
-    pub additional_objective_titles: Vec<String>,
-    pub transition_plan: QuestTransitionPlanV1,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSkeletonV3 {
-    input: DraftQuestSkeletonInput,
-    additional_objective_titles: Vec<String>,
-    transition_plan: QuestTransitionPlanV1,
-    technical_names: DraftQuestSemanticTechnicalNames,
-    input_fingerprint: Sha256Digest,
-}
-
-impl DraftQuestSkeletonV3 {
-    pub fn new(input: DraftQuestSkeletonInputV3) -> Result<Self, DraftQuestSkeletonError> {
-        let DraftQuestSkeletonInputV3 {
-            base,
-            additional_objective_titles,
-            transition_plan,
-        } = input;
-        validate_draft_quest_objective_titles(&base.objective_title, &additional_objective_titles)?;
-        let objective_count = 1 + additional_objective_titles.len();
-        validate_draft_quest_transition_plan_v1(&transition_plan, objective_count)?;
-
-        // Close the frozen validation surface first. Slot 1 is retained by every V4 plan, so all
-        // V1 technical-name and catalog checks remain applicable without weakening compatibility.
-        let frozen = DraftQuestSkeletonV1::new(base)?;
-        let DraftQuestSkeletonV1 {
-            input,
-            technical_names: base_names,
-            ..
-        } = frozen;
-        let objectives = transition_plan
+        let objectives = input
+            .transition_plan
             .objective_slots
             .iter()
             .copied()
             .map(|slot| {
                 if slot == 1 {
-                    DraftQuestSemanticObjectiveTechnicalNames {
+                    DraftQuestObjectiveTechnicalNames {
                         slot,
                         objective_class: base_names.objective_class.clone(),
                         objective_getter: base_names.objective_getter.clone(),
                     }
                 } else {
-                    DraftQuestSemanticObjectiveTechnicalNames {
+                    DraftQuestObjectiveTechnicalNames {
                         slot,
                         objective_class: format!("UQuest_{}_OBJ_{slot}", input.technical_id),
                         objective_getter: format!("{}{slot}", base_names.objective_getter),
@@ -1451,8 +1123,8 @@ impl DraftQuestSkeletonV3 {
                 }
             })
             .collect::<Vec<_>>();
-        validate_semantic_objective_names(&objectives)?;
-        check_semantic_symbol_collisions(&base_names, &objectives)?;
+        validate_objective_names(&objectives)?;
+        check_symbol_collisions(&base_names, &objectives)?;
         for objective in objectives.iter().filter(|objective| objective.slot != 1) {
             if input
                 .parent_quest
@@ -1475,25 +1147,19 @@ impl DraftQuestSkeletonV3 {
                 }
             }
         }
-        let technical_names = DraftQuestSemanticTechnicalNames {
+        let technical_names = DraftQuestTechnicalNames {
             base: base_names,
             objectives,
         };
-        let input_fingerprint = fingerprint_semantic_quest_input(
-            &input,
-            &additional_objective_titles,
-            &transition_plan,
-        );
+        let input_fingerprint = fingerprint_draft_quest_input(&input);
         Ok(Self {
             input,
-            additional_objective_titles,
-            transition_plan,
             technical_names,
             input_fingerprint,
         })
     }
 
-    pub fn technical_names(&self) -> &DraftQuestSemanticTechnicalNames {
+    pub fn technical_names(&self) -> &DraftQuestTechnicalNames {
         &self.technical_names
     }
 
@@ -1501,7 +1167,7 @@ impl DraftQuestSkeletonV3 {
         self.input_fingerprint
     }
 
-    pub fn generate(&self) -> DraftQuestSemanticGeneratedSource {
+    pub fn generate(&self) -> DraftQuestGeneratedSource {
         let base_names = &self.technical_names.base;
         let giver = self.input.giver.runtime_unique_name();
         let mut source = format!(
@@ -1522,9 +1188,15 @@ impl DraftQuestSkeletonV3 {
         source.push('\n');
 
         let titles = std::iter::once(self.input.objective_title.as_str())
-            .chain(self.additional_objective_titles.iter().map(String::as_str))
+            .chain(
+                self.input
+                    .additional_objective_titles
+                    .iter()
+                    .map(String::as_str),
+            )
             .collect::<Vec<_>>();
         for (position, slot) in self
+            .input
             .transition_plan
             .objective_order
             .iter()
@@ -1548,17 +1220,17 @@ impl DraftQuestSkeletonV3 {
                 &objective.objective_class,
                 &objective.objective_getter,
             );
-            if position + 1 != self.transition_plan.objective_order.len() {
+            if position + 1 != self.input.transition_plan.objective_order.len() {
                 source.push('\n');
             }
         }
 
         let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
-        DraftQuestSemanticGeneratedSource {
+        DraftQuestGeneratedSource {
             target: self.input.target.clone(),
             quest_id: self.input.quest_id,
             generator_id: DRAFT_QUEST_GENERATOR_ID,
-            generator_version: DRAFT_QUEST_SEMANTIC_GENERATOR_VERSION,
+            generator_version: DRAFT_QUEST_GENERATOR_VERSION,
             giver: self.input.giver.clone(),
             parent_quest: self.input.parent_quest.clone(),
             collision_catalog: self.input.collision_catalog.anchor(),
@@ -1583,8 +1255,8 @@ impl DraftQuestSkeletonV3 {
         if transitions.iter().any(|transition| {
             transition.edge == QuestTransitionEdgeV1::Availability && !transition.external_allowed
         }) {
-            // UG1RQuest availability is externally driven by default. Emitting only the false
-            // override preserves byte-for-byte legacy-seed upgrades while making opt-out real.
+            // UG1RQuest availability is externally driven by default. Emit only the false
+            // override when the authored plan opts out.
             source.push_str("    default bExternalAvailabilityTrigger = false;\n");
         }
         if transitions.iter().any(|transition| {
@@ -1705,13 +1377,14 @@ impl DraftQuestSkeletonV3 {
         node: QuestTransitionNodeV1,
         edge: QuestTransitionEdgeV1,
     ) -> Option<&QuestTransitionV1> {
-        self.transition_plan
+        self.input
+            .transition_plan
             .transitions
             .iter()
             .find(|transition| transition.node == node && transition.edge == edge)
     }
 
-    fn objective_names(&self, slot: u16) -> &DraftQuestSemanticObjectiveTechnicalNames {
+    fn objective_names(&self, slot: u16) -> &DraftQuestObjectiveTechnicalNames {
         self.technical_names
             .objectives
             .iter()
@@ -1734,7 +1407,7 @@ impl DraftQuestSkeletonV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestSemanticGeneratedSource {
+pub struct DraftQuestGeneratedSource {
     pub target: GameGenerationAnchor,
     pub quest_id: EntityId,
     pub generator_id: &'static str,
@@ -1742,7 +1415,7 @@ pub struct DraftQuestSemanticGeneratedSource {
     pub giver: CatalogQualifiedQuestGiver,
     pub parent_quest: CatalogQualifiedParentQuest,
     pub collision_catalog: DraftQuestCatalogLayerAnchor,
-    pub technical_names: DraftQuestSemanticTechnicalNames,
+    pub technical_names: DraftQuestTechnicalNames,
     pub source: String,
     pub source_sha256: Sha256Digest,
     pub input_fingerprint: Sha256Digest,
@@ -1813,8 +1486,8 @@ fn render_condition_atom(
     }
 }
 
-fn validate_semantic_objective_names(
-    objectives: &[DraftQuestSemanticObjectiveTechnicalNames],
+fn validate_objective_names(
+    objectives: &[DraftQuestObjectiveTechnicalNames],
 ) -> Result<(), DraftQuestSkeletonError> {
     for objective in objectives {
         for value in [&objective.objective_class, &objective.objective_getter] {
@@ -1830,9 +1503,9 @@ fn validate_semantic_objective_names(
     Ok(())
 }
 
-fn check_semantic_symbol_collisions(
-    base: &DraftQuestTechnicalNames,
-    objectives: &[DraftQuestSemanticObjectiveTechnicalNames],
+fn check_symbol_collisions(
+    base: &DraftQuestBaseTechnicalNames,
+    objectives: &[DraftQuestObjectiveTechnicalNames],
 ) -> Result<(), DraftQuestSkeletonError> {
     let mut seen = BTreeMap::<String, String>::new();
     for symbol in [&base.root_class, &base.text_helper, &base.root_getter]
@@ -1852,69 +1525,6 @@ fn check_semantic_symbol_collisions(
         }
     }
     Ok(())
-}
-
-fn fingerprint_semantic_quest_input(
-    input: &DraftQuestSkeletonInput,
-    additional_titles: &[String],
-    plan: &QuestTransitionPlanV1,
-) -> Sha256Digest {
-    let mut hasher = Sha256::new();
-    fingerprint_bytes(
-        &mut hasher,
-        "schema",
-        b"gore-authoring.draft-quest-skeleton-v3.input-fingerprint",
-    );
-    fingerprint_bytes(
-        &mut hasher,
-        "frozen-v1.input-fingerprint",
-        fingerprint_input(input).as_bytes(),
-    );
-    for (index, title) in additional_titles.iter().enumerate() {
-        fingerprint_string(
-            &mut hasher,
-            &format!("objective.{}.title", index + 2),
-            title,
-        );
-    }
-    let plan_bytes = serde_json::to_vec(plan).expect("closed transition plan is serializable");
-    fingerprint_bytes(&mut hasher, "transition-plan-v1", &plan_bytes);
-    Sha256Digest::from_bytes(hasher.finalize().into())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestMultiObjectiveGeneratedSource {
-    pub target: GameGenerationAnchor,
-    pub quest_id: EntityId,
-    pub generator_id: &'static str,
-    pub generator_version: u32,
-    pub giver: CatalogQualifiedQuestGiver,
-    pub parent_quest: CatalogQualifiedParentQuest,
-    pub collision_catalog: DraftQuestCatalogLayerAnchor,
-    pub technical_names: DraftQuestMultiObjectiveTechnicalNames,
-    pub fixed_shape: DraftQuestFixedShape,
-    pub source: String,
-    pub source_sha256: Sha256Digest,
-    pub input_fingerprint: Sha256Digest,
-    pub status: DraftQuestCapabilityStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftQuestGeneratedSource {
-    pub target: GameGenerationAnchor,
-    pub quest_id: EntityId,
-    pub generator_id: &'static str,
-    pub generator_version: u32,
-    pub giver: CatalogQualifiedQuestGiver,
-    pub parent_quest: CatalogQualifiedParentQuest,
-    pub collision_catalog: DraftQuestCatalogLayerAnchor,
-    pub technical_names: DraftQuestTechnicalNames,
-    pub fixed_shape: DraftQuestFixedShape,
-    pub source: String,
-    pub source_sha256: Sha256Digest,
-    /// Canonical hash of every semantic/provenance input, separate from emitted source bytes.
-    pub input_fingerprint: Sha256Digest,
-    pub status: DraftQuestCapabilityStatus,
 }
 
 fn validate_generation(
@@ -2014,7 +1624,7 @@ fn technical_id_pascal_case(value: &str) -> String {
 }
 
 fn validate_generated_name_lengths(
-    names: &DraftQuestTechnicalNames,
+    names: &DraftQuestBaseTechnicalNames,
 ) -> Result<(), DraftQuestSkeletonError> {
     for (field, value) in [
         (DraftQuestField::TechnicalId, names.root_class.as_str()),
@@ -2037,12 +1647,12 @@ fn validate_generated_name_lengths(
     Ok(())
 }
 
-fn fingerprint_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
+fn fingerprint_draft_quest_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
     let mut hasher = Sha256::new();
     fingerprint_bytes(
         &mut hasher,
         "schema",
-        b"gore-authoring.draft-quest-skeleton-v1.input-fingerprint",
+        b"gore-authoring.draft-quest-skeleton.input-fingerprint",
     );
     fingerprint_u64(
         &mut hasher,
@@ -2110,6 +1720,21 @@ fn fingerprint_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
     fingerprint_string(&mut hasher, "text.title", &input.title);
     fingerprint_string(&mut hasher, "text.description", &input.description);
     fingerprint_string(&mut hasher, "text.objective-title", &input.objective_title);
+    fingerprint_u64(
+        &mut hasher,
+        "objective.additional-count",
+        input.additional_objective_titles.len() as u64,
+    );
+    for (index, title) in input.additional_objective_titles.iter().enumerate() {
+        fingerprint_string(
+            &mut hasher,
+            &format!("objective.{}.title", index + 2),
+            title,
+        );
+    }
+    let transition_plan = serde_json::to_vec(&input.transition_plan)
+        .expect("validated transition plan is serializable");
+    fingerprint_bytes(&mut hasher, "transition-plan", &transition_plan);
 
     fingerprint_seal(
         &mut hasher,
@@ -2148,7 +1773,6 @@ fn fingerprint_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
     fingerprint_string(&mut hasher, "shape.hero-unique-name", HERO_UNIQUE_NAME);
     fingerprint_string(&mut hasher, "shape.root-kind", ROOT_KIND);
     fingerprint_string(&mut hasher, "shape.objective-kind", OBJECTIVE_KIND);
-    fingerprint_bytes(&mut hasher, "shape.flags", &[1, 1, 1, 1]);
     fingerprint_string(&mut hasher, "capability.authoring", "OfflineDraft");
     fingerprint_string(&mut hasher, "capability.discovery", "RuntimeUnqualified");
     fingerprint_string(
@@ -2157,62 +1781,6 @@ fn fingerprint_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
         "TransitionsRuntimeUnqualified",
     );
 
-    Sha256Digest::from_bytes(hasher.finalize().into())
-}
-
-fn fingerprint_multi_objective_input(
-    input: &DraftQuestSkeletonInput,
-    additional_titles: &[String],
-    names: &DraftQuestMultiObjectiveTechnicalNames,
-) -> Sha256Digest {
-    let mut hasher = Sha256::new();
-    fingerprint_bytes(
-        &mut hasher,
-        "schema",
-        b"gore-authoring.draft-quest-skeleton-v2.input-fingerprint",
-    );
-    fingerprint_u64(
-        &mut hasher,
-        "generator.version",
-        u64::from(DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION),
-    );
-    fingerprint_bytes(
-        &mut hasher,
-        "frozen-v1.input-fingerprint",
-        fingerprint_input(input).as_bytes(),
-    );
-    fingerprint_u64(
-        &mut hasher,
-        "objective.count",
-        (1 + additional_titles.len()) as u64,
-    );
-    fingerprint_string(&mut hasher, "objective.title", &input.objective_title);
-    for (offset, (title, technical)) in additional_titles
-        .iter()
-        .zip(&names.additional_objectives)
-        .enumerate()
-    {
-        let ordinal = offset + 2;
-        fingerprint_string(&mut hasher, &format!("objective.{ordinal}.title"), title);
-        fingerprint_string(
-            &mut hasher,
-            &format!("objective.{ordinal}.class"),
-            &technical.objective_class,
-        );
-        fingerprint_string(
-            &mut hasher,
-            &format!("objective.{ordinal}.getter"),
-            &technical.objective_getter,
-        );
-    }
-    fingerprint_bytes(&mut hasher, "shape.last-objective-succeeds-parent", &[1]);
-    fingerprint_string(&mut hasher, "capability.authoring", "OfflineDraft");
-    fingerprint_string(&mut hasher, "capability.discovery", "RuntimeUnqualified");
-    fingerprint_string(
-        &mut hasher,
-        "capability.transitions",
-        "TransitionsRuntimeUnqualified",
-    );
     Sha256Digest::from_bytes(hasher.finalize().into())
 }
 
@@ -2244,7 +1812,7 @@ fn fingerprint_bytes(hasher: &mut Sha256, field: &str, value: &[u8]) {
 }
 
 fn check_generated_symbol_collisions(
-    names: &DraftQuestTechnicalNames,
+    names: &DraftQuestBaseTechnicalNames,
 ) -> Result<(), DraftQuestSkeletonError> {
     let mut seen = std::collections::BTreeMap::<String, &str>::new();
     for symbol in [
@@ -2259,52 +1827,6 @@ fn check_generated_symbol_collisions(
             return Err(DraftQuestSkeletonError::GeneratedSymbolCollision {
                 first: first.to_owned(),
                 second: symbol.to_owned(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_multi_objective_name_lengths(
-    names: &[DraftQuestAdditionalObjectiveTechnicalNames],
-) -> Result<(), DraftQuestSkeletonError> {
-    for names in names {
-        for value in [&names.objective_class, &names.objective_getter] {
-            if value.len() > MAX_IDENTIFIER_BYTES {
-                return Err(DraftQuestSkeletonError::ValueTooLong {
-                    field: DraftQuestField::TechnicalId,
-                    actual: value.len(),
-                    max: MAX_IDENTIFIER_BYTES,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_multi_objective_symbol_collisions(
-    base: &DraftQuestTechnicalNames,
-    additional: &[DraftQuestAdditionalObjectiveTechnicalNames],
-) -> Result<(), DraftQuestSkeletonError> {
-    let mut seen = std::collections::BTreeMap::<String, String>::new();
-    for symbol in [
-        &base.root_class,
-        &base.objective_class,
-        &base.text_helper,
-        &base.root_getter,
-        &base.objective_getter,
-    ]
-    .into_iter()
-    .chain(
-        additional
-            .iter()
-            .flat_map(|names| [&names.objective_class, &names.objective_getter]),
-    ) {
-        let key = symbol.to_ascii_lowercase();
-        if let Some(first) = seen.insert(key, symbol.clone()) {
-            return Err(DraftQuestSkeletonError::GeneratedSymbolCollision {
-                first,
-                second: symbol.clone(),
             });
         }
     }
@@ -2462,7 +1984,7 @@ fn safe_bare_identifier(value: &str) -> bool {
 
 fn check_catalog_collisions(
     catalog: &DraftQuestCollisionCatalog,
-    names: &DraftQuestTechnicalNames,
+    names: &DraftQuestBaseTechnicalNames,
 ) -> Result<(), DraftQuestSkeletonError> {
     let candidates = [
         (

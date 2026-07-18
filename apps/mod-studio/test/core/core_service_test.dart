@@ -73,7 +73,7 @@ void main() {
       expect(info.abi, goreCoreAbi);
       expect(info.version, '0.1.0-test');
       expect(info.commands, requiredStudioCoreCommands);
-      expect(info.supportsCommand('authoring_project_check'), isTrue);
+      expect(info.supportsCommand('authoring_store_open_revision3'), isTrue);
       expect(
         info.supportsCommand('authoring_unreal_handoff_capabilities_v1'),
         isFalse,
@@ -99,7 +99,7 @@ void main() {
         final incompleteBaseline = GoreCoreInfo.parseResponse(
           _coreInfoResponse(
             commands: commandsWithOptional
-                .where((command) => command != 'authoring_project_check')
+                .where((command) => command != 'authoring_store_open_revision3')
                 .toList(),
           ),
         );
@@ -121,7 +121,7 @@ void main() {
         expect(incompleteBaseline.supportsCommand(optionalCommand), isTrue);
         expect(incompleteBaseline.isStudioCompatible, isFalse);
         expect(incompleteBaseline.missingRequiredCommands, [
-          'authoring_project_check',
+          'authoring_store_open_revision3',
         ]);
       },
     );
@@ -142,9 +142,9 @@ void main() {
     });
 
     test(
-      'candidate decision skips legacy, wrong ABI, and incomplete cores',
+      'candidate decision skips non-current, wrong-ABI, and incomplete cores',
       () {
-        final legacy = jsonEncode({
+        final missingCoreInfo = jsonEncode({
           'ok': false,
           'error': {
             'code': 'UNKNOWN_COMMAND',
@@ -154,7 +154,7 @@ void main() {
         final wrongAbi = _coreInfoResponse(abi: goreCoreAbi + 1);
         final missingAuthoring = _coreInfoResponse(
           commands: requiredStudioCoreCommands
-              .where((command) => command != 'authoring_project_check')
+              .where((command) => command != 'authoring_store_open_revision3')
               .toList(),
         );
         final missingVoice = _coreInfoResponse(
@@ -172,18 +172,6 @@ void main() {
               .where((command) => command != 'dataasset_fixed_inspect_v1')
               .toList(),
         );
-        final missingWorkingStore = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) => command != 'authoring_store_prepare_checkpoint',
-              )
-              .toList(),
-        );
-        final missingDocumentStore = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where((command) => command != 'authoring_store_open_document')
-              .toList(),
-        );
         final missingRevision3Store = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -192,25 +180,9 @@ void main() {
               )
               .toList(),
         );
-        final missingStoryTransaction = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) =>
-                    command != 'authoring_project_story_draft_insert_v1',
-              )
-              .toList(),
-        );
         final missingStoryCatalog = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where((command) => command != 'authoring_story_catalog_v1_read')
-              .toList(),
-        );
-        final missingStoryBuildPlan = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) =>
-                    command != 'authoring_story_build_plan_v1_generate',
-              )
               .toList(),
         );
         final missingStoryCatalogBuild = _coreInfoResponse(
@@ -226,21 +198,6 @@ void main() {
               )
               .toList(),
         );
-        final missingStoryInventoryBuild = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) => command != 'authoring_story_inventory_v1_build',
-              )
-              .toList(),
-        );
-        final missingNpcDraft = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) =>
-                    command != 'authoring_logical_npc_clone_draft_v1_generate',
-              )
-              .toList(),
-        );
         final missingNpcCatalog = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -250,38 +207,23 @@ void main() {
               )
               .toList(),
         );
-        final missingQuestDraft = _coreInfoResponse(
-          commands: requiredStudioCoreCommands
-              .where(
-                (command) =>
-                    command != 'authoring_draft_quest_skeleton_v1_generate',
-              )
-              .toList(),
-        );
         final current = _coreInfoResponse(version: '0.2.0-current');
 
         final decisions = [
-          legacy,
+          missingCoreInfo,
           wrongAbi,
           missingAuthoring,
           missingVoice,
           missingVoiceOggInspect,
           missingDataAssetInspect,
-          missingWorkingStore,
-          missingDocumentStore,
           missingRevision3Store,
-          missingStoryTransaction,
-          missingStoryBuildPlan,
           missingStoryCatalog,
           missingStoryCatalogBuild,
           missingStoryCatalogRootBuild,
-          missingStoryInventoryBuild,
-          missingNpcDraft,
           missingNpcCatalog,
-          missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(18), everyElement(isNull));
+        expect(decisions.take(decisions.length - 1), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -310,21 +252,16 @@ void main() {
       final commands = requiredStudioCoreCommands
           .where(
             (command) =>
-                command != 'authoring_project_check' &&
-                command != 'authoring_project_story_draft_insert_v1' &&
-                command != 'authoring_story_build_plan_v1_generate' &&
+                command != 'authoring_store_open_revision3' &&
+                command != 'authoring_store_prepare_revision3_checkpoint' &&
                 command != 'authoring_story_catalog_v1_build' &&
                 command != 'authoring_story_catalog_v1_build_for_game_root' &&
                 command != 'authoring_story_catalog_v1_read' &&
-                command != 'authoring_story_inventory_v1_build' &&
-                command != 'authoring_store_open_document' &&
                 command != 'dataasset_fixed_inspect_v1' &&
                 command != 'voice_archive_match_line' &&
                 command != 'voice_ogg_inspect_v1' &&
-                command != 'authoring_logical_npc_clone_draft_v1_generate' &&
                 command !=
-                    'authoring_npc_archetype_catalog_v1_build_for_game_root' &&
-                command != 'authoring_draft_quest_skeleton_v1_generate',
+                    'authoring_npc_archetype_catalog_v1_build_for_game_root',
           )
           .toList();
       final info = GoreCoreInfo.parseResponse(
@@ -333,17 +270,12 @@ void main() {
 
       expect(info.isStudioCompatible, isFalse);
       expect(info.missingRequiredCommands, [
-        'authoring_draft_quest_skeleton_v1_generate',
-        'authoring_logical_npc_clone_draft_v1_generate',
         'authoring_npc_archetype_catalog_v1_build_for_game_root',
-        'authoring_project_check',
-        'authoring_project_story_draft_insert_v1',
-        'authoring_store_open_document',
-        'authoring_story_build_plan_v1_generate',
+        'authoring_store_open_revision3',
+        'authoring_store_prepare_revision3_checkpoint',
         'authoring_story_catalog_v1_build',
         'authoring_story_catalog_v1_build_for_game_root',
         'authoring_story_catalog_v1_read',
-        'authoring_story_inventory_v1_build',
         'dataasset_fixed_inspect_v1',
         'voice_archive_match_line',
         'voice_ogg_inspect_v1',

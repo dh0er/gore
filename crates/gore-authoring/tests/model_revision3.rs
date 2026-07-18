@@ -1,17 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor,
-    ProjectDocument, ProjectDocumentError, ProjectId, ProjectMeta, ProjectRevision3,
-    ProjectRevision3JsonError, ProjectRevision3ValidationError, QuestCollisionArtifactRef,
-    QuestTransitionPlanV1, Revision2QuestGiverInput, Revision2QuestParentInput, Revision3Entity,
-    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
-    ScriptModuleStatus, Sha256Digest, MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
-    MAX_REVISION3_ENTITY_JSON_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId,
+    ProjectMeta, ProjectRevision3, ProjectRevision3JsonError, ProjectRevision3ValidationError,
+    QuestCollisionArtifactRef, QuestGiverInput, QuestParentInput, QuestTransitionPlanV1,
+    Revision3Entity, Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef,
+    Revision3QuestDraft, Revision3QuestDraftInput, Revision3ScriptModule, Revision3TypedRef,
+    SchemaRevisionV3, ScriptModuleStatus, Sha256Digest, MAX_PROJECT_JSON_BYTES,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -54,8 +52,8 @@ fn empty_revision3() -> ProjectRevision3 {
     }
 }
 
-fn parent() -> Revision2QuestParentInput {
-    Revision2QuestParentInput {
+fn parent() -> QuestParentInput {
+    QuestParentInput {
         generation: target(),
         source_seal: seal(2, 20_000),
         catalog_layer: "base-game.g1r.quests".into(),
@@ -64,8 +62,8 @@ fn parent() -> Revision2QuestParentInput {
     }
 }
 
-fn giver() -> Revision2QuestGiverInput {
-    Revision2QuestGiverInput {
+fn giver() -> QuestGiverInput {
+    QuestGiverInput {
         generation: target(),
         source_seal: seal(3, 30_000),
         catalog_layer: "base-game.g1r.characters".into(),
@@ -83,7 +81,7 @@ fn quest_project() -> ProjectRevision3 {
         artifact.sha256,
         AssetMeta {
             byte_len: artifact.byte_len,
-            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.into(),
+            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.into(),
         },
     );
     let quest = Revision3QuestDraft {
@@ -101,10 +99,10 @@ fn quest_project() -> ProjectRevision3 {
             description: "Prove that the gate is secure.".into(),
             objective_title: "Report to Asghan".into(),
             additional_objective_titles: Vec::new(),
-            transition_plan: None,
+            transition_plan: Box::new(QuestTransitionPlanV1::default_for_objectives(1).unwrap()),
             collision_catalog: QuestCollisionArtifactRef {
                 generation: target(),
-                catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),
+                catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.into(),
                 artifact: artifact.clone(),
                 source_seal: seal(5, artifact.byte_len),
                 basis_snapshot: seal(6, 800),
@@ -176,7 +174,7 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
     assert!(!canonical.contains("\"relative_paths\""));
     assert!(!canonical.contains("\"symbols\""));
     assert!(!canonical.contains("\"additional_objective_titles\""));
-    assert!(!canonical.contains("\"transition_plan\""));
+    assert!(canonical.contains("\"transition_plan\""));
 
     let whitespace = format!(" {canonical}");
     assert!(matches!(
@@ -194,42 +192,20 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
         Err(ProjectRevision3JsonError::InvalidJson(_))
     ));
 
-    let document = ProjectDocument::from_json(&canonical).unwrap();
-    let ProjectDocument::Revision3(reopened) = &document else {
-        panic!("revision-3 marker dispatched to the wrong model")
-    };
-    assert_eq!(reopened, &project);
-    assert_eq!(document.to_canonical_json().unwrap(), canonical);
-    assert_eq!(serde_json::to_string(&document).unwrap(), canonical);
-
-    assert!(matches!(
-        ProjectDocument::from_json(&duplicate),
-        Err(ProjectDocumentError::InvalidProbeJson(_))
-    ));
-    assert!(matches!(
-        ProjectDocument::from_json(&unknown),
-        Err(ProjectDocumentError::InvalidRevision3(_))
-    ));
-    assert!(matches!(
-        ProjectDocument::from_json(&whitespace),
-        Err(ProjectDocumentError::InvalidRevision3(
-            ProjectRevision3JsonError::NonCanonicalJson
-        ))
-    ));
-
     let invalid = canonical.replacen(
         &format!("\"project_id\":\"{}\"", project.project_id),
         &format!("\"project_id\":\"{}\"", ProjectId::from_bytes([0; 16])),
         1,
     );
-    assert!(matches!(
-        ProjectDocument::from_json(&invalid),
-        Err(ProjectDocumentError::InvalidRevision3(_))
-    ));
+    let error = ProjectRevision3::from_json(&invalid).unwrap_err();
+    assert!(
+        matches!(error, ProjectRevision3JsonError::InvalidJson(_)),
+        "unexpected zero-project-id error: {error:?}"
+    );
 }
 
 #[test]
-fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
+fn revision3_multi_objectives_round_trip_in_order_with_stable_slots() {
     let mut project = quest_project();
     let quest_id = entity_id(10);
     let module_id = entity_id(11);
@@ -238,22 +214,24 @@ fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
     else {
         panic!("fixture Quest missing")
     };
-    quest.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
     quest.input.additional_objective_titles =
         vec!["Inspect the gate".into(), "Report the secured mine".into()];
+    quest.input.transition_plan =
+        Box::new(QuestTransitionPlanV1::default_for_objectives(3).unwrap());
     let Revision3EntityPayload::ScriptModule(module) =
         &mut project.entities.get_mut(&module_id).unwrap().payload
     else {
         panic!("fixture module missing")
     };
-    module.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    module.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
     let Revision3OriginRef::Generated {
         generator_version, ..
     } = &mut project.entities.get_mut(&module_id).unwrap().origin
     else {
         panic!("fixture module origin missing")
     };
-    *generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    *generator_version = REVISION3_QUEST_GENERATOR_VERSION;
 
     project.validate_closed_model().unwrap();
     let canonical = project.to_canonical_json().unwrap();
@@ -267,7 +245,8 @@ fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
     else {
         unreachable!()
     };
-    quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+    quest.input.transition_plan =
+        Box::new(QuestTransitionPlanV1::default_for_objectives(1).unwrap());
     assert!(matches!(
         project.validate_closed_model(),
         Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
@@ -275,51 +254,19 @@ fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
 }
 
 #[test]
-fn semantic_transition_plan_requires_generator_v4_and_v4_requires_the_plan() {
+fn quest_wire_requires_a_transition_plan_and_generator_v4() {
     let mut project = quest_project();
     let quest_id = entity_id(10);
-    let module_id = entity_id(11);
     let Revision3EntityPayload::QuestDraft(quest) =
         &mut project.entities.get_mut(&quest_id).unwrap().payload
     else {
         panic!("fixture Quest missing")
     };
-    quest.input.transition_plan = Some(Box::new(QuestTransitionPlanV1::legacy_seed(1).unwrap()));
-    assert!(matches!(
-        project.validate_closed_model(),
-        Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
-    ));
+    let mut input = serde_json::to_value(&quest.input).unwrap();
+    input.as_object_mut().unwrap().remove("transition_plan");
+    assert!(serde_json::from_value::<Revision3QuestDraftInput>(input).is_err());
 
-    let Revision3EntityPayload::QuestDraft(quest) =
-        &mut project.entities.get_mut(&quest_id).unwrap().payload
-    else {
-        unreachable!()
-    };
-    quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-    let Revision3EntityPayload::ScriptModule(module) =
-        &mut project.entities.get_mut(&module_id).unwrap().payload
-    else {
-        panic!("fixture module missing")
-    };
-    module.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-    let Revision3OriginRef::Generated {
-        generator_version, ..
-    } = &mut project.entities.get_mut(&module_id).unwrap().origin
-    else {
-        panic!("fixture module origin missing")
-    };
-    *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-    project.validate_closed_model().unwrap();
-    let canonical = project.to_canonical_json().unwrap();
-    assert!(canonical.contains("\"transition_plan\":{"));
-    assert_eq!(ProjectRevision3::from_json(&canonical).unwrap(), project);
-
-    let Revision3EntityPayload::QuestDraft(quest) =
-        &mut project.entities.get_mut(&quest_id).unwrap().payload
-    else {
-        unreachable!()
-    };
-    quest.input.transition_plan = None;
+    quest.generator_version = 3;
     assert!(matches!(
         project.validate_closed_model(),
         Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
@@ -339,9 +286,10 @@ fn collision_arrays_and_cross_revision_markers_are_not_revision3_wire() {
         Err(ProjectRevision3JsonError::InvalidJson(_))
     ));
 
-    let revision2 = canonical.replacen("\"schema_revision\":3", "\"schema_revision\":2", 1);
+    let unsupported_schema =
+        canonical.replacen("\"schema_revision\":3", "\"schema_revision\":2", 1);
     assert!(matches!(
-        ProjectRevision3::from_json(&revision2),
+        ProjectRevision3::from_json(&unsupported_schema),
         Err(ProjectRevision3JsonError::InvalidJson(_))
     ));
 }

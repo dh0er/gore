@@ -44,30 +44,6 @@ final class Revision3QuestOutlineFixture {
 
   String get projectJson => jsonEncode(projectObject());
 
-  String get semanticProjectJson {
-    final project = projectObject();
-    final entities = (project['entities']! as Map).cast<String, Object?>();
-    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
-        .cast<String, Object?>();
-    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
-    final questData = (questPayload['data']! as Map).cast<String, Object?>();
-    questData['generator_version'] = 4;
-    final input = (questData['input']! as Map).cast<String, Object?>();
-    input['transition_plan'] =
-        AuthoringRevision3QuestTransitionPlanV1.legacySeed(
-          objectiveTitles.length,
-        ).toJson();
-    final module = (entities[revision3QuestOutlineModuleId]! as Map)
-        .cast<String, Object?>();
-    final origin = (module['origin']! as Map).cast<String, Object?>();
-    origin['generator_version'] = 4;
-    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
-    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
-    moduleData['generator_version'] = 4;
-    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
-    return jsonEncode(project);
-  }
-
   // A real revision-3 WorkingHead seals the sharded SnapshotManifest, not the
   // monolithic project JSON returned by open. Keep the fixture intentionally
   // different so Dart cannot accidentally conflate those two byte domains.
@@ -112,24 +88,6 @@ final class Revision3QuestOutlineFixture {
     };
   }
 
-  AuthoringRevision3QuestOutlineEditRequestV1 request({
-    String displayName = 'Find Homer safely',
-    String title = 'Find Homer safely',
-    List<String> objectiveTitles = const <String>[
-      'Inspect the old gate',
-      'Ask Asghan about Homer',
-      'Report to Diego',
-    ],
-  }) => AuthoringRevision3QuestOutlineEditRequestV1.forProject(
-    expectedHead: head,
-    currentProjectJson: projectJson,
-    questId: revision3QuestOutlineQuestId,
-    expectedQuestRevision: questRevision,
-    displayName: displayName,
-    title: title,
-    objectiveTitles: objectiveTitles,
-  );
-
   AuthoringDraftContentSeal get storyCatalogSeal =>
       AuthoringDraftContentSeal.fromJson(_seal(2048, '9'));
 
@@ -157,65 +115,6 @@ final class Revision3QuestOutlineFixture {
     expectedGiverAuthoringSelector: revision3QuestContextGiverRuntimeUniqueName,
     expectedGiverSourceSeal: AuthoringDraftContentSeal.fromJson(_seal(12, '2')),
   );
-
-  String candidateProjectJson({
-    String displayName = 'Find Homer safely',
-    String title = 'Find Homer safely',
-    List<String> objectiveTitles = const <String>[
-      'Inspect the old gate',
-      'Ask Asghan about Homer',
-      'Report to Diego',
-    ],
-  }) {
-    final project = projectObject();
-    project['revision'] = projectRevision + 1;
-    final entities = (project['entities']! as Map).cast<String, Object?>();
-    final input = _questInput(title: title, objectiveTitles: objectiveTitles);
-    entities[revision3QuestOutlineQuestId] = _questEntity(
-      input: input,
-      revision: questRevision + 1,
-      displayName: displayName,
-    );
-    entities[revision3QuestOutlineModuleId] = _moduleEntity(
-      input: input,
-      revision: moduleRevision + 1,
-      // Module display identity is deliberately outside the editable outline.
-      displayName: '${this.displayName} Script',
-    );
-    return jsonEncode(project);
-  }
-
-  Map<String, Object?> response({
-    String displayName = 'Find Homer safely',
-    String title = 'Find Homer safely',
-    List<String> objectiveTitles = const <String>[
-      'Inspect the old gate',
-      'Ask Asghan about Homer',
-      'Report to Diego',
-    ],
-  }) {
-    final candidate = candidateProjectJson(
-      displayName: displayName,
-      title: title,
-      objectiveTitles: objectiveTitles,
-    );
-    return <String, Object?>{
-      'ok': true,
-      'outcome': 'prepared_unpublished',
-      'basis_head_json': head.canonicalJson,
-      'head_json': manifestHead(4100, 'c').canonicalJson,
-      'project_json': candidate,
-      'project_id': revision3QuestOutlineProjectId,
-      'revision': projectRevision + 1,
-      'quest_id': revision3QuestOutlineQuestId,
-      'module_id': revision3QuestOutlineModuleId,
-      'quest_revision': questRevision + 1,
-      'module_revision': moduleRevision + 1,
-      'build_status': 'blocked',
-      'runtime_status': 'runtime_unqualified',
-      'publication_status': 'not_supported',
-    };
-  }
 
   String contextCandidateProjectJson({
     String description = 'Find Homer and report back safely.',
@@ -299,9 +198,8 @@ final class Revision3QuestOutlineFixture {
     'publication_status': 'not_supported',
   };
 
-  Revision3ContentIndex contentIndex({
-    int questGeneratorVersion = 3,
-  }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  Revision3ContentIndex
+  contentIndex() => Revision3ContentIndex.fromJsonObject(<String, Object?>{
     'schema_revision': 1,
     'project_id': revision3QuestOutlineProjectId,
     'project_revision': projectRevision,
@@ -328,6 +226,10 @@ final class Revision3QuestOutlineFixture {
             'title': title,
             'objective_title': objectiveTitles.first,
             'additional_objective_titles': objectiveTitles.skip(1).toList(),
+            'objective_slots': List<int>.generate(
+              objectiveTitles.length,
+              (index) => index + 1,
+            ),
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
             'giver_runtime_unique_name': 'OM_GRD_Asghan_263',
@@ -360,7 +262,7 @@ final class Revision3QuestOutlineFixture {
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': questGeneratorVersion,
+          'generator_version': 4,
           'owner': <String, Object?>{
             'project_id': revision3QuestOutlineProjectId,
             'entity_id': revision3QuestOutlineQuestId,
@@ -371,7 +273,7 @@ final class Revision3QuestOutlineFixture {
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': questGeneratorVersion,
+            'generator_version': 4,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
             'status': <String, Object?>{
@@ -439,7 +341,12 @@ final class Revision3QuestOutlineFixture {
     'title': title,
     'description': description,
     'objective_title': objectiveTitles.first,
-    'additional_objective_titles': objectiveTitles.skip(1).toList(),
+    if (objectiveTitles.length > 1)
+      'additional_objective_titles': objectiveTitles.skip(1).toList(),
+    'transition_plan':
+        AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+          objectiveTitles.length,
+        ).toJson(),
     'collision_catalog': <String, Object?>{
       'generation': _target(),
       'catalog_layer':
@@ -466,7 +373,7 @@ final class Revision3QuestOutlineFixture {
       'kind': 'quest_draft',
       'data': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 3,
+        'generator_version': 4,
         'input': input,
         'script_module': <String, Object?>{
           'project_id': revision3QuestOutlineProjectId,
@@ -503,8 +410,9 @@ final class Revision3QuestOutlineFixture {
       title: input['title']! as String,
       description: input['description']! as String,
       objectiveTitle: input['objective_title']! as String,
-      additionalObjectiveTitles: (input['additional_objective_titles']! as List)
-          .cast<String>(),
+      additionalObjectiveTitles:
+          (input['additional_objective_titles'] as List?)?.cast<String>() ??
+          const <String>[],
     );
     return <String, Object?>{
       'id': revision3QuestOutlineModuleId,
@@ -512,7 +420,7 @@ final class Revision3QuestOutlineFixture {
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 3,
+        'generator_version': 4,
         'owner': <String, Object?>{
           'project_id': revision3QuestOutlineProjectId,
           'id': revision3QuestOutlineQuestId,
@@ -524,7 +432,7 @@ final class Revision3QuestOutlineFixture {
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 3,
+          'generator_version': 4,
           'owner': <String, Object?>{
             'project_id': revision3QuestOutlineProjectId,
             'id': revision3QuestOutlineQuestId,

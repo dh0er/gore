@@ -3,16 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId,
     ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef, QuestTransitionPlanV1,
-    Revision2LocalizationEntry, Revision2NpcParentClassInput, Revision3DialogLine, Revision3Entity,
-    Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcDraftInput,
-    Revision3NpcGreetingBindingV1, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
-    Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest,
-    LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-    MAX_ANGELSCRIPT_IDENTIFIER_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
-    MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    Revision3DialogLine, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision3LocalizationEntry, Revision3NpcDraft, Revision3NpcDraftInput,
+    Revision3NpcGreetingBindingV1, Revision3NpcParentClassInput, Revision3OriginRef,
+    Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestGiverInput,
+    Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
+    ScriptModuleStatus, Sha256Digest, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
+    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -67,8 +67,8 @@ fn target() -> GameGenerationAnchor {
     }
 }
 
-fn npc_parent(value: u8, runtime_class: &str) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+fn npc_parent(value: u8, runtime_class: &str) -> Revision3NpcParentClassInput {
+    Revision3NpcParentClassInput {
         generation: target(),
         source_seal: seal(value, 4_096),
         catalog_layer: "base-game.g1r.npc-parents.v1".to_owned(),
@@ -109,7 +109,7 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
         artifact.sha256,
         AssetMeta {
             byte_len: artifact.byte_len,
-            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.to_owned(),
+            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.to_owned(),
         },
     );
 
@@ -120,7 +120,7 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
     );
     let draft = Revision3QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         input: Revision3QuestDraftInput {
             target: target(),
             quest_id,
@@ -145,12 +145,13 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
             description: "This V4 Quest must remain outside NPC inspection.".to_owned(),
             objective_title: "Remain untouched".to_owned(),
             additional_objective_titles: Vec::new(),
-            transition_plan: Some(Box::new(
-                QuestTransitionPlanV1::legacy_seed(1).expect("one-objective semantic plan"),
-            )),
+            transition_plan: Box::new(
+                QuestTransitionPlanV1::default_for_objectives(1)
+                    .expect("one-objective transition plan"),
+            ),
             collision_catalog: QuestCollisionArtifactRef {
                 generation: target(),
-                catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                 artifact,
                 source_seal: seal(0x73, 4_096),
                 basis_snapshot: seal(0x74, 8_192),
@@ -166,7 +167,7 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
     let source = "// unrelated V4 Quest source; intentionally opaque to NPC inspection\n";
     let module = Revision3ScriptModule {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         owner: owner.clone(),
         module_namespace: draft.input.module_namespace.clone(),
         module_relative_path: "GoreMods/Quests/UnrelatedV4.as".to_owned(),
@@ -195,7 +196,7 @@ fn insert_unrelated_v4_quest(project: &mut ProjectRevision3) {
             display_name: "Unrelated semantic Quest source".to_owned(),
             origin: Revision3OriginRef::Generated {
                 generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+                generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                 owner,
             },
             revision: 5,
@@ -399,7 +400,7 @@ fn authoring_only_greetings_leave_npc_source_inspection_and_verification_exact()
                 authored_runtime_id: "GORE_INSPECTION_GREETING_LOC".to_owned(),
             },
             revision: 1,
-            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+            payload: Revision3EntityPayload::LocalizationEntry(Revision3LocalizationEntry {
                 loc_id: "GORE_INSPECTION_GREETING".to_owned(),
                 texts: BTreeMap::new(),
             }),

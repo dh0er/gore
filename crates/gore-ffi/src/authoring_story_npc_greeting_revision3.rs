@@ -666,8 +666,8 @@ mod tests {
 
     use gore_authoring::model_revision3::{DialogLine, LocalizationEntry};
     use gore_authoring::{
-        AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId,
-        ProjectMeta, ProjectRevision3, Revision2NpcParentClassInput,
+        AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor,
+        NpcParentClassInput, ProjectId, ProjectMeta, ProjectRevision3,
         Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogLineInsertRequestV1,
         Revision3DialogLocalizationIntentV1, Revision3Entity, Revision3EntityKind,
         Revision3EntityPayload, Revision3NpcDraft, Revision3NpcDraftInput,
@@ -709,8 +709,8 @@ mod tests {
         }
     }
 
-    fn parent(value: u8, runtime_class: &str) -> Revision2NpcParentClassInput {
-        Revision2NpcParentClassInput {
+    fn parent(value: u8, runtime_class: &str) -> NpcParentClassInput {
+        NpcParentClassInput {
             generation: target(),
             source_seal: seal(value, 4_096),
             catalog_layer: "base-game.g1r.npc-parents.v1".to_owned(),

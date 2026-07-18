@@ -3883,7 +3883,7 @@ fn reopen_store_closure(
         // Shared members are intentionally charged once per snapshot reopen: the implementation
         // reparses entities and reiterates asset indexes, and this prevents a small unique member
         // set from amplifying into unbounded CPU, I/O, or transient allocation. Matching the
-        // writer's formula and caps also preserves V2 writer-to-reader compatibility.
+        // writer's formula and caps also keeps current V2 read/write accounting consistent.
         reopen_work.charge_snapshot(&need.seal, &snapshot)?;
         let mut entities = BTreeMap::new();
         for (id, seal) in &snapshot.entities {
@@ -4209,7 +4209,7 @@ fn verify_archive_voice_metadata(
             validated.insert(take.asset.sha256, actual.clone());
             actual
         };
-        let declared = revision2_ogg_metadata_as_revision1(&take.ogg);
+        let declared = take.ogg.clone();
         if declared != actual {
             return Err(Revision3ExactSnapshotInspectionErrorV2::InvalidClosure(
                 format!(
@@ -4385,11 +4385,11 @@ fn verify_exact_zip64_footer(
 ) -> Result<(), Revision3ExactSnapshotInspectionErrorV2> {
     const ZIP64_EOCD_BYTES: usize = 56;
     const ZIP64_LOCATOR_BYTES: usize = 20;
-    const LEGACY_EOCD_BYTES: usize = 22;
-    let mut footer = [0u8; ZIP64_EOCD_BYTES + ZIP64_LOCATOR_BYTES + LEGACY_EOCD_BYTES];
+    const CLASSIC_EOCD_BYTES: usize = 22;
+    let mut footer = [0u8; ZIP64_EOCD_BYTES + ZIP64_LOCATOR_BYTES + CLASSIC_EOCD_BYTES];
     read_exact_file_at(file, &mut footer, footer_offset).map_err(archive_io_error)?;
     let locator = ZIP64_EOCD_BYTES;
-    let legacy = locator + ZIP64_LOCATOR_BYTES;
+    let classic_eocd = locator + ZIP64_LOCATOR_BYTES;
     if le_u32(&footer, 0) != 0x0606_4b50
         || le_u64(&footer, 4) != 44
         || le_u16(&footer, 12) != ZIP_VERSION_45
@@ -4404,17 +4404,17 @@ fn verify_exact_zip64_footer(
         || le_u32(&footer, locator + 4) != 0
         || le_u64(&footer, locator + 8) != footer_offset
         || le_u32(&footer, locator + 16) != 1
-        || le_u32(&footer, legacy) != 0x0605_4b50
-        || le_u16(&footer, legacy + 4) != 0
-        || le_u16(&footer, legacy + 6) != 0
-        || le_u16(&footer, legacy + 8) != entry_count.min(u16::MAX as u64) as u16
-        || le_u16(&footer, legacy + 10) != entry_count.min(u16::MAX as u64) as u16
-        || le_u32(&footer, legacy + 12) != central_size.min(u32::MAX as u64) as u32
-        || le_u32(&footer, legacy + 16) != central_offset.min(u32::MAX as u64) as u32
-        || le_u16(&footer, legacy + 20) != 0
+        || le_u32(&footer, classic_eocd) != 0x0605_4b50
+        || le_u16(&footer, classic_eocd + 4) != 0
+        || le_u16(&footer, classic_eocd + 6) != 0
+        || le_u16(&footer, classic_eocd + 8) != entry_count.min(u16::MAX as u64) as u16
+        || le_u16(&footer, classic_eocd + 10) != entry_count.min(u16::MAX as u64) as u16
+        || le_u32(&footer, classic_eocd + 12) != central_size.min(u32::MAX as u64) as u32
+        || le_u32(&footer, classic_eocd + 16) != central_offset.min(u32::MAX as u64) as u32
+        || le_u16(&footer, classic_eocd + 20) != 0
     {
         return Err(layout_error(
-            "ZIP64 EOCD, locator, or legacy EOCD differs from the exact dialect".to_owned(),
+            "ZIP64 EOCD, locator, or classic EOCD differs from the exact dialect".to_owned(),
         ));
     }
     Ok(())
@@ -4570,11 +4570,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        LocaleCode, QuestCollisionArtifactRef, Revision2OggCodec, Revision2OggMetadata,
-        Revision2VoiceTake, Revision2VoiceTakeStatus, Revision3EntityKind, Revision3OriginRef,
-        Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestGiverInput,
-        Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, ScriptModuleStatus,
-        QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
+        LocaleCode, OggCodec as AuthoringOggCodec, OggMetadata as AuthoringOggMetadata,
+        QuestCollisionArtifactRef, Revision3EntityKind, Revision3OriginRef, Revision3QuestDraft,
+        Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
+        Revision3ScriptModule, Revision3TypedRef, ScriptModuleStatus, VoiceTake, VoiceTakeStatus,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
         REVISION3_QUEST_GENERATOR_VERSION,
     };
 
@@ -4680,10 +4680,12 @@ mod tests {
                 description: "Exercise the exact import closure.".to_owned(),
                 objective_title: "Reopen everything".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    crate::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                     artifact,
                     source_seal: seal(5, artifact_byte_len),
                     basis_snapshot,
@@ -4762,20 +4764,20 @@ mod tests {
                     authored_runtime_id: "VOICE_IMPORT_TRIAL_EN".to_owned(),
                 },
                 revision: 0,
-                payload: Revision3EntityPayload::VoiceTake(Revision2VoiceTake {
+                payload: Revision3EntityPayload::VoiceTake(VoiceTake {
                     locale,
                     asset: imported.asset.clone(),
-                    ogg: Revision2OggMetadata {
+                    ogg: AuthoringOggMetadata {
                         codec: match imported.ogg.codec {
-                            OggCodec::Vorbis => Revision2OggCodec::Vorbis,
-                            OggCodec::Opus => Revision2OggCodec::Opus,
+                            OggCodec::Vorbis => AuthoringOggCodec::Vorbis,
+                            OggCodec::Opus => AuthoringOggCodec::Opus,
                         },
                         channels: imported.ogg.channels,
                         sample_rate: imported.ogg.sample_rate,
                         pages: imported.ogg.pages,
                         logical_streams: imported.ogg.logical_streams,
                     },
-                    status: Revision2VoiceTakeStatus::Recorded,
+                    status: VoiceTakeStatus::Recorded,
                 }),
             },
         );
@@ -5521,7 +5523,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn real_v2_export_reopens_to_the_same_exact_receipt() {
-        let area = TestArea::new("export-compatibility");
+        let area = TestArea::new("empty-export-roundtrip");
         let store_root = area.0.join("managed.goreproj");
         let store = WorkingProjectStore::at(&store_root, WorkingStoreLimits::default()).unwrap();
         let prepared = store
@@ -5560,7 +5562,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn strict_producer_v2_reopens_with_default_reader_across_shared_closure() {
-        let area = TestArea::new("nonempty-export-compatibility");
+        let area = TestArea::new("nonempty-export-roundtrip");
         let store_root = area.0.join("managed.goreproj");
         let producer_limits = WorkingStoreLimits {
             max_snapshot_bytes: 64 * 1024,
@@ -5578,7 +5580,7 @@ mod tests {
         fs::write(store_root.join(HEAD_FILE_NAME), &published_basis.head_bytes).unwrap();
         let artifact_bytes = br#"{"padding":"import-closure"}"#;
         let imported = store
-            .import_quest_collision_artifact_v1(artifact_bytes, Some(&published_basis.head))
+            .import_quest_collision_artifact_v2(artifact_bytes, &published_basis.head)
             .unwrap();
         let prior_project = quest_project(
             7,
@@ -5617,7 +5619,7 @@ mod tests {
         assert_eq!(preflight.verification_objects, closed_work.objects);
         assert!(
             preflight.verification_bytes < closed_work.bytes,
-            "strict producer-local legacy work must differ from the closed V2 format charge"
+            "strict producer-local preflight work must differ from the closed V2 format charge"
         );
         let path = area.archive();
         let exported = store
@@ -5631,7 +5633,7 @@ mod tests {
         assert_eq!(inspected.head, current.head);
         assert_eq!(inspected.project_revision, 8);
         // Current and prior share both entity shards and the asset. This is the normal-path
-        // writer-to-reader compatibility regression for the aggregate Full-reopen work budget.
+        // current writer/reader consistency regression for the aggregate Full-reopen work budget.
         assert_eq!(inspected.closure.snapshot_objects, 4);
         assert_eq!(inspected.closure.entity_objects, 2);
         assert_eq!(inspected.closure.asset_objects, 1);
@@ -5654,9 +5656,9 @@ mod tests {
             .unwrap();
         fs::write(store_root.join(HEAD_FILE_NAME), &published_basis.head_bytes).unwrap();
         let collision = store
-            .import_quest_collision_artifact_v1(
+            .import_quest_collision_artifact_v2(
                 br#"{"padding":"rich-import-closure"}"#,
-                Some(&published_basis.head),
+                &published_basis.head,
             )
             .unwrap();
         let ogg_source =

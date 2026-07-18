@@ -1,6 +1,5 @@
-//! C ABI for gore-mod's `dart:ffi` bridge. New Studio builds use a length-aware, globally bounded
-//! transport-v2 entry point; the bounded C-string entry point remains exported only for older
-//! Studio binaries. Both carry the same JSON command/response protocol.
+//! C ABI for gore-mod's `dart:ffi` bridge. The length-aware, globally bounded transport-v2 entry
+//! point carries the JSON command/response protocol.
 //!
 //! Request:  `{"command": "<name>", "payload": { ... }}`
 //! Response: `{"ok": true, ...}` or `{"ok": false, "error": {"code","message"}}`
@@ -11,27 +10,10 @@
 //!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
 //!   returns `{ok, valid, errors:[..]}`.
-//! - `authoring_project_check` — payload `{project_json, profile}` where `project_json` is the
-//!   untouched format-2 JSON string and `profile` is `production|experimental`; returns canonical
-//!   project JSON, deterministic structured diagnostics, and `blocks_build`. Project input is
-//!   capped at 16 MiB by `gore-authoring`; serialized success responses are capped at 64 MiB.
-//! - `authoring_logical_npc_clone_draft_v1_generate` and
-//!   `authoring_draft_quest_skeleton_v1_generate` accept one bounded raw `input_json` string and
-//!   return deterministic offline-only previews. They never write, compile, deploy, or qualify
-//!   runtime behavior.
-//! - `authoring_project_story_draft_insert_v1` atomically evaluates one raw, duplicate-safe Story
-//!   Draft mutation against one exact canonical schema-revision-2 project. Rejections never carry
-//!   candidate project JSON.
-//! - `authoring_project_story_quest_draft_insert_v1` accepts friendly Quest intent plus one game
-//!   root, then rebuilds all catalog/collision provenance natively and runs the existing atomic
-//!   transaction. It never accepts provenance from clients or compiles, writes, or publishes.
 //! - `authoring_npc_archetype_catalog_v1_build_for_game_root` accepts only one game root and
 //!   returns the canonical, generation-sealed, read-only NPC archetype catalog. Native code fixes
 //!   executable/Binds paths and selects only the deployment-aware pristine Shipping snapshot; it
 //!   never writes, launches, builds, deploys, publishes, or claims runtime qualification.
-//! - `authoring_story_build_plan_v1_generate` derives one deterministic, sealed source-inspection
-//!   plan from exact canonical revision-2 project bytes. It always remains runtime-unqualified,
-//!   build-blocked, and non-publishable and never compiles, writes, deploys, or launches the game.
 //! - `authoring_story_catalog_v1_build` reads three bounded generation paths and builds the pinned
 //!   catalog entirely in memory; `authoring_story_catalog_v1_read` accepts one bounded raw
 //!   canonical catalog string and returns a request-bound read-only chooser projection. Neither
@@ -39,17 +21,10 @@
 //!   `authoring_story_catalog_v1_build_for_game_root` keeps the same boundary but selects the
 //!   deployment-aware pristine Shipping cache natively through `gore-mod`; clients supply only the
 //!   game root and never parse deployment records or choose backups.
-//! - `authoring_story_inventory_v1_build` reads the same exact pinned generation paths and returns
-//!   one canonical, base-game-only collision inventory. It never resolves a mod loadout, writes,
-//!   launches the game, qualifies runtime behavior, builds, deploys, or publishes.
-//! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
-//!   `authoring_store_prepare_checkpoint` retain the frozen schema-revision-1 working-store wire.
-//!   Their additive `*_document` counterparts dispatch between closed schema revisions 1 and 2.
-//!   The dedicated `authoring_store_open_revision3`, `authoring_store_open_revision3_head_bytes`,
-//!   and `authoring_store_prepare_revision3_checkpoint` commands exclusively carry schema
-//!   revision 3. Opens return exact canonical head/project JSON; preparation returns only the
-//!   canonical candidate head after a full exact reopen. It never publishes the fixed head, and
-//!   generic document preparation remains revision-1/2-only. Their bounded raw request envelopes
+//! - `authoring_store_open_revision3`, `authoring_store_open_revision3_head_bytes`, and
+//!   `authoring_store_prepare_revision3_checkpoint` exclusively carry schema revision 3. Opens
+//!   return exact canonical head/project JSON; preparation returns only the canonical candidate
+//!   head after a full exact reopen and never publishes the fixed head. Their bounded raw envelopes
 //!   reject duplicate, unknown, missing, and wrongly typed outer or payload fields.
 //!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
 //!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
@@ -79,18 +54,13 @@
 //!   rebuilt Story capability bound to the exact Store head and caller-observed catalog seal.
 //!   The route prepares and fully reopens an immutable candidate without importing an artifact,
 //!   touching the game/save, or publishing the fixed head.
-//! - `authoring_store_prepare_revision3_quest_outline_edit_v1` edits only one exact-current
-//!   managed Quest's display outline and deterministically regenerates its owned ScriptModule.
-//!   It fully reopens an unpublished candidate, never accepts collision authority from the
-//!   client, and never builds, deploys, touches a game/save, or publishes the fixed head.
 //! - `authoring_store_prepare_revision3_quest_outline_edit_v2` edits the display outline of one
-//!   exact-current semantic Quest while retaining stable objective slots and transition behavior.
+//!   exact-current Quest while retaining stable objective slots and transition behavior.
 //!   It binds the owned module and retained plan explicitly, fully reopens only an unpublished
 //!   candidate, and accepts no game, compiler, build, deployment, save, or publication authority.
 //! - `authoring_store_prepare_revision3_quest_transitions_edit_v1` edits only one exact-current
 //!   managed Quest's bounded semantic transition plan and deterministically regenerates its owned
-//!   ScriptModule. It can explicitly upgrade a frozen generator-v2/v3 Quest to generator v4,
-//!   fully reopens an unpublished candidate, and never accepts a game root, builds, deploys,
+//!   ScriptModule. It fully reopens an unpublished candidate and never accepts a game root, builds, deploys,
 //!   touches a game/save, or publishes the fixed head.
 //! - `authoring_store_prepare_revision3_npc_draft_v1` rebuilds the fresh Story catalog, broad NPC
 //!   archetype linkage, and complete base-game-plus-exact-current script collision inventory, then
@@ -198,8 +168,7 @@
 //! - `dataasset_fixed_inspect_v1` accepts exactly `{uasset_path, usmap_path, export_index?}` and
 //!   performs a bounded, offline-only G1R UE5.4 fixed-leaf inspection. It returns exact content
 //!   seals and offset-free selectors without paths, patching, deployment, or runtime claims.
-//! - `script_compile_report_v1` is the bounded structured companion to the legacy
-//!   `script_compile` command. It fails closed unless the deployment-aware pristine cache can be
+//! - `script_compile_report_v1` fails closed unless the deployment-aware pristine cache can be
 //!   resolved, runs the optional compiler hook with automatic normal-generator fallback, and
 //!   reports diagnostics plus exact live-install restoration separately from compile success.
 //! - `script_compile_install_state_v1` is a bounded, strictly read-only native preflight for the
@@ -218,7 +187,6 @@
 //!   no-clobber outside the Store. It never mutates project, game, save, build, deployment, or
 //!   runtime state.
 
-mod authoring;
 mod authoring_content_revision3;
 mod authoring_dataasset_build_revision3;
 mod authoring_dataasset_package_index_revision3;
@@ -228,27 +196,22 @@ mod authoring_dialog_localization_revision3;
 mod authoring_dialog_revision3;
 mod authoring_dialog_voice_slot_create_revision3;
 mod authoring_dialog_voice_slot_remove_revision3;
-mod authoring_drafts;
 mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
 mod authoring_project_export_revision3;
 mod authoring_project_import_revision3;
+mod authoring_source_io;
 mod authoring_store;
-mod authoring_story;
-mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_compiler_revision3;
 mod authoring_story_draft_remove_revision3;
-mod authoring_story_inventory;
 mod authoring_story_npc_greeting_revision3;
 mod authoring_story_npc_inspection_revision3;
 mod authoring_story_npc_profile_revision3;
 mod authoring_story_npc_revision3;
-mod authoring_story_quest;
 mod authoring_story_quest_context_revision3;
 mod authoring_story_quest_inspection_revision3;
-mod authoring_story_quest_outline_revision3;
 mod authoring_story_quest_outline_v2_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_story_quest_transcript_revision3;
@@ -284,12 +247,11 @@ use gore_modgen::validate::validate_config;
 use gore_reflect::model::ReflectionModel;
 
 pub use transport::{
-    gore_core_execute, gore_core_execute_v2, gore_core_free, gore_core_response_free_v2,
-    gore_core_transport_abi_v2, GoreCoreResponseV2,
+    gore_core_execute_v2, gore_core_response_free_v2, gore_core_transport_abi_v2,
+    GoreCoreResponseV2,
 };
 
-/// Increment only when the JSON command/response protocol is incompatible. Transport ownership
-/// is negotiated independently so old Studio binaries can keep using the legacy C-string exports.
+/// Increment only when the current JSON command/response protocol changes incompatibly.
 const CORE_PROTOCOL_ABI: u32 = 1;
 
 /// Every command understood by [`dispatch`], kept in bytewise ascending order so capability
@@ -297,12 +259,7 @@ const CORE_PROTOCOL_ABI: u32 = 1;
 const CORE_COMMANDS: &[&str] = &[
     "audio_extract",
     "audio_list",
-    "authoring_draft_quest_skeleton_v1_generate",
-    "authoring_logical_npc_clone_draft_v1_generate",
     "authoring_npc_archetype_catalog_v1_build_for_game_root",
-    "authoring_project_check",
-    "authoring_project_story_draft_insert_v1",
-    "authoring_project_story_quest_draft_insert_v1",
     "authoring_read_dataasset_extract_receipt_v2",
     "authoring_store_build_revision3_reviewed_dataasset_v1",
     "authoring_store_build_revision3_voice_v1",
@@ -319,16 +276,10 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_list_revision3_dataasset_stages_v1",
     authoring_history_revision3::LIST_COMMAND,
     authoring_voice_preview_revision3::COMMAND,
-    "authoring_store_open",
-    "authoring_store_open_document",
-    "authoring_store_open_head_bytes",
-    "authoring_store_open_head_bytes_document",
     "authoring_store_open_revision3",
     "authoring_store_open_revision3_head_bytes",
     authoring_voice_batch_revision3::PLAN_COMMAND,
     authoring_voice_plan_revision3::COMMAND,
-    "authoring_store_prepare_checkpoint",
-    "authoring_store_prepare_document_checkpoint",
     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
     authoring_story_draft_remove_revision3::COMMAND,
     "authoring_store_prepare_revision3_checkpoint",
@@ -345,7 +296,6 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_story_npc_profile_revision3::COMMAND,
     "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
-    "authoring_store_prepare_revision3_quest_outline_edit_v1",
     "authoring_store_prepare_revision3_quest_outline_edit_v2",
     authoring_story_quest_transcript_revision3::COMMAND,
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
@@ -363,11 +313,9 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_voice_preview_revision3::REGISTER_COMMAND,
     authoring_voice_preview_revision3::RELEASE_COMMAND,
     "authoring_store_verify_asset",
-    "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
     "authoring_story_catalog_v1_build_for_game_root",
     "authoring_story_catalog_v1_read",
-    "authoring_story_inventory_v1_build",
     "core_info",
     "dataasset_fixed_inspect_v1",
     "find_game",
@@ -386,7 +334,6 @@ const CORE_COMMANDS: &[&str] = &[
     "mod_build",
     "mod_deploy",
     "mod_undeploy",
-    "script_compile",
     "script_compile_install_state_v1",
     "script_compile_report_v1",
     "script_emit_module",
@@ -402,12 +349,11 @@ const CORE_COMMANDS: &[&str] = &[
     "voice_ogg_inspect_v1",
 ];
 
-// The C ABI entry points live in `transport`; they are re-exported above so the Rust API and
-// native symbol names remain backward compatible.
+// The transport-v2 C ABI entry points live in `transport` and are re-exported above.
 
 /// Pure entry point (no FFI) — also the test seam.
 pub fn execute_json(input: &str) -> String {
-    // The pure seam uses the same global response budget as both native transports.
+    // The pure seam uses the same global response budget as the native transport.
     String::from_utf8(transport::execute_json_bounded(input))
         .expect("JSON transport output is always UTF-8")
 }
@@ -716,9 +662,6 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_quest_draft_v3" => {
             Some(authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw)
         }
-        "authoring_store_prepare_revision3_quest_outline_edit_v1" => Some(
-            authoring_story_quest_outline_revision3::prepare_revision3_quest_outline_edit_v1_raw,
-        ),
         "authoring_store_prepare_revision3_quest_outline_edit_v2" => Some(
             authoring_story_quest_outline_v2_revision3::prepare_revision3_quest_outline_edit_v2_raw,
         ),
@@ -786,7 +729,7 @@ fn dispatch(input: &str) -> Value {
             return err("BAD_REQUEST", "invalid request json");
         }
     };
-    // These security-sensitive additive Store routes see the original wire before any generic
+    // These security-sensitive Store routes see the original wire before any generic
     // payload `Value` exists. Route-local parsers enforce their smaller envelope caps before
     // decoding nested strings.
     if let Some(route) = revision3_store_raw_route(&command) {
@@ -826,25 +769,8 @@ fn dispatch(input: &str) -> Value {
         texture_preview::RELEASE_COMMAND => texture_preview::release(payload),
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
-        "script_compile" => script_compile(payload),
-        "authoring_draft_quest_skeleton_v1_generate" => {
-            authoring_drafts::draft_quest_skeleton(payload)
-        }
-        "authoring_logical_npc_clone_draft_v1_generate" => {
-            authoring_drafts::logical_npc_clone(payload)
-        }
         "authoring_npc_archetype_catalog_v1_build_for_game_root" => {
             authoring_npc_catalog::build_for_game_root_v1(payload)
-        }
-        "authoring_project_check" => authoring::project_check(payload),
-        "authoring_project_story_draft_insert_v1" => {
-            authoring_story::insert_story_draft_v1(payload)
-        }
-        "authoring_project_story_quest_draft_insert_v1" => {
-            authoring_story_quest::insert_quest_draft_v1(payload)
-        }
-        "authoring_story_build_plan_v1_generate" => {
-            authoring_story_build::generate_story_build_plan_v1(payload)
         }
         "authoring_story_catalog_v1_build" => {
             authoring_story_catalog::build_story_catalog_v1(payload)
@@ -855,20 +781,7 @@ fn dispatch(input: &str) -> Value {
         "authoring_story_catalog_v1_read" => {
             authoring_story_catalog::read_story_catalog_v1(payload)
         }
-        "authoring_story_inventory_v1_build" => {
-            authoring_story_inventory::build_story_inventory_v1(payload)
-        }
         "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
-        "authoring_store_open" => authoring_store::open(payload),
-        "authoring_store_open_document" => authoring_store::open_document(payload),
-        "authoring_store_open_head_bytes" => authoring_store::open_head_bytes(payload),
-        "authoring_store_open_head_bytes_document" => {
-            authoring_store::open_head_bytes_document(payload)
-        }
-        "authoring_store_prepare_checkpoint" => authoring_store::prepare_checkpoint(payload),
-        "authoring_store_prepare_document_checkpoint" => {
-            authoring_store::prepare_document_checkpoint(payload)
-        }
         "authoring_store_verify_asset" => authoring_store::verify_asset(payload),
         "voice_archive_list" => voice::archive_list(payload),
         "voice_archive_match_line" => voice::archive_match_line(payload),
@@ -878,7 +791,7 @@ fn dispatch(input: &str) -> Value {
     }
 }
 
-/// Cheap, read-only compatibility handshake. This deliberately does not inspect the game,
+/// Cheap, read-only protocol handshake. This deliberately does not inspect the game,
 /// filesystem, caches, or any other mutable state.
 fn core_info() -> Value {
     json!({
@@ -1429,84 +1342,6 @@ fn script_emit_module(payload: Value) -> Value {
     json!({"ok": true, "source": source})
 }
 
-/// `{game_dir, op, module_name, rel_path, as_path, work_dir}` → `{ok, mini_path, module}`.
-/// `allow_new_symbols` is an explicit opt-in and defaults to false when omitted.
-fn script_compile(payload: Value) -> Value {
-    let g = |k: &str| payload.get(k).and_then(Value::as_str).map(str::to_string);
-    let (
-        Some(game_dir),
-        Some(op),
-        Some(module_name),
-        Some(rel_path),
-        Some(as_path),
-        Some(work_dir),
-    ) = (
-        g("game_dir"),
-        g("op"),
-        g("module_name"),
-        g("rel_path"),
-        g("as_path"),
-        g("work_dir"),
-    )
-    else {
-        return err(
-            "BAD_REQUEST",
-            "missing one of game_dir/op/module_name/rel_path/as_path/work_dir",
-        );
-    };
-    let allow_new_symbols = payload
-        .get("allow_new_symbols")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    // Keep the legacy response shape, but execute through the same bounded native route as the
-    // structured command. In particular, the same install guard spans pristine selection through
-    // compile, and gore-as receives only a uniquely-owned child below `work_dir`; no caller-owned
-    // `work_dir/tree` is ever recursively reset by this raw compatibility command.
-    let request = json!({
-        "command": script_compile_report::COMMAND,
-        "payload": {
-            "allow_new_symbols": allow_new_symbols,
-            "as_path": as_path,
-            "game_dir": game_dir,
-            "module_name": module_name,
-            "op": op,
-            "rel_path": rel_path,
-            "work_dir": work_dir,
-        }
-    });
-    let structured = script_compile_report::compile_report_v1_raw(&request.to_string());
-    match structured.get("outcome").and_then(Value::as_str) {
-        Some("compiled") => json!({
-            "ok": true,
-            "mini_path": structured.get("mini_path").cloned().unwrap_or(Value::Null),
-            "module": structured.get("module").cloned().unwrap_or(Value::Null),
-        }),
-        Some("failed") => {
-            let recovery_required = structured
-                .get("recovery_required")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let compile_error = structured.get("compile_error");
-            let structured_code = compile_error
-                .and_then(|value| value.get("code"))
-                .and_then(Value::as_str)
-                .unwrap_or("COMPILE_FAILED");
-            let message = compile_error
-                .and_then(|value| value.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("AngelScript compilation failed");
-            let code = if recovery_required {
-                "COMPILE_RECOVERY_REQUIRED"
-            } else {
-                structured_code
-            };
-            err(code, message)
-        }
-        // Bad-request envelopes already use the legacy `{ok:false,error:{...}}` shape.
-        _ => structured,
-    }
-}
-
 /// `{out_dir, spec:BuildSpec}` → build the unified bundle into `out_dir`.
 fn mod_build(payload: Value) -> Value {
     let Some(out_dir) = payload.get("out_dir").and_then(Value::as_str) else {
@@ -1964,12 +1799,7 @@ mod tests {
                 "commands": [
                     "audio_extract",
                     "audio_list",
-                    "authoring_draft_quest_skeleton_v1_generate",
-                    "authoring_logical_npc_clone_draft_v1_generate",
                     "authoring_npc_archetype_catalog_v1_build_for_game_root",
-                    "authoring_project_check",
-                    "authoring_project_story_draft_insert_v1",
-                    "authoring_project_story_quest_draft_insert_v1",
                     "authoring_read_dataasset_extract_receipt_v2",
                     "authoring_store_build_revision3_reviewed_dataasset_v1",
                     "authoring_store_build_revision3_voice_v1",
@@ -1986,16 +1816,10 @@ mod tests {
                     "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_list_revision3_history_v1",
                     "authoring_store_materialize_revision3_voice_take_preview_v1",
-                    "authoring_store_open",
-                    "authoring_store_open_document",
-                    "authoring_store_open_head_bytes",
-                    "authoring_store_open_head_bytes_document",
                     "authoring_store_open_revision3",
                     "authoring_store_open_revision3_head_bytes",
                     "authoring_store_plan_revision3_voice_batch_v1",
                     "authoring_store_plan_revision3_voice_v1",
-                    "authoring_store_prepare_checkpoint",
-                    "authoring_store_prepare_document_checkpoint",
                     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_remove_revision3_story_draft_v1",
                     "authoring_store_prepare_revision3_checkpoint",
@@ -2012,7 +1836,6 @@ mod tests {
                     "authoring_store_prepare_revision3_npc_profile_edit_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
-                    "authoring_store_prepare_revision3_quest_outline_edit_v1",
                     "authoring_store_prepare_revision3_quest_outline_edit_v2",
                     "authoring_store_prepare_revision3_quest_transcript_v1",
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
@@ -2030,11 +1853,9 @@ mod tests {
                     "authoring_store_register_revision3_voice_take_preview_v1",
                     "authoring_store_release_revision3_voice_take_preview_v1",
                     "authoring_store_verify_asset",
-                    "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
                     "authoring_story_catalog_v1_build_for_game_root",
                     "authoring_story_catalog_v1_read",
-                    "authoring_story_inventory_v1_build",
                     "core_info",
                     "dataasset_fixed_inspect_v1",
                     "find_game",
@@ -2053,7 +1874,6 @@ mod tests {
                     "mod_build",
                     "mod_deploy",
                     "mod_undeploy",
-                    "script_compile",
                     "script_compile_install_state_v1",
                     "script_compile_report_v1",
                     "script_emit_module",
@@ -2077,15 +1897,6 @@ mod tests {
             .all(|pair| pair[0].as_str() < pair[1].as_str()));
         assert!(commands
             .iter()
-            .any(|command| command == "authoring_project_check"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_project_story_draft_insert_v1"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_story_build_plan_v1_generate"));
-        assert!(commands
-            .iter()
             .any(|command| command == "authoring_story_catalog_v1_build"));
         assert!(commands
             .iter()
@@ -2095,19 +1906,7 @@ mod tests {
             .any(|command| command == "authoring_story_catalog_v1_read"));
         assert!(commands
             .iter()
-            .any(|command| command == "authoring_story_inventory_v1_build"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_logical_npc_clone_draft_v1_generate"));
-        assert!(commands
-            .iter()
             .any(|command| command == "authoring_npc_archetype_catalog_v1_build_for_game_root"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_store_prepare_checkpoint"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_store_prepare_document_checkpoint"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_list_revision3_dataasset_stages_v1"));
@@ -2163,9 +1962,6 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_draft_v3"));
-        assert!(commands
-            .iter()
-            .any(|command| command == "authoring_store_prepare_revision3_quest_outline_edit_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_outline_edit_v2"));
@@ -2250,54 +2046,6 @@ mod tests {
         .unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"]["code"], "BAD_REQUEST");
-    }
-
-    #[test]
-    fn legacy_script_compile_never_resets_the_caller_work_tree() {
-        let root = tempfile::tempdir().unwrap();
-        let game = root.path().join("game");
-        let script = game.join("G1R/Script");
-        let work = root.path().join("caller-work");
-        let victim_tree = work.join("tree");
-        std::fs::create_dir_all(&script).unwrap();
-        std::fs::create_dir_all(&victim_tree).unwrap();
-        std::fs::write(
-            script.join("PrecompiledScript_Shipping.Cache"),
-            b"invalid-but-readable-pristine",
-        )
-        .unwrap();
-        std::fs::write(victim_tree.join("keep.txt"), b"caller-owned").unwrap();
-
-        let response = script_compile(json!({
-            "game_dir": game.display().to_string(),
-            "op": "add",
-            "module_name": "NeverRuns",
-            "rel_path": "NeverRuns.as",
-            "as_path": root.path().join("missing.as").display().to_string(),
-            "work_dir": work.display().to_string(),
-            "allow_new_symbols": false,
-        }));
-
-        assert_eq!(response["ok"], false);
-        assert_eq!(
-            std::fs::read(victim_tree.join("keep.txt")).unwrap(),
-            b"caller-owned"
-        );
-        assert!(!game.join(".gore-install-mutation.lock").exists());
-        let owned_children = std::fs::read_dir(&work)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("gore-owned-compile-")
-            })
-            .count();
-        assert_eq!(
-            owned_children, 1,
-            "legacy compile must use its own staging child"
-        );
     }
 
     // ── mgr_* commands ─────────────────────────────────────────────────────────

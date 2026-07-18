@@ -149,12 +149,9 @@ final class AuthoringRevision3QuestInspectionGeneratedModule {
       json,
       'generator_version',
       min: _authoringRevision3QuestGeneratorVersion,
-      max: _authoringRevision3SemanticQuestGeneratorVersion,
+      max: _authoringRevision3QuestGeneratorVersion,
     );
-    if (generatorVersion != _authoringRevision3QuestGeneratorVersion &&
-        generatorVersion !=
-            _authoringRevision3MultiObjectiveQuestGeneratorVersion &&
-        generatorVersion != _authoringRevision3SemanticQuestGeneratorVersion) {
+    if (generatorVersion != _authoringRevision3QuestGeneratorVersion) {
       throw const FormatException(
         'authoring revision-3 Quest inspection generator version is unsupported',
       );

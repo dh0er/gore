@@ -60,9 +60,6 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.objectivesLabel,
     required this.uniqueNameLabel,
     required this.moduleNamespaceLabel,
-    required this.questGiverLabel,
-    required this.runtimeParentLabel,
-    required this.logicDescription,
     required this.outgoingHeading,
     required this.noOutgoingReferences,
     required this.incomingHeading,
@@ -127,10 +124,6 @@ final class Revision3StoryEntityWorkbenchCopy {
        objectivesLabel = 'Objectives',
        uniqueNameLabel = 'Unique name',
        moduleNamespaceLabel = 'Module namespace',
-       questGiverLabel = 'Quest giver',
-       runtimeParentLabel = 'Runtime parent',
-       logicDescription =
-           'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.',
        outgoingHeading = 'Outgoing',
        noOutgoingReferences = 'No projected references',
        incomingHeading = 'Incoming',
@@ -186,9 +179,6 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String objectivesLabel;
   final String uniqueNameLabel;
   final String moduleNamespaceLabel;
-  final String questGiverLabel;
-  final String runtimeParentLabel;
-  final String logicDescription;
   final String outgoingHeading;
   final String noOutgoingReferences;
   final String incomingHeading;
@@ -256,10 +246,6 @@ enum _Revision3QuestContextAction { overview, story, logic }
 enum Revision3StoryWorkbenchSection {
   overview,
   profile,
-  story,
-  logic,
-  routine,
-  inventory,
   dialogVoice,
   references,
   problemsChecks,
@@ -288,7 +274,8 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
              entity.kind == Revision3ContentEntityKind.npcDraft,
        ),
        assert(projectId == index.projectId),
-       assert(index.entityById(entity.id) == entity);
+       assert(index.entityById(entity.id) == entity),
+       assert(supportsSection(entity, selectedSection));
 
   final String projectId;
   final Revision3ContentIndex index;
@@ -325,26 +312,11 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
       ? Revision3StoryWorkbenchSection.overview
       : Revision3StoryWorkbenchSection.profile;
 
-  /// Whether [section] is a valid incoming selection for [entity].
-  ///
-  /// Legacy Quest Story/Logic values remain accepted for API compatibility;
-  /// the workbench normalizes both to the canonical Journey/Overview. Legacy
-  /// NPC Story/Routine/Inventory values likewise normalize to Profile now that
-  /// those three unmodeled placeholders no longer occupy primary tab space.
-  /// Use [sectionsFor] for the tabs that should actually be presented to
-  /// authors.
+  /// Whether [section] belongs to the productive surface for [entity].
   static bool supportsSection(
     Revision3ContentEntity entity,
     Revision3StoryWorkbenchSection section,
-  ) =>
-      sectionsFor(entity).contains(section) ||
-      (entity.kind == Revision3ContentEntityKind.questDraft &&
-          (section == Revision3StoryWorkbenchSection.story ||
-              section == Revision3StoryWorkbenchSection.logic)) ||
-      (entity.kind == Revision3ContentEntityKind.npcDraft &&
-          (section == Revision3StoryWorkbenchSection.story ||
-              section == Revision3StoryWorkbenchSection.routine ||
-              section == Revision3StoryWorkbenchSection.inventory));
+  ) => sectionsFor(entity).contains(section);
 
   static List<Revision3StoryWorkbenchSection> sectionsFor(
     Revision3ContentEntity entity,
@@ -369,10 +341,7 @@ final class Revision3StoryEntityWorkbench extends StatefulWidget {
 
 class _Revision3StoryEntityWorkbenchState
     extends State<Revision3StoryEntityWorkbench> {
-  late Revision3StoryWorkbenchSection _section = _normalizedSection(
-    widget.entity,
-    widget.selectedSection,
-  );
+  late Revision3StoryWorkbenchSection _section = widget.selectedSection;
   _Revision3QuestContextAction? _activeQuestContextAction;
   var _questContextActionEpoch = 0;
 
@@ -393,7 +362,7 @@ class _Revision3StoryEntityWorkbenchState
     }
     if (selectedEntityChanged ||
         oldWidget.selectedSection != widget.selectedSection) {
-      _section = _normalizedSection(widget.entity, widget.selectedSection);
+      _section = widget.selectedSection;
     }
   }
 
@@ -626,22 +595,6 @@ class _Revision3StoryEntityWorkbenchState
       children: switch (_section) {
         Revision3StoryWorkbenchSection.overview => _questOverview(context),
         Revision3StoryWorkbenchSection.profile => _npcProfile(context),
-        Revision3StoryWorkbenchSection.story => _story(context),
-        Revision3StoryWorkbenchSection.logic => _questLogic(context),
-        Revision3StoryWorkbenchSection.routine => <Widget>[
-          _UnavailableCapability(
-            title: widget.copy.routineTab,
-            description: widget.copy.npcRoutineUnavailable,
-            fallback: widget.copy.capabilityUnavailable,
-          ),
-        ],
-        Revision3StoryWorkbenchSection.inventory => <Widget>[
-          _UnavailableCapability(
-            title: widget.copy.inventoryTab,
-            description: widget.copy.npcInventoryUnavailable,
-            fallback: widget.copy.capabilityUnavailable,
-          ),
-        ],
         Revision3StoryWorkbenchSection.dialogVoice => <Widget>[
           if (entity.kind == Revision3ContentEntityKind.questDraft &&
               widget.questTranscript != null)
@@ -777,63 +730,6 @@ class _Revision3StoryEntityWorkbenchState
       _NpcPlannedCapabilities(copy: widget.copy),
       const SizedBox(height: 4),
       _TechnicalDetails(entity: entity, copy: widget.copy),
-    ];
-  }
-
-  List<Widget> _story(BuildContext context) {
-    final entity = widget.entity;
-    if (entity.kind == Revision3ContentEntityKind.npcDraft) {
-      return <Widget>[
-        _UnavailableCapability(
-          title: widget.copy.storyTab,
-          description: widget.copy.npcStoryUnavailable,
-          fallback: widget.copy.capabilityUnavailable,
-        ),
-      ];
-    }
-    final quest = entity.summary.questDraft!;
-    return <Widget>[
-      _SectionHeading(widget.copy.storyTab),
-      _AtomicActionCard(
-        key: Key('revision3-story-workbench-action-edit-story-${entity.id}'),
-        icon: Icons.account_tree_outlined,
-        title: widget.copy.editStory,
-        unavailable:
-            widget.actions.editStoryDisabledReason ??
-            widget.copy.capabilityUnavailable,
-        onPressed: widget.actions.editStory,
-      ),
-      const SizedBox(height: 12),
-      _Fact(
-        label: widget.copy.questGiverLabel,
-        value: quest.giverRuntimeUniqueName,
-      ),
-      _Fact(
-        label: widget.copy.runtimeParentLabel,
-        value: quest.parentRuntimeClass,
-      ),
-      _Fact(
-        label: widget.copy.moduleNamespaceLabel,
-        value: quest.moduleNamespace,
-      ),
-    ];
-  }
-
-  List<Widget> _questLogic(BuildContext context) {
-    final entity = widget.entity;
-    return <Widget>[
-      _SectionHeading(widget.copy.logicTab),
-      Text(widget.copy.logicDescription),
-      const SizedBox(height: 12),
-      _AtomicActionCard(
-        key: Key('revision3-story-workbench-action-edit-logic-${entity.id}'),
-        icon: Icons.schema_outlined,
-        title: widget.copy.editLogic,
-        unavailable:
-            widget.actions.editLogicDisabledReason ??
-            widget.copy.capabilityUnavailable,
-        onPressed: widget.actions.editLogic,
-      ),
     ];
   }
 
@@ -995,40 +891,12 @@ class _Revision3StoryEntityWorkbenchState
   }
 }
 
-Revision3StoryWorkbenchSection _normalizedSection(
-  Revision3ContentEntity entity,
-  Revision3StoryWorkbenchSection candidate,
-) {
-  // Story and Logic used to be standalone Quest tabs. Their exact editors now
-  // live behind contextual hand-offs in the canonical Journey/Overview, but
-  // the enum values remain public so persisted and in-flight selections from
-  // older callers can be accepted safely.
-  if (entity.kind == Revision3ContentEntityKind.questDraft &&
-      (candidate == Revision3StoryWorkbenchSection.story ||
-          candidate == Revision3StoryWorkbenchSection.logic)) {
-    return Revision3StoryWorkbenchSection.overview;
-  }
-  if (entity.kind == Revision3ContentEntityKind.npcDraft &&
-      (candidate == Revision3StoryWorkbenchSection.story ||
-          candidate == Revision3StoryWorkbenchSection.routine ||
-          candidate == Revision3StoryWorkbenchSection.inventory)) {
-    return Revision3StoryWorkbenchSection.profile;
-  }
-  return Revision3StoryEntityWorkbench.supportsSection(entity, candidate)
-      ? candidate
-      : Revision3StoryEntityWorkbench.defaultSectionFor(entity);
-}
-
 String _sectionLabel(
   Revision3StoryEntityWorkbenchCopy copy,
   Revision3StoryWorkbenchSection section,
 ) => switch (section) {
   Revision3StoryWorkbenchSection.overview => copy.overviewTab,
   Revision3StoryWorkbenchSection.profile => copy.profileTab,
-  Revision3StoryWorkbenchSection.story => copy.storyTab,
-  Revision3StoryWorkbenchSection.logic => copy.logicTab,
-  Revision3StoryWorkbenchSection.routine => copy.routineTab,
-  Revision3StoryWorkbenchSection.inventory => copy.inventoryTab,
   Revision3StoryWorkbenchSection.dialogVoice => copy.dialogVoiceTab,
   Revision3StoryWorkbenchSection.references => copy.referencesTab,
   Revision3StoryWorkbenchSection.problemsChecks => copy.problemsChecksTab,

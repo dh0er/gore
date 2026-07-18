@@ -370,8 +370,6 @@ final class ManagedRevision3QuestTransitionsEditCheckpoint {
     required this.moduleId,
     required this.questRevision,
     required this.moduleRevision,
-    required this.previousGeneratorVersion,
-    required this.upgradedFromLegacy,
     required this.transitionPlanSeal,
     required this.buildStatus,
     required this.runtimeStatus,
@@ -386,8 +384,6 @@ final class ManagedRevision3QuestTransitionsEditCheckpoint {
   final String moduleId;
   final int questRevision;
   final int moduleRevision;
-  final int previousGeneratorVersion;
-  final bool upgradedFromLegacy;
   final AuthoringDraftContentSeal transitionPlanSeal;
   final AuthoringRevision3QuestTransitionsBuildStatus buildStatus;
   final AuthoringRevision3QuestTransitionsRuntimeStatus runtimeStatus;
@@ -886,75 +882,6 @@ final class ManagedRevision3StoryDraftRemovalCheckpoint {
   final int removedScriptModuleRevision;
 }
 
-/// Narrow seam over the native managed-store document API.
-///
-/// The interface keeps session durability and ordering independently testable;
-/// production callers normally use [ModFfiManagedAuthoringStore].
-abstract interface class ManagedAuthoringStore {
-  Future<AuthoringStoreOpenedResult> open({
-    required String root,
-    required AuthoringAssetVerification verification,
-    required AuthoringValidationProfile profile,
-  });
-
-  Future<AuthoringCheckpointPreparation> prepareCheckpoint({
-    required String root,
-    required AuthoringWorkingHead? expectedHead,
-    required String projectJson,
-    required AuthoringValidationProfile profile,
-  });
-
-  Future<AuthoringStoreOpenedResult> openHeadBytes({
-    required String root,
-    required AuthoringWorkingHead head,
-    required AuthoringAssetVerification verification,
-    required AuthoringValidationProfile profile,
-  });
-}
-
-class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
-  const ModFfiManagedAuthoringStore(this.ffi);
-
-  final ModFfi ffi;
-
-  @override
-  Future<AuthoringStoreOpenedResult> open({
-    required String root,
-    required AuthoringAssetVerification verification,
-    required AuthoringValidationProfile profile,
-  }) => ffi.authoringStoreOpenDocument(
-    root: root,
-    verification: verification,
-    profile: profile,
-  );
-
-  @override
-  Future<AuthoringCheckpointPreparation> prepareCheckpoint({
-    required String root,
-    required AuthoringWorkingHead? expectedHead,
-    required String projectJson,
-    required AuthoringValidationProfile profile,
-  }) => ffi.authoringStorePrepareDocumentCheckpoint(
-    root: root,
-    expectedHead: expectedHead,
-    projectJson: projectJson,
-    profile: profile,
-  );
-
-  @override
-  Future<AuthoringStoreOpenedResult> openHeadBytes({
-    required String root,
-    required AuthoringWorkingHead head,
-    required AuthoringAssetVerification verification,
-    required AuthoringValidationProfile profile,
-  }) => ffi.authoringStoreOpenHeadBytesDocument(
-    root: root,
-    head: head,
-    verification: verification,
-    profile: profile,
-  );
-}
-
 /// Narrow seam over the dedicated schema-revision-3 managed-store API.
 ///
 /// Revision 3 deliberately has no validation profile, diagnostics, readiness, runtime, deployment,
@@ -983,13 +910,6 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String gameRoot,
     required String currentProjectJson,
     required String questRequestJson,
-  });
-
-  Future<AuthoringRevision3QuestOutlineEditPreparation>
-  prepareQuestOutlineEditV1({
-    required String root,
-    required String currentProjectJson,
-    required AuthoringRevision3QuestOutlineEditRequestV1 request,
   });
 
   Future<AuthoringRevision3QuestOutlineEditPreparationV2>
@@ -1415,18 +1335,6 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     questRequestJson: questRequestJson,
-  );
-
-  @override
-  Future<AuthoringRevision3QuestOutlineEditPreparation>
-  prepareQuestOutlineEditV1({
-    required String root,
-    required String currentProjectJson,
-    required AuthoringRevision3QuestOutlineEditRequestV1 request,
-  }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV1(
-    root: root,
-    currentProjectJson: currentProjectJson,
-    request: request,
   );
 
   @override
@@ -1978,18 +1886,14 @@ final class _ManagedOpenedCheckpoint {
   const _ManagedOpenedCheckpoint({
     required this.head,
     required this.projectJson,
-    this.diagnostics,
-    this.blocksBuild,
-    this.projectId,
-    this.projectRevision,
+    required this.projectId,
+    required this.projectRevision,
   });
 
   final AuthoringWorkingHead head;
   final String projectJson;
-  final List<AuthoringDiagnostic>? diagnostics;
-  final bool? blocksBuild;
-  final String? projectId;
-  final int? projectRevision;
+  final String projectId;
+  final int projectRevision;
 }
 
 final class _ManagedPreparedCheckpoint<T> {
@@ -2047,77 +1951,6 @@ abstract interface class _ManagedCheckpointStore {
     required String packName,
     required String output,
   });
-}
-
-final class _Revision12ManagedCheckpointStore
-    implements _ManagedCheckpointStore {
-  const _Revision12ManagedCheckpointStore(this.store, this.profile);
-
-  final ManagedAuthoringStore store;
-  final AuthoringValidationProfile profile;
-
-  @override
-  bool get supportsReviewedDataAssetBuild => false;
-
-  @override
-  Future<_ManagedOpenedCheckpoint> open({
-    required String root,
-    required AuthoringAssetVerification verification,
-  }) async => _fromOpened(
-    await store.open(root: root, verification: verification, profile: profile),
-  );
-
-  @override
-  Future<AuthoringWorkingHead> prepareCheckpoint({
-    required String root,
-    required AuthoringWorkingHead? expectedHead,
-    required String projectJson,
-  }) async {
-    final prepared = await store.prepareCheckpoint(
-      root: root,
-      expectedHead: expectedHead,
-      projectJson: projectJson,
-      profile: profile,
-    );
-    return prepared.head;
-  }
-
-  @override
-  Future<_ManagedOpenedCheckpoint> openHeadBytes({
-    required String root,
-    required AuthoringWorkingHead head,
-    required AuthoringAssetVerification verification,
-  }) async => _fromOpened(
-    await store.openHeadBytes(
-      root: root,
-      head: head,
-      verification: verification,
-      profile: profile,
-    ),
-  );
-
-  @override
-  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
-  buildReviewedDataAssetV1({
-    required String root,
-    required String gameRoot,
-    required String currentProjectJson,
-    required AuthoringWorkingHead expectedHead,
-    required String targetPath,
-    required String packName,
-    required String output,
-  }) => throw UnsupportedError(
-    'reviewed DataAsset builds require a managed revision-3 Store',
-  );
-
-  static _ManagedOpenedCheckpoint _fromOpened(
-    AuthoringStoreOpenedResult opened,
-  ) => _ManagedOpenedCheckpoint(
-    head: opened.head,
-    projectJson: opened.projectJson,
-    diagnostics: opened.diagnostics,
-    blocksBuild: opened.blocksBuild,
-  );
 }
 
 final class _Revision3ManagedCheckpointStore
@@ -2204,78 +2037,13 @@ final class _Revision3ManagedCheckpointStore
   );
 }
 
-/// Exclusive, crash-recoverable editing session for one closed schema-revision-1/2 format-2
-/// working tree.
-///
-/// Immutable objects are prepared by the native store. The only Dart-owned mutation is
-/// publication of the fixed `gore-project.json` head. Publication is an exact byte-for-byte CAS
-/// and every candidate, repaired generation, and published generation is reopened using full
-/// asset verification.
-class ManagedAuthoringProjectSession {
-  ManagedAuthoringProjectSession._(this._core, this._profile);
-
-  final _ManagedProjectSessionCore _core;
-  final AuthoringValidationProfile _profile;
-
-  Directory get root => _core.root;
-  String get projectJson => _core.projectJson;
-  AuthoringWorkingHead get head => _core.head;
-  List<AuthoringDiagnostic> get diagnostics => _core._opened.diagnostics!;
-  bool get blocksBuild => _core._opened.blocksBuild!;
-  AuthoringValidationProfile get profile => _profile;
-  bool get isClosed => _core.isClosed;
-  bool get requiresReopen => _core.requiresReopen;
-  File get headFile => _core.headFile;
-
-  static Future<ManagedAuthoringProjectSession> create({
-    required Directory root,
-    required ManagedAuthoringStore store,
-    required String projectJson,
-    required AuthoringValidationProfile profile,
-    AtomicByteReplacement? replacement,
-  }) async => ManagedAuthoringProjectSession._(
-    await _ManagedProjectSessionCore.create(
-      root: root,
-      store: _Revision12ManagedCheckpointStore(store, profile),
-      projectJson: projectJson,
-      replacement: replacement,
-    ),
-    profile,
-  );
-
-  static Future<ManagedAuthoringProjectSession> open({
-    required Directory root,
-    required ManagedAuthoringStore store,
-    required AuthoringValidationProfile profile,
-    AtomicByteReplacement? replacement,
-  }) async => ManagedAuthoringProjectSession._(
-    await _ManagedProjectSessionCore.open(
-      root: root,
-      store: _Revision12ManagedCheckpointStore(store, profile),
-      replacement: replacement,
-    ),
-    profile,
-  );
-
-  Future<void> save(String projectJson) => _core.save(projectJson);
-
-  Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
-      _core.deriveAndSave(derive);
-
-  /// Reopen the exact currently-published checkpoint with full asset
-  /// verification without preparing or publishing a new checkpoint.
-  Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
-
-  Future<void> close() => _core.close();
-}
-
 /// Safe managed session for a canonical schema-revision-3 format-2 working tree.
 ///
 /// This API exposes only durable checkpoint identity. Revision 3 store responses do not carry
 /// diagnostics, build readiness, runtime compatibility, deployment status, or publication
 /// authority, so this session intentionally does not synthesize or expose any of those claims.
 /// It otherwise uses the exact same lock, serialized operation lane, compare-and-swap,
-/// verification, repair, and no-clobber publication core as [ManagedAuthoringProjectSession].
+/// verification, repair, and no-clobber publication core.
 class ManagedRevision3AuthoringProjectSession {
   ManagedRevision3AuthoringProjectSession._(this._core, this._store);
 
@@ -2285,8 +2053,8 @@ class ManagedRevision3AuthoringProjectSession {
   Directory get root => _core.root;
   String get projectJson => _core.projectJson;
   AuthoringWorkingHead get head => _core.head;
-  String get projectId => _core._opened.projectId!;
-  int get projectRevision => _core._opened.projectRevision!;
+  String get projectId => _core._opened.projectId;
+  int get projectRevision => _core._opened.projectRevision;
   bool get isClosed => _core.isClosed;
   bool get requiresReopen => _core.requiresReopen;
   bool get supportsReviewedDataAssetBuild =>
@@ -2362,9 +2130,7 @@ class ManagedRevision3AuthoringProjectSession {
       final store = _store;
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (store is! ManagedRevision3ProjectHistoryStore ||
-          projectId == null ||
-          projectRevision == null) {
+      if (store is! ManagedRevision3ProjectHistoryStore) {
         throw UnsupportedError(
           'this managed revision-3 Store has no authenticated history capability',
         );
@@ -2434,9 +2200,7 @@ class ManagedRevision3AuthoringProjectSession {
           final store = _store;
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (store is! ManagedRevision3ProjectHistoryStore ||
-              projectId == null ||
-              projectRevision == null) {
+          if (store is! ManagedRevision3ProjectHistoryStore) {
             throw UnsupportedError(
               'this managed revision-3 Store has no authenticated history restore capability',
             );
@@ -2534,11 +2298,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest transaction has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3QuestDraftRequestV3(
             expectedHead: basis.head,
             expectedProjectId: projectId,
@@ -2592,86 +2351,7 @@ class ManagedRevision3AuthoringProjectSession {
         },
       );
 
-  /// Edit only the visible outline of one exact-current Quest and regenerate
-  /// its already-owned ScriptModule. The request is constructed inside the
-  /// serialized lane; native collision context remains private. The same
-  /// full-reopen, repair and exact byte-CAS publication lane is used as every
-  /// other managed checkpoint edit.
-  Future<ManagedRevision3QuestOutlineEditCheckpoint>
-  prepareAndPublishQuestOutlineEditV1({
-    required String questId,
-    required int expectedQuestRevision,
-    required String expectedModuleId,
-    required int expectedModuleRevision,
-    required String displayName,
-    required String title,
-    required List<String> objectiveTitles,
-  }) =>
-      _core._publishPreparedRevision3Checkpoint<
-        ManagedRevision3QuestOutlineEditCheckpoint
-      >(
-        operation: 'prepareAndPublishQuestOutlineEditV1',
-        handlePrepareError: _core._throwRevision3QuestOutlinePrepareError,
-        prepare: (basis) async {
-          final projectId = basis.projectId;
-          final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest outline edit has no exact project identity',
-            );
-          }
-          final request =
-              AuthoringRevision3QuestOutlineEditRequestV1.forProject(
-                expectedHead: basis.head,
-                currentProjectJson: basis.projectJson,
-                questId: questId,
-                expectedQuestRevision: expectedQuestRevision,
-                displayName: displayName,
-                title: title,
-                objectiveTitles: objectiveTitles,
-              );
-          if (request.moduleId != expectedModuleId ||
-              request.expectedModuleRevision != expectedModuleRevision) {
-            throw const FormatException(
-              'revision-3 Quest outline edit does not bind the selected Quest module',
-            );
-          }
-          final prepared = await _store.prepareQuestOutlineEditV1(
-            root: root.path,
-            currentProjectJson: basis.projectJson,
-            request: request,
-          );
-          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
-              prepared.projectId != projectId ||
-              prepared.revision != projectRevision + 1 ||
-              prepared.questId != request.questId ||
-              prepared.moduleId != request.moduleId ||
-              prepared.questRevision != request.expectedQuestRevision + 1 ||
-              prepared.moduleRevision != request.expectedModuleRevision + 1) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest outline preparation disagrees with its exact session basis or request',
-            );
-          }
-          return _ManagedPreparedCheckpoint<
-            ManagedRevision3QuestOutlineEditCheckpoint
-          >(
-            head: prepared.head,
-            projectJson: prepared.projectJson,
-            value: ManagedRevision3QuestOutlineEditCheckpoint._(
-              head: prepared.head,
-              projectJson: prepared.projectJson,
-              projectId: prepared.projectId,
-              projectRevision: prepared.revision,
-              questId: prepared.questId,
-              moduleId: prepared.moduleId,
-              questRevision: prepared.questRevision,
-              moduleRevision: prepared.moduleRevision,
-            ),
-          );
-        },
-      );
-
-  /// Stable-slot-aware outline edit for an exact semantic Quest. Objective
+  /// Stable-slot-aware outline edit for an exact Quest. Objective
   /// titles and order may change, while the active slot set and transition
   /// graph remain bound to the exact transition-plan seal.
   Future<ManagedRevision3QuestOutlineEditCheckpoint>
@@ -2694,11 +2374,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest outline-v2 edit has no exact project identity',
-            );
-          }
           if (objectiveSlots.length != objectiveTitles.length) {
             throw const FormatException(
               'revision-3 Quest outline-v2 slots and titles disagree',
@@ -2837,11 +2512,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Quest transcript edit has no exact project identity',
-          );
-        }
         final intent = intentForBasis(basis);
         final request = AuthoringRevision3QuestTranscriptRequestV1.forProject(
           expectedHead: basis.head,
@@ -3002,11 +2672,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 NPC greeting edit has no exact project identity',
-          );
-        }
         final intent = intentForBasis(basis);
         final request = AuthoringRevision3NpcGreetingRequestV1.forProject(
           expectedHead: basis.head,
@@ -3105,7 +2770,7 @@ class ManagedRevision3AuthoringProjectSession {
   }
 
   /// Edit one exact-current Quest transition plan without consulting a game
-  /// installation. The effective legacy/V4 seed and its seal are derived from
+  /// installation. The effective V4 seed and its seal are derived from
   /// the canonical project only after entering the serialized session lane.
   /// Native code returns an unpublished candidate; the common managed
   /// checkpoint path performs both full reopens and the fixed-head CAS.
@@ -3126,11 +2791,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest transitions edit has no exact project identity',
-            );
-          }
           final request =
               AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
                 expectedHead: basis.head,
@@ -3161,9 +2821,6 @@ class ManagedRevision3AuthoringProjectSession {
               prepared.moduleId != request.moduleId ||
               prepared.questRevision != request.expectedQuestRevision + 1 ||
               prepared.moduleRevision != request.expectedModuleRevision + 1 ||
-              prepared.previousGeneratorVersion !=
-                  request.previousGeneratorVersion ||
-              prepared.upgradedFromLegacy != request.upgradesLegacy ||
               !_sameDraftContentSeal(
                 prepared.transitionPlanSeal,
                 request.transitionPlan.contentSeal,
@@ -3194,8 +2851,6 @@ class ManagedRevision3AuthoringProjectSession {
               moduleId: prepared.moduleId,
               questRevision: prepared.questRevision,
               moduleRevision: prepared.moduleRevision,
-              previousGeneratorVersion: prepared.previousGeneratorVersion,
-              upgradedFromLegacy: prepared.upgradedFromLegacy,
               transitionPlanSeal: prepared.transitionPlanSeal,
               buildStatus: prepared.buildStatus,
               runtimeStatus: prepared.runtimeStatus,
@@ -3237,11 +2892,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Quest context edit has no exact project identity',
-            );
-          }
           final request =
               AuthoringRevision3QuestContextEditRequestV1.forProject(
                 expectedHead: basis.head,
@@ -3345,11 +2995,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 NPC transaction has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3NpcDraftRequestV1.forProject(
             expectedHead: basis.head,
             currentProjectJson: basis.projectJson,
@@ -3461,11 +3106,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 NPC profile edit has no exact project identity',
-          );
-        }
         final request = AuthoringRevision3NpcProfileEditRequestV1.forProject(
           expectedHead: basis.head,
           currentProjectJson: basis.projectJson,
@@ -3547,11 +3187,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 dialog-line transaction has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3DialogLineEntryRequestV1.forProject(
             expectedHead: basis.head,
             currentProjectJson: basis.projectJson,
@@ -3617,11 +3252,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 dialog localization read has no exact project identity',
-        );
-      }
       final result = await _store.readDialogLocalizationV1(
         root: root.path,
         expectedHead: basis.head,
@@ -3657,11 +3287,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 localization-edit seed has no exact project identity',
-        );
-      }
       final result = await _store.readDialogLocalizationEditSeedV1(
         root: root.path,
         expectedHead: basis.head,
@@ -3713,11 +3338,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 localization-edit transaction has no exact project identity',
-            );
-          }
           if (plan.expectedHead.canonicalJson != basis.head.canonicalJson) {
             throw const ManagedRevision3DialogLocalizationEditStaleException();
           }
@@ -3814,11 +3434,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Voice transaction has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3VoiceTakeRequestV1.forProject(
             expectedHead: basis.head,
             currentProjectJson: basis.projectJson,
@@ -3907,11 +3522,6 @@ class ManagedRevision3AuthoringProjectSession {
               (basis) async {
                 final projectId = basis.projectId;
                 final projectRevision = basis.projectRevision;
-                if (projectId == null || projectRevision == null) {
-                  throw UnsupportedError(
-                    'this managed revision-3 Store has no Voice take preview capability',
-                  );
-                }
                 final request = AuthoringRevision3VoiceTakePreviewRequestV1(
                   expectedHead: basis.head,
                   expectedProjectId: projectId,
@@ -3996,11 +3606,6 @@ class ManagedRevision3AuthoringProjectSession {
       (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw UnsupportedError(
-            'this managed revision-3 Store has no Voice take media QA capability',
-          );
-        }
         final request = AuthoringRevision3VoiceTakePreviewRequestV1(
           expectedHead: basis.head,
           expectedProjectId: projectId,
@@ -4109,11 +3714,6 @@ class ManagedRevision3AuthoringProjectSession {
       (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Voice batch plan has no exact project identity',
-          );
-        }
         final result = await batchStore.planVoiceBatchV1(
           root: root.path,
           gameRoot: gameRoot,
@@ -4161,11 +3761,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Voice batch transaction has no exact project identity',
-          );
-        }
         if (plan.basisHead.canonicalJson != basis.head.canonicalJson ||
             plan.projectId != projectId ||
             plan.revision != projectRevision ||
@@ -4232,11 +3827,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Voice selection has no exact project identity',
-            );
-          }
           final request =
               AuthoringRevision3VoiceTakeSelectionRequestV1.forProject(
                 expectedHead: basis.head,
@@ -4325,11 +3915,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Voice take removal has no exact project identity',
-          );
-        }
         // Keep the overflow rejection inside the serialized prepare lane but
         // before the Store call. The retryable closed error leaves this exact
         // session usable, matching ordinary compiler-like revision handling.
@@ -4437,11 +4022,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 dialog Voice slot creation has no exact project identity',
-          );
-        }
         if (projectRevision >= 0x7fffffffffffffff) {
           throw const ModFfiException(
             command:
@@ -4542,11 +4122,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 dialog Voice slot removal has no exact project identity',
-          );
-        }
         if (projectRevision >= 0x7fffffffffffffff) {
           throw const ModFfiException(
             command:
@@ -4637,11 +4212,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Voice take status has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3VoiceTakeStatusRequestV1.forProject(
             expectedHead: basis.head,
             currentProjectJson: basis.projectJson,
@@ -4728,11 +4298,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 Voice target transaction has no exact project identity',
-            );
-          }
           final request = AuthoringRevision3VoiceTargetRequestV1.forProject(
             expectedHead: basis.head,
             currentProjectJson: basis.projectJson,
@@ -4790,11 +4355,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 Voice build plan has no exact project identity',
-        );
-      }
       final result = await _store.planVoiceV1(
         root: root.path,
         currentProjectJson: basis.projectJson,
@@ -4822,11 +4382,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 Voice build has no exact project identity',
-        );
-      }
       final result = await _store.buildVoiceV1(
         root: root.path,
         gameRoot: gameRoot,
@@ -4869,11 +4424,6 @@ class ManagedRevision3AuthoringProjectSession {
       (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 restorable exact snapshot export has no exact project identity',
-          );
-        }
         final result = await restorableExportStore.exportExactSnapshotV2(
           root: root.path,
           expectedHead: basis.head,
@@ -4918,11 +4468,6 @@ class ManagedRevision3AuthoringProjectSession {
       (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 reviewed DataAsset build has no exact project identity',
-          );
-        }
         final result = await _core._store.buildReviewedDataAssetV1(
           root: root.path,
           gameRoot: gameRoot,
@@ -5054,11 +4599,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 DataAsset transaction has no exact project identity',
-            );
-          }
           final prepared = await prepare(basis);
           final stage = prepared.stage;
           if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
@@ -5095,11 +4635,6 @@ class ManagedRevision3AuthoringProjectSession {
         (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 DataAsset read has no exact project identity',
-            );
-          }
           final result = await _store.listDataAssetStagesV1(
             root: root.path,
             expectedHead: basis.head,
@@ -5132,11 +4667,6 @@ class ManagedRevision3AuthoringProjectSession {
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 DataAsset removal has no exact project identity',
-            );
-          }
           final prepared = await _store.prepareRemoveDataAssetStageV1(
             root: root.path,
             expectedHead: basis.head,
@@ -5213,11 +4743,6 @@ class ManagedRevision3AuthoringProjectSession {
       prepare: (basis) async {
         final projectId = basis.projectId;
         final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Story Draft removal has no exact project identity',
-          );
-        }
         if (projectRevision >= 0x7fffffffffffffff) {
           throw const ModFfiException(
             command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
@@ -5274,10 +4799,9 @@ class ManagedRevision3AuthoringProjectSession {
     );
   }
 
-  /// Derive one private effective transition-plan seed from this session's
-  /// exact canonical project. Legacy plans are synthesized deterministically;
-  /// no project bytes leave the serialized read lane and no candidate is
-  /// prepared or published.
+  /// Derive one private transition-plan seed from this session's exact
+  /// canonical project. No project bytes leave the serialized read lane and
+  /// no candidate is prepared or published.
   Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
     required String questId,
     required int expectedQuestRevision,
@@ -5330,11 +4854,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 Quest source inspection has no exact project identity',
-        );
-      }
       final result = await _store.inspectQuestSourceV1(
         root: root.path,
         gameRoot: gameRoot,
@@ -5368,11 +4887,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 NPC source inspection has no exact project identity',
-        );
-      }
       final result = await _store.inspectNpcSourceV1(
         root: root.path,
         expectedHead: basis.head,
@@ -5445,9 +4959,7 @@ class ManagedRevision3AuthoringProjectSession {
             final projectBytes = utf8.encode(basis.projectJson);
             final projectId = basis.projectId;
             final projectRevision = basis.projectRevision;
-            if (projectId == null ||
-                projectRevision == null ||
-                result.head.canonicalJson != basis.head.canonicalJson ||
+            if (result.head.canonicalJson != basis.head.canonicalJson ||
                 result.project.id != projectId ||
                 result.project.revision != projectRevision ||
                 result.project.seal.byteLength != projectBytes.length ||
@@ -5487,11 +4999,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 DataAsset package index has no exact project identity',
-        );
-      }
       final result = await _store.readDataAssetPackageIndexV1(
         root: root.path,
         gameRoot: gameRoot,
@@ -5526,11 +5033,6 @@ class ManagedRevision3AuthoringProjectSession {
     (basis) async {
       final projectId = basis.projectId;
       final projectRevision = basis.projectRevision;
-      if (projectId == null || projectRevision == null) {
-        throw const ManagedProjectVerificationException(
-          'revision-3 installed DataAsset inspection has no exact project identity',
-        );
-      }
       if (expectedSnapshot.head.canonicalJson != basis.head.canonicalJson ||
           expectedSnapshot.projectId != projectId ||
           expectedSnapshot.projectRevision != projectRevision ||
@@ -5586,11 +5088,6 @@ class ManagedRevision3AuthoringProjectSession {
         (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
-          if (projectId == null || projectRevision == null) {
-            throw const ManagedProjectVerificationException(
-              'revision-3 content read has no exact project identity',
-            );
-          }
           final result = await _store.readContentIndex(
             root: root.path,
             expectedHead: basis.head,

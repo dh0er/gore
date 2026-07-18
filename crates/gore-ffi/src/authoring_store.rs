@@ -1,4 +1,4 @@
-//! Bounded JSON bridge for the format-2 immutable working-project store.
+//! Bounded JSON bridge for the revision-3 immutable working-project store.
 //!
 //! Head and project documents cross the outer JSON protocol as untouched strings. This preserves
 //! duplicate-key rejection in `gore-authoring` and gives the Studio the exact canonical head bytes
@@ -8,10 +8,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use gore_authoring::{
-    AssetRef, AssetVerification, Diagnostic, OpenedDocumentCheckpoint, ProjectDocument,
-    ProjectDocumentError, ProjectJsonError, ProjectRevision3, ProjectRevision3JsonError, ProjectV2,
-    ValidationProfile, WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
-    MAX_PROJECT_JSON_BYTES,
+    AssetRef, AssetVerification, ProjectRevision3, ProjectRevision3JsonError, WorkingHead,
+    WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
@@ -25,10 +23,6 @@ const MAX_LOGICAL_NAME_BYTES: usize = 1024;
 const MAX_AUTHORING_STORE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_IMPORT_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
-const MAX_DIAGNOSTICS: usize = 262_144;
-const MAX_DIAGNOSTIC_MESSAGE_BYTES: usize = 4 * 1024;
-const MAX_DIAGNOSTIC_PROPERTY_PATH_BYTES: usize = 4 * 1024;
-const MAX_DIAGNOSTIC_RELATED_ENTITIES: usize = 100_000;
 // The nested head/project strings are already canonical JSON. Embedding those exact bytes in the
 // outer wire can at most double their quotes/backslashes; a filesystem path can use six-byte JSON
 // escapes for each source byte. These route-local raw-decode limits stay below the global 64 MiB
@@ -115,14 +109,6 @@ impl StoreFailure {
     }
 }
 
-pub(super) fn open(payload: Value) -> Value {
-    command_response(open_inner(&payload))
-}
-
-pub(super) fn open_document(payload: Value) -> Value {
-    command_response(open_document_inner(&payload))
-}
-
 pub(super) fn open_revision3_raw(input: &str) -> Value {
     command_response((|| {
         let payload: OpenRevision3WirePayload = parse_exact_revision3_wire(
@@ -138,14 +124,6 @@ pub(super) fn open_revision3_raw(input: &str) -> Value {
             ),
         ])))
     })())
-}
-
-pub(super) fn prepare_checkpoint(payload: Value) -> Value {
-    command_response(prepare_checkpoint_inner(&payload))
-}
-
-pub(super) fn prepare_document_checkpoint(payload: Value) -> Value {
-    command_response(prepare_document_checkpoint_inner(&payload))
 }
 
 pub(super) fn prepare_revision3_checkpoint_raw(input: &str) -> Value {
@@ -167,14 +145,6 @@ pub(super) fn prepare_revision3_checkpoint_raw(input: &str) -> Value {
             ("root".to_owned(), Value::String(payload.root)),
         ])))
     })())
-}
-
-pub(super) fn open_head_bytes(payload: Value) -> Value {
-    command_response(open_head_bytes_inner(&payload))
-}
-
-pub(super) fn open_head_bytes_document(payload: Value) -> Value {
-    command_response(open_head_bytes_document_inner(&payload))
 }
 
 pub(super) fn open_revision3_head_bytes_raw(input: &str) -> Value {
@@ -236,28 +206,6 @@ fn parse_exact_revision3_wire<P: DeserializeOwned>(
     Ok(request.payload)
 }
 
-fn open_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(payload, &["profile", "root", "verification"])?;
-    let store = open_existing_store(required_path(object, "root")?)?;
-    let verification = required_verification(object)?;
-    let profile = required_profile(object)?;
-    let opened = store
-        .open_current(verification, profile)
-        .map_err(map_store_error)?;
-    opened_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
-fn open_document_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(payload, &["profile", "root", "verification"])?;
-    let store = open_existing_store(required_path(object, "root")?)?;
-    let verification = required_verification(object)?;
-    let profile = required_profile(object)?;
-    let opened = store
-        .open_current_document(verification, profile)
-        .map_err(map_store_error)?;
-    opened_document_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
 fn open_revision3_inner(payload: &Value) -> Result<Value, StoreFailure> {
     let object = exact_payload(payload, &["root", "verification"])?;
     let store = open_existing_store(required_revision3_root(object)?)?;
@@ -265,84 +213,6 @@ fn open_revision3_inner(payload: &Value) -> Result<Value, StoreFailure> {
         .open_current_revision3(required_verification(object)?)
         .map_err(map_store_error)?;
     opened_revision3_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
-fn prepare_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(
-        payload,
-        &["expected_head_json", "profile", "project_json", "root"],
-    )?;
-    let expected_head = required_expected_head(object)?;
-    let store = store_for_expected_head(required_path(object, "root")?, expected_head.as_ref())?;
-    let profile = required_profile(object)?;
-    let project_json = required_bounded_string(
-        object,
-        "project_json",
-        MAX_PROJECT_JSON_BYTES,
-        "authoring project JSON",
-    )?;
-
-    // Keep the nested string byte-for-byte intact. A Value round trip here would erase duplicate
-    // object keys before ProjectV2's strict deserializer sees them.
-    let project = ProjectV2::from_json(project_json).map_err(map_project_error)?;
-    let prepared = store
-        .prepare_checkpoint(expected_head.as_ref(), &project, profile)
-        .map_err(map_store_error)?;
-    let head_json = String::from_utf8(prepared.head_bytes).map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_INVARIANT",
-            "prepared head is not valid UTF-8 JSON",
-        )
-    })?;
-    ensure_head_json(&head_json)?;
-    let diagnostics = diagnostics_to_wire(prepared.diagnostics)?;
-
-    let response = json!({
-        "ok": true,
-        "head_json": head_json,
-        "diagnostics": diagnostics,
-        "blocks_build": prepared.blocks_build,
-    });
-    enforce_response_budget(response, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
-fn prepare_document_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(
-        payload,
-        &["expected_head_json", "profile", "project_json", "root"],
-    )?;
-    let expected_head = required_expected_head(object)?;
-    let store = store_for_expected_head(required_path(object, "root")?, expected_head.as_ref())?;
-    let profile = required_profile(object)?;
-    let project_json = required_bounded_string(
-        object,
-        "project_json",
-        MAX_PROJECT_JSON_BYTES,
-        "authoring project JSON",
-    )?;
-
-    // Keep the nested string byte-for-byte intact so the closed document dispatcher can reject
-    // duplicate keys before selecting its revision-specific parser.
-    let document = ProjectDocument::from_json(project_json).map_err(map_project_document_error)?;
-    let prepared = store
-        .prepare_document_checkpoint(expected_head.as_ref(), &document, profile)
-        .map_err(map_store_error)?;
-    let head_json = String::from_utf8(prepared.head_bytes).map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_INVARIANT",
-            "prepared head is not valid UTF-8 JSON",
-        )
-    })?;
-    ensure_head_json(&head_json)?;
-    let diagnostics = diagnostics_to_wire(prepared.diagnostics)?;
-
-    let response = json!({
-        "ok": true,
-        "head_json": head_json,
-        "diagnostics": diagnostics,
-        "blocks_build": prepared.blocks_build,
-    });
-    enforce_response_budget(response, MAX_AUTHORING_STORE_RESPONSE_BYTES)
 }
 
 fn prepare_revision3_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
@@ -377,46 +247,6 @@ fn prepare_revision3_checkpoint_inner(payload: &Value) -> Result<Value, StoreFai
         ));
     }
     prepared_revision3_response(&reopened.head, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
-fn open_head_bytes_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(payload, &["head_json", "profile", "root", "verification"])?;
-    let store = open_existing_store(required_path(object, "root")?)?;
-    let head_json = required_bounded_string(
-        object,
-        "head_json",
-        MAX_HEAD_JSON_BYTES,
-        "working-store head JSON",
-    )?;
-    // The store performs strict canonical parsing and duplicate-field rejection on these exact
-    // bytes. Do not decode through serde_json::Value first.
-    let opened = store
-        .open_head_bytes(
-            head_json.as_bytes(),
-            required_verification(object)?,
-            required_profile(object)?,
-        )
-        .map_err(map_store_error)?;
-    opened_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
-}
-
-fn open_head_bytes_document_inner(payload: &Value) -> Result<Value, StoreFailure> {
-    let object = exact_payload(payload, &["head_json", "profile", "root", "verification"])?;
-    let store = open_existing_store(required_path(object, "root")?)?;
-    let head_json = required_bounded_string(
-        object,
-        "head_json",
-        MAX_HEAD_JSON_BYTES,
-        "working-store head JSON",
-    )?;
-    let opened = store
-        .open_head_bytes_document(
-            head_json.as_bytes(),
-            required_verification(object)?,
-            required_profile(object)?,
-        )
-        .map_err(map_store_error)?;
-    opened_document_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
 }
 
 fn open_revision3_head_bytes_inner(payload: &Value) -> Result<Value, StoreFailure> {
@@ -486,74 +316,6 @@ fn verify_asset_inner(payload: &Value) -> Result<Value, StoreFailure> {
     Ok(json!({"ok": true}))
 }
 
-fn opened_response(
-    opened: gore_authoring::OpenedCheckpoint,
-    response_limit: usize,
-) -> Result<Value, StoreFailure> {
-    let head_json = serde_json::to_string(&opened.head).map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_SERIALIZE",
-            "working-store head serialization failed",
-        )
-    })?;
-    ensure_head_json(&head_json)?;
-    let project_json = opened.project.to_canonical_json().map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_SERIALIZE",
-            "working-store project serialization failed",
-        )
-    })?;
-    if project_json.len() > MAX_PROJECT_JSON_BYTES {
-        return Err(StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_LIMIT",
-            format!("working-store project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
-        ));
-    }
-    let diagnostics = diagnostics_to_wire(opened.diagnostics)?;
-    let response = json!({
-        "ok": true,
-        "head_json": head_json,
-        "project_json": project_json,
-        "diagnostics": diagnostics,
-        "blocks_build": opened.blocks_build,
-    });
-    enforce_response_budget(response, response_limit)
-}
-
-fn opened_document_response(
-    opened: OpenedDocumentCheckpoint,
-    response_limit: usize,
-) -> Result<Value, StoreFailure> {
-    let head_json = serde_json::to_string(&opened.head).map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_SERIALIZE",
-            "working-store head serialization failed",
-        )
-    })?;
-    ensure_head_json(&head_json)?;
-    let project_json = opened.project.to_canonical_json().map_err(|_| {
-        StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_SERIALIZE",
-            "working-store project serialization failed",
-        )
-    })?;
-    if project_json.len() > MAX_PROJECT_JSON_BYTES {
-        return Err(StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_LIMIT",
-            format!("working-store project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
-        ));
-    }
-    let diagnostics = diagnostics_to_wire(opened.diagnostics)?;
-    let response = json!({
-        "ok": true,
-        "head_json": head_json,
-        "project_json": project_json,
-        "diagnostics": diagnostics,
-        "blocks_build": opened.blocks_build,
-    });
-    enforce_response_budget(response, response_limit)
-}
-
 fn opened_revision3_response(
     opened: gore_authoring::OpenedRevision3Checkpoint,
     response_limit: usize,
@@ -589,57 +351,6 @@ fn prepared_revision3_response(
     })?;
     ensure_head_json(&head_json)?;
     enforce_response_budget(json!({"ok": true, "head_json": head_json}), response_limit)
-}
-
-fn diagnostics_to_wire(diagnostics: Vec<Diagnostic>) -> Result<Vec<Value>, StoreFailure> {
-    if diagnostics.len() > MAX_DIAGNOSTICS {
-        return Err(StoreFailure::new(
-            "AUTHORING_STORE_RESPONSE_LIMIT",
-            format!("authoring diagnostic count exceeds the {MAX_DIAGNOSTICS}-item response limit"),
-        ));
-    }
-
-    let mut wire = Vec::with_capacity(diagnostics.len());
-    for diagnostic in diagnostics {
-        if diagnostic
-            .property_path
-            .as_ref()
-            .is_some_and(|path| path.len() > MAX_DIAGNOSTIC_PROPERTY_PATH_BYTES)
-        {
-            return Err(StoreFailure::new(
-                "AUTHORING_STORE_RESPONSE_LIMIT",
-                format!(
-                    "authoring diagnostic property path exceeds the \
-                     {MAX_DIAGNOSTIC_PROPERTY_PATH_BYTES}-byte response limit"
-                ),
-            ));
-        }
-        if diagnostic.related_entities.len() > MAX_DIAGNOSTIC_RELATED_ENTITIES {
-            return Err(StoreFailure::new(
-                "AUTHORING_STORE_RESPONSE_LIMIT",
-                format!(
-                    "authoring diagnostic related-entity count exceeds the \
-                     {MAX_DIAGNOSTIC_RELATED_ENTITIES}-item response limit"
-                ),
-            ));
-        }
-        let message =
-            truncate_utf8_with_suffix(diagnostic.message, MAX_DIAGNOSTIC_MESSAGE_BYTES, "...");
-        wire.push(json!({
-            "code": diagnostic.code,
-            "severity": diagnostic.severity,
-            "entity": diagnostic.entity.map(|entity| entity.to_string()),
-            "property_path": diagnostic.property_path,
-            "message": message,
-            "related_entities": diagnostic
-                .related_entities
-                .into_iter()
-                .map(|entity| entity.to_string())
-                .collect::<Vec<_>>(),
-            "blocks_build": diagnostic.blocks_build,
-        }));
-    }
-    Ok(wire)
 }
 
 fn exact_payload<'a>(
@@ -700,17 +411,6 @@ fn required_bounded_string<'a>(
         ));
     }
     Ok(value)
-}
-
-fn required_profile(object: &Map<String, Value>) -> Result<ValidationProfile, StoreFailure> {
-    match object.get("profile").and_then(Value::as_str) {
-        Some("production") => Ok(ValidationProfile::Production),
-        Some("experimental") => Ok(ValidationProfile::Experimental),
-        _ => Err(StoreFailure::new(
-            "AUTHORING_STORE_PROFILE_INVALID",
-            "'profile' must be 'production' or 'experimental'",
-        )),
-    }
 }
 
 fn required_verification(object: &Map<String, Value>) -> Result<AssetVerification, StoreFailure> {
@@ -810,28 +510,6 @@ fn store_for_expected_head(
     }
 }
 
-fn map_project_error(error: ProjectJsonError) -> StoreFailure {
-    match error {
-        ProjectJsonError::InputTooLarge { .. } => StoreFailure::new(
-            "AUTHORING_STORE_PROJECT_LIMIT",
-            format!("authoring project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
-        ),
-        ProjectJsonError::InvalidJson(_) => {
-            StoreFailure::new("AUTHORING_STORE_PROJECT_INVALID", error.to_string())
-        }
-    }
-}
-
-fn map_project_document_error(error: ProjectDocumentError) -> StoreFailure {
-    match error {
-        ProjectDocumentError::InputTooLarge { .. } => StoreFailure::new(
-            "AUTHORING_STORE_PROJECT_LIMIT",
-            format!("authoring project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
-        ),
-        error => StoreFailure::new("AUTHORING_STORE_PROJECT_INVALID", error.to_string()),
-    }
-}
-
 fn map_revision3_project_error(error: ProjectRevision3JsonError) -> StoreFailure {
     match error {
         ProjectRevision3JsonError::InputTooLarge { .. } => StoreFailure::new(
@@ -921,60 +599,12 @@ fn truncate_utf8_with_suffix(mut value: String, max_bytes: usize, suffix: &str) 
 mod tests {
     use std::fs;
 
-    use gore_authoring::{DiagnosticCode, DiagnosticSeverity, EntityId, Sha256Digest};
+    use gore_authoring::Sha256Digest;
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
     use crate::execute_json;
-
-    fn diagnostic(message: String, property_path: Option<String>) -> Diagnostic {
-        Diagnostic {
-            code: DiagnosticCode::AssetMediaTypeMismatch,
-            severity: DiagnosticSeverity::Error,
-            entity: None,
-            property_path,
-            message,
-            related_entities: Vec::new(),
-            blocks_build: true,
-        }
-    }
-
-    fn project_json() -> String {
-        json!({
-            "format": 2,
-            "schema_revision": 1,
-            "project_id": "00000000000000000000000000000001",
-            "revision": 0,
-            "meta": {"name": "Store bridge", "version": "1.0.0", "author": "tests"},
-            "target": {"executable": {
-                "byte_len": 123,
-                "sha256": "4242424242424242424242424242424242424242424242424242424242424242"
-            }},
-            "authoring_locales": [],
-            "entities": {},
-            "asset_store": {"assets": {}}
-        })
-        .to_string()
-    }
-
-    fn revision2_project_json() -> String {
-        json!({
-            "format": 2,
-            "schema_revision": 2,
-            "project_id": "00000000000000000000000000000002",
-            "revision": 0,
-            "meta": {"name": "Store document bridge", "version": "1.0.0", "author": "tests"},
-            "target": {"executable": {
-                "byte_len": 123,
-                "sha256": "4343434343434343434343434343434343434343434343434343434343434343"
-            }},
-            "authoring_locales": [],
-            "entities": {},
-            "asset_store": {"assets": {}}
-        })
-        .to_string()
-    }
 
     fn revision3_project_json() -> String {
         let project: ProjectRevision3 = serde_json::from_value(json!({
@@ -1035,52 +665,6 @@ mod tests {
         crc
     }
 
-    #[test]
-    fn long_media_type_diagnostic_is_utf8_truncated_to_dart_wire_limit() {
-        let media_type = "\u{97f3}\u{58f0}/".repeat(2_000);
-        let message = format!(
-            "voice asset has media type {media_type:?}; expected canonical media type audio/ogg"
-        );
-        let wire = diagnostics_to_wire(vec![diagnostic(
-            message,
-            Some("payload.data.asset.sha256".to_owned()),
-        )])
-        .unwrap();
-        let message = wire[0]["message"].as_str().unwrap();
-        assert!(message.len() <= MAX_DIAGNOSTIC_MESSAGE_BYTES);
-        assert!(message.ends_with("..."));
-        assert!(std::str::from_utf8(message.as_bytes()).is_ok());
-    }
-
-    #[test]
-    fn oversized_diagnostic_paths_and_related_sets_fail_response_closed() {
-        let too_many = vec![diagnostic(String::new(), None); MAX_DIAGNOSTICS + 1];
-        let count_error = diagnostics_to_wire(too_many).unwrap_err();
-        assert_eq!(
-            count_error.response()["error"]["code"],
-            "AUTHORING_STORE_RESPONSE_LIMIT"
-        );
-
-        let path_error = diagnostics_to_wire(vec![diagnostic(
-            "failure".to_owned(),
-            Some("p".repeat(MAX_DIAGNOSTIC_PROPERTY_PATH_BYTES + 1)),
-        )])
-        .unwrap_err();
-        assert_eq!(
-            path_error.response()["error"]["code"],
-            "AUTHORING_STORE_RESPONSE_LIMIT"
-        );
-
-        let id: EntityId = "00000000000000000000000000000001".parse().unwrap();
-        let mut related = diagnostic("failure".to_owned(), None);
-        related.related_entities = vec![id; MAX_DIAGNOSTIC_RELATED_ENTITIES + 1];
-        let related_error = diagnostics_to_wire(vec![related]).unwrap_err();
-        assert_eq!(
-            related_error.response()["error"]["code"],
-            "AUTHORING_STORE_RESPONSE_LIMIT"
-        );
-    }
-
     fn call(command: &str, payload: Value) -> Value {
         serde_json::from_str(&call_json(command, payload)).unwrap()
     }
@@ -1093,35 +677,6 @@ mod tests {
         serde_json::from_str(&execute_json(request)).unwrap()
     }
 
-    fn prepare(temp: &TempDir, project_json: String, expected_head_json: Value) -> Value {
-        call(
-            "authoring_store_prepare_checkpoint",
-            json!({
-                "root": temp.path(),
-                "expected_head_json": expected_head_json,
-                "project_json": project_json,
-                "profile": "production",
-            }),
-        )
-    }
-
-    fn prepare_document(
-        temp: &TempDir,
-        project_json: String,
-        expected_head_json: Value,
-        profile: &str,
-    ) -> Value {
-        call(
-            "authoring_store_prepare_document_checkpoint",
-            json!({
-                "root": temp.path(),
-                "expected_head_json": expected_head_json,
-                "project_json": project_json,
-                "profile": profile,
-            }),
-        )
-    }
-
     fn prepare_revision3(temp: &TempDir, project_json: String, expected_head_json: Value) -> Value {
         call(
             "authoring_store_prepare_revision3_checkpoint",
@@ -1131,142 +686,6 @@ mod tests {
                 "project_json": project_json,
             }),
         )
-    }
-
-    #[test]
-    fn document_commands_preserve_revision1_responses_exactly() {
-        let temp = TempDir::new().unwrap();
-        let legacy_prepared = prepare(&temp, project_json(), Value::Null);
-        let document_prepared = prepare_document(&temp, project_json(), Value::Null, "production");
-        assert_eq!(document_prepared, legacy_prepared);
-        let payload = json!({
-            "root": temp.path(),
-            "expected_head_json": null,
-            "project_json": project_json(),
-            "profile": "production",
-        });
-        assert_eq!(
-            call_json(
-                "authoring_store_prepare_document_checkpoint",
-                payload.clone(),
-            ),
-            call_json("authoring_store_prepare_checkpoint", payload),
-        );
-
-        let head_json = legacy_prepared["head_json"].as_str().unwrap();
-        fs::write(temp.path().join("gore-project.json"), head_json).unwrap();
-        let payload = json!({
-            "root": temp.path(),
-            "verification": "full",
-            "profile": "production",
-        });
-        assert_eq!(
-            call_json("authoring_store_open_document", payload.clone()),
-            call_json("authoring_store_open", payload),
-        );
-
-        let payload = json!({
-            "root": temp.path(),
-            "head_json": head_json,
-            "verification": "structural",
-            "profile": "experimental",
-        });
-        assert_eq!(
-            call_json("authoring_store_open_head_bytes_document", payload.clone(),),
-            call_json("authoring_store_open_head_bytes", payload),
-        );
-    }
-
-    #[test]
-    fn document_commands_round_trip_revision2_but_legacy_commands_stay_closed() {
-        let temp = TempDir::new().unwrap();
-        let raw_project = revision2_project_json();
-        let canonical_project = ProjectDocument::from_json(&raw_project)
-            .unwrap()
-            .to_canonical_json()
-            .unwrap();
-
-        let legacy_rejected = prepare(&temp, raw_project.clone(), Value::Null);
-        assert_eq!(
-            legacy_rejected["error"]["code"],
-            "AUTHORING_STORE_PROJECT_INVALID"
-        );
-
-        let prepared = prepare_document(&temp, raw_project, Value::Null, "production");
-        assert_eq!(prepared["ok"], true);
-        assert_eq!(prepared["blocks_build"], true);
-        assert_eq!(prepared["diagnostics"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            prepared["diagnostics"][0]["code"],
-            "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
-        );
-        assert_eq!(prepared["diagnostics"][0]["blocks_build"], true);
-
-        let head_json = prepared["head_json"].as_str().unwrap();
-        fs::write(temp.path().join("gore-project.json"), head_json).unwrap();
-
-        let legacy_open = call(
-            "authoring_store_open",
-            json!({
-                "root": temp.path(),
-                "verification": "full",
-                "profile": "production",
-            }),
-        );
-        assert_eq!(legacy_open["error"]["code"], "AUTHORING_STORE_JSON_INVALID");
-
-        for profile in ["production", "experimental"] {
-            let opened = call(
-                "authoring_store_open_document",
-                json!({
-                    "root": temp.path(),
-                    "verification": "full",
-                    "profile": profile,
-                }),
-            );
-            assert_eq!(opened["ok"], true);
-            assert_eq!(opened["head_json"], head_json);
-            assert_eq!(opened["project_json"], canonical_project);
-            assert_eq!(opened["blocks_build"], true);
-            assert!(opened["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diagnostic| diagnostic["code"]
-                    == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
-                    && diagnostic["blocks_build"] == true));
-        }
-
-        let reopened = call(
-            "authoring_store_open_head_bytes_document",
-            json!({
-                "root": temp.path(),
-                "head_json": head_json,
-                "verification": "full",
-                "profile": "experimental",
-            }),
-        );
-        assert_eq!(reopened["ok"], true);
-        assert_eq!(reopened["project_json"], canonical_project);
-    }
-
-    #[test]
-    fn document_prepare_rejects_duplicates_and_unknown_dispatch_markers() {
-        for invalid in [
-            revision2_project_json().replacen("\"revision\":0", "\"revision\":0,\"revision\":1", 1),
-            revision2_project_json().replacen("\"format\":2", "\"format\":3", 1),
-        ] {
-            let temp = TempDir::new().unwrap();
-            let rejected = prepare_document(&temp, invalid, Value::Null, "production");
-            assert_eq!(rejected["error"]["code"], "AUTHORING_STORE_PROJECT_INVALID");
-            assert!(!temp.path().join("gore-project.json").exists());
-        }
-
-        let temp = TempDir::new().unwrap();
-        let revision3 =
-            prepare_document(&temp, revision3_project_json(), Value::Null, "production");
-        assert_eq!(revision3["error"]["code"], "AUTHORING_STORE_INVARIANT");
-        assert!(!temp.path().join("gore-project.json").exists());
     }
 
     #[test]
@@ -1363,16 +782,13 @@ mod tests {
     }
 
     #[test]
-    fn revision3_commands_reject_other_revisions_and_noncanonical_nested_bytes() {
-        for invalid in [project_json(), revision2_project_json()] {
-            let temp = TempDir::new().unwrap();
-            let rejected = prepare_revision3(&temp, invalid, Value::Null);
-            assert_eq!(rejected["error"]["code"], "AUTHORING_STORE_PROJECT_INVALID");
-            assert!(!temp.path().join("gore-project.json").exists());
-        }
-
+    fn revision3_commands_reject_wrong_revision_and_noncanonical_nested_bytes() {
         let canonical = revision3_project_json();
         let cases = [
+            (
+                canonical.replacen("\"schema_revision\":3", "\"schema_revision\":99", 1),
+                "AUTHORING_STORE_PROJECT_INVALID",
+            ),
             (
                 format!(" {canonical}"),
                 "AUTHORING_STORE_PROJECT_NONCANONICAL",
@@ -1388,50 +804,6 @@ mod tests {
             let rejected = prepare_revision3(&temp, invalid, Value::Null);
             assert_eq!(rejected["error"]["code"], code);
         }
-
-        let r1 = TempDir::new().unwrap();
-        let legacy = prepare(&r1, project_json(), Value::Null);
-        fs::write(
-            r1.path().join("gore-project.json"),
-            legacy["head_json"].as_str().unwrap(),
-        )
-        .unwrap();
-        let rejected = call(
-            "authoring_store_open_revision3_head_bytes",
-            json!({
-                "root": r1.path(),
-                "head_json": legacy["head_json"],
-                "verification": "full",
-            }),
-        );
-        assert_eq!(rejected["ok"], false);
-        let rejected = call(
-            "authoring_store_open_revision3",
-            json!({"root": r1.path(), "verification": "full"}),
-        );
-        assert_eq!(rejected["ok"], false);
-
-        let r2 = TempDir::new().unwrap();
-        let document = prepare_document(&r2, revision2_project_json(), Value::Null, "experimental");
-        fs::write(
-            r2.path().join("gore-project.json"),
-            document["head_json"].as_str().unwrap(),
-        )
-        .unwrap();
-        let rejected = call(
-            "authoring_store_open_revision3_head_bytes",
-            json!({
-                "root": r2.path(),
-                "head_json": document["head_json"],
-                "verification": "structural",
-            }),
-        );
-        assert_eq!(rejected["ok"], false);
-        let rejected = call(
-            "authoring_store_open_revision3",
-            json!({"root": r2.path(), "verification": "structural"}),
-        );
-        assert_eq!(rejected["ok"], false);
     }
 
     #[test]
@@ -1684,171 +1056,6 @@ mod tests {
             prepare_error.response()["error"]["code"],
             "AUTHORING_STORE_RESPONSE_LIMIT"
         );
-    }
-
-    #[test]
-    fn prepare_returns_exact_head_and_open_round_trips_canonical_project() {
-        let temp = TempDir::new().unwrap();
-        let prepared = prepare(&temp, project_json(), Value::Null);
-        assert_eq!(prepared["ok"], true);
-        let head_json = prepared["head_json"].as_str().unwrap();
-        assert_eq!(
-            serde_json::to_string(&serde_json::from_str::<WorkingHead>(head_json).unwrap())
-                .unwrap(),
-            head_json
-        );
-
-        fs::write(temp.path().join("gore-project.json"), head_json).unwrap();
-        let stale_absent = prepare(&temp, project_json(), Value::Null);
-        assert_eq!(
-            stale_absent["error"]["code"],
-            "AUTHORING_STORE_HEAD_CONFLICT"
-        );
-        let matching_head = prepare(&temp, project_json(), json!(head_json));
-        assert_eq!(matching_head["ok"], true);
-
-        let opened = call(
-            "authoring_store_open",
-            json!({
-                "root": temp.path(),
-                "verification": "full",
-                "profile": "production",
-            }),
-        );
-        assert_eq!(opened["ok"], true);
-        assert_eq!(opened["head_json"], prepared["head_json"]);
-        assert_eq!(
-            opened["project_json"],
-            ProjectV2::from_json(&project_json())
-                .unwrap()
-                .to_canonical_json()
-                .unwrap()
-        );
-        assert_eq!(opened["diagnostics"], json!([]));
-        assert_eq!(opened["blocks_build"], false);
-
-        let reopened = call(
-            "authoring_store_open_head_bytes",
-            json!({
-                "root": temp.path(),
-                "head_json": head_json,
-                "verification": "structural",
-                "profile": "experimental",
-            }),
-        );
-        assert_eq!(reopened["ok"], true);
-        assert_eq!(reopened["head_json"], head_json);
-    }
-
-    #[test]
-    fn raw_duplicate_project_keys_and_noncanonical_heads_fail_closed() {
-        let temp = TempDir::new().unwrap();
-        let duplicate =
-            project_json().replacen("\"revision\":0", "\"revision\":0,\"revision\":1", 1);
-        let rejected = prepare(&temp, duplicate, Value::Null);
-        assert_eq!(rejected["error"]["code"], "AUTHORING_STORE_PROJECT_INVALID");
-
-        let prepared = prepare(&temp, project_json(), Value::Null);
-        let noncanonical = format!(" {}", prepared["head_json"].as_str().unwrap());
-        let rejected = call(
-            "authoring_store_open_head_bytes",
-            json!({
-                "root": temp.path(),
-                "head_json": noncanonical,
-                "verification": "full",
-                "profile": "production",
-            }),
-        );
-        assert_eq!(
-            rejected["error"]["code"],
-            "AUTHORING_STORE_JSON_NONCANONICAL"
-        );
-
-        let rejected = call(
-            "authoring_store_open_head_bytes",
-            json!({
-                "root": temp.path(),
-                "head_json": "{ }",
-                "verification": "full",
-                "profile": "production",
-            }),
-        );
-        assert_eq!(rejected["error"]["code"], "AUTHORING_STORE_JSON_INVALID");
-    }
-
-    #[test]
-    fn payloads_profiles_paths_and_expected_heads_are_closed_and_bounded() {
-        let temp = TempDir::new().unwrap();
-        let missing = call(
-            "authoring_store_open",
-            json!({"root": temp.path(), "verification": "full", "profile": "production"}),
-        );
-        assert_eq!(missing["error"]["code"], "AUTHORING_STORE_HEAD_MISSING");
-
-        let cases = [
-            call("authoring_store_open", Value::Null),
-            call(
-                "authoring_store_open",
-                json!({"root": temp.path(), "verification": "quick", "profile": "production"}),
-            ),
-            call(
-                "authoring_store_open",
-                json!({"root": "x".repeat(MAX_FILESYSTEM_PATH_BYTES + 1), "verification": "full", "profile": "production"}),
-            ),
-            prepare(&temp, project_json(), json!({"store_format": 1})),
-            call(
-                "authoring_store_verify_asset",
-                json!({"root": temp.path(), "verification": "full", "asset": {}, "extra": true}),
-            ),
-        ];
-        let codes = cases
-            .iter()
-            .map(|value| value["error"]["code"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            codes,
-            [
-                "AUTHORING_STORE_PAYLOAD_INVALID",
-                "AUTHORING_STORE_VERIFICATION_INVALID",
-                "AUTHORING_STORE_INPUT_LIMIT",
-                "AUTHORING_STORE_HEAD_INVALID",
-                "AUTHORING_STORE_PAYLOAD_INVALID",
-            ]
-        );
-    }
-
-    #[test]
-    fn read_and_existing_head_commands_never_create_a_missing_root() {
-        let parent = TempDir::new().unwrap();
-        let missing = parent.path().join("missing").join("project");
-        let canonical_missing_head = concat!(
-            "{\"store_format\":1,\"snapshot\":{\"byte_len\":1,\"sha256\":\"",
-            "1111111111111111111111111111111111111111111111111111111111111111",
-            "\"}}",
-        );
-
-        let opened = call(
-            "authoring_store_open",
-            json!({
-                "root": missing.display().to_string(),
-                "verification": "full",
-                "profile": "production",
-            }),
-        );
-        assert_eq!(opened["error"]["code"], "AUTHORING_STORE_ROOT_MISSING");
-        assert!(!missing.exists());
-
-        let stale = call(
-            "authoring_store_prepare_checkpoint",
-            json!({
-                "root": missing.display().to_string(),
-                "expected_head_json": canonical_missing_head,
-                "project_json": project_json(),
-                "profile": "production",
-            }),
-        );
-        assert_eq!(stale["error"]["code"], "AUTHORING_STORE_ROOT_MISSING");
-        assert!(!missing.exists());
     }
 
     #[test]

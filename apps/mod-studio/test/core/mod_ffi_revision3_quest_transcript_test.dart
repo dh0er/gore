@@ -237,7 +237,7 @@ void main() {
 
 String _basisProjectJson() {
   final project =
-      jsonDecode(Revision3QuestOutlineFixture().semanticProjectJson)
+      jsonDecode(Revision3QuestOutlineFixture().projectJson)
           as Map<String, Object?>;
   project['authoring_locales'] = <Object?>['de'];
   final entities = (project['entities']! as Map).cast<String, Object?>();

@@ -103,7 +103,7 @@ String _inputFingerprint(Map<String, Object?> input) {
   final generator = utf8.encode(_generator);
   final bytes = BytesBuilder(copy: false)
     ..add(
-      utf8.encode('gore-authoring.revision2.npc-draft.input-fingerprint\u0000'),
+      utf8.encode('gore-authoring.revision3.npc-draft.input-fingerprint\u0000'),
     )
     ..add(_u64(generator.length))
     ..add(generator)

@@ -630,7 +630,6 @@ fn map_transaction_conflict(error: Revision3QuestTranscriptEditConflictV1) -> Fa
         Revision3QuestTranscriptEditConflictV1::TooManyBindings { .. }
         | Revision3QuestTranscriptEditConflictV1::InvalidLineReference { .. }
         | Revision3QuestTranscriptEditConflictV1::DuplicateLine { .. }
-        | Revision3QuestTranscriptEditConflictV1::LegacyObjectiveSlot { .. }
         | Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { .. } => {
             "AUTHORING_REVISION3_QUEST_TRANSCRIPT_BINDING_CONFLICT"
         }
@@ -732,14 +731,14 @@ mod tests {
 
     use gore_authoring::model_revision3::{DialogLine, LocalizationEntry};
     use gore_authoring::{
-        regenerate_revision3_quest_module_v2, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
+        regenerate_revision3_quest_module, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
         GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
         QuestCollisionCatalogInput, Revision3DialogEmptyVoiceSlotIntentV1,
         Revision3DialogLineInsertRequestV1, Revision3DialogLocalizationIntentV1, Revision3Entity,
         Revision3EntityKind, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
         Revision3QuestGiverInput, Revision3QuestParentInput, Revision3QuestTranscriptBindingV1,
         Revision3QuestTranscriptIntentV1, Revision3TypedRef, SchemaRevisionV3, Sha256Digest,
-        QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
         REVISION3_QUEST_GENERATOR_VERSION,
     };
     use tempfile::TempDir;
@@ -807,7 +806,7 @@ mod tests {
 
         let artifact_bytes = br#"{"format":"fixture-collision-v1"}"#;
         let imported = store
-            .import_quest_collision_artifact_v1(artifact_bytes, Some(&base_checkpoint.head))
+            .import_quest_collision_artifact_v2(artifact_bytes, &base_checkpoint.head)
             .unwrap();
         let mut project = empty_project(1);
         project
@@ -843,10 +842,12 @@ mod tests {
                 description: "Authoring metadata only".to_owned(),
                 objective_title: "Talk".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    gore_authoring::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: target(),
-                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
                     artifact: imported.artifact,
                     source_seal: seal(0x33, artifact_bytes.len() as u64),
                     basis_snapshot: base_checkpoint.head.snapshot.clone(),
@@ -867,7 +868,7 @@ mod tests {
             relative_paths: BTreeSet::new(),
             symbols: BTreeSet::new(),
         };
-        let module = regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+        let module = regenerate_revision3_quest_module(&quest, collision).unwrap();
         project.entities.insert(
             quest_id,
             Revision3Entity {

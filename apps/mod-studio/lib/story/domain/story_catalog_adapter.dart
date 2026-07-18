@@ -1,14 +1,7 @@
-import 'dart:convert';
-
 import '../../core/mod_ffi.dart';
-import 'story_draft_requests.dart';
 import 'story_npc_archetype_index.dart';
 
-const int _maxNpcDisplayNameBytes = 256;
-const int _maxNpcModuleNamespaceBytes = 255;
-const int _maxNpcUniqueNameBytes = 64;
-
-/// Fail-closed boundary between a verified native catalog DTO and Story input.
+/// Fail-closed boundary for projecting a verified native Story catalog.
 final class StoryCatalogAdapterException implements Exception {
   const StoryCatalogAdapterException(this.message);
 
@@ -86,40 +79,15 @@ final class StoryCatalogQuestGiverChoice {
   final StoryCatalogContentSeal sourceSeal;
 }
 
-enum StoryQuestDraftDisabledReason { collisionInventoryUnavailable }
-
-/// Typed Quest chooser state. It intentionally has no creation method. Until a
-/// sealed collision-inventory capability exists, the public Story domain also
-/// exposes no Quest input, mutation-builder, or managed-controller API.
-final class StoryCatalogQuestDraftAvailability {
-  const StoryCatalogQuestDraftAvailability._({
-    required this.disabledReason,
-    required this.parents,
-    required this.givers,
-    required this.collisionCatalogLayer,
-    required this.collisionSourceSeal,
-  });
-
-  bool get canCreate => false;
-  final StoryQuestDraftDisabledReason disabledReason;
-  final List<StoryCatalogQuestParentChoice> parents;
-  final List<StoryCatalogQuestGiverChoice> givers;
-  final String collisionCatalogLayer;
-  final StoryCatalogContentSeal collisionSourceSeal;
-}
-
 /// Deterministic projection of the pinned native Story catalog for non-UI
 /// authoring flows.
 final class StoryCatalogAdapter {
   StoryCatalogAdapter._({
     required this.npcChoices,
-    required this.questAvailability,
-    required Map<String, AuthoringStoryCatalogNpcSelection> npcsById,
-    required this._generation,
+    required this.questParents,
+    required this.questGivers,
     required this.npcArchetypeIndex,
-  }) : _npcsById = Map<String, AuthoringStoryCatalogNpcSelection>.unmodifiable(
-         npcsById,
-       );
+  });
 
   factory StoryCatalogAdapter.fromSelections(
     AuthoringStoryCatalogSelections selections,
@@ -144,16 +112,15 @@ final class StoryCatalogAdapter {
     StoryNpcArchetypeIndex? npcArchetypeIndex,
   ) {
     _requireSupportedReadiness(selections);
-    final npcsById = <String, AuthoringStoryCatalogNpcSelection>{};
+    final npcIds = <String>{};
     final npcChoices = <StoryCatalogNpcChoice>[];
     final giverChoices = <StoryCatalogQuestGiverChoice>[];
     for (final npc in selections.npcs) {
-      if (npcsById.containsKey(npc.catalogId)) {
+      if (!npcIds.add(npc.catalogId)) {
         throw const StoryCatalogAdapterException(
           'Story catalog contains a duplicate NPC choice',
         );
       }
-      npcsById[npc.catalogId] = npc;
       npcChoices.add(
         StoryCatalogNpcChoice._(
           catalogId: npc.catalogId,
@@ -189,75 +156,24 @@ final class StoryCatalogAdapter {
     ];
     return StoryCatalogAdapter._(
       npcChoices: List<StoryCatalogNpcChoice>.unmodifiable(npcChoices),
-      questAvailability: StoryCatalogQuestDraftAvailability._(
-        disabledReason:
-            StoryQuestDraftDisabledReason.collisionInventoryUnavailable,
-        parents: List<StoryCatalogQuestParentChoice>.unmodifiable(
-          parentChoices,
-        ),
-        givers: List<StoryCatalogQuestGiverChoice>.unmodifiable(giverChoices),
-        collisionCatalogLayer: selections.questCollisionCatalog.catalogLayer,
-        collisionSourceSeal: _seal(selections.questCollisionCatalog.sourceSeal),
+      questParents: List<StoryCatalogQuestParentChoice>.unmodifiable(
+        parentChoices,
       ),
-      npcsById: npcsById,
-      generation: selections.generation,
+      questGivers: List<StoryCatalogQuestGiverChoice>.unmodifiable(
+        giverChoices,
+      ),
       npcArchetypeIndex: npcArchetypeIndex,
     );
   }
 
   final List<StoryCatalogNpcChoice> npcChoices;
-  final StoryCatalogQuestDraftAvailability questAvailability;
+  final List<StoryCatalogQuestParentChoice> questParents;
+  final List<StoryCatalogQuestGiverChoice> questGivers;
 
-  /// Full native archetype picker index when the production launcher loaded it.
+  /// Full native archetype picker index when both native catalogs were loaded.
   ///
-  /// Legacy/test callers that only project the curated Story catalog may omit
-  /// it; draft creation remains restricted to [npcChoices] either way.
+  /// Callers that only need the curated Story catalog may omit it.
   final StoryNpcArchetypeIndex? npcArchetypeIndex;
-  final Map<String, AuthoringStoryCatalogNpcSelection> _npcsById;
-  final AuthoringStoryCatalogGeneration _generation;
-
-  StoryNpcDraftInput createNpcDraftInput({
-    required String catalogId,
-    required String displayName,
-    required String moduleNamespace,
-    required String uniqueName,
-  }) {
-    final selected = _npcsById[catalogId];
-    if (selected == null) {
-      throw StoryCatalogAdapterException(
-        'unknown Story catalog NPC choice: $catalogId',
-      );
-    }
-    _boundedUtf8(displayName, _maxNpcDisplayNameBytes, 'displayName');
-    _boundedUtf8(
-      moduleNamespace,
-      _maxNpcModuleNamespaceBytes,
-      'moduleNamespace',
-    );
-    _boundedUtf8(uniqueName, _maxNpcUniqueNameBytes, 'uniqueName');
-    return StoryNpcDraftInput(
-      displayName: displayName,
-      moduleNamespace: moduleNamespace,
-      uniqueName: uniqueName,
-      parentCharacterDefinition: _npcParent(selected.characterDefinition),
-      parentAiAgentConfig: _npcParent(selected.aiAgentConfig),
-      parentSpawnDefinition: _npcParent(selected.spawnDefinition),
-    );
-  }
-
-  CanonicalUnverifiedStoryJsonObject _npcParent(
-    AuthoringStoryCatalogClassSelection selected,
-  ) => CanonicalUnverifiedStoryJsonObject.fromCanonicalJson(
-    jsonEncode(<String, Object?>{
-      'generation': <String, Object?>{
-        'executable': _sealJson(_generation.executable),
-      },
-      'source_seal': _sealJson(selected.sourceSeal),
-      'catalog_layer': selected.catalogLayer,
-      'canonical_selector': selected.authoringSelector,
-      'runtime_class': selected.runtimeClass,
-    }),
-  );
 }
 
 void _requireSupportedReadiness(AuthoringStoryCatalogSelections selections) {
@@ -298,54 +214,7 @@ void _requireSupportedReadiness(AuthoringStoryCatalogSelections selections) {
       );
     }
   }
-  final collision = selections.questCollisionCatalog;
-  if (collision.status !=
-          AuthoringStoryCatalogCollisionStatus.inventoryUnavailable ||
-      !collision.blocksDraftCreation) {
-    throw const StoryCatalogAdapterException(
-      'Quest creation must remain disabled without an exact collision inventory',
-    );
-  }
 }
 
 StoryCatalogContentSeal _seal(AuthoringDraftContentSeal seal) =>
     StoryCatalogContentSeal._(byteLength: seal.byteLength, sha256: seal.sha256);
-
-Map<String, Object?> _sealJson(AuthoringDraftContentSeal seal) =>
-    <String, Object?>{'byte_len': seal.byteLength, 'sha256': seal.sha256};
-
-void _boundedUtf8(String value, int maxBytes, String context) {
-  if (value.isEmpty) {
-    throw StoryCatalogAdapterException('$context must not be empty');
-  }
-  var bytes = 0;
-  for (var index = 0; index < value.length; index++) {
-    final codeUnit = value.codeUnitAt(index);
-    final int width;
-    if (codeUnit <= 0x7f) {
-      width = 1;
-    } else if (codeUnit <= 0x7ff) {
-      width = 2;
-    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      if (index + 1 >= value.length) {
-        throw StoryCatalogAdapterException('$context has malformed UTF-16');
-      }
-      final low = value.codeUnitAt(index + 1);
-      if (low < 0xdc00 || low > 0xdfff) {
-        throw StoryCatalogAdapterException('$context has malformed UTF-16');
-      }
-      index++;
-      width = 4;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      throw StoryCatalogAdapterException('$context has malformed UTF-16');
-    } else {
-      width = 3;
-    }
-    bytes += width;
-    if (bytes > maxBytes) {
-      throw StoryCatalogAdapterException(
-        '$context exceeds its $maxBytes-byte limit',
-      );
-    }
-  }
-}

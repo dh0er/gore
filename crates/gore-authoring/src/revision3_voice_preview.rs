@@ -366,7 +366,7 @@ pub fn bind_revision3_voice_take_preview_v1(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum Revision3VoiceTakePreviewOggErrorV1 {
+pub enum Revision3VoiceTakeMediaQaErrorV1 {
     #[error("managed Voice take is not a bounded valid Vorbis or Opus Ogg stream: {0}")]
     Invalid(String),
     #[error("managed Voice take Ogg metadata exceeds the revision-3 wire range")]
@@ -426,14 +426,7 @@ impl Revision3VoiceTakeMediaQaV1 {
     pub const fn assurance(&self) -> Revision3VoiceTakeMediaAssuranceV1 {
         self.assurance
     }
-
-    fn into_ogg(self) -> OggMetadata {
-        self.ogg
-    }
 }
-
-/// Backward-compatible error alias for the broader media-QA inspector.
-pub type Revision3VoiceTakeMediaQaErrorV1 = Revision3VoiceTakePreviewOggErrorV1;
 
 /// Derive exact revision-3 Ogg metadata, rational duration, and validation assurance.
 ///
@@ -445,19 +438,19 @@ pub fn inspect_revision3_voice_take_media_qa_v1(
     bytes: &[u8],
 ) -> Result<Revision3VoiceTakeMediaQaV1, Revision3VoiceTakeMediaQaErrorV1> {
     let validation = gore_vo::validate_ogg_with_timing(bytes, &gore_vo::Limits::default())
-        .map_err(|error| Revision3VoiceTakePreviewOggErrorV1::Invalid(error.to_string()))?;
+        .map_err(|error| Revision3VoiceTakeMediaQaErrorV1::Invalid(error.to_string()))?;
     let info = validation.info;
     let timing = validation.timing;
-    let pages = u32::try_from(info.pages)
-        .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?;
+    let pages =
+        u32::try_from(info.pages).map_err(|_| Revision3VoiceTakeMediaQaErrorV1::MetadataLimit)?;
     let logical_streams = u32::try_from(info.logical_streams)
-        .map_err(|_| Revision3VoiceTakePreviewOggErrorV1::MetadataLimit)?;
+        .map_err(|_| Revision3VoiceTakeMediaQaErrorV1::MetadataLimit)?;
     if timing.duration_sample_frames == 0 || i64::try_from(timing.duration_sample_frames).is_err() {
-        return Err(Revision3VoiceTakePreviewOggErrorV1::MetadataLimit);
+        return Err(Revision3VoiceTakeMediaQaErrorV1::MetadataLimit);
     }
 
     let inconsistent = || {
-        Revision3VoiceTakePreviewOggErrorV1::Invalid(
+        Revision3VoiceTakeMediaQaErrorV1::Invalid(
             "validated Ogg duration or decode assurance is internally inconsistent".to_owned(),
         )
     };
@@ -488,7 +481,7 @@ pub fn inspect_revision3_voice_take_media_qa_v1(
             )
         }
         gore_vo::OggCodec::Unknown => {
-            return Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(
+            return Err(Revision3VoiceTakeMediaQaErrorV1::Invalid(
                 "Ogg codec is not Vorbis or Opus".to_owned(),
             ));
         }
@@ -507,16 +500,6 @@ pub fn inspect_revision3_voice_take_media_qa_v1(
         },
         assurance,
     })
-}
-
-/// Derive the exact revision-3 metadata expected for preview bytes.
-///
-/// This compatibility API intentionally retains its original return type and serialized shape.
-/// New media-QA callers should use [`inspect_revision3_voice_take_media_qa_v1`].
-pub fn inspect_revision3_voice_take_preview_ogg_v1(
-    bytes: &[u8],
-) -> Result<OggMetadata, Revision3VoiceTakePreviewOggErrorV1> {
-    inspect_revision3_voice_take_media_qa_v1(bytes).map(Revision3VoiceTakeMediaQaV1::into_ogg)
 }
 
 fn is_zero_entity_id(value: &EntityId) -> bool {
@@ -912,21 +895,9 @@ mod tests {
     }
 
     #[test]
-    fn preview_ogg_inspector_remains_a_metadata_only_compatibility_wrapper() {
+    fn media_qa_wire_is_current_and_invalid_input_fails_closed() {
         let bytes = include_bytes!("../../gore-vo/testdata/tiny-vorbis.ogg");
         let media = inspect_revision3_voice_take_media_qa_v1(bytes).unwrap();
-        let metadata = inspect_revision3_voice_take_preview_ogg_v1(bytes).unwrap();
-        assert_eq!(&metadata, media.ogg());
-        assert_eq!(
-            serde_json::to_value(&metadata).unwrap(),
-            serde_json::json!({
-                "codec": "vorbis",
-                "channels": 1,
-                "sample_rate": 48_000,
-                "pages": 3,
-                "logical_streams": 1,
-            })
-        );
         assert_eq!(
             serde_json::to_value(&media).unwrap(),
             serde_json::json!({
@@ -946,11 +917,7 @@ mod tests {
         );
         assert!(matches!(
             inspect_revision3_voice_take_media_qa_v1(b"not ogg"),
-            Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(_))
-        ));
-        assert!(matches!(
-            inspect_revision3_voice_take_preview_ogg_v1(b"not ogg"),
-            Err(Revision3VoiceTakePreviewOggErrorV1::Invalid(_))
+            Err(Revision3VoiceTakeMediaQaErrorV1::Invalid(_))
         ));
     }
 }

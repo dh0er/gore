@@ -1018,8 +1018,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gore_authoring::{
-        AssetStoreIndex, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-        Revision2NpcParentClassInput, Revision3Entity, Revision3NpcDraft, Revision3NpcDraftInput,
+        AssetStoreIndex, FormatV2, GameGenerationAnchor, NpcParentClassInput, ProjectId,
+        ProjectMeta, Revision3Entity, Revision3NpcDraft, Revision3NpcDraftInput,
         Revision3OriginRef, Revision3TypedRef, SchemaRevisionV3, LOGICAL_NPC_CLONE_GENERATOR_ID,
         LOGICAL_NPC_CLONE_GENERATOR_VERSION,
     };
@@ -1047,8 +1047,8 @@ mod tests {
         }
     }
 
-    fn parent(value: u8, runtime_class: &str) -> Revision2NpcParentClassInput {
-        Revision2NpcParentClassInput {
+    fn parent(value: u8, runtime_class: &str) -> NpcParentClassInput {
+        NpcParentClassInput {
             generation: target(),
             source_seal: content_seal(value, 4_096),
             catalog_layer: "base-game.g1r.npc-parents.v1".to_owned(),

@@ -16,8 +16,8 @@ use crate::model_revision3::{
 };
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
-    apply_revision3_dialog_line_insert_transaction_v1, regenerate_revision3_quest_module_v2,
-    EntityId, GameGenerationAnchor, ProjectId, QuestCollisionCatalogInput,
+    apply_revision3_dialog_line_insert_transaction_v1, regenerate_revision3_quest_module, EntityId,
+    GameGenerationAnchor, ProjectId, QuestCollisionCatalogInput,
     Revision3DialogLineInsertConflictV1, Revision3DialogLineInsertErrorV1,
     Revision3DialogLineInsertEvaluationV1, Revision3DialogLineInsertRequestJsonErrorV1,
     Revision3DialogLineInsertRequestV1, Revision3DialogLocalizationActionV1, WorkingHead,
@@ -146,8 +146,6 @@ pub enum Revision3QuestTranscriptEditConflictV1 {
     InvalidLineReference { index: usize, reason: String },
     #[error("Quest transcript binding {index} duplicates DialogLine {line}")]
     DuplicateLine { index: usize, line: EntityId },
-    #[error("legacy Quest transcript binding {index} cannot target objective slot {slot}")]
-    LegacyObjectiveSlot { index: usize, slot: u16 },
     #[error("Quest transcript binding {index} targets inactive objective slot {slot}")]
     InactiveObjectiveSlot { index: usize, slot: u16 },
     #[error("create-and-insert index {index} exceeds transcript length {len}")]
@@ -362,18 +360,17 @@ pub fn apply_revision3_quest_transcript_edit_transaction_v1(
             }
         );
     }
-    let regenerated =
-        match regenerate_revision3_quest_module_v2(quest, empty_collision_input(quest)) {
-            Ok(module) => module,
-            Err(error) => {
-                reject!(
-                    Revision3QuestTranscriptEditConflictV1::InvalidQuestClosure {
-                        quest: request.quest_id,
-                        reason: error.to_string(),
-                    }
-                );
-            }
-        };
+    let regenerated = match regenerate_revision3_quest_module(quest, empty_collision_input(quest)) {
+        Ok(module) => module,
+        Err(error) => {
+            reject!(
+                Revision3QuestTranscriptEditConflictV1::InvalidQuestClosure {
+                    quest: request.quest_id,
+                    reason: error.to_string(),
+                }
+            );
+        }
+    };
     if &regenerated != existing_module {
         reject!(Revision3QuestTranscriptEditConflictV1::OwnedModuleDrift {
             quest: request.quest_id,
@@ -548,12 +545,13 @@ fn validate_bindings(
             max: MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1,
         });
     }
-    let active_slots = quest.input.transition_plan.as_deref().map(|plan| {
-        plan.objective_slots
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>()
-    });
+    let active_slots = quest
+        .input
+        .transition_plan
+        .objective_slots
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
     let mut line_ids = BTreeSet::new();
     for (index, binding) in bindings.iter().enumerate() {
         if binding.line.project_id != project.project_id {
@@ -594,13 +592,8 @@ fn validate_bindings(
                 },
             );
         }
-        match (active_slots.as_ref(), binding.objective_slot) {
-            (None, Some(slot)) => {
-                return Err(
-                    Revision3QuestTranscriptEditConflictV1::LegacyObjectiveSlot { index, slot },
-                );
-            }
-            (Some(active), Some(slot)) if !active.contains(&slot) => {
+        match binding.objective_slot {
+            Some(slot) if !active_slots.contains(&slot) => {
                 return Err(
                     Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { index, slot },
                 );

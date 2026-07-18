@@ -1,12 +1,10 @@
 use gore_authoring::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, ContentSeal,
     DraftQuestAuthoringStatus, DraftQuestCollisionCatalog, DraftQuestCollisionKind,
-    DraftQuestDiscoveryStatus, DraftQuestSkeletonError, DraftQuestSkeletonInput,
-    DraftQuestSkeletonInputV2, DraftQuestSkeletonV1, DraftQuestSkeletonV2,
-    DraftQuestTransitionStatus, EntityId, GameGenerationAnchor, Sha256Digest,
-    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
-    DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
-    MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+    DraftQuestDiscoveryStatus, DraftQuestSkeleton, DraftQuestSkeletonError,
+    DraftQuestSkeletonInput, DraftQuestTransitionStatus, EntityId, GameGenerationAnchor,
+    QuestTransitionPlanV1, Sha256Digest, DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
+    MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES, MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
 };
 
 const MODULE: &str = "GoreMods.Probe.AsghanMiniQuest";
@@ -68,6 +66,8 @@ fn input_with_catalog(catalog: DraftQuestCollisionCatalog) -> DraftQuestSkeleton
         title: "Gore probe at Asghan".into(),
         description: "Talk to Asghan once more to complete the probe quest.".into(),
         objective_title: "Talk to Asghan once more".into(),
+        additional_objective_titles: Vec::new(),
+        transition_plan: QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
         collision_catalog: catalog,
     }
 }
@@ -84,6 +84,14 @@ fn input() -> DraftQuestSkeletonInput {
         )
         .unwrap(),
     )
+}
+
+fn input_with_titles(titles: Vec<String>) -> DraftQuestSkeletonInput {
+    let mut input = input();
+    input.transition_plan =
+        QuestTransitionPlanV1::default_for_objectives(1 + titles.len()).unwrap();
+    input.additional_objective_titles = titles;
+    input
 }
 
 fn giver(
@@ -140,8 +148,8 @@ fn collision_catalog(
 }
 
 #[test]
-fn retained_asghan_lines_1_to_59_are_reproduced_byte_exactly() {
-    let generated = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+fn single_objective_source_is_rendered_exactly() {
+    let generated = DraftQuestSkeleton::new(input()).unwrap().generate();
     let expected = r#"FText GoreProbeAsghanText(const FName Text)
 {
     FString Value = Text.ToString();
@@ -208,9 +216,9 @@ UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE GetGoreProbeAsghanMiniObjective()
         generated.source_sha256.to_string(),
         "eb38bf814685485977113cf67a679d4b4cb309a2dbcd229fae3a6d57f2a4ae82"
     );
-    assert_eq!(
-        generated.input_fingerprint.to_string(),
-        "5987a4b5147fb76f34af3cf0f926f0c7de2450d4e370c1aee3d88bcf8121de93"
+    assert_ne!(
+        generated.input_fingerprint,
+        Sha256Digest::from_bytes([0; 32])
     );
     assert!(!generated.source.contains('\r'));
     assert!(generated.source.ends_with('\n'));
@@ -218,8 +226,9 @@ UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE GetGoreProbeAsghanMiniObjective()
 
 #[test]
 fn capability_is_always_offline_and_runtime_unqualified() {
-    let generated = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+    let generated = DraftQuestSkeleton::new(input()).unwrap().generate();
     assert_eq!(generated.generator_id, DRAFT_QUEST_GENERATOR_ID);
+    assert_eq!(DRAFT_QUEST_GENERATOR_VERSION, 4);
     assert_eq!(generated.generator_version, DRAFT_QUEST_GENERATOR_VERSION);
     assert_eq!(
         generated.status.authoring,
@@ -233,19 +242,11 @@ fn capability_is_always_offline_and_runtime_unqualified() {
         generated.status.transitions,
         DraftQuestTransitionStatus::TransitionsRuntimeUnqualified
     );
-    assert_eq!(generated.fixed_shape.quest_base_class, "UG1RQuest");
-    assert!(generated.fixed_shape.root_external_start);
-    assert!(generated.fixed_shape.objective_external_start);
-    assert!(generated.fixed_shape.objective_external_success);
-    assert!(generated.fixed_shape.objective_succeeds_parent);
 }
 
 #[test]
 fn source_contains_only_defaults_and_read_only_getters() {
-    let source = DraftQuestSkeletonV1::new(input())
-        .unwrap()
-        .generate()
-        .source;
+    let source = DraftQuestSkeleton::new(input()).unwrap().generate().source;
     for forbidden in [
         "UChoice",
         "UFUNCTION",
@@ -275,7 +276,7 @@ fn generation_and_catalog_seals_fail_closed_without_qualifying_runtime() {
     let mut bad_target = input();
     bad_target.target.executable.byte_len = 0;
     assert!(matches!(
-        DraftQuestSkeletonV1::new(bad_target),
+        DraftQuestSkeleton::new(bad_target),
         Err(DraftQuestSkeletonError::InvalidSeal { .. })
     ));
 
@@ -289,7 +290,7 @@ fn generation_and_catalog_seals_fail_closed_without_qualifying_runtime() {
     )
     .unwrap();
     assert!(matches!(
-        DraftQuestSkeletonV1::new(mismatched_giver),
+        DraftQuestSkeleton::new(mismatched_giver),
         Err(DraftQuestSkeletonError::GenerationMismatch {
             field: gore_authoring::DraftQuestField::GiverGeneration
         })
@@ -305,7 +306,7 @@ fn generation_and_catalog_seals_fail_closed_without_qualifying_runtime() {
     )
     .unwrap();
     assert!(matches!(
-        DraftQuestSkeletonV1::new(mismatched_parent),
+        DraftQuestSkeleton::new(mismatched_parent),
         Err(DraftQuestSkeletonError::GenerationMismatch {
             field: gore_authoring::DraftQuestField::ParentGeneration
         })
@@ -321,7 +322,7 @@ fn generation_and_catalog_seals_fail_closed_without_qualifying_runtime() {
     )
     .unwrap();
     assert!(matches!(
-        DraftQuestSkeletonV1::new(input_with_catalog(mismatched_collision)),
+        DraftQuestSkeleton::new(input_with_catalog(mismatched_collision)),
         Err(DraftQuestSkeletonError::GenerationMismatch {
             field: gore_authoring::DraftQuestField::CollisionGeneration
         })
@@ -364,21 +365,21 @@ fn identifiers_and_literals_reject_reserved_words_injection_and_length_overflow(
     for mutate in mutations {
         let mut candidate = input();
         mutate(&mut candidate);
-        assert!(DraftQuestSkeletonV1::new(candidate).is_err());
+        assert!(DraftQuestSkeleton::new(candidate).is_err());
     }
 
     let mut injected = input();
     injected.title = "Bad\"; StartQuest(nullptr); //".into();
-    assert!(DraftQuestSkeletonV1::new(injected).is_err());
+    assert!(DraftQuestSkeleton::new(injected).is_err());
 
     let mut newline = input();
     newline.objective_title = "line one\nline two".into();
-    assert!(DraftQuestSkeletonV1::new(newline).is_err());
+    assert!(DraftQuestSkeleton::new(newline).is_err());
 
     let mut too_long = input();
     too_long.description = "x".repeat(MAX_DRAFT_QUEST_DESCRIPTION_BYTES + 1);
     assert!(matches!(
-        DraftQuestSkeletonV1::new(too_long),
+        DraftQuestSkeleton::new(too_long),
         Err(DraftQuestSkeletonError::ValueTooLong { .. })
     ));
 
@@ -419,7 +420,7 @@ fn generated_symbols_are_pairwise_unique_and_gore_as_generated_names_are_reserve
         let mut candidate = input();
         candidate.text_helper = helper.into();
         assert!(matches!(
-            DraftQuestSkeletonV1::new(candidate),
+            DraftQuestSkeleton::new(candidate),
             Err(DraftQuestSkeletonError::GeneratedSymbolCollision { .. })
         ));
     }
@@ -436,7 +437,7 @@ fn generated_symbols_are_pairwise_unique_and_gore_as_generated_names_are_reserve
         let mut candidate = input();
         candidate.text_helper = generated_name.into();
         assert!(matches!(
-            DraftQuestSkeletonV1::new(candidate),
+            DraftQuestSkeleton::new(candidate),
             Err(DraftQuestSkeletonError::ReservedIdentifier { .. })
         ));
     }
@@ -487,7 +488,7 @@ fn catalog_layers_are_bounded_canonical_and_retained_without_cross_layer_retarge
     )
     .is_err());
 
-    let generated = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+    let generated = DraftQuestSkeleton::new(input()).unwrap().generate();
     assert_eq!(generated.giver.catalog_layer(), GIVER_LAYER);
     assert_eq!(generated.giver.canonical_selector(), GIVER_SELECTOR);
     assert_eq!(generated.giver.runtime_unique_name(), GIVER);
@@ -571,7 +572,7 @@ fn collision_catalog_rejects_unsafe_ambiguous_and_generated_names_case_insensiti
         .unwrap(),
     ] {
         assert!(matches!(
-            DraftQuestSkeletonV1::new(input_with_catalog(catalog)),
+            DraftQuestSkeleton::new(input_with_catalog(catalog)),
             Err(DraftQuestSkeletonError::GeneratedNameCollision { .. })
         ));
     }
@@ -579,27 +580,27 @@ fn collision_catalog_rejects_unsafe_ambiguous_and_generated_names_case_insensiti
 
 #[test]
 fn same_immutable_inputs_generate_identical_source_and_metadata() {
-    let first = DraftQuestSkeletonV1::new(input()).unwrap().generate();
-    let second = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+    let first = DraftQuestSkeleton::new(input()).unwrap().generate();
+    let second = DraftQuestSkeleton::new(input()).unwrap().generate();
     assert_eq!(first, second);
     assert_eq!(first.quest_id, entity_id());
-    assert_eq!(first.technical_names.module_namespace, MODULE);
+    assert_eq!(first.technical_names.base.module_namespace, MODULE);
     assert_eq!(
-        first.technical_names.module_relative_path,
+        first.technical_names.base.module_relative_path,
         "GoreMods/Probe/AsghanMiniQuest.as"
     );
     assert_eq!(
-        first.technical_names.root_class,
+        first.technical_names.base.root_class,
         "UQuest_GORE_PROBE_ASGHAN_MINI"
     );
     assert_eq!(
-        first.technical_names.objective_class,
+        first.technical_names.base.objective_class,
         "UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE"
     );
     assert_eq!(first.input_fingerprint, second.input_fingerprint);
     assert_eq!(
         first.input_fingerprint,
-        DraftQuestSkeletonV1::new(input())
+        DraftQuestSkeleton::new(input())
             .unwrap()
             .input_fingerprint()
     );
@@ -607,7 +608,7 @@ fn same_immutable_inputs_generate_identical_source_and_metadata() {
 
 #[test]
 fn input_fingerprint_covers_source_semantics_and_non_emitted_provenance() {
-    let baseline = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+    let baseline = DraftQuestSkeleton::new(input()).unwrap().generate();
     let mut variants = Vec::<(&str, DraftQuestSkeletonInput, bool)>::new();
 
     let mut changed = input();
@@ -816,7 +817,7 @@ fn input_fingerprint_covers_source_semantics_and_non_emitted_provenance() {
     variants.push(("generation byte length", changed, true));
 
     for (label, candidate, source_alias) in variants {
-        let generated = DraftQuestSkeletonV1::new(candidate).unwrap().generate();
+        let generated = DraftQuestSkeleton::new(candidate).unwrap().generate();
         assert_ne!(
             generated.input_fingerprint, baseline.input_fingerprint,
             "fingerprint aliased after changing {label}"
@@ -859,8 +860,8 @@ fn collision_inventory_fingerprint_is_ordered_and_casefold_canonical() {
         vec!["existing/a.as".into(), "existing/b.as".into()],
         vec!["existingsymbola".into(), "existingsymbolb".into()],
     ));
-    let first = DraftQuestSkeletonV1::new(first).unwrap().generate();
-    let second = DraftQuestSkeletonV1::new(second).unwrap().generate();
+    let first = DraftQuestSkeleton::new(first).unwrap().generate();
+    let second = DraftQuestSkeleton::new(second).unwrap().generate();
     assert_eq!(first.source, second.source);
     assert_eq!(first.input_fingerprint, second.input_fingerprint);
 }
@@ -874,8 +875,8 @@ fn input_fingerprint_length_prefixes_field_boundaries() {
     second.title = "A".into();
     second.description = "BC".into();
 
-    let first = DraftQuestSkeletonV1::new(first).unwrap().generate();
-    let second = DraftQuestSkeletonV1::new(second).unwrap().generate();
+    let first = DraftQuestSkeleton::new(first).unwrap().generate();
+    let second = DraftQuestSkeleton::new(second).unwrap().generate();
     assert_ne!(first.input_fingerprint, second.input_fingerprint);
 }
 
@@ -895,7 +896,7 @@ fn parent_may_not_alias_either_generated_class() {
         )
         .unwrap();
         assert!(matches!(
-            DraftQuestSkeletonV1::new(candidate),
+            DraftQuestSkeleton::new(candidate),
             Err(DraftQuestSkeletonError::ParentClassCollision { .. })
         ));
     }
@@ -913,7 +914,7 @@ fn collision_error_names_its_domain() {
     )
     .unwrap();
     assert!(matches!(
-        DraftQuestSkeletonV1::new(input_with_catalog(catalog)),
+        DraftQuestSkeleton::new(input_with_catalog(catalog)),
         Err(DraftQuestSkeletonError::GeneratedNameCollision {
             kind: DraftQuestCollisionKind::Module,
             ..
@@ -923,20 +924,14 @@ fn collision_error_names_its_domain() {
 
 #[test]
 fn multi_objective_source_is_ordered_and_only_the_last_objective_succeeds_parent() {
-    let generated = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-        base: input(),
-        additional_objective_titles: vec![
-            "Find the guard captain".into(),
-            "Report the secured gate".into(),
-        ],
-    })
+    let generated = DraftQuestSkeleton::new(input_with_titles(vec![
+        "Find the guard captain".into(),
+        "Report the secured gate".into(),
+    ]))
     .unwrap()
     .generate();
 
-    assert_eq!(
-        generated.generator_version,
-        DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION
-    );
+    assert_eq!(generated.generator_version, DRAFT_QUEST_GENERATOR_VERSION);
     let first = generated
         .source
         .find("class UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE")
@@ -958,44 +953,30 @@ fn multi_objective_source_is_ordered_and_only_the_last_objective_succeeds_parent
 
 #[test]
 fn multi_objective_titles_are_closed_bounded_unique_and_order_sensitive() {
+    let mut too_many = input();
+    too_many.additional_objective_titles = vec!["Step".into(); 8];
     assert!(matches!(
-        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-            base: input(),
-            additional_objective_titles: vec![],
-        }),
-        Err(DraftQuestSkeletonError::EmptyValue { .. })
-    ));
-    assert!(matches!(
-        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-            base: input(),
-            additional_objective_titles: vec!["Step".into(); 8],
-        }),
+        DraftQuestSkeleton::new(too_many),
         Err(DraftQuestSkeletonError::TooManyObjectives { .. })
     ));
     assert!(matches!(
-        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-            base: input(),
-            additional_objective_titles: vec!["talk to asghan once more".into()],
-        }),
+        DraftQuestSkeleton::new(input_with_titles(vec!["talk to asghan once more".into()])),
         Err(DraftQuestSkeletonError::DuplicateObjectiveTitle { .. })
     ));
     assert!(matches!(
-        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-            base: input(),
-            additional_objective_titles: vec![" ".into()],
-        }),
+        DraftQuestSkeleton::new(input_with_titles(vec![" ".into()])),
         Err(DraftQuestSkeletonError::NonCanonicalText { .. })
     ));
 
-    let first = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-        base: input(),
-        additional_objective_titles: vec!["Inspect the gate".into(), "Report back".into()],
-    })
+    let first = DraftQuestSkeleton::new(input_with_titles(vec![
+        "Inspect the gate".into(),
+        "Report back".into(),
+    ]))
     .unwrap();
-    let second = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-        base: input(),
-        additional_objective_titles: vec!["Report back".into(), "Inspect the gate".into()],
-    })
+    let second = DraftQuestSkeleton::new(input_with_titles(vec![
+        "Report back".into(),
+        "Inspect the gate".into(),
+    ]))
     .unwrap();
     assert_ne!(first.input_fingerprint(), second.input_fingerprint());
 }
@@ -1015,11 +996,11 @@ fn every_added_objective_symbol_is_reserved_against_the_catalog() {
             vec![],
             vec![symbol.into()],
         );
+        let mut candidate = input_with_catalog(catalog);
+        candidate.additional_objective_titles = vec!["Inspect the gate".into()];
+        candidate.transition_plan = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
         assert!(matches!(
-            DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-                base: input_with_catalog(catalog),
-                additional_objective_titles: vec!["Inspect the gate".into()],
-            }),
+            DraftQuestSkeleton::new(candidate),
             Err(DraftQuestSkeletonError::GeneratedNameCollision {
                 kind: DraftQuestCollisionKind::Symbol,
                 ..

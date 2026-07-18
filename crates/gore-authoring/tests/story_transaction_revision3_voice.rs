@@ -165,8 +165,8 @@ fn basis_with_selected_take(status: VoiceTakeStatus) -> ProjectRevision3 {
                     byte_len: 4096,
                     logical_name: "old.ogg".into(),
                 },
-                ogg: gore_authoring::Revision2OggMetadata {
-                    codec: gore_authoring::Revision2OggCodec::Vorbis,
+                ogg: gore_authoring::OggMetadata {
+                    codec: gore_authoring::OggCodec::Vorbis,
                     channels: 1,
                     sample_rate: 48_000,
                     pages: 2,
@@ -437,8 +437,8 @@ fn appends_and_selects_only_an_approved_take_on_the_exact_existing_slot() {
                     byte_len: 4096,
                     logical_name: "old.ogg".into(),
                 },
-                ogg: gore_authoring::Revision2OggMetadata {
-                    codec: gore_authoring::Revision2OggCodec::Vorbis,
+                ogg: gore_authoring::OggMetadata {
+                    codec: gore_authoring::OggCodec::Vorbis,
                     channels: 1,
                     sample_rate: 48_000,
                     pages: 2,
@@ -614,12 +614,12 @@ fn adding_future_takes_preserves_valid_resolved_and_ambiguous_targets() {
     let first = VoiceTarget {
         archive: "german.zip".into(),
         member: "NPC/Asghan/line.ogg".into(),
-        operation: gore_authoring::Revision2VoiceOperation::Replace,
+        operation: gore_authoring::VoiceOperation::Replace,
         archive_seal: gore_authoring::ArchiveSeal {
             byte_len: 100,
             sha256: digest(0x61),
         },
-        member_proof: gore_authoring::Revision2VoiceMemberProof::Present {
+        member_proof: gore_authoring::VoiceMemberProof::Present {
             uncompressed_size: 10,
             crc32: 123,
         },

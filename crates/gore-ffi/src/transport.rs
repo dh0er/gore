@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::c_void;
 use std::io::{self, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
@@ -92,7 +91,7 @@ fn serialize_value_bounded(value: &Value, limit: usize) -> Vec<u8> {
     }
 }
 
-/// Pure bounded serializer used by the C-string compatibility ABI and transport v2.
+/// Pure bounded serializer used by transport v2 and the in-process test seam.
 pub(crate) fn execute_json_bounded(input: &str) -> Vec<u8> {
     serialize_value_bounded(&dispatch(input), MAX_TRANSPORT_RESPONSE_BYTES)
 }
@@ -196,57 +195,8 @@ pub unsafe extern "C" fn gore_core_response_free_v2(handle: *mut c_void) {
     unsafe { drop(Box::from_raw(handle.cast::<OwnedResponse>())) };
 }
 
-/// Backward-compatible C-string ABI for older Studio binaries. New Studio builds never bind this
-/// symbol. The NUL search is capped, and responses share the v2 global serialization budget.
-///
-/// # Safety
-/// `request_json` must be null or point to a readable NUL-terminated string. The returned pointer
-/// is owned by the caller and must be released exactly once with [`gore_core_free`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gore_core_execute(request_json: *const c_char) -> *mut c_char {
-    let response = if request_json.is_null() {
-        execute_json_bounded(r#"{"command":null}"#)
-    } else {
-        let mut len = 0usize;
-        while len <= MAX_TRANSPORT_REQUEST_BYTES {
-            // SAFETY: the legacy ABI requires readable bytes through its NUL terminator. The loop
-            // adds a hard upper bound that `CStr::from_ptr` did not provide.
-            if unsafe { request_json.cast::<u8>().add(len).read() } == 0 {
-                break;
-            }
-            len += 1;
-        }
-        if len > MAX_TRANSPORT_REQUEST_BYTES {
-            REQUEST_LIMIT_RESPONSE.to_vec()
-        } else {
-            // SAFETY: the bounded scan just found the terminator at `len`.
-            let bytes = unsafe { slice::from_raw_parts(request_json.cast::<u8>(), len) };
-            let input: Cow<'_, str> = String::from_utf8_lossy(bytes);
-            execute_json_bounded(&input)
-        }
-    };
-    match CString::new(response) {
-        Ok(value) => value.into_raw(),
-        Err(_) => ptr::null_mut(),
-    }
-}
-
-/// Releases a legacy response returned by [`gore_core_execute`].
-///
-/// # Safety
-/// `ptr` must be null or an unreleased pointer returned by [`gore_core_execute`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gore_core_free(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: guaranteed by the ownership contract above.
-    unsafe { drop(CString::from_raw(ptr)) };
-}
-
 #[cfg(test)]
 mod tests {
-    use std::ffi::{CStr, CString};
     use std::ptr;
     use std::slice;
     use std::thread;
@@ -399,22 +349,5 @@ mod tests {
             })
             .collect();
         assert!(joins.into_iter().all(|join| join.join().unwrap()));
-    }
-
-    #[test]
-    fn legacy_and_v2_have_the_same_json_protocol() {
-        let request = r#"{"command":"core_info","payload":{}}"#;
-        let c_request = CString::new(request).unwrap();
-        let legacy_ptr = unsafe { gore_core_execute(c_request.as_ptr()) };
-        assert!(!legacy_ptr.is_null());
-        let legacy: Value =
-            serde_json::from_slice(unsafe { CStr::from_ptr(legacy_ptr) }.to_bytes()).unwrap();
-
-        let (status, out, bytes) = unsafe { invoke(request.as_ptr(), request.len()) };
-        assert_eq!(status, TRANSPORT_STATUS_OK);
-        assert_eq!(legacy, value(&bytes));
-
-        unsafe { gore_core_free(legacy_ptr) };
-        unsafe { free(out) };
     }
 }

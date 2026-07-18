@@ -327,7 +327,11 @@ fn exact_resolved_and_ambiguous_target_evidence_is_reported_before_slot_removal(
                 "Npc/Asghan/GORE_ASGHAN_GREETING.ogg",
                 0x42,
             ),
-            voice_target("german_old.zip", "Legacy/GORE_ASGHAN_GREETING.ogg", 0x43),
+            voice_target(
+                "german_alternate.zip",
+                "Alternate/GORE_ASGHAN_GREETING.ogg",
+                0x43,
+            ),
         ],
     });
     let ambiguous_outcome = applied(evaluate(&ambiguous, &request()));

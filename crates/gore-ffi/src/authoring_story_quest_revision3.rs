@@ -32,7 +32,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::authoring_story_inventory::{read_source_no_follow, SourceReadError};
+use crate::authoring_source_io::{read_source_no_follow, SourceReadError};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_prepare_revision3_quest_draft_v3";

@@ -1,30 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use gore_authoring::{
-    AssetStoreIndex, ContentSeal, DraftQuestSkeletonError, EntityId, FormatV2,
-    GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
-    QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
-    Revision3QuestGenerationError, Revision3QuestGiverInput, Revision3QuestParentInput,
-    Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, Sha256Digest,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    ContentSeal, DraftQuestSkeletonError, EntityId, GameGenerationAnchor, ProjectId,
+    QuestCollisionArtifactRef, QuestCollisionCatalogInput, Revision3EntityKind,
+    Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestGenerationError,
+    Revision3QuestGiverInput, Revision3QuestParentInput, Revision3TypedRef, Sha256Digest,
+    WorkingHead, WorkingStoreFormat, QUEST_COLLISION_CATALOG_LAYER_V2,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
-use gore_story_inventory::{
-    QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability,
-    VerifiedRevision3QuestCollisionInspectionCapabilityV2,
-};
+use gore_story_inventory::VerifiedRevision3QuestCollisionInspectionCapabilityV2;
 use sha2::{Digest as _, Sha256};
 
 use crate::revision3_quest::{
-    prepare_revision3_quest_source_inspection, prepare_revision3_quest_source_inspection_v3,
-    regenerate_revision3_quest_module, revision3_quest_input_fingerprint, validate_revision3_basis,
-    PlanFormat, PlanSchemaRevision, PreparedRevision3QuestSourceInspection,
+    prepare_revision3_quest_source_inspection_v3, regenerate_revision3_quest_module,
+    revision3_quest_input_fingerprint, PlanFormat, PlanSchemaRevisionV3,
     PreparedRevision3QuestSourceInspectionV3, QuestInspectionBuildStatus,
     QuestInspectionPublicationStatus, QuestInspectionRuntimeQualification, QuestInspectionScope,
     Revision3QuestInspectionError, Revision3QuestInspectionModule,
-    Revision3QuestInspectionProvenance, Revision3QuestSourceInspectionPlanV2,
-    Revision3QuestSourceInspectionPlanV3,
+    Revision3QuestInspectionProvenanceV3, Revision3QuestSourceInspectionPlanV3,
 };
 
 fn project_id(value: u8) -> ProjectId {
@@ -78,7 +71,7 @@ fn giver() -> Revision3QuestGiverInput {
 fn artifact_ref() -> QuestCollisionArtifactRef {
     QuestCollisionArtifactRef {
         generation: target(),
-        catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+        catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
         artifact: seal(4, 4_096),
         source_seal: seal(5, 4_096),
         basis_snapshot: seal(6, 800),
@@ -101,7 +94,9 @@ fn quest(project: ProjectId) -> Revision3QuestDraft {
             description: "Prove that the gate is secure.".to_owned(),
             objective_title: "Report to Asghan".to_owned(),
             additional_objective_titles: Vec::new(),
-            transition_plan: None,
+            transition_plan: Box::new(
+                gore_authoring::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+            ),
             collision_catalog: artifact_ref(),
         },
         script_module: Revision3TypedRef::new(
@@ -117,54 +112,10 @@ fn collision_input() -> QuestCollisionCatalogInput {
     QuestCollisionCatalogInput {
         generation: target(),
         source_seal: artifact_ref().source_seal,
-        catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+        catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
         modules: BTreeSet::new(),
         relative_paths: BTreeSet::new(),
         symbols: BTreeSet::new(),
-    }
-}
-
-fn empty_basis() -> ProjectRevision3 {
-    ProjectRevision3 {
-        format: FormatV2,
-        schema_revision: SchemaRevisionV3,
-        project_id: project_id(8),
-        revision: 3,
-        meta: ProjectMeta {
-            name: "Quest basis".to_owned(),
-            version: "0.1.0".to_owned(),
-            author: "test".to_owned(),
-        },
-        target: target(),
-        authoring_locales: BTreeSet::new(),
-        entities: BTreeMap::new(),
-        asset_store: AssetStoreIndex::default(),
-    }
-}
-
-fn quest_entity(draft: Revision3QuestDraft) -> Revision3Entity {
-    Revision3Entity {
-        id: draft.input.quest_id,
-        display_name: "Asghan Trial".to_owned(),
-        origin: Revision3OriginRef::New {
-            authored_runtime_id: draft.input.technical_id.clone(),
-        },
-        revision: 0,
-        payload: Revision3EntityPayload::QuestDraft(draft),
-    }
-}
-
-fn module_entity(project: ProjectId, module: Revision3ScriptModule) -> Revision3Entity {
-    Revision3Entity {
-        id: entity_id(11),
-        display_name: "Asghan Trial source".to_owned(),
-        origin: Revision3OriginRef::Generated {
-            generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-            generator_version: REVISION3_QUEST_GENERATOR_VERSION,
-            owner: Revision3TypedRef::new(project, entity_id(10), Revision3EntityKind::QuestDraft),
-        },
-        revision: 0,
-        payload: Revision3EntityPayload::ScriptModule(module),
     }
 }
 
@@ -219,17 +170,18 @@ fn v2_lowering_is_deterministic_and_checks_the_moved_collision_set() {
 }
 
 #[test]
-fn v3_multi_objective_lowering_preserves_order_and_reserves_every_symbol() {
+fn current_multi_objective_lowering_preserves_order_and_reserves_every_symbol() {
     let mut draft = quest(project_id(8));
-    draft.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
     draft.input.additional_objective_titles = vec![
         "Inspect the gate".to_owned(),
         "Report the secured gate".to_owned(),
     ];
+    draft.input.transition_plan =
+        Box::new(gore_authoring::QuestTransitionPlanV1::default_for_objectives(3).unwrap());
     let generated = regenerate_revision3_quest_module(&draft, collision_input()).unwrap();
     assert_eq!(
         generated.generator_version,
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        REVISION3_QUEST_GENERATOR_VERSION
     );
     let first = generated.source.find("_OBJ_DONE").unwrap();
     let second = generated.source.find("_OBJ_2").unwrap();
@@ -255,11 +207,11 @@ fn v3_multi_objective_lowering_preserves_order_and_reserves_every_symbol() {
     }
 
     let mut wrong_version = draft.clone();
-    wrong_version.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+    wrong_version.generator_version = REVISION3_QUEST_GENERATOR_VERSION - 1;
     assert!(matches!(
         regenerate_revision3_quest_module(&wrong_version, collision_input()),
         Err(Revision3QuestInspectionError::SharedQuestGeneration(
-            Revision3QuestGenerationError::ObjectiveGeneratorContract { .. }
+            Revision3QuestGenerationError::GeneratorContract { .. }
         ))
     ));
 }
@@ -299,53 +251,32 @@ fn s3_lowering_propagates_all_shared_collision_reference_mismatches() {
 }
 
 #[test]
-fn native_basis_validation_accepts_clean_r3_and_rejects_recursive_or_residual_quest_state() {
-    let clean = empty_basis();
-    validate_revision3_basis(&clean).unwrap();
-
-    let mut recursive = empty_basis();
-    let draft = quest(recursive.project_id);
-    recursive
-        .entities
-        .insert(draft.input.quest_id, quest_entity(draft));
-    assert!(matches!(
-        validate_revision3_basis(&recursive),
-        Err(Revision3QuestInspectionError::RecursiveQuestBasis { .. })
-    ));
-
-    let mut residual = empty_basis();
-    let draft = quest(residual.project_id);
-    let module = regenerate_revision3_quest_module(&draft, collision_input()).unwrap();
-    residual
-        .entities
-        .insert(entity_id(11), module_entity(residual.project_id, module));
-    assert!(matches!(
-        validate_revision3_basis(&residual),
-        Err(Revision3QuestInspectionError::ResidualQuestBasis { .. })
-    ));
-}
-
-#[test]
-fn plan_reopen_is_canonical_bounded_and_permanently_fail_closed() {
+fn current_plan_reopen_is_canonical_bounded_and_permanently_fail_closed() {
     let project = project_id(8);
     let draft = quest(project);
     let generated = regenerate_revision3_quest_module(&draft, collision_input()).unwrap();
     let input = serde_json::to_vec(&draft.input).unwrap();
     let source = seal_bytes(generated.source.as_bytes());
-    let plan = Revision3QuestSourceInspectionPlanV2 {
+    let plan = Revision3QuestSourceInspectionPlanV3 {
         format_marker: PlanFormat,
-        schema_revision: PlanSchemaRevision,
+        schema_revision: PlanSchemaRevisionV3,
         scope: QuestInspectionScope::SourceInspectionOnly,
         build_status: QuestInspectionBuildStatus::Blocked,
         runtime_qualification: QuestInspectionRuntimeQualification::RuntimeUnqualified,
         publication_status: QuestInspectionPublicationStatus::NotSupported,
-        provenance: Revision3QuestInspectionProvenance {
+        provenance: Revision3QuestInspectionProvenanceV3 {
             project_id: project,
             project_revision: 4,
             target_executable: target().executable,
             canonical_project: seal(20, 1_000),
-            basis_snapshot: artifact_ref().basis_snapshot,
-            canonical_collision_source_project: seal(21, 900),
+            collision_basis_head: WorkingHead {
+                store_format: WorkingStoreFormat,
+                snapshot: artifact_ref().basis_snapshot,
+            },
+            collision_basis_project: seal(21, 900),
+            collision_nonquest_project: seal(22, 700),
+            collision_prior_quest_count: 0,
+            collision_prior_quest_evidence: seal(23, 600),
             collision_artifact: artifact_ref().artifact,
             collision_source: artifact_ref().source_seal,
         },
@@ -359,15 +290,15 @@ fn plan_reopen_is_canonical_bounded_and_permanently_fail_closed() {
     };
     let canonical = plan.to_canonical_json().unwrap();
     assert_eq!(
-        Revision3QuestSourceInspectionPlanV2::from_json(&canonical).unwrap(),
+        Revision3QuestSourceInspectionPlanV3::from_json(&canonical).unwrap(),
         plan
     );
     assert!(matches!(
-        Revision3QuestSourceInspectionPlanV2::from_json(&(canonical.clone() + "\n")),
+        Revision3QuestSourceInspectionPlanV3::from_json(&(canonical.clone() + "\n")),
         Err(Revision3QuestInspectionError::NonCanonicalPlanJson)
     ));
     assert!(matches!(
-        Revision3QuestSourceInspectionPlanV2::from_json(
+        Revision3QuestSourceInspectionPlanV3::from_json(
             &canonical.replace("\"blocked\"", "\"ready\"")
         ),
         Err(Revision3QuestInspectionError::InvalidPlanJson(_))
@@ -382,20 +313,6 @@ fn plan_reopen_is_canonical_bounded_and_permanently_fail_closed() {
 
 #[test]
 fn public_lowering_boundary_accepts_only_a_fresh_capability_not_an_artifact() {
-    let _: fn(
-        PreparedRevision3QuestSourceInspection,
-        VerifiedQuestCollisionCapability,
-    ) -> Result<Revision3QuestSourceInspectionPlanV2, Revision3QuestInspectionError> =
-        PreparedRevision3QuestSourceInspection::lower;
-    let _: fn(
-        &gore_authoring::WorkingProjectStore,
-        &str,
-        EntityId,
-    )
-        -> Result<PreparedRevision3QuestSourceInspection, Revision3QuestInspectionError> =
-        prepare_revision3_quest_source_inspection;
-    let _: Option<QuestCollisionCapabilityArtifactV1> = None;
-
     let _: fn(
         PreparedRevision3QuestSourceInspectionV3,
         VerifiedRevision3QuestCollisionInspectionCapabilityV2,

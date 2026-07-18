@@ -1,9 +1,8 @@
 //! Closed base-game plus exact-current revision-3 Quest collision capability.
 //!
-//! Version 2 is deliberately separate from the frozen version-1 wire and API. Its only project
-//! authority input is an opaque [`PreparedRevision3QuestCollisionSourceV2`] produced by the
-//! working store from one exact current head. Historical Quest artifacts and their historical
-//! basis snapshots are never authority inputs.
+//! Its only project authority input is an opaque [`PreparedRevision3QuestCollisionSourceV2`]
+//! produced by the working store from one exact current head. Historical Quest artifacts and
+//! their historical basis snapshots are never authority inputs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -24,13 +23,31 @@ use gore_story_catalog::{CatalogError, StoryCatalogFile, MAX_CATALOG_JSON_BYTES}
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
-use super::quest_capability::{
-    QuestCollisionBuildStatus, QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
-};
 use super::{
     BaseGameCollisionInventory, ContentSeal, MAX_COLLISION_ENTRIES, MAX_COLLISION_ENTRY_BYTES,
     MAX_COLLISION_TOTAL_BYTES, MAX_INVENTORY_JSON_BYTES,
 };
+
+/// Offline collision inspection does not qualify runtime behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestCollisionRuntimeQualification {
+    RuntimeUnqualified,
+}
+
+/// Collision inspection alone cannot authorize a build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestCollisionBuildStatus {
+    Blocked,
+}
+
+/// Publication remains outside this capability boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestCollisionPublicationStatus {
+    NotSupported,
+}
 
 /// Honest layer identity: pristine base game plus one exact current revision-3 project.
 pub const BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2: &str =

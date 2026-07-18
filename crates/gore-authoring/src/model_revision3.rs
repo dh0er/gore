@@ -5,9 +5,8 @@
 //! bounded reference to immutable collision evidence; multi-megabyte collision arrays are not
 //! representable in this schema.
 //!
-//! This foundation is also available through [`crate::ProjectDocument`] for bounded parsing and
-//! canonical serialization. Dispatch alone grants no Store, build, deployment, or runtime
-//! authority.
+//! Bounded parsing and canonical serialization are owned directly by [`ProjectRevision3`].
+//! Parsing alone grants no Store, build, deployment, or runtime authority.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -17,30 +16,28 @@ use std::marker::PhantomData;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::revision3_story_generation::{
+    fingerprint_npc_input, validate_generator_contract, validate_npc_input_provenance,
+    GeneratedStoryIdentity,
+};
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
     AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, LocaleCode, ProjectId,
     ProjectMeta, Sha256Digest, MAX_PROJECT_JSON_BYTES,
 };
 
-pub use crate::model_revision2::{
+pub use crate::story_model::{
     LocalizationEntry, NpcDraftInput, NpcParentClassInput, OggCodec, OggMetadata, QuestGiverInput,
     QuestParentInput, ScriptAuthoringStatus, ScriptModuleStatus, ScriptRuntimeStatus,
     VoiceMemberProof, VoiceOperation, VoiceTake, VoiceTakeStatus, VoiceTarget,
     VoiceTargetResolution,
 };
 
-pub const QUEST_COLLISION_ARTIFACT_FORMAT: &str = "quest_collision_capability";
-pub const QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION: u32 = 1;
-pub const QUEST_COLLISION_ARTIFACT_MEDIA_TYPE: &str =
-    "application/vnd.gore.quest-collision-capability+json;version=1";
-pub const QUEST_COLLISION_CATALOG_LAYER: &str = "base-game-plus-exact-project.story-collisions.v1";
 /// Media type reserved for collision evidence rebuilt from the exact current revision-3
 /// project, including already-authored Quest identities.
 ///
-/// Version 1 constants and wire fields deliberately remain unchanged. The catalog layer is the
-/// discriminator carried by [`QuestCollisionArtifactRef`]; closed-model validation requires this
-/// media type and [`QUEST_COLLISION_CATALOG_LAYER_V2`] as an exact pair.
+/// The catalog layer is the discriminator carried by [`QuestCollisionArtifactRef`]; closed-model
+/// validation requires this media type and [`QUEST_COLLISION_CATALOG_LAYER_V2`] as an exact pair.
 pub const QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2: &str =
     "application/vnd.gore.quest-collision-capability+json;version=2";
 pub const QUEST_COLLISION_CATALOG_LAYER_V2: &str =
@@ -59,9 +56,7 @@ pub const MAX_REVISION3_BASE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum final revision-3 Store snapshot, including its bounded retained-history envelope.
 pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 17 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
-pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
-pub const REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION: u32 = 3;
-pub const REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION: u32 = 4;
+pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 4;
 pub const MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1: usize = 8;
 pub const MAX_QUEST_TRANSITION_EFFECTS_V1: usize = 8;
@@ -69,8 +64,7 @@ pub(crate) const MAX_CATALOG_LAYER_BYTES: usize = 128;
 
 /// Closed entity kinds owned by schema revision 3.
 ///
-/// This is intentionally not a revision-2 re-export. Revision 3 is the only managed authoring
-/// schema and may add native payloads without widening any older wire model.
+/// Revision 3 is the only managed authoring schema and owns every entity kind directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityKind {
@@ -178,15 +172,13 @@ pub(crate) fn revision3_voice_target_key_v1(target: &VoiceTarget) -> (String, St
 
 pub(crate) fn quest_collision_artifact_media_for_layer(layer: &str) -> Option<&'static str> {
     match layer {
-        QUEST_COLLISION_CATALOG_LAYER => Some(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE),
         QUEST_COLLISION_CATALOG_LAYER_V2 => Some(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2),
         _ => None,
     }
 }
 
 pub(crate) fn is_quest_collision_artifact_media_type(media_type: &str) -> bool {
-    media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE
-        || media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2
+    media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -344,7 +336,7 @@ pub struct QuestTransitionV1 {
     pub succeeds_parent: bool,
 }
 
-/// Closed, bounded semantic transition plan carried only by generator version 4.
+/// Closed, bounded semantic transition plan carried by every Quest draft.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuestTransitionPlanV1 {
@@ -370,20 +362,17 @@ pub struct QuestDraftInput {
     pub title: String,
     pub description: String,
     pub objective_title: String,
-    /// Ordered objectives after the frozen first objective. Omitted when empty so all existing
-    /// generator-v2 project bytes remain canonical and byte-identical.
+    /// Ordered objectives after the first objective.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_objective_titles: Vec<String>,
-    /// Optional only for exact generator-v2/v3 compatibility. Generator v4 requires a plan.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transition_plan: Option<Box<QuestTransitionPlanV1>>,
+    pub transition_plan: Box<QuestTransitionPlanV1>,
     pub collision_catalog: QuestCollisionArtifactRef,
 }
 
 /// One ordered, authoring-only dialog-line placement in a Quest transcript.
 ///
-/// `objective_slot` is a stable semantic-objective ordinal for generator-v4 Quests. It is absent
-/// for the Quest root/unassigned transcript and for every legacy generator-v2/v3 Quest. This
+/// `objective_slot` is a stable semantic-objective ordinal. It is absent for the Quest
+/// root/unassigned transcript. This
 /// relationship is project metadata only: it grants no topic, selection-effect, build, or runtime
 /// authority and deliberately remains outside [`QuestDraftInput`] so Quest source and its input
 /// fingerprint are unchanged.
@@ -407,8 +396,8 @@ pub struct NpcGreetingBindingV1 {
 
 /// Revision-3 NPC authoring intent plus ordered authoring-only greeting metadata.
 ///
-/// The first four fields retain the exact revision-2 wire shape. Empty `greetings` are omitted so
-/// every pre-greeting canonical revision-3 project remains byte-identical.
+/// Empty `greetings` are omitted because absence is the canonical compact spelling of an empty
+/// ordered greeting set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NpcDraft {
@@ -427,7 +416,7 @@ impl NpcDraft {
     pub fn regenerate_script_module(
         &self,
         owner: TypedRef,
-    ) -> Result<ScriptModule, crate::model_revision2::StoryRegenerationError> {
+    ) -> Result<ScriptModule, crate::Revision3NpcRegenerationError> {
         self.regenerate_script_module_with_identity(owner)
             .map(|(module, _)| module)
     }
@@ -435,29 +424,26 @@ impl NpcDraft {
     pub(crate) fn regenerate_script_module_with_identity(
         &self,
         owner: TypedRef,
-    ) -> Result<
-        (ScriptModule, crate::model_revision2::GeneratedStoryIdentity),
-        crate::model_revision2::StoryRegenerationError,
-    > {
-        use crate::model_revision2::StoryRegenerationError;
+    ) -> Result<(ScriptModule, GeneratedStoryIdentity), crate::Revision3NpcRegenerationError> {
+        use crate::Revision3NpcRegenerationError;
 
-        crate::model_revision2::validate_generator_contract(
+        validate_generator_contract(
             &self.generator_id,
             self.generator_version,
             crate::LOGICAL_NPC_CLONE_GENERATOR_ID,
             crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
         )?;
         if owner.expected_kind != EntityKind::NpcDraft {
-            return Err(StoryRegenerationError::InvalidNpcProvenance(
+            return Err(Revision3NpcRegenerationError::InvalidNpcProvenance(
                 "NPC generator owner must declare native NpcDraft kind".to_owned(),
             ));
         }
         if self.script_module.expected_kind != EntityKind::ScriptModule {
-            return Err(StoryRegenerationError::InvalidNpcProvenance(
+            return Err(Revision3NpcRegenerationError::InvalidNpcProvenance(
                 "NPC ScriptModule reference must declare native ScriptModule kind".to_owned(),
             ));
         }
-        crate::model_revision2::validate_npc_input_provenance(&self.input)?;
+        validate_npc_input_provenance(&self.input)?;
         let draft = crate::LogicalNpcCloneDraft::new(
             self.input.module_namespace.clone(),
             self.input.unique_name.clone(),
@@ -465,11 +451,11 @@ impl NpcDraft {
             self.input.parent_ai_agent_config.runtime_class.clone(),
             self.input.parent_spawn_definition.runtime_class.clone(),
         )
-        .map_err(StoryRegenerationError::InvalidNpcIntent)?;
+        .map_err(Revision3NpcRegenerationError::InvalidNpcIntent)?;
         let generated = draft.generate();
-        let input_fingerprint = crate::model_revision2::fingerprint_npc_input(&self.input)
-            .map_err(StoryRegenerationError::NpcFingerprint)?;
-        let identity = crate::model_revision2::GeneratedStoryIdentity {
+        let input_fingerprint = fingerprint_npc_input(&self.input)
+            .map_err(Revision3NpcRegenerationError::NpcFingerprint)?;
+        let identity = GeneratedStoryIdentity {
             module_namespace: generated.module_namespace.clone(),
             module_relative_path: generated.module_relative_path.clone(),
             symbols: vec![

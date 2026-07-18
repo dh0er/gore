@@ -157,33 +157,29 @@ final class Revision3ProjectProblemsCopy {
 /// refreshes, and disposal invalidate every older asynchronous completion.
 final class Revision3ProjectProblemsView extends StatefulWidget {
   const Revision3ProjectProblemsView({
-    this.projectRoot,
+    required this.projectRoot,
     required this.projectId,
     required this.projectRevision,
-    this.projectHeadCanonicalJson,
+    required this.projectHeadCanonicalJson,
     required this.loadContent,
     required this.loadDataAssetStages,
     required this.gameConfigured,
     required this.copy,
     this.actions = const Revision3ProjectProblemsActions(),
     super.key,
-  }) : assert(projectRoot == null || projectRoot != ''),
+  }) : assert(projectRoot != ''),
        assert(projectId != ''),
        assert(projectRevision >= 0),
-       assert(
-         projectHeadCanonicalJson == null || projectHeadCanonicalJson != '',
-       );
+       assert(projectHeadCanonicalJson != '');
 
-  /// Optional filesystem identity for callers that can bind the report to a
-  /// complete managed-project checkpoint. Kept optional for source-compatible
-  /// embedded/read-only uses that have no managed project root.
-  final String? projectRoot;
+  /// Filesystem identity binding the report to one managed-project checkpoint.
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
 
-  /// Optional canonical-head identity. When supplied, same-revision head
-  /// drift invalidates both loaded evidence and every rendered action.
-  final String? projectHeadCanonicalJson;
+  /// Canonical-head identity. Same-revision head drift invalidates both loaded
+  /// evidence and every rendered action.
+  final String projectHeadCanonicalJson;
   final Revision3ProblemsViewContentLoader loadContent;
   final Revision3ProblemsViewDataAssetStageLoader loadDataAssetStages;
   final bool gameConfigured;
@@ -489,10 +485,10 @@ final class _Revision3ProblemsCheckpoint {
     required this.projectHeadCanonicalJson,
   });
 
-  final String? projectRoot;
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
-  final String? projectHeadCanonicalJson;
+  final String projectHeadCanonicalJson;
 
   @override
   bool operator ==(Object other) =>

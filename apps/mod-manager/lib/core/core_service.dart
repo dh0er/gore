@@ -5,10 +5,44 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
-typedef _ExecuteNative = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef _ExecuteDart  = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef _FreeNative   = Void Function(Pointer<Utf8>);
-typedef _FreeDart     = void Function(Pointer<Utf8>);
+final class _GoreCoreResponseV2 extends Struct {
+  external Pointer<Uint8> data;
+
+  @UintPtr()
+  external int len;
+
+  external Pointer<Void> handle;
+}
+
+typedef _TransportProbeNative = Uint32 Function();
+typedef _TransportProbeDart = int Function();
+typedef _ExecuteV2Native =
+    Uint32 Function(Pointer<Uint8>, UintPtr, Pointer<_GoreCoreResponseV2>);
+typedef _ExecuteV2Dart =
+    int Function(Pointer<Uint8>, int, Pointer<_GoreCoreResponseV2>);
+typedef _FreeV2Native = Void Function(Pointer<Void>);
+typedef _FreeV2Dart = void Function(Pointer<Void>);
+
+const _transportAbiV2 = 2;
+const _protocolAbi = 1;
+const _maxRequestBytes = 64 * 1024 * 1024;
+const _maxResponseBytes = 64 * 1024 * 1024;
+const _maxCoreInfoBytes = 64 * 1024;
+const _transportStatusOk = 0;
+const _transportStatusInvalidArgument = 1;
+const _transportStatusPanic = 2;
+const _coreInfoRequest = '{"command":"core_info","payload":{}}';
+const _requiredManagerCommands = <String>{
+  'core_info',
+  'mgr_analyze',
+  'mgr_apply',
+  'mgr_import',
+  'mgr_library_list',
+  'mgr_remove',
+  'mgr_set_loadout',
+  'mgr_status',
+  'mgr_undeploy_all',
+};
 
 abstract class GoreCoreFfiService {
   bool get isAvailable;
@@ -27,8 +61,24 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
     for (final candidate in _candidateLibraryPaths()) {
       try {
         final lib = DynamicLibrary.open(candidate);
-        lib.lookupFunction<_ExecuteNative, _ExecuteDart>('gore_core_execute');
-        lib.lookupFunction<_FreeNative, _FreeDart>('gore_core_free');
+        final probe = lib
+            .lookupFunction<_TransportProbeNative, _TransportProbeDart>(
+              'gore_core_transport_abi_v2',
+            );
+        if (probe() != _transportAbiV2) continue;
+        final execute = lib.lookupFunction<_ExecuteV2Native, _ExecuteV2Dart>(
+          'gore_core_execute_v2',
+        );
+        final free = lib.lookupFunction<_FreeV2Native, _FreeV2Dart>(
+          'gore_core_response_free_v2',
+        );
+        final coreInfo = _executeV2(
+          execute,
+          free,
+          _coreInfoRequest,
+          responseLimit: _maxCoreInfoBytes,
+        );
+        if (!_isCurrentCoreInfo(coreInfo)) continue;
         return NativeGoreCoreFfiService._(candidate);
       } catch (_) {
         continue;
@@ -60,33 +110,131 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
 
 String _executeNativeRequest(String libPath, String request) {
   final lib = DynamicLibrary.open(libPath);
-  final execute = lib.lookupFunction<_ExecuteNative, _ExecuteDart>('gore_core_execute');
-  final free    = lib.lookupFunction<_FreeNative, _FreeDart>('gore_core_free');
-  final reqPtr  = request.toNativeUtf8();
-  Pointer<Utf8> resPtr = nullptr;
+  final probe = lib.lookupFunction<_TransportProbeNative, _TransportProbeDart>(
+    'gore_core_transport_abi_v2',
+  );
+  if (probe() != _transportAbiV2) {
+    throw const FormatException('gore_ffi transport ABI changed after load');
+  }
+  final execute = lib.lookupFunction<_ExecuteV2Native, _ExecuteV2Dart>(
+    'gore_core_execute_v2',
+  );
+  final free = lib.lookupFunction<_FreeV2Native, _FreeV2Dart>(
+    'gore_core_response_free_v2',
+  );
+  return _executeV2(execute, free, request);
+}
+
+String _executeV2(
+  _ExecuteV2Dart execute,
+  _FreeV2Dart free,
+  String request, {
+  int responseLimit = _maxResponseBytes,
+}) {
+  final requestBytes = utf8.encode(request);
+  if (requestBytes.length > _maxRequestBytes) {
+    return '{"ok":false,"error":{"code":"FFI_REQUEST_LIMIT",'
+        '"message":"native request exceeds the 67108864-byte transport limit"}}';
+  }
+  final out = calloc<_GoreCoreResponseV2>();
+  if (out == nullptr) {
+    throw StateError('failed to allocate native response descriptor');
+  }
+  Pointer<Uint8> requestPointer = nullptr;
   try {
-    resPtr = execute(reqPtr);
-    if (resPtr == nullptr) throw const FormatException('gore_ffi returned null');
-    return resPtr.toDartString();
+    if (requestBytes.isNotEmpty) {
+      requestPointer = malloc<Uint8>(requestBytes.length);
+      if (requestPointer == nullptr) {
+        throw StateError('failed to allocate native request buffer');
+      }
+      requestPointer.asTypedList(requestBytes.length).setAll(0, requestBytes);
+    }
+    final status = execute(requestPointer, requestBytes.length, out);
+    final responseData = out.ref.data;
+    final responseLength = out.ref.len;
+    final responseHandle = out.ref.handle;
+    if (status != _transportStatusOk) {
+      if (responseData != nullptr ||
+          responseLength != 0 ||
+          responseHandle != nullptr) {
+        throw const FormatException(
+          'gore_ffi returned output with a failed transport status',
+        );
+      }
+      return switch (status) {
+        _transportStatusInvalidArgument =>
+          '{"ok":false,"error":{"code":"CORE_TRANSPORT_INVALID_ARGUMENT",'
+              '"message":"native transport rejected its arguments"}}',
+        _transportStatusPanic =>
+          '{"ok":false,"error":{"code":"CORE_TRANSPORT_PANIC",'
+              '"message":"native transport caught an internal panic"}}',
+        _ => throw FormatException(
+          'gore_ffi returned unknown transport status $status',
+        ),
+      };
+    }
+    if (responseData == nullptr || responseHandle == nullptr) {
+      throw const FormatException('gore_ffi returned an incomplete response');
+    }
+    if (responseLength <= 0 || responseLength > responseLimit) {
+      throw FormatException(
+        'gore_ffi response length $responseLength is outside the bounded range',
+      );
+    }
+    return utf8.decode(
+      responseData.asTypedList(responseLength),
+      allowMalformed: false,
+    );
   } finally {
-    malloc.free(reqPtr);
-    if (resPtr != nullptr) free(resPtr);
+    try {
+      if (requestPointer != nullptr) malloc.free(requestPointer);
+    } finally {
+      final responseHandle = out.ref.handle;
+      try {
+        if (responseHandle != nullptr) free(responseHandle);
+      } finally {
+        calloc.free(out);
+      }
+    }
   }
 }
 
-/// Stub returned when gore_ffi.dll is not found (dev / CI without the DLL).
+bool _isCurrentCoreInfo(String response) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(response);
+  } on FormatException {
+    return false;
+  }
+  if (decoded is! Map ||
+      decoded['ok'] != true ||
+      decoded['abi'] != _protocolAbi) {
+    return false;
+  }
+  final commands = decoded['commands'];
+  if (commands is! List || commands.any((command) => command is! String)) {
+    return false;
+  }
+  final advertised = commands.cast<String>().toSet();
+  return _requiredManagerCommands.every(advertised.contains);
+}
+
+/// Stub returned when no current bounded gore_ffi.dll is available.
 class MissingGoreCoreFfiService implements GoreCoreFfiService {
   @override
   bool get isAvailable => false;
   @override
-  String get description => 'gore_ffi.dll not loaded';
+  String get description => 'current bounded gore_ffi.dll not available';
   @override
   Future<Map<String, Object?>> execute(
     String command, {
     Map<String, Object?> payload = const {},
   }) async => {
     'ok': false,
-    'error': {'code': 'CORE_UNAVAILABLE', 'message': 'gore_ffi.dll not found'},
+    'error': {
+      'code': 'CORE_UNAVAILABLE',
+      'message': 'current bounded gore_ffi.dll not available',
+    },
   };
 }
 
@@ -107,7 +255,11 @@ class FakeGoreCoreFfiService implements GoreCoreFfiService {
     Map<String, Object?> payload = const {},
   }) async {
     calls.add((command: command, payload: payload));
-    return responses[command] ?? {'ok': false, 'error': {'message': 'unknown command'}};
+    return responses[command] ??
+        {
+          'ok': false,
+          'error': {'message': 'unknown command'},
+        };
   }
 }
 

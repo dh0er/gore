@@ -33,7 +33,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::authoring_story_inventory::{read_source_no_follow, SourceReadError};
+use crate::authoring_source_io::{read_source_no_follow, SourceReadError};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_inspect_revision3_quest_source_v1";
@@ -542,9 +542,7 @@ fn map_inspection_error(error: Revision3QuestInspectionError) -> Failure {
             "AUTHORING_REVISION3_QUEST_INSPECTION_QUEST_INVALID",
             "quest_id does not identify one managed revision-3 Quest",
         ),
-        E::ArtifactUnavailable { source, .. } | E::BasisUnavailable { source, .. } => {
-            map_store_error(source)
-        }
+        E::ArtifactUnavailable { source, .. } => map_store_error(source),
         E::HistoricalInspectionSource(source) => match source {
             gore_authoring::Revision3QuestCollisionSourceErrorV2::Store(source) => {
                 map_store_error(source)
@@ -561,9 +559,7 @@ fn map_inspection_error(error: Revision3QuestInspectionError) -> Failure {
             }
             _ => inspection_failed(),
         },
-        E::InvalidProjectDocument(_)
-        | E::NonCanonicalProjectJson
-        | E::Revision3Required
+        E::InvalidProject(_)
         | E::ForeignProject { .. }
         | E::ForeignGeneration { .. }
         | E::ForeignGenerator { .. }

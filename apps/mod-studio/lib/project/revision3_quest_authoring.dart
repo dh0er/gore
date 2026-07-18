@@ -175,9 +175,8 @@ final class Revision3QuestCatalog {
     required AuthoringDraftContentSeal catalogSeal,
     required AuthoringDraftContentSeal generationExecutableSeal,
   }) {
-    final availability = adapter.questAvailability;
     return Revision3QuestCatalog(
-      parents: availability.parents.map(
+      parents: adapter.questParents.map(
         (choice) => Revision3QuestParentChoice(
           catalogId: choice.catalogId,
           displayName: choice.displayName,
@@ -190,7 +189,7 @@ final class Revision3QuestCatalog {
           }),
         ),
       ),
-      givers: availability.givers.map(
+      givers: adapter.questGivers.map(
         (choice) => Revision3QuestGiverChoice(
           catalogId: choice.catalogId,
           displayName: choice.displayName,
@@ -254,10 +253,9 @@ final class Revision3QuestCatalog {
 
 /// Rebuilds the read-only Story catalog for the configured game generation.
 ///
-/// The older Story workspace keeps Quest mutation disabled because it lacks a
-/// collision inventory. The dedicated R3 transaction independently requires
-/// and verifies its PatchReceipt collision artifact; this projection grants no
-/// build or runtime authority.
+/// The dedicated R3 transaction independently requires and verifies its
+/// PatchReceipt collision artifact; this projection grants no build or runtime
+/// authority.
 final class Revision3QuestCatalogService {
   const Revision3QuestCatalogService(this._ffi);
 

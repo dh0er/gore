@@ -7,29 +7,25 @@
 
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::{GeneratedStoryIdentity, QuestCollisionCatalogInput};
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, ProjectRevision3, QuestDraft, QuestDraftInput,
-    ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
+use crate::revision3_story_generation::GeneratedStoryIdentity;
 use crate::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestCollisionCatalog,
-    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonInputV2,
-    DraftQuestSkeletonInputV3, DraftQuestSkeletonV1, DraftQuestSkeletonV2, DraftQuestSkeletonV3,
-    EntityId, Sha256Digest,
+    DraftQuestSkeleton, DraftQuestSkeletonError, DraftQuestSkeletonInput, EntityId,
+    QuestCollisionCatalogInput, Sha256Digest,
 };
 
-// This domain shipped first with the S3 verifier. Its exact bytes are retained so moving the
-// implementation into gore-authoring cannot drift persisted fingerprints.
-const REVISION3_QUEST_INPUT_FINGERPRINT_V2_DOMAIN: &[u8] =
-    b"gore-story-build.revision3-quest-v2.input-fingerprint\0";
+const REVISION3_QUEST_INPUT_FINGERPRINT_DOMAIN: &[u8] =
+    b"gore-authoring.revision3-quest.input-fingerprint\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3QuestGenerationError {
     #[error(
-        "revision-3 Quest generator contract mismatch: expected {expected_id}@{expected_version}, @3, or @4, got {actual_id}@{actual_version}"
+        "revision-3 Quest generator contract mismatch: expected {expected_id}@{expected_version}, got {actual_id}@{actual_version}"
     )]
     GeneratorContract {
         expected_id: &'static str,
@@ -37,10 +33,6 @@ pub enum Revision3QuestGenerationError {
         actual_id: String,
         actual_version: u32,
     },
-    #[error(
-        "revision-3 Quest objective shape does not match generator version {generator_version}"
-    )]
-    ObjectiveGeneratorContract { generator_version: u32 },
     #[error("revision-3 Quest ScriptModule reference is zero, foreign, or mistyped")]
     InvalidScriptModuleReference,
     #[error("revision-3 Quest collision generation differs from its ArtifactRef")]
@@ -55,18 +47,18 @@ pub enum Revision3QuestGenerationError {
     SerializeQuestInput(#[source] serde_json::Error),
 }
 
-/// Stable v2 fingerprint of every bounded revision-3 Quest input field, including the raw,
+/// Stable fingerprint of every bounded revision-3 Quest input field, including the raw,
 /// semantic, and basis seals retained by its artifact reference.
 ///
 /// This is deterministic source-generation metadata only. A matching digest is not artifact
 /// authenticity or runtime evidence.
-pub fn revision3_quest_input_fingerprint_v2(
+pub fn revision3_quest_input_fingerprint(
     input: &QuestDraftInput,
 ) -> Result<Sha256Digest, Revision3QuestGenerationError> {
     let canonical =
         serde_json::to_vec(input).map_err(Revision3QuestGenerationError::SerializeQuestInput)?;
     let mut hasher = Sha256::new();
-    hasher.update(REVISION3_QUEST_INPUT_FINGERPRINT_V2_DOMAIN);
+    hasher.update(REVISION3_QUEST_INPUT_FINGERPRINT_DOMAIN);
     hasher.update((canonical.len() as u64).to_be_bytes());
     hasher.update(&canonical);
     Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
@@ -76,24 +68,19 @@ pub fn revision3_quest_input_fingerprint_v2(
 ///
 /// `collision` must come from a separately verified caller. This function validates its closed
 /// generator shape and collision entries but deliberately cannot authenticate its provenance.
-pub fn regenerate_revision3_quest_module_v2(
+pub fn regenerate_revision3_quest_module(
     quest: &QuestDraft,
     collision: QuestCollisionCatalogInput,
 ) -> Result<ScriptModule, Revision3QuestGenerationError> {
-    regenerate_revision3_quest_module_v2_with_identity(quest, collision).map(|(module, _)| module)
+    regenerate_revision3_quest_module_with_identity(quest, collision).map(|(module, _)| module)
 }
 
-pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
+pub(crate) fn regenerate_revision3_quest_module_with_identity(
     quest: &QuestDraft,
     collision: QuestCollisionCatalogInput,
 ) -> Result<(ScriptModule, GeneratedStoryIdentity), Revision3QuestGenerationError> {
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || !matches!(
-            quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION
-                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        )
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
     {
         return Err(Revision3QuestGenerationError::GeneratorContract {
             expected_id: REVISION3_QUEST_GENERATOR_ID,
@@ -154,24 +141,7 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         collision.symbols.into_iter().collect(),
     )
     .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?;
-    let shape_matches = match quest.generator_version {
-        REVISION3_QUEST_GENERATOR_VERSION => {
-            quest.input.additional_objective_titles.is_empty()
-                && quest.input.transition_plan.is_none()
-        }
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION => {
-            !quest.input.additional_objective_titles.is_empty()
-                && quest.input.transition_plan.is_none()
-        }
-        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION => quest.input.transition_plan.is_some(),
-        _ => false,
-    };
-    if !shape_matches {
-        return Err(Revision3QuestGenerationError::ObjectiveGeneratorContract {
-            generator_version: quest.generator_version,
-        });
-    }
-    let base_input = DraftQuestSkeletonInput {
+    let generated = DraftQuestSkeleton::new(DraftQuestSkeletonInput {
         target: quest.input.target.clone(),
         quest_id: quest.input.quest_id,
         module_namespace: quest.input.module_namespace.clone(),
@@ -182,95 +152,39 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         title: quest.input.title.clone(),
         description: quest.input.description.clone(),
         objective_title: quest.input.objective_title.clone(),
+        additional_objective_titles: quest.input.additional_objective_titles.clone(),
+        transition_plan: (*quest.input.transition_plan).clone(),
         collision_catalog,
-    };
-    let (module_namespace, module_relative_path, source, source_sha256, symbols) =
-        if quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION {
-            let generated = DraftQuestSkeletonV1::new(base_input)
-                .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
-                .generate();
-            let names = generated.technical_names;
-            (
-                names.module_namespace,
-                names.module_relative_path,
-                generated.source,
-                generated.source_sha256,
-                vec![
-                    names.root_class,
-                    names.objective_class,
-                    names.text_helper,
-                    names.root_getter,
-                    names.objective_getter,
-                ],
-            )
-        } else if quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION {
-            let generated = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-                base: base_input,
-                additional_objective_titles: quest.input.additional_objective_titles.clone(),
-            })
-            .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
-            .generate();
-            let names = generated.technical_names;
-            let mut symbols = vec![
-                names.base.root_class,
-                names.base.objective_class,
-                names.base.text_helper,
-                names.base.root_getter,
-                names.base.objective_getter,
-            ];
-            for objective in names.additional_objectives {
-                symbols.push(objective.objective_class);
-                symbols.push(objective.objective_getter);
-            }
-            (
-                names.base.module_namespace,
-                names.base.module_relative_path,
-                generated.source,
-                generated.source_sha256,
-                symbols,
-            )
-        } else {
-            let generated = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
-                base: base_input,
-                additional_objective_titles: quest.input.additional_objective_titles.clone(),
-                transition_plan: quest
-                    .input
-                    .transition_plan
-                    .as_deref()
-                    .cloned()
-                    .expect("generator-v4 shape checked above"),
-            })
-            .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
-            .generate();
-            let names = generated.technical_names;
-            let slot_one = names
-                .objectives
-                .iter()
-                .find(|objective| objective.slot == 1)
-                .expect("validated semantic plan retains frozen slot 1");
-            let mut symbols = vec![
-                names.base.root_class.clone(),
-                slot_one.objective_class.clone(),
-                names.base.text_helper.clone(),
-                names.base.root_getter.clone(),
-                slot_one.objective_getter.clone(),
-            ];
-            for objective in names
-                .objectives
-                .into_iter()
-                .filter(|objective| objective.slot != 1)
-            {
-                symbols.push(objective.objective_class);
-                symbols.push(objective.objective_getter);
-            }
-            (
-                names.base.module_namespace,
-                names.base.module_relative_path,
-                generated.source,
-                generated.source_sha256,
-                symbols,
-            )
-        };
+    })
+    .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
+    .generate();
+    let names = generated.technical_names;
+    let slot_one = names
+        .objectives
+        .iter()
+        .find(|objective| objective.slot == 1)
+        .expect("validated semantic plan retains slot 1");
+    let mut symbols = vec![
+        names.base.root_class.clone(),
+        slot_one.objective_class.clone(),
+        names.base.text_helper.clone(),
+        names.base.root_getter.clone(),
+        slot_one.objective_getter.clone(),
+    ];
+    for objective in names
+        .objectives
+        .into_iter()
+        .filter(|objective| objective.slot != 1)
+    {
+        symbols.push(objective.objective_class);
+        symbols.push(objective.objective_getter);
+    }
+    let (module_namespace, module_relative_path, source, source_sha256) = (
+        names.base.module_namespace,
+        names.base.module_relative_path,
+        generated.source,
+        generated.source_sha256,
+    );
     let identity = GeneratedStoryIdentity {
         module_namespace: module_namespace.clone(),
         module_relative_path: module_relative_path.clone(),
@@ -288,7 +202,7 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         module_relative_path,
         source,
         source_sha256,
-        input_fingerprint: revision3_quest_input_fingerprint_v2(&quest.input)?,
+        input_fingerprint: revision3_quest_input_fingerprint(&quest.input)?,
         status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
     };
     Ok((module, identity))
@@ -306,8 +220,7 @@ pub enum Revision3QuestFreeBasisError {
 
 /// Validate one native revision-3 project as a closed, Quest-free Story collision basis.
 ///
-/// No schema projection, migration, artifact access, or authority grant occurs. Quest Drafts and
-/// residual Quest-owned generator state are rejected rather than interpreted. Callers that need
+/// Quest Drafts and residual Quest-owned generator state are rejected. Callers that need
 /// immutable-basis proof must separately reopen and verify the pinned revision-3 snapshot.
 pub fn validate_revision3_quest_free_basis(
     source: &ProjectRevision3,

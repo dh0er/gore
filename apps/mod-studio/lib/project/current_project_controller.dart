@@ -597,7 +597,7 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required Revision3QuestDraftAuthoringInput input,
   });
   Future<Revision3QuestOutlineEditPublication>
-  prepareAndPublishQuestOutlineEditV1({
+  prepareAndPublishQuestOutlineEditV2({
     required Revision3QuestOutlineEditInput input,
   });
   Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
@@ -1253,32 +1253,20 @@ final class _ManagedRevision3SessionLease
 
   @override
   Future<Revision3QuestOutlineEditPublication>
-  prepareAndPublishQuestOutlineEditV1({
+  prepareAndPublishQuestOutlineEditV2({
     required Revision3QuestOutlineEditInput input,
   }) async {
-    final slots = input.objectiveSlots;
-    final planSeal = input.expectedTransitionPlanSeal;
-    final checkpoint = slots == null || planSeal == null
-        ? await _session.prepareAndPublishQuestOutlineEditV1(
-            questId: input.questId,
-            expectedQuestRevision: input.expectedQuestRevision,
-            expectedModuleId: input.moduleId,
-            expectedModuleRevision: input.expectedModuleRevision,
-            displayName: input.displayName,
-            title: input.title,
-            objectiveTitles: input.objectiveTitles,
-          )
-        : await _session.prepareAndPublishQuestOutlineEditV2(
-            questId: input.questId,
-            expectedQuestRevision: input.expectedQuestRevision,
-            expectedModuleId: input.moduleId,
-            expectedModuleRevision: input.expectedModuleRevision,
-            expectedTransitionPlanSeal: planSeal,
-            displayName: input.displayName,
-            title: input.title,
-            objectiveSlots: slots,
-            objectiveTitles: input.objectiveTitles,
-          );
+    final checkpoint = await _session.prepareAndPublishQuestOutlineEditV2(
+      questId: input.questId,
+      expectedQuestRevision: input.expectedQuestRevision,
+      expectedModuleId: input.moduleId,
+      expectedModuleRevision: input.expectedModuleRevision,
+      expectedTransitionPlanSeal: input.expectedTransitionPlanSeal,
+      displayName: input.displayName,
+      title: input.title,
+      objectiveSlots: input.objectiveSlots,
+      objectiveTitles: input.objectiveTitles,
+    );
     return Revision3QuestOutlineEditPublication(
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
@@ -3335,7 +3323,7 @@ final class CurrentProjectCoordinator
       throw const Revision3QuestOutlineStaleCheckpointException();
     }
     try {
-      final publication = await lease.prepareAndPublishQuestOutlineEditV1(
+      final publication = await lease.prepareAndPublishQuestOutlineEditV2(
         input: input,
       );
       if (publication.projectId != expectedProjectId ||

@@ -10,27 +10,26 @@ use std::fmt;
 use std::io::{self, Write};
 
 use gore_authoring::{
-    ContentSeal, EntityId, GameGenerationAnchor, ProjectDocument, ProjectDocumentError, ProjectId,
-    Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3NpcDraft, Revision3NpcDraftInput, Revision3OriginRef, Revision3ScriptModule,
-    Revision3TypedRef, ScriptModuleStatus, Sha256Digest, StoryRegenerationError,
-    LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-    MAX_ANGELSCRIPT_IDENTIFIER_BYTES, MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES,
-    MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES, MAX_PROJECT_JSON_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
+    ProjectRevision3JsonError, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision3NpcDraft, Revision3NpcDraftInput, Revision3NpcParentClassInput,
+    Revision3NpcRegenerationError, Revision3OriginRef, Revision3ScriptModule, Revision3TypedRef,
+    ScriptModuleStatus, Sha256Digest, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
+    MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES,
+    MAX_PROJECT_JSON_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
     MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1,
 };
 use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
-use crate::{
-    BoundedString, MAX_STORY_BUILD_DIAGNOSTIC_MESSAGE_BYTES, MAX_STORY_BUILD_GENERATOR_ID_BYTES,
-    MAX_STORY_BUILD_PROPERTY_PATH_BYTES,
-};
-
 const PLAN_FORMAT: &str = "revision3_npc_source_inspection_plan";
 const PLAN_SCHEMA_REVISION: u32 = 1;
-// These are the closed bounds enforced by revision-2/3 NPC provenance validation. They are not
+const MAX_NPC_INSPECTION_DIAGNOSTIC_MESSAGE_BYTES: usize = 16 * 1_024;
+const MAX_NPC_INSPECTION_GENERATOR_ID_BYTES: usize = 256;
+const MAX_NPC_INSPECTION_PROPERTY_PATH_BYTES: usize = 2 * 1_024;
+// These are the closed bounds enforced by revision-3 NPC provenance validation. They are not
 // exported by gore-authoring, so this inspection mirrors them rather than widening the envelope.
 const MAX_NPC_PARENT_CATALOG_LAYER_BYTES: usize = 128;
 const MAX_NPC_PARENT_SELECTOR_BYTES: usize = MAX_ANGELSCRIPT_IDENTIFIER_BYTES;
@@ -40,6 +39,67 @@ const PROJECT_ID_HEX_BYTES: usize = 32;
 const ENTITY_ID_HEX_BYTES: usize = 32;
 const SHA256_HEX_BYTES: usize = 64;
 const MAX_CLOSED_TOKEN_BYTES: usize = 64;
+
+#[derive(Debug)]
+struct BoundedString<const LIMIT: usize>(String);
+
+impl<const LIMIT: usize> BoundedString<LIMIT> {
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl<'de, const LIMIT: usize> Deserialize<'de> for BoundedString<LIMIT> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BoundedStringVisitor<const LIMIT: usize>;
+
+        impl<const LIMIT: usize> Visitor<'_> for BoundedStringVisitor<LIMIT> {
+            type Value = BoundedString<LIMIT>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "a UTF-8 string of at most {LIMIT} bytes")
+            }
+
+            fn visit_borrowed_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_str(value)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value.len() > LIMIT {
+                    return Err(E::custom(format!(
+                        "string is {} bytes; maximum is {LIMIT}",
+                        value.len()
+                    )));
+                }
+                Ok(BoundedString(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value.len() > LIMIT {
+                    return Err(E::custom(format!(
+                        "string is {} bytes; maximum is {LIMIT}",
+                        value.len()
+                    )));
+                }
+                Ok(BoundedString(value))
+            }
+        }
+
+        deserializer.deserialize_string(BoundedStringVisitor::<LIMIT>)
+    }
+}
 
 /// The input uses the same bounded envelope as every authoring project document.
 pub const MAX_REVISION3_NPC_INSPECTION_PROJECT_JSON_BYTES: usize = MAX_PROJECT_JSON_BYTES;
@@ -553,7 +613,7 @@ impl From<NpcOriginWire> for Revision3OriginRef {
 struct ModuleOriginWire {
     #[serde(rename = "type")]
     type_marker: GeneratedOriginTypeWire,
-    generator_id: BoundedString<MAX_STORY_BUILD_GENERATOR_ID_BYTES>,
+    generator_id: BoundedString<MAX_NPC_INSPECTION_GENERATOR_ID_BYTES>,
     generator_version: u32,
     owner: TypedRefWire,
 }
@@ -585,7 +645,7 @@ struct NpcParentClassInputWire {
     runtime_class: BoundedString<MAX_ANGELSCRIPT_IDENTIFIER_BYTES>,
 }
 
-impl From<NpcParentClassInputWire> for Revision2NpcParentClassInput {
+impl From<NpcParentClassInputWire> for Revision3NpcParentClassInput {
     fn from(wire: NpcParentClassInputWire) -> Self {
         Self {
             generation: wire.generation.into(),
@@ -648,7 +708,7 @@ struct InspectionNpcWire {
     entity_revision: u64,
     display_name: BoundedString<MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1>,
     origin: NpcOriginWire,
-    generator_id: BoundedString<MAX_STORY_BUILD_GENERATOR_ID_BYTES>,
+    generator_id: BoundedString<MAX_NPC_INSPECTION_GENERATOR_ID_BYTES>,
     generator_version: u32,
     input: NpcDraftInputWire,
     input_seal: ContentSealWire,
@@ -690,7 +750,7 @@ impl From<ScriptModuleStatusWire> for ScriptModuleStatus {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptModuleWire {
-    generator_id: BoundedString<MAX_STORY_BUILD_GENERATOR_ID_BYTES>,
+    generator_id: BoundedString<MAX_NPC_INSPECTION_GENERATOR_ID_BYTES>,
     generator_version: u32,
     owner: TypedRefWire,
     module_namespace: BoundedString<MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES>,
@@ -747,8 +807,8 @@ struct DiagnosticWire {
     code: DiagnosticCodeWire,
     severity: DiagnosticSeverityWire,
     entity: TypedRefWire,
-    property_path: BoundedString<MAX_STORY_BUILD_PROPERTY_PATH_BYTES>,
-    message: BoundedString<MAX_STORY_BUILD_DIAGNOSTIC_MESSAGE_BYTES>,
+    property_path: BoundedString<MAX_NPC_INSPECTION_PROPERTY_PATH_BYTES>,
+    message: BoundedString<MAX_NPC_INSPECTION_DIAGNOSTIC_MESSAGE_BYTES>,
     blocks_build: bool,
 }
 
@@ -1172,7 +1232,7 @@ impl Revision3NpcSourceInspectionPlanV1 {
         validate_bounded_string(
             "npc.generator_id",
             &self.npc.generator_id,
-            MAX_STORY_BUILD_GENERATOR_ID_BYTES,
+            MAX_NPC_INSPECTION_GENERATOR_ID_BYTES,
         )?;
         validate_bounded_string(
             "npc.input.module_namespace",
@@ -1231,12 +1291,12 @@ impl Revision3NpcSourceInspectionPlanV1 {
         validate_bounded_string(
             "module.origin.generator_id",
             generator_id,
-            MAX_STORY_BUILD_GENERATOR_ID_BYTES,
+            MAX_NPC_INSPECTION_GENERATOR_ID_BYTES,
         )?;
         validate_bounded_string(
             "module.generated.generator_id",
             &self.module.generated.generator_id,
-            MAX_STORY_BUILD_GENERATOR_ID_BYTES,
+            MAX_NPC_INSPECTION_GENERATOR_ID_BYTES,
         )?;
         validate_bounded_string(
             "module.generated.module_namespace",
@@ -1260,12 +1320,12 @@ impl Revision3NpcSourceInspectionPlanV1 {
             validate_bounded_string(
                 "diagnostic.property_path",
                 &diagnostic.property_path,
-                MAX_STORY_BUILD_PROPERTY_PATH_BYTES,
+                MAX_NPC_INSPECTION_PROPERTY_PATH_BYTES,
             )?;
             validate_bounded_string(
                 "diagnostic.message",
                 &diagnostic.message,
-                MAX_STORY_BUILD_DIAGNOSTIC_MESSAGE_BYTES,
+                MAX_NPC_INSPECTION_DIAGNOSTIC_MESSAGE_BYTES,
             )?;
         }
         Ok(())
@@ -1305,17 +1365,8 @@ pub fn build_revision3_npc_source_inspection_plan_v1(
             limit: MAX_REVISION3_NPC_INSPECTION_PROJECT_JSON_BYTES,
         });
     }
-    let document = ProjectDocument::from_json(canonical_project_json)
-        .map_err(Revision3NpcInspectionErrorV1::InvalidProjectDocument)?;
-    let canonical = document
-        .to_canonical_json()
-        .map_err(Revision3NpcInspectionErrorV1::SerializeProject)?;
-    if canonical.as_bytes() != canonical_project_json.as_bytes() {
-        return Err(Revision3NpcInspectionErrorV1::NonCanonicalProjectJson);
-    }
-    let ProjectDocument::Revision3(project) = document else {
-        return Err(Revision3NpcInspectionErrorV1::Revision3Required);
-    };
+    let project = ProjectRevision3::from_json(canonical_project_json)
+        .map_err(Revision3NpcInspectionErrorV1::InvalidProject)?;
 
     let npc_entity = project
         .entities
@@ -1693,14 +1744,8 @@ fn invariant<T>(message: impl Into<String>) -> Result<T, Revision3NpcInspectionE
 pub enum Revision3NpcInspectionErrorV1 {
     #[error("revision-3 NPC project JSON exceeds the {limit}-byte limit: {actual} bytes")]
     ProjectJsonTooLarge { actual: usize, limit: usize },
-    #[error("invalid authoring project document: {0}")]
-    InvalidProjectDocument(#[source] ProjectDocumentError),
-    #[error("could not canonicalize authoring project: {0}")]
-    SerializeProject(#[source] serde_json::Error),
-    #[error("revision-3 NPC inspection requires exact canonical project JSON")]
-    NonCanonicalProjectJson,
-    #[error("revision-3 NPC inspection requires authoring schema revision 3")]
-    Revision3Required,
+    #[error("invalid authoring revision-3 project: {0}")]
+    InvalidProject(#[source] ProjectRevision3JsonError),
     #[error("revision-3 NPC {0} is absent")]
     MissingNpc(EntityId),
     #[error("revision-3 entity {0} is not an NPC Draft")]
@@ -1720,7 +1765,7 @@ pub enum Revision3NpcInspectionErrorV1 {
     #[error("revision-3 NPC {npc} ScriptModule {module} differs from exact regeneration")]
     PersistedModuleDrift { npc: EntityId, module: EntityId },
     #[error("could not regenerate the persisted revision-3 NPC parent triple: {0}")]
-    RegenerateNpc(#[source] StoryRegenerationError),
+    RegenerateNpc(#[source] Revision3NpcRegenerationError),
     #[error("could not serialize revision-3 NPC input: {0}")]
     SerializeNpcInput(#[source] serde_json::Error),
     #[error("revision-3 NPC inspection field {field} exceeds {limit} bytes: {actual}")]

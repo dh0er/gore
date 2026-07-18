@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    apply_revision3_quest_transition_plan_transaction_v1, regenerate_revision3_quest_module_v2,
+    apply_revision3_quest_transition_plan_transaction_v1, regenerate_revision3_quest_module,
     revision3_quest_transition_plan_basis_v1, revision3_quest_transition_plan_seal_v1, AssetMeta,
-    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-    ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
-    QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
-    QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
-    QuestTransitionStateTestV1, Revision2LocalizationEntry, Revision3DialogLine, Revision3Entity,
+    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, LocalizationEntry,
+    ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
+    QuestCollisionCatalogInput, QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1,
+    QuestTransitionEdgeV1, QuestTransitionNodeV1, QuestTransitionPlanV1,
+    QuestTransitionPredicateV1, QuestTransitionStateTestV1, Revision3DialogLine, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
     Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
     Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditBuildStatusV1,
@@ -19,8 +19,7 @@ use gore_authoring::{
     SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat, MAX_PROJECT_JSON_BYTES,
     MAX_REVISION3_QUEST_TRANSITION_PLAN_EDIT_REQUEST_JSON_BYTES_V1,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -79,11 +78,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
         source_seal: seal(0x42, artifact.byte_len),
         basis_snapshot: seal(0x43, 4096),
     };
-    let generator_version = if objective_titles.len() == 1 {
-        REVISION3_QUEST_GENERATOR_VERSION
-    } else {
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-    };
+    let generator_version = REVISION3_QUEST_GENERATOR_VERSION;
     let quest = Revision3QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
         generator_version,
@@ -114,7 +109,9 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
                 .iter()
                 .map(|title| (*title).to_owned())
                 .collect(),
-            transition_plan: None,
+            transition_plan: Box::new(
+                QuestTransitionPlanV1::default_for_objectives(objective_titles.len()).unwrap(),
+            ),
             collision_catalog: artifact_ref,
         },
         script_module: Revision3TypedRef::new(
@@ -124,7 +121,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
         ),
         transcript: Vec::new(),
     };
-    let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
+    let module = regenerate_revision3_quest_module(&quest, collision_input(&quest)).unwrap();
     let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
     let entities = BTreeMap::from([
         (
@@ -162,7 +159,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
                     authored_runtime_id: "GORE_UNRELATED_LOC".to_owned(),
                 },
                 revision: 9,
-                payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+                payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
                     loc_id: "GORE_UNRELATED_LOC".to_owned(),
                     texts: BTreeMap::new(),
                 }),
@@ -232,13 +229,15 @@ fn request(
     }
 }
 
-fn seed_request(
+fn default_edit_request(
     project: &ProjectRevision3,
     basis_head: &WorkingHead,
 ) -> Revision3QuestTransitionPlanEditRequestV1 {
-    let basis = revision3_quest_transition_plan_basis_v1(quest(project)).unwrap();
-    assert!(basis.legacy_synthetic);
-    request(project, basis_head, basis.plan)
+    let mut plan = revision3_quest_transition_plan_basis_v1(quest(project))
+        .unwrap()
+        .plan;
+    automatic_root_start(&mut plan);
+    request(project, basis_head, plan)
 }
 
 fn evaluate(
@@ -313,7 +312,7 @@ fn attach_transcript(
                 authored_runtime_id: "GORE_TRANSITION_TRANSCRIPT_LOC_ENTITY".to_owned(),
             },
             revision: 2,
-            payload: Revision3EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
+            payload: Revision3EntityPayload::LocalizationEntry(LocalizationEntry {
                 loc_id: "GORE_TRANSITION_TRANSCRIPT_TEXT".to_owned(),
                 texts: BTreeMap::new(),
             }),
@@ -354,7 +353,7 @@ fn attach_transcript(
 }
 
 #[test]
-fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_three_revisions() {
+fn v4_edit_preserves_everything_except_plan_contract_and_three_revisions() {
     for objective_titles in [
         vec!["Win the trial"],
         vec!["Enter the arena", "Defeat the guard", "Report to Asghan"],
@@ -364,17 +363,12 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
         let before = project.clone();
         let old_quest = quest(&before).clone();
         let old_module_entity = before.entities[&id(0x22)].clone();
-        let request = seed_request(&project, &basis_head);
+        let request = default_edit_request(&project, &basis_head);
         let outcome = applied(&project, &basis_head, &request);
 
         assert_eq!(outcome.basis_head, basis_head);
         assert_eq!(outcome.quest_id, id(0x21));
         assert_eq!(outcome.script_module_id, id(0x22));
-        assert_eq!(
-            outcome.previous_generator_version,
-            old_quest.generator_version
-        );
-        assert!(outcome.upgraded_from_legacy);
         assert_eq!(outcome.quest_revision, 4);
         assert_eq!(outcome.script_module_revision, 6);
         assert_eq!(
@@ -414,8 +408,7 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
         );
         let after_quest = quest(&outcome.project);
         let mut expected_quest = old_quest;
-        expected_quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-        expected_quest.input.transition_plan = Some(Box::new(request.transition_plan.clone()));
+        expected_quest.input.transition_plan = Box::new(request.transition_plan.clone());
         assert_eq!(after_quest, &expected_quest);
 
         let after_module_entity = &outcome.project.entities[&id(0x22)];
@@ -442,10 +435,7 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
             panic!("old generated module origin")
         };
         assert_eq!(generator_id, old_generator_id);
-        assert_eq!(
-            *generator_version,
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        );
+        assert_eq!(*generator_version, REVISION3_QUEST_GENERATOR_VERSION);
         assert_eq!(owner, old_owner);
         let Revision3EntityPayload::ScriptModule(old_module) = &old_module_entity.payload else {
             panic!("old module kind")
@@ -458,7 +448,7 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
         assert_eq!(after_module.generator_id, old_module.generator_id);
         assert_eq!(
             after_module.generator_version,
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
+            REVISION3_QUEST_GENERATOR_VERSION
         );
         assert_eq!(after_module.module_namespace, old_module.module_namespace);
         assert_eq!(
@@ -468,8 +458,7 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
         assert_eq!(after_module.status, old_module.status);
         assert_eq!(
             after_module,
-            &regenerate_revision3_quest_module_v2(after_quest, collision_input(after_quest))
-                .unwrap()
+            &regenerate_revision3_quest_module(after_quest, collision_input(after_quest)).unwrap()
         );
         assert_eq!(
             outcome.transition_plan_seal,
@@ -487,16 +476,8 @@ fn legacy_v2_and_v3_seed_upgrade_preserves_everything_except_plan_contract_and_t
 
 #[test]
 fn v4_edit_uses_retained_plan_cas_and_same_plan_is_a_no_op() {
-    let (legacy, first_head) = project_with_quest(&["Win the trial"]);
-    let upgraded = applied(&legacy, &first_head, &seed_request(&legacy, &first_head));
-    let v4 = upgraded.project.clone();
-    let second_head = head(0x62);
+    let (v4, second_head) = project_with_quest(&["Win the trial"]);
     let basis = revision3_quest_transition_plan_basis_v1(quest(&v4)).unwrap();
-    assert!(!basis.legacy_synthetic);
-    assert_eq!(
-        basis.generator_version,
-        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-    );
 
     let no_op = request(&v4, &second_head, basis.plan.clone());
     assert_eq!(
@@ -508,11 +489,6 @@ fn v4_edit_uses_retained_plan_cas_and_same_plan_is_a_no_op() {
     automatic_root_start(&mut edited_plan);
     let edit = request(&v4, &second_head, edited_plan.clone());
     let outcome = applied(&v4, &second_head, &edit);
-    assert!(!outcome.upgraded_from_legacy);
-    assert_eq!(
-        outcome.previous_generator_version,
-        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-    );
     assert_eq!(outcome.project.revision, v4.revision + 1);
     assert_eq!(outcome.quest_revision, v4.entities[&id(0x21)].revision + 1);
     assert_eq!(
@@ -520,8 +496,8 @@ fn v4_edit_uses_retained_plan_cas_and_same_plan_is_a_no_op() {
         v4.entities[&id(0x22)].revision + 1
     );
     assert_eq!(
-        quest(&outcome.project).input.transition_plan.as_deref(),
-        Some(&edited_plan)
+        quest(&outcome.project).input.transition_plan.as_ref(),
+        &edited_plan
     );
     assert_ne!(
         outcome.transition_plan_seal,
@@ -533,14 +509,7 @@ fn v4_edit_uses_retained_plan_cas_and_same_plan_is_a_no_op() {
 
 #[test]
 fn transition_only_edit_preserves_active_slots_and_never_reuses_burned_ordinals() {
-    let (legacy_multi, first_head) = project_with_quest(&["Enter the arena", "Report to Asghan"]);
-    let upgraded_multi = applied(
-        &legacy_multi,
-        &first_head,
-        &seed_request(&legacy_multi, &first_head),
-    );
-    let v4_multi = upgraded_multi.project;
-    let second_head = head(0x63);
+    let (v4_multi, second_head) = project_with_quest(&["Enter the arena", "Report to Asghan"]);
     let mut replaced_slot = revision3_quest_transition_plan_basis_v1(quest(&v4_multi))
         .unwrap()
         .plan;
@@ -558,15 +527,15 @@ fn transition_only_edit_preserves_active_slots_and_never_reuses_burned_ordinals(
         Revision3QuestTransitionPlanEditConflictV1::ObjectiveSlotsChanged
     );
 
-    let (legacy_single, third_head) = project_with_quest(&["Win the trial"]);
-    let mut burn_plan = revision3_quest_transition_plan_basis_v1(quest(&legacy_single))
+    let (v4_single, third_head) = project_with_quest(&["Win the trial"]);
+    let mut burn_plan = revision3_quest_transition_plan_basis_v1(quest(&v4_single))
         .unwrap()
         .plan;
     burn_plan.next_slot_ordinal = 10;
     let burned = applied(
-        &legacy_single,
+        &v4_single,
         &third_head,
-        &request(&legacy_single, &third_head, burn_plan),
+        &request(&v4_single, &third_head, burn_plan),
     );
     let burned_v4 = burned.project;
     let fourth_head = head(0x64);
@@ -587,7 +556,7 @@ fn transition_only_edit_preserves_active_slots_and_never_reuses_burned_ordinals(
 #[test]
 fn exact_head_project_quest_and_plan_cas_conflicts_fail_closed() {
     let (project, basis_head) = project_with_quest(&["Win the trial"]);
-    let base = seed_request(&project, &basis_head);
+    let base = default_edit_request(&project, &basis_head);
 
     let mut candidate = base.clone();
     candidate.expected_head = head(0x72);
@@ -649,7 +618,7 @@ fn exact_head_project_quest_and_plan_cas_conflicts_fail_closed() {
 #[test]
 fn invalid_plan_module_drift_and_all_revision_overflows_are_rejected() {
     let (project, basis_head) = project_with_quest(&["Win the trial"]);
-    let mut invalid = seed_request(&project, &basis_head);
+    let mut invalid = default_edit_request(&project, &basis_head);
     invalid.transition_plan.objective_order.clear();
     assert!(matches!(
         rejected(&project, &basis_head, &invalid),
@@ -666,7 +635,7 @@ fn invalid_plan_module_drift_and_all_revision_overflows_are_rejected() {
     module.source_sha256 =
         Sha256Digest::from_bytes(Sha256::digest(module.source.as_bytes()).into());
     drift.validate_closed_model().unwrap();
-    let drift_request = seed_request(&drift, &basis_head);
+    let drift_request = default_edit_request(&drift, &basis_head);
     assert_eq!(
         rejected(&drift, &basis_head, &drift_request),
         Revision3QuestTransitionPlanEditConflictV1::OwnedModuleDrift {
@@ -677,21 +646,21 @@ fn invalid_plan_module_drift_and_all_revision_overflows_are_rejected() {
 
     let mut overflow = project.clone();
     overflow.revision = u64::MAX;
-    let request = seed_request(&overflow, &basis_head);
+    let request = default_edit_request(&overflow, &basis_head);
     assert_eq!(
         rejected(&overflow, &basis_head, &request),
         Revision3QuestTransitionPlanEditConflictV1::ProjectRevisionOverflow
     );
     overflow = project.clone();
     overflow.entities.get_mut(&id(0x21)).unwrap().revision = u64::MAX;
-    let request = seed_request(&overflow, &basis_head);
+    let request = default_edit_request(&overflow, &basis_head);
     assert_eq!(
         rejected(&overflow, &basis_head, &request),
         Revision3QuestTransitionPlanEditConflictV1::QuestRevisionOverflow { quest: id(0x21) }
     );
     overflow = project;
     overflow.entities.get_mut(&id(0x22)).unwrap().revision = u64::MAX;
-    let request = seed_request(&overflow, &basis_head);
+    let request = default_edit_request(&overflow, &basis_head);
     assert_eq!(
         rejected(&overflow, &basis_head, &request),
         Revision3QuestTransitionPlanEditConflictV1::ScriptModuleRevisionOverflow {
@@ -703,7 +672,7 @@ fn invalid_plan_module_drift_and_all_revision_overflows_are_rejected() {
 #[test]
 fn request_and_plan_seals_are_bounded_duplicate_free_canonical_and_domain_separated() {
     let (project, basis_head) = project_with_quest(&["Win the trial"]);
-    let request = seed_request(&project, &basis_head);
+    let request = default_edit_request(&project, &basis_head);
     let json = request.to_canonical_json().unwrap();
     assert_eq!(
         Revision3QuestTransitionPlanEditRequestV1::from_json(&json).unwrap(),
@@ -761,7 +730,7 @@ fn request_and_plan_seals_are_bounded_duplicate_free_canonical_and_domain_separa
 #[test]
 fn malformed_noncanonical_and_over_capacity_projects_never_return_a_candidate() {
     let (project, basis_head) = project_with_quest(&["Win the trial"]);
-    let request = seed_request(&project, &basis_head)
+    let request = default_edit_request(&project, &basis_head)
         .to_canonical_json()
         .unwrap();
     let project_json = project.to_canonical_json().unwrap();
@@ -789,7 +758,7 @@ fn malformed_noncanonical_and_over_capacity_projects_never_return_a_candidate() 
     assert!(fixed_bytes < basis_len);
     full.meta.name = "x".repeat(basis_len - fixed_bytes);
     assert_eq!(full.to_canonical_json().unwrap().len(), basis_len);
-    let request = seed_request(&full, &basis_head);
+    let request = default_edit_request(&full, &basis_head);
     assert!(matches!(
         rejected(&full, &basis_head, &request),
         Revision3QuestTransitionPlanEditConflictV1::CandidateTooLarge {

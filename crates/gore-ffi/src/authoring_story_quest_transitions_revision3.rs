@@ -12,14 +12,14 @@ use std::path::Path;
 use gore_authoring::{
     apply_revision3_quest_transition_plan_transaction_v1, revision3_quest_transition_plan_basis_v1,
     AssetVerification, EntityId, OpenedRevision3Checkpoint, Revision3EntityPayload,
-    Revision3QuestTransitionPlanBasisErrorV1, Revision3QuestTransitionPlanBasisV1,
-    Revision3QuestTransitionPlanEditBuildStatusV1, Revision3QuestTransitionPlanEditConflictV1,
-    Revision3QuestTransitionPlanEditErrorV1, Revision3QuestTransitionPlanEditEvaluationV1,
-    Revision3QuestTransitionPlanEditOutcomeV1, Revision3QuestTransitionPlanEditPublicationStatusV1,
-    Revision3QuestTransitionPlanEditRequestV1, Revision3QuestTransitionPlanEditRuntimeStatusV1,
-    WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
-    MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_TRANSITION_PLAN_EDIT_REQUEST_JSON_BYTES_V1,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    Revision3QuestTransitionPlanBasisErrorV1, Revision3QuestTransitionPlanEditBuildStatusV1,
+    Revision3QuestTransitionPlanEditConflictV1, Revision3QuestTransitionPlanEditErrorV1,
+    Revision3QuestTransitionPlanEditEvaluationV1, Revision3QuestTransitionPlanEditOutcomeV1,
+    Revision3QuestTransitionPlanEditPublicationStatusV1, Revision3QuestTransitionPlanEditRequestV1,
+    Revision3QuestTransitionPlanEditRuntimeStatusV1, WorkingHead, WorkingProjectStore,
+    WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
+    MAX_REVISION3_QUEST_TRANSITION_PLAN_EDIT_REQUEST_JSON_BYTES_V1,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,6 @@ struct PrepareQuestTransitionsWirePayload {
 struct BoundQuestBasis {
     module_id: EntityId,
     module_revision: u64,
-    transition: Revision3QuestTransitionPlanBasisV1,
 }
 
 #[derive(Debug)]
@@ -225,8 +224,6 @@ where
         "module_id": outcome.script_module_id.to_string(),
         "quest_revision": outcome.quest_revision,
         "module_revision": outcome.script_module_revision,
-        "previous_generator_version": outcome.previous_generator_version,
-        "upgraded_from_legacy": outcome.upgraded_from_legacy,
         "transition_plan_seal": outcome.transition_plan_seal,
         "build_status": "blocked",
         "runtime_status": "runtime_unqualified",
@@ -366,7 +363,6 @@ fn bind_request_to_basis(
     Ok(BoundQuestBasis {
         module_id,
         module_revision: module.revision,
-        transition,
     })
 }
 
@@ -384,8 +380,6 @@ fn validate_transaction_binding(
         || outcome.script_module_id != bound.module_id
         || outcome.quest_revision != request.expected_quest_revision + 1
         || outcome.script_module_revision != bound.module_revision + 1
-        || outcome.previous_generator_version != bound.transition.generator_version
-        || outcome.upgraded_from_legacy != bound.transition.legacy_synthetic
     {
         return Err(Failure::new(
             "AUTHORING_REVISION3_QUEST_TRANSITIONS_INVARIANT",
@@ -422,8 +416,7 @@ fn verify_reopened_transition(
     let transition =
         revision3_quest_transition_plan_basis_v1(quest).map_err(map_transition_basis_error)?;
     if entity.revision != outcome.quest_revision
-        || quest.generator_version != REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        || transition.legacy_synthetic
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
         || transition.plan != request.transition_plan
         || transition.seal != outcome.transition_plan_seal
     {
@@ -719,14 +712,14 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gore_authoring::{
-        regenerate_revision3_quest_module_v2, revision3_quest_transition_plan_seal_v1,
+        regenerate_revision3_quest_module, revision3_quest_transition_plan_seal_v1,
         AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
         ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
         QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionNodeV1,
         QuestTransitionPredicateV1, QuestTransitionStateTestV1, Revision3Entity,
         Revision3EntityKind, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
         Revision3QuestGiverInput, Revision3QuestParentInput, Revision3TypedRef, SchemaRevisionV3,
-        Sha256Digest, QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
+        Sha256Digest, QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
         REVISION3_QUEST_GENERATOR_VERSION,
     };
     use tempfile::TempDir;
@@ -790,7 +783,7 @@ mod tests {
 
         let artifact_bytes = br#"{"format":"fixture-collision-v1"}"#;
         let imported = store
-            .import_quest_collision_artifact_v1(artifact_bytes, Some(&basis.head))
+            .import_quest_collision_artifact_v2(artifact_bytes, &basis.head)
             .unwrap();
 
         let mut project = empty_project(1);
@@ -802,7 +795,7 @@ mod tests {
         let module_id = entity_id(MODULE_ID_BYTE);
         let collision_ref = QuestCollisionArtifactRef {
             generation: target(),
-            catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+            catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
             artifact: imported.artifact,
             source_seal: seal(0x33, artifact_bytes.len() as u64),
             basis_snapshot: basis.head.snapshot.clone(),
@@ -834,7 +827,9 @@ mod tests {
                 description: "Transition fixture description".to_owned(),
                 objective_title: "Transition fixture objective".to_owned(),
                 additional_objective_titles: Vec::new(),
-                transition_plan: None,
+                transition_plan: Box::new(
+                    gore_authoring::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+                ),
                 collision_catalog: collision_ref,
             },
             script_module: Revision3TypedRef::new(
@@ -852,7 +847,7 @@ mod tests {
             relative_paths: BTreeSet::new(),
             symbols: BTreeSet::new(),
         };
-        let module = regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+        let module = regenerate_revision3_quest_module(&quest, collision).unwrap();
         let owner = Revision3TypedRef::new(
             project.project_id,
             quest_id,
@@ -1079,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_happy_path_fully_reopens_v4_candidate_without_publishing() {
+    fn v4_happy_path_fully_reopens_candidate_without_publishing() {
         let store = published_store();
         let request = edit_request(&store);
         let response = call(&store, &request);
@@ -1091,8 +1086,6 @@ mod tests {
         assert_eq!(response["module_id"], entity_id(MODULE_ID_BYTE).to_string());
         assert_eq!(response["quest_revision"], 1);
         assert_eq!(response["module_revision"], 1);
-        assert_eq!(response["previous_generator_version"], 2);
-        assert_eq!(response["upgraded_from_legacy"], true);
         assert_eq!(response["build_status"], "blocked");
         assert_eq!(response["runtime_status"], "runtime_unqualified");
         assert_eq!(response["publication_status"], "not_supported");
@@ -1118,16 +1111,12 @@ mod tests {
         let Revision3EntityPayload::QuestDraft(quest) = &quest.payload else {
             panic!("expected Quest")
         };
+        assert_eq!(quest.generator_version, REVISION3_QUEST_GENERATOR_VERSION);
         assert_eq!(
-            quest.generator_version,
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        );
-        assert_eq!(
-            quest.input.transition_plan.as_deref(),
-            Some(&request.transition_plan)
+            quest.input.transition_plan.as_ref(),
+            &request.transition_plan
         );
         let reopened_basis = revision3_quest_transition_plan_basis_v1(quest).unwrap();
-        assert!(!reopened_basis.legacy_synthetic);
         assert_eq!(
             response["transition_plan_seal"],
             serde_json::to_value(&reopened_basis.seal).unwrap()
@@ -1145,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_v4_edit_reports_retained_plan_and_rejects_noop_without_writes() {
+    fn second_v4_edit_reports_retained_plan_and_rejects_noop_without_writes() {
         let store = published_store();
         let first = call(&store, &edit_request(&store));
         assert_eq!(first["ok"], true, "{first}");
@@ -1166,7 +1155,6 @@ mod tests {
             panic!("expected Quest")
         };
         let current_basis = revision3_quest_transition_plan_basis_v1(quest).unwrap();
-        assert!(!current_basis.legacy_synthetic);
         let noop = Revision3QuestTransitionPlanEditRequestV1 {
             expected_head: current.head.clone(),
             expected_project_id: current.project.project_id,
@@ -1199,11 +1187,6 @@ mod tests {
         assert_eq!(response["revision"], 3);
         assert_eq!(response["quest_revision"], 2);
         assert_eq!(response["module_revision"], 2);
-        assert_eq!(
-            response["previous_generator_version"],
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        );
-        assert_eq!(response["upgraded_from_legacy"], false);
         assert_eq!(fixed_head(&store), first_head_bytes);
     }
 

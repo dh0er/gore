@@ -33,10 +33,9 @@ void main() {
       expect(journey.projectRevision, 7);
       expect(journey.questId, revision3QuestOutlineQuestId);
       expect(journey.moduleId, revision3QuestOutlineModuleId);
-      expect(journey.legacySyntheticBehavior, isFalse);
       expect(
         journey.objectives.map((objective) => objective.stableObjectiveSlot),
-        <int?>[1, 2, 3],
+        <int>[1, 2, 3],
       );
       expect(journey.orderedDialogLines, isEmpty);
       expect(calls.seedReads, 1);
@@ -252,7 +251,7 @@ Revision3QuestJourneyService _service({
           }
           if (transitionSeedRead != null) return transitionSeedRead;
           return AuthoringRevision3QuestTransitionsSeed.forProject(
-            currentProjectJson: fixture.semanticProjectJson,
+            currentProjectJson: fixture.projectJson,
             questId: questId,
             expectedQuestRevision: expectedQuestRevision,
             expectedModuleId: expectedModuleId,

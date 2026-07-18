@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    apply_revision3_npc_draft_transaction_v1, regenerate_revision3_quest_module_v2, AssetMeta,
-    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-    ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput,
-    Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    apply_revision3_npc_draft_transaction_v1, regenerate_revision3_quest_module, AssetMeta,
+    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, NpcParentClassInput,
+    ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
+    QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
     Revision3NpcCatalogAuthorityV1, Revision3NpcCatalogSelectionV1,
     Revision3NpcCollisionAuthorityV1, Revision3NpcCollisionInventoryV1,
     Revision3NpcDraftBuildStatusV1, Revision3NpcDraftInsertConflictV1,
@@ -76,8 +76,8 @@ fn parent(
     seal_value: u8,
     selector_suffix: char,
     runtime_class: &str,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: project.target.clone(),
         source_seal: seal(seal_value, 20_000 + u64::from(seal_value)),
         catalog_layer: "base-game.g1r.characters".to_owned(),
@@ -213,7 +213,9 @@ fn project_with_valid_quest() -> ProjectRevision3 {
             description: "Already authored before the NPC.".to_owned(),
             objective_title: "Keep the exact Quest closure".to_owned(),
             additional_objective_titles: Vec::new(),
-            transition_plan: None,
+            transition_plan: Box::new(
+                gore_authoring::QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
+            ),
             collision_catalog: artifact_ref.clone(),
         },
         script_module: Revision3TypedRef::new(
@@ -231,7 +233,7 @@ fn project_with_valid_quest() -> ProjectRevision3 {
         relative_paths: BTreeSet::new(),
         symbols: BTreeSet::new(),
     };
-    let module = regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+    let module = regenerate_revision3_quest_module(&quest, collision).unwrap();
     let owner = module.owner.clone();
     project.entities.insert(
         quest_id,

@@ -10,8 +10,8 @@ use gore_authoring::model_revision3::OggCodec as VoiceOggCodec;
 use gore_authoring::{
     bind_revision3_voice_take_preview_v1, inspect_revision3_voice_take_media_qa_v1,
     AssetVerification, ProjectRevision3, Revision3VoiceTakeMediaAssuranceV1,
-    Revision3VoiceTakeMediaQaV1, Revision3VoiceTakePreviewBindingV1,
-    Revision3VoiceTakePreviewConflictV1, Revision3VoiceTakePreviewOggErrorV1,
+    Revision3VoiceTakeMediaQaErrorV1, Revision3VoiceTakeMediaQaV1,
+    Revision3VoiceTakePreviewBindingV1, Revision3VoiceTakePreviewConflictV1,
     Revision3VoiceTakePreviewRequestJsonErrorV1, Revision3VoiceTakePreviewRequestV1, WorkingHead,
     WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
     MAX_REVISION3_VOICE_TAKE_PREVIEW_REQUEST_JSON_BYTES_V1,
@@ -405,13 +405,13 @@ fn map_selected_asset_error(error: WorkingStoreError) -> Failure {
     }
 }
 
-fn map_media_error(error: Revision3VoiceTakePreviewOggErrorV1) -> Failure {
+fn map_media_error(error: Revision3VoiceTakeMediaQaErrorV1) -> Failure {
     match error {
-        Revision3VoiceTakePreviewOggErrorV1::MetadataLimit => Failure::new(
+        Revision3VoiceTakeMediaQaErrorV1::MetadataLimit => Failure::new(
             "AUTHORING_REVISION3_VOICE_MEDIA_RESPONSE_LIMIT",
             "selected VoiceTake media facts exceed the signed response range",
         ),
-        Revision3VoiceTakePreviewOggErrorV1::Invalid(_) => {
+        Revision3VoiceTakeMediaQaErrorV1::Invalid(_) => {
             asset_invalid("selected VoiceTake is not bounded valid Vorbis or Opus media")
         }
     }

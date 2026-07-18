@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/story/domain/story_catalog_adapter.dart';
-import 'package:gore_mod/story/domain/story_draft_requests.dart';
 
 const _catalogJson = '{"format":"story_catalog"}';
 const _asghanId = 'g1r:npc:om_grd_asghan_263';
@@ -19,7 +18,7 @@ void main() {
     adapter = StoryCatalogAdapter.fromSelections(await _selections());
   });
 
-  test('Asghan and Viper choices map exact qualified parent objects', () {
+  test('projects exact qualified NPC catalog rows', () {
     expect(adapter.npcChoices.map((choice) => choice.catalogId), <String>[
       _asghanId,
       _viperId,
@@ -46,185 +45,43 @@ void main() {
       ),
     );
 
-    final asghan = adapter.createNpcDraftInput(
-      catalogId: _asghanId,
-      displayName: 'Asghan clone',
-      moduleNamespace: 'GoreMods.Npcs.AsghanClone',
-      uniqueName: 'GoreAsghanClone',
-    );
-    final character = _decode(asghan.parentCharacterDefinition);
-    final ai = _decode(asghan.parentAiAgentConfig);
-    final spawn = _decode(asghan.parentSpawnDefinition);
-    _expectGeneration(character);
-    expect(character.keys, <String>[
-      'generation',
-      'source_seal',
-      'catalog_layer',
-      'canonical_selector',
-      'runtime_class',
-    ]);
-    expect(character['catalog_layer'], 'base-game.g1r.scripts');
-    expect(
-      character['canonical_selector'],
-      _selectorAlias(_asghanId, 'character_definition'),
-    );
-    expect(
-      character['runtime_class'],
-      'UCharacterDefinition_Human_OM_GRD_Asghan_263',
-    );
-    expect(character['source_seal'], _seal('a', 100));
-    expect(
-      ai['canonical_selector'],
-      _selectorAlias(_asghanId, 'ai_agent_config'),
-    );
-    expect(ai['source_seal'], _seal('b', 100));
-    expect(
-      spawn['canonical_selector'],
-      _selectorAlias(_asghanId, 'spawn_definition'),
-    );
-    expect(spawn['source_seal'], _seal('c', 100));
-    expect(
-      asghan.parentCharacterDefinition.canonicalJson,
-      isNot(contains('source_catalog_selector')),
-    );
-    expect(
-      asghan.parentCharacterDefinition.canonicalJson,
-      isNot(contains('Trusted/')),
-    );
-
-    final viper = adapter.createNpcDraftInput(
-      catalogId: _viperId,
-      displayName: 'Viper clone',
-      moduleNamespace: 'GoreMods.Npcs.ViperClone',
-      uniqueName: 'GoreViperClone',
-    );
-    final viperCharacter = _decode(viper.parentCharacterDefinition);
-    expect(
-      viperCharacter['runtime_class'],
-      'UCharacterDefinition_Human_OM_STT_Viper_302',
-    );
-    expect(viperCharacter['source_seal'], _seal('e', 100));
-  });
-
-  test('catalog NPC input is accepted by the closed mutation factory', () {
-    final input = adapter.createNpcDraftInput(
-      catalogId: _asghanId,
-      displayName: 'NPC GoreAsghanClone',
-      moduleNamespace: 'GoreMods.Npcs.GoreAsghanClone',
-      uniqueName: 'GoreAsghanClone',
-    );
-    final mutationJson = buildNpcStoryDraftMutationJson(
-      context: StoryDraftMutationContext(
-        projectId: '01010101010101010101010101010101',
-        revision: 4,
-        ids: StoryDraftEntityIds(
-          draftId: '10101010101010101010101010101010',
-          scriptModuleId: '11111111111111111111111111111111',
-        ),
-      ),
-      input: input,
-    );
-    final mutation = (jsonDecode(mutationJson) as Map).cast<String, Object?>();
-    final draft = (mutation['draft'] as Map).cast<String, Object?>();
-    final encodedInput = (draft['input'] as Map).cast<String, Object?>();
-
-    expect(draft['kind'], 'npc');
-    expect(encodedInput['unique_name'], 'GoreAsghanClone');
-    expect(
-      encodedInput['parent_character_definition'],
-      _decode(input.parentCharacterDefinition),
-    );
-    expect(
-      encodedInput['parent_ai_agent_config'],
-      _decode(input.parentAiAgentConfig),
-    );
-    expect(
-      encodedInput['parent_spawn_definition'],
-      _decode(input.parentSpawnDefinition),
-    );
-  });
-
-  test('unknown NPC choice and oversized friendly input fail closed', () {
-    expect(
-      () => adapter.createNpcDraftInput(
-        catalogId: 'g1r:npc:not-present',
-        displayName: 'Unknown',
-        moduleNamespace: 'GoreMods.Npcs.Unknown',
-        uniqueName: 'GoreUnknown',
-      ),
-      throwsA(isA<StoryCatalogAdapterException>()),
-    );
-    expect(
-      () => adapter.createNpcDraftInput(
-        catalogId: _asghanId,
-        displayName: 'Bounded',
-        moduleNamespace: 'GoreMods.Npcs.Bounded',
-        uniqueName: List<String>.filled(65, 'x').join(),
-      ),
-      throwsA(isA<StoryCatalogAdapterException>()),
-    );
-  });
-
-  test('Quest choices are typed but creation stays disabled', () {
-    final availability = adapter.questAvailability;
-
-    expect(availability.canCreate, isFalse);
-    expect(
-      availability.disabledReason,
-      StoryQuestDraftDisabledReason.collisionInventoryUnavailable,
-    );
-    expect(availability.parents, hasLength(1));
-    expect(
-      availability.parents.single.runtimeClass,
-      'UQuest_SwampCamp_SCCHAPTER2',
-    );
-    expect(
-      availability.parents.single.authoringSelector,
-      _selectorAlias('g1r:quest-parent:swampcamp_scchapter2', 'quest_parent'),
-    );
-    expect(availability.givers, hasLength(2));
-    expect(
-      availability.givers.map((giver) => giver.runtimeUniqueName),
-      <String>['OM_GRD_Asghan_263', 'OM_STT_Viper_302'],
-    );
-    expect(availability.collisionCatalogLayer, 'resolved-loadout.scripts.v1');
-    expect(availability.collisionSourceSeal.byteLength, 123394250);
-    expect(
-      availability.collisionSourceSeal.sha256,
-      List.filled(64, '2').join(),
-    );
-    expect(
-      () => availability.parents.add(availability.parents.single),
-      throwsUnsupportedError,
-    );
+    expect(adapter.npcChoices.first.runtimeUniqueName, 'OM_GRD_Asghan_263');
+    expect(adapter.npcChoices.last.runtimeUniqueName, 'OM_STT_Viper_302');
     expect(
       () => adapter.npcChoices.add(adapter.npcChoices.first),
       throwsUnsupportedError,
     );
   });
 
-  test(
-    'inconsistent readiness is rejected before adapter construction',
-    () async {
-      final response = _catalogResponse();
-      final selections = (response['selections'] as Map)
-          .cast<String, Object?>();
-      final collision = (selections['quest_collision_catalog'] as Map)
-          .cast<String, Object?>();
-      collision['blocks_draft_creation'] = false;
-
-      await expectLater(
-        ModFfi(
-          FakeGoreCoreFfiService(
-            responses: <String, Map<String, Object?>>{
-              'authoring_story_catalog_v1_read': response,
-            },
-          ),
-        ).authoringStoryCatalogV1Read(catalogJson: _catalogJson),
-        throwsFormatException,
-      );
-    },
-  );
+  test('projects immutable R3 Quest catalog rows', () {
+    expect(adapter.questParents, hasLength(1));
+    expect(
+      adapter.questParents.single.runtimeClass,
+      'UQuest_SwampCamp_SCCHAPTER2',
+    );
+    expect(
+      adapter.questParents.single.authoringSelector,
+      _selectorAlias('g1r:quest-parent:swampcamp_scchapter2', 'quest_parent'),
+    );
+    expect(adapter.questParents.single.sourceSeal.byteLength, 100);
+    expect(
+      adapter.questParents.single.sourceSeal.sha256,
+      List.filled(64, 'f').join(),
+    );
+    expect(adapter.questGivers, hasLength(2));
+    expect(
+      adapter.questGivers.map((giver) => giver.runtimeUniqueName),
+      <String>['OM_GRD_Asghan_263', 'OM_STT_Viper_302'],
+    );
+    expect(
+      () => adapter.questParents.add(adapter.questParents.single),
+      throwsUnsupportedError,
+    );
+    expect(
+      () => adapter.questGivers.add(adapter.questGivers.first),
+      throwsUnsupportedError,
+    );
+  });
 }
 
 Future<AuthoringStoryCatalogSelections> _selections() => ModFfi(
@@ -234,15 +91,6 @@ Future<AuthoringStoryCatalogSelections> _selections() => ModFfi(
     },
   ),
 ).authoringStoryCatalogV1Read(catalogJson: _catalogJson);
-
-Map<String, Object?> _decode(CanonicalUnverifiedStoryJsonObject value) =>
-    (jsonDecode(value.canonicalJson) as Map).cast<String, Object?>();
-
-void _expectGeneration(Map<String, Object?> parent) {
-  final generation = (parent['generation'] as Map).cast<String, Object?>();
-  expect(generation.keys, <String>['executable']);
-  expect(generation['executable'], _seal('1', 171698176));
-}
 
 Map<String, Object?> _seal(String byte, int byteLength) => <String, Object?>{
   'byte_len': byteLength,

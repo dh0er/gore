@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::model_revision3::{DialogLine, LocalizationEntry};
 use gore_authoring::{
     apply_revision3_npc_greeting_edit_transaction_v1, build_revision3_content_index_v1,
-    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-    ProjectRevision3, ProjectRevision3ValidationError, Revision2NpcDraftInput,
-    Revision2NpcParentClassInput, Revision3ContentEntitySummaryV1, Revision3ContentReferenceRoleV1,
+    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, NpcDraftInput,
+    NpcParentClassInput, ProjectId, ProjectMeta, ProjectRevision3, ProjectRevision3ValidationError,
+    Revision3ContentEntitySummaryV1, Revision3ContentReferenceRoleV1,
     Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogLineInsertRequestV1,
     Revision3DialogLocalizationActionV1, Revision3DialogLocalizationIntentV1, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
@@ -64,8 +64,8 @@ fn parent(
     generation: &GameGenerationAnchor,
     value: u8,
     runtime_class: &str,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: generation.clone(),
         source_seal: seal(value, 4096),
         catalog_layer: "base-game.g1r.npcs".to_owned(),
@@ -128,7 +128,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
     let npc = Revision3NpcDraft {
         generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
         generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-        input: Revision2NpcDraftInput {
+        input: NpcDraftInput {
             target: generation.clone(),
             module_namespace: "GoreMods.Npcs.GreetingGuard".to_owned(),
             unique_name: "GORE_GREETING_GUARD".to_owned(),

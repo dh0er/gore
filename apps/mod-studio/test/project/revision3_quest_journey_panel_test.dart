@@ -41,7 +41,7 @@ void main() {
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1200, 900));
-    final projection = await _projection(legacy: false);
+    final projection = await _projection();
     var nameEdits = 0;
     var connectionEdits = 0;
     var transitionEdits = 0;
@@ -144,7 +144,7 @@ void main() {
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(360, 640));
-    final projection = await _projection(legacy: false);
+    final projection = await _projection();
 
     await _pumpPanel(
       tester,
@@ -178,7 +178,7 @@ void main() {
     'persistent Draft setup shows two publications and one review action',
     (tester) async {
       await _setSurfaceSize(tester, const Size(1000, 900));
-      final projection = await _projection(legacy: false);
+      final projection = await _projection();
       var dialogOpens = 0;
 
       await _pumpPanel(
@@ -205,12 +205,6 @@ void main() {
           findsOneWidget,
         );
       }
-      expect(
-        find.byKey(
-          const Key('revision3-quest-draft-setup-step-legacyBehavior'),
-        ),
-        findsNothing,
-      );
       expect(find.text('Saved in project'), findsNWidgets(2));
       expect(find.textContaining('one project checkpoint'), findsOneWidget);
       expect(find.textContaining('separate second checkpoint'), findsOneWidget);
@@ -254,67 +248,11 @@ void main() {
     },
   );
 
-  testWidgets(
-    'legacy Draft recommends behavior and shares the single-flight action lane',
-    (tester) async {
-      await _setSurfaceSize(tester, const Size(900, 800));
-      final projection = await _projection(legacy: true);
-      final pending = Completer<void>();
-      var transitionCalls = 0;
-
-      await _pumpPanel(
-        tester,
-        Revision3QuestJourneyPanel(
-          projection: projection,
-          onEditStatesTransitions: () {
-            transitionCalls++;
-            return pending.future;
-          },
-          onOpenDialogVoice: () {},
-        ),
-      );
-
-      expect(
-        find.byKey(
-          const Key('revision3-quest-draft-setup-step-legacyBehavior'),
-        ),
-        findsOneWidget,
-      );
-      expect(find.text('Legacy behavior review'), findsOneWidget);
-      final recommended = find.byKey(
-        const Key('revision3-quest-draft-setup-recommended-states-transitions'),
-      );
-      await tester.ensureVisible(recommended);
-      await tester.tap(recommended);
-      await tester.pump();
-      await tester.tap(recommended, warnIfMissed: false);
-      await tester.pump();
-
-      expect(transitionCalls, 1);
-      expect(tester.widget<FilledButton>(recommended).onPressed, isNull);
-      expect(
-        find.byKey(const Key('revision3-quest-journey-action-progress')),
-        findsOneWidget,
-      );
-      expect(
-        find.text(
-          const Revision3QuestJourneyPanelCopy.english().editActionBusyReason,
-        ),
-        findsWidgets,
-      );
-
-      pending.complete();
-      await tester.pumpAndSettle();
-      expect(transitionCalls, 1);
-      expect(tester.takeException(), isNull);
-    },
-  );
-
   testWidgets('Draft setup remains usable at 360px and 200% text', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(360, 900));
-    final projection = await _projection(legacy: false, emptyTranscript: true);
+    final projection = await _projection(emptyTranscript: true);
     var dialogOpens = 0;
 
     await _pumpPanel(
@@ -355,7 +293,7 @@ void main() {
     'wide blocked edits stay visible, disabled and explain the owner reason',
     (tester) async {
       await _setSurfaceSize(tester, const Size(1200, 900));
-      final projection = await _projection(legacy: false);
+      final projection = await _projection();
       const reason = 'Save or discard the pending project changes first.';
 
       await _pumpPanel(
@@ -400,7 +338,7 @@ void main() {
     'compact partial blocker keeps other edits enabled without overflow',
     (tester) async {
       await _setSurfaceSize(tester, const Size(320, 480));
-      final projection = await _projection(legacy: false);
+      final projection = await _projection();
       const reason =
           'Richte zuerst den Gothic-Spielordner in den Einstellungen ein, bevor du Beschreibung und Verknüpfungen dieser Quest bearbeitest.';
       var nameEdits = 0;
@@ -454,7 +392,7 @@ void main() {
     'duplicate per-action reasons render once but explain each action',
     (tester) async {
       await _setSurfaceSize(tester, const Size(900, 700));
-      final projection = await _projection(legacy: false);
+      final projection = await _projection();
       const reason = 'The configured game folder is required for this editor.';
 
       await _pumpPanel(
@@ -507,7 +445,7 @@ void main() {
     'edit actions keep one single-flight lane and explain busy state',
     (tester) async {
       await _setSurfaceSize(tester, const Size(900, 820));
-      final projection = await _projection(legacy: false);
+      final projection = await _projection();
       final pending = Completer<void>();
       var nameEdits = 0;
       var connectionEdits = 0;
@@ -588,7 +526,7 @@ void main() {
     'compact German busy status keeps long progress guidance accessible',
     (tester) async {
       await _setSurfaceSize(tester, const Size(300, 440));
-      final projection = await _projection(legacy: false, german: true);
+      final projection = await _projection(german: true);
       final pending = Completer<void>();
       const copy = Revision3QuestJourneyPanelCopy.german();
 
@@ -635,10 +573,10 @@ void main() {
   );
 
   testWidgets(
-    'German narrow view localizes actions, boundaries, legacy and general dialog',
+    'German narrow view localizes actions, boundaries and general dialog',
     (tester) async {
       await _setSurfaceSize(tester, const Size(360, 700));
-      final projection = await _projection(legacy: true, german: true);
+      final projection = await _projection(german: true);
       var transitionEdits = 0;
       Revision3QuestTranscriptRow? opened;
 
@@ -661,7 +599,7 @@ void main() {
       expect(find.text('Homer finden'), findsOne);
       expect(find.text('Name & Ziele bearbeiten'), findsOne);
       expect(find.text('Beschreibung & Verknüpfungen bearbeiten'), findsOne);
-      expect(find.text('Zustände & Übergänge bearbeiten'), findsNWidgets(2));
+      expect(find.text('Zustände & Übergänge bearbeiten'), findsOneWidget);
       expect(find.text('Entwurf'), findsOne);
       expect(find.text('Projektlogik'), findsOne);
       expect(find.text('Offline-Projektansicht'), findsOne);
@@ -672,7 +610,6 @@ void main() {
       expect(find.text('Erfolg'), findsNWidgets(4));
       expect(find.text('Fehlschlag'), findsNWidgets(4));
       expect(find.text('Nicht verwendet'), findsNWidgets(5));
-      expect(find.text('Ursprüngliches festes Verhalten'), findsNWidgets(3));
 
       await tester.tap(
         find.byKey(
@@ -691,10 +628,6 @@ void main() {
         scrollable: find.byType(Scrollable).first,
       );
       expect(find.text('Allgemeiner Dialog'), findsOne);
-      expect(
-        find.textContaining('statt Zielen nur vermutungsweise'),
-        findsNWidgets(4),
-      );
       expect(find.text('Dialogzeile 3'), findsOne);
       expect(find.textContaining('Text in 1 Sprache'), findsNWidgets(4));
       expect(find.textContaining('0 Sprachaufnahmen'), findsNWidgets(4));
@@ -731,59 +664,6 @@ void main() {
     },
   );
 
-  testWidgets(
-    'legacy view keeps every dialog line general and labels synthetic behavior',
-    (tester) async {
-      await _setSurfaceSize(tester, const Size(700, 820));
-      final projection = await _projection(legacy: true);
-
-      await _pumpPanel(
-        tester,
-        Revision3QuestJourneyPanel(
-          projection: projection,
-          onOpenDialogLine: (_) {},
-        ),
-      );
-
-      expect(projection.legacySyntheticBehavior, isTrue);
-      expect(find.text('Original fixed behavior'), findsNWidgets(3));
-      expect(
-        find.byKey(const Key('revision3-quest-journey-legacy-dialog-note')),
-        findsOne,
-      );
-      expect(find.textContaining('instead of being guessed'), findsNWidgets(4));
-      for (var index = 0; index < projection.objectives.length; index++) {
-        final objectiveGroup = find.byKey(
-          Key('revision3-quest-journey-objective-dialog-$index'),
-        );
-        expect(
-          find.descendant(
-            of: objectiveGroup,
-            matching: find.byKey(
-              const Key('revision3-quest-journey-dialog-line-0'),
-            ),
-          ),
-          findsNothing,
-        );
-      }
-      final general = find.byKey(
-        const Key('revision3-quest-journey-general-dialog'),
-      );
-      for (var index = 0; index < 3; index++) {
-        expect(
-          find.descendant(
-            of: general,
-            matching: find.byKey(
-              Key('revision3-quest-journey-dialog-line-$index'),
-            ),
-          ),
-          findsOne,
-        );
-      }
-      expect(tester.takeException(), isNull);
-    },
-  );
-
   testWidgets('unavailable view exposes only safe recovery guidance', (
     tester,
   ) async {
@@ -811,7 +691,7 @@ void main() {
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(700, 820));
-    final projection = await _projection(legacy: false, emptyTranscript: true);
+    final projection = await _projection(emptyTranscript: true);
 
     await _pumpPanel(
       tester,
@@ -840,7 +720,7 @@ void main() {
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(700, 820));
-    final projection = await _projection(legacy: false);
+    final projection = await _projection();
 
     await _pumpPanel(
       tester,
@@ -898,7 +778,6 @@ void main() {
 }
 
 Future<Revision3QuestJourneyProjection> _projection({
-  required bool legacy,
   bool emptyTranscript = false,
   bool german = false,
 }) async {
@@ -916,11 +795,7 @@ Future<Revision3QuestJourneyProjection> _projection({
     objectiveTitles: objectiveTitles,
   );
   final index = Revision3ContentIndex.fromJsonObject(
-    _contentIndexJson(
-      legacy: legacy,
-      emptyTranscript: emptyTranscript,
-      german: german,
-    ),
+    _contentIndexJson(emptyTranscript: emptyTranscript, german: german),
   );
   final service = Revision3QuestTranscriptAuthoringService(
     expectedHead: outline.head,
@@ -954,9 +829,7 @@ Future<Revision3QuestJourneyProjection> _projection({
     expectedQuestRevision: outline.questRevision,
   );
   final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-    currentProjectJson: legacy
-        ? outline.projectJson
-        : outline.semanticProjectJson,
+    currentProjectJson: outline.projectJson,
     questId: revision3QuestOutlineQuestId,
     expectedQuestRevision: outline.questRevision,
     expectedModuleId: revision3QuestOutlineModuleId,
@@ -972,11 +845,9 @@ Future<Revision3QuestJourneyProjection> _projection({
 }
 
 Map<String, Object?> _contentIndexJson({
-  required bool legacy,
   required bool emptyTranscript,
   required bool german,
 }) {
-  final generatorVersion = legacy ? 3 : 4;
   final title = german ? 'Homer finden' : 'Find Homer';
   final objectiveTitles = german
       ? _germanObjectiveTitles
@@ -989,8 +860,8 @@ Map<String, Object?> _contentIndexJson({
   final bindings = emptyTranscript
       ? const <({int lineIndex, int? slot})>[]
       : <({int lineIndex, int? slot})>[
-          (lineIndex: 2, slot: legacy ? null : 1),
-          (lineIndex: 0, slot: legacy ? null : 1),
+          (lineIndex: 2, slot: 1),
+          (lineIndex: 0, slot: 1),
           (lineIndex: 1, slot: null),
         ];
   final lineCount = emptyTranscript ? 0 : 3;
@@ -1025,7 +896,7 @@ Map<String, Object?> _contentIndexJson({
           'title': title,
           'objective_title': objectiveTitles.first,
           'additional_objective_titles': objectiveTitles.skip(1).toList(),
-          if (!legacy) 'objective_slots': <Object?>[1, 2, 3],
+          'objective_slots': <Object?>[1, 2, 3],
           'transcript_count': bindings.length,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
@@ -1054,7 +925,7 @@ Map<String, Object?> _contentIndexJson({
         origin: <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': generatorVersion,
+          'generator_version': 4,
           'owner': <String, Object?>{
             'project_id': revision3QuestOutlineProjectId,
             'entity_id': revision3QuestOutlineQuestId,
@@ -1063,7 +934,7 @@ Map<String, Object?> _contentIndexJson({
         },
         summary: <String, Object?>{
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': generatorVersion,
+          'generator_version': 4,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
           'status': <String, Object?>{

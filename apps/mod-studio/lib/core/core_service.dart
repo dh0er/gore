@@ -46,18 +46,13 @@ const _transportPanicResponse =
 const requiredStudioCoreCommands = <String>[
   'audio_extract',
   'audio_list',
-  'authoring_draft_quest_skeleton_v1_generate',
-  'authoring_logical_npc_clone_draft_v1_generate',
   'authoring_npc_archetype_catalog_v1_build_for_game_root',
-  'authoring_project_check',
-  'authoring_project_story_draft_insert_v1',
   'authoring_read_dataasset_extract_receipt_v2',
   'authoring_store_build_revision3_reviewed_dataasset_v1',
   'authoring_store_build_revision3_voice_v1',
   'authoring_store_check_revision3_npc_compiler_v1',
   'authoring_store_check_revision3_quest_compiler_v1',
   'authoring_store_export_revision3_exact_snapshot_v2',
-  'authoring_store_import_ogg',
   'authoring_store_import_revision3_exact_snapshot_v2',
   'authoring_store_inspect_revision3_exact_snapshot_v2',
   'authoring_store_inspect_revision3_installed_dataasset_v1',
@@ -67,15 +62,10 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_list_revision3_dataasset_stages_v1',
   'authoring_store_list_revision3_history_v1',
   'authoring_store_materialize_revision3_voice_take_preview_v1',
-  'authoring_store_open',
-  'authoring_store_open_document',
-  'authoring_store_open_head_bytes',
-  'authoring_store_open_head_bytes_document',
   'authoring_store_open_revision3',
   'authoring_store_open_revision3_head_bytes',
+  'authoring_store_plan_revision3_voice_batch_v1',
   'authoring_store_plan_revision3_voice_v1',
-  'authoring_store_prepare_checkpoint',
-  'authoring_store_prepare_document_checkpoint',
   'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
   'authoring_store_prepare_remove_revision3_story_draft_v1',
   'authoring_store_prepare_revision3_checkpoint',
@@ -92,11 +82,11 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_revision3_npc_profile_edit_v1',
   'authoring_store_prepare_revision3_quest_context_edit_v1',
   'authoring_store_prepare_revision3_quest_draft_v3',
-  'authoring_store_prepare_revision3_quest_outline_edit_v1',
   'authoring_store_prepare_revision3_quest_outline_edit_v2',
   'authoring_store_prepare_revision3_quest_transcript_v1',
   'authoring_store_prepare_revision3_quest_transitions_edit_v1',
   'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+  'authoring_store_prepare_revision3_voice_batch_v1',
   'authoring_store_prepare_revision3_voice_take_removal_v1',
   'authoring_store_prepare_revision3_voice_take_selection_v1',
   'authoring_store_prepare_revision3_voice_take_status_v1',
@@ -108,12 +98,9 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_read_revision3_dialog_localization_v1',
   'authoring_store_register_revision3_voice_take_preview_v1',
   'authoring_store_release_revision3_voice_take_preview_v1',
-  'authoring_store_verify_asset',
-  'authoring_story_build_plan_v1_generate',
   'authoring_story_catalog_v1_build',
   'authoring_story_catalog_v1_build_for_game_root',
   'authoring_story_catalog_v1_read',
-  'authoring_story_inventory_v1_build',
   'core_info',
   'dataasset_fixed_inspect_v1',
   'find_game',
@@ -123,7 +110,6 @@ const requiredStudioCoreCommands = <String>[
   'mod_build',
   'mod_deploy',
   'mod_undeploy',
-  'script_compile',
   'script_compile_install_state_v1',
   'script_compile_report_v1',
   'script_emit_module',
@@ -252,7 +238,7 @@ class GoreCoreInfo {
     }
   }
 
-  /// A valid protocol response alone must never make a legacy, unbounded transport operational.
+  /// A valid protocol response alone must never make a non-v2 transport operational.
   /// The loader uses this seam after resolving and invoking the exact versioned v2 probe.
   static GoreCoreInfo? tryParseCompatibleTransportV2Response(
     int transportAbi,
@@ -503,7 +489,7 @@ String executeGoreCoreV2WithBindings(
 }
 
 /// Stub returned when no candidate exposes the exact bounded transport and compatible protocol.
-/// This includes a missing DLL as well as stale legacy-only builds that are intentionally skipped.
+/// This includes a missing DLL as well as non-current builds that are intentionally skipped.
 class MissingGoreCoreFfiService implements GoreCoreFfiService {
   @override
   bool get isAvailable => false;

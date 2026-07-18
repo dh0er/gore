@@ -2,6 +2,12 @@ part of '../core/mod_ffi.dart';
 
 const _maxAuthoringRevision3QuestOutlineV2RequestJsonBytes = 32 * 1024;
 
+enum AuthoringRevision3QuestOutlineBuildStatus { blocked }
+
+enum AuthoringRevision3QuestOutlineRuntimeStatus { runtimeUnqualified }
+
+enum AuthoringRevision3QuestOutlinePublicationStatus { notSupported }
+
 final class AuthoringRevision3QuestOutlineObjectiveEditV2 {
   const AuthoringRevision3QuestOutlineObjectiveEditV2({
     required this.slot,
@@ -246,7 +252,6 @@ final class AuthoringRevision3QuestOutlineEditRequestV2 {
       current.project,
       projectId: current.projectId,
       questId: questId,
-      allowSemanticPlan: true,
     );
     if (expectedProjectId != current.projectId ||
         expectedRevision != current.revision ||
@@ -254,9 +259,6 @@ final class AuthoringRevision3QuestOutlineEditRequestV2 {
         expectedQuestRevision != basis.questRevision ||
         moduleId != basis.moduleId ||
         expectedModuleRevision != basis.moduleRevision ||
-        basis.generatorVersion !=
-            _authoringRevision3SemanticQuestGeneratorVersion ||
-        basis.legacySynthetic ||
         !_questTransitionsSameSeal(
           expectedTransitionPlanSeal,
           basis.transitionPlan.contentSeal,
@@ -534,10 +536,7 @@ void _questOutlineV2RequireExactDelta(
   final requestedSlots = request.objectives
       .map((objective) => objective.slot)
       .toList(growable: false);
-  if (candidateBasis.generatorVersion !=
-          _authoringRevision3SemanticQuestGeneratorVersion ||
-      candidateBasis.legacySynthetic ||
-      !_questTransitionsSameInts(
+  if (!_questTransitionsSameInts(
         candidateBasis.transitionPlan.objectiveSlots,
         baseBasis.transitionPlan.objectiveSlots,
       ) ||
@@ -697,4 +696,263 @@ void _questOutlineV2RequireExactDelta(
       'authoring revision-3 Quest outline-v2 candidate changed a preserved module field',
     );
   }
+}
+
+({
+  int questRevision,
+  String moduleId,
+  int moduleRevision,
+  String displayName,
+  String title,
+  List<String> objectiveTitles,
+})
+_questOutlineRequireBasisPair(
+  Map<String, Object?> project, {
+  required String projectId,
+  required String questId,
+}) {
+  final entities = _authoringRequiredObject(
+    project['entities'],
+    'revision-3 Quest outline basis entities',
+  );
+  final quest = _questOutlineEntity(entities, questId, 'quest_draft');
+  final hasTranscript = quest.data.containsKey('transcript');
+  _authoringExactFields(quest.data, <String>{
+    'generator_id',
+    'generator_version',
+    'input',
+    'script_module',
+    if (hasTranscript) 'transcript',
+  }, 'revision-3 Quest outline Quest data');
+  if (quest.data['generator_id'] != _authoringRevision3QuestGeneratorId ||
+      _authoringRequiredInt(
+            quest.data,
+            'generator_version',
+            min: _authoringRevision3QuestGeneratorVersion,
+            max: _authoringRevision3QuestGeneratorVersion,
+          ) !=
+          _authoringRevision3QuestGeneratorVersion) {
+    throw const FormatException(
+      'authoring revision-3 Quest outlines require generator version 4',
+    );
+  }
+  final scriptRef = _authoringRequiredObject(
+    quest.data['script_module'],
+    'revision-3 Quest outline script reference',
+  );
+  _authoringExactFields(scriptRef, const {
+    'project_id',
+    'id',
+    'expected_kind',
+  }, 'revision-3 Quest outline script reference');
+  final moduleId = _questOutlineEntityId(scriptRef, 'id');
+  if (scriptRef['project_id'] != projectId ||
+      scriptRef['expected_kind'] != 'script_module') {
+    throw const FormatException(
+      'authoring revision-3 Quest outline has a foreign or mistyped module reference',
+    );
+  }
+  final module = _questOutlineEntity(entities, moduleId, 'script_module');
+  if (module.data['generator_id'] != _authoringRevision3QuestGeneratorId ||
+      module.data['generator_version'] !=
+          _authoringRevision3QuestGeneratorVersion) {
+    throw const FormatException(
+      'authoring revision-3 Quest outline has an unsupported generated script',
+    );
+  }
+  final input = _authoringRequiredObject(
+    quest.data['input'],
+    'revision-3 Quest outline Quest input',
+  );
+  _authoringExactFields(input, <String>{
+    'target',
+    'quest_id',
+    'module_namespace',
+    'technical_id',
+    'text_helper',
+    'parent_quest',
+    'giver',
+    'title',
+    'description',
+    'objective_title',
+    if (input.containsKey('additional_objective_titles'))
+      'additional_objective_titles',
+    'transition_plan',
+    'collision_catalog',
+  }, 'revision-3 Quest outline Quest input');
+  if (input['quest_id'] != questId ||
+      jsonEncode(input['target']) != jsonEncode(project['target'])) {
+    throw const FormatException(
+      'authoring revision-3 Quest outline Quest identity or target is not exact',
+    );
+  }
+  final firstObjective = _questOutlineLiteral(input, 'objective_title');
+  final additional = input.containsKey('additional_objective_titles')
+      ? _authoringRevision3QuestObjectiveTitleList(
+          input['additional_objective_titles'],
+          firstTitle: firstObjective,
+          requireAdditional: true,
+          context: 'outline basis',
+        )
+      : const <String>[];
+  final titles = <String>[firstObjective, ...additional];
+  final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
+    input['transition_plan'],
+  );
+  if (plan.objectiveOrder.length != titles.length) {
+    throw const FormatException(
+      'authoring revision-3 Quest transition plan does not cover every outline title',
+    );
+  }
+  return (
+    questRevision: _authoringRequiredInt(
+      quest.entity,
+      'revision',
+      max: _maxAuthoringStoryBaseRevision,
+    ),
+    moduleId: moduleId,
+    moduleRevision: _authoringRequiredInt(
+      module.entity,
+      'revision',
+      max: _maxAuthoringStoryBaseRevision,
+    ),
+    displayName: _questOutlineDisplayName(quest.entity, 'display_name'),
+    title: _questOutlineLiteral(input, 'title'),
+    objectiveTitles: List<String>.unmodifiable(titles),
+  );
+}
+
+({Map<String, Object?> entity, Map<String, Object?> data}) _questOutlineEntity(
+  Map<String, Object?> entities,
+  String id,
+  String kind,
+) {
+  final entity = _authoringRequiredObject(
+    entities[id],
+    'revision-3 Quest outline $kind entity',
+  );
+  _authoringExactFields(entity, const {
+    'id',
+    'display_name',
+    'origin',
+    'revision',
+    'payload',
+  }, 'revision-3 Quest outline $kind entity');
+  if (entity['id'] != id) {
+    throw FormatException(
+      'authoring revision-3 Quest outline $kind entity key and ID disagree',
+    );
+  }
+  final payload = _authoringRequiredObject(
+    entity['payload'],
+    'revision-3 Quest outline $kind payload',
+  );
+  _authoringExactFields(payload, const {
+    'kind',
+    'data',
+  }, 'revision-3 Quest outline $kind payload');
+  if (payload['kind'] != kind) {
+    throw FormatException(
+      'authoring revision-3 Quest outline entity is not a $kind',
+    );
+  }
+  return (
+    entity: entity,
+    data: _authoringRequiredObject(
+      payload['data'],
+      'revision-3 Quest outline $kind data',
+    ),
+  );
+}
+
+({Map<String, Object?> json, int byteLength, String sha256})
+_questOutlineGeneration(Object? value, String context) {
+  final generation = _authoringRequiredObject(
+    value,
+    'revision-3 Quest outline $context',
+  );
+  _authoringExactFields(generation, const {
+    'executable',
+  }, 'revision-3 Quest outline $context');
+  final executable = _authoringRequiredObject(
+    generation['executable'],
+    'revision-3 Quest outline $context executable',
+  );
+  _authoringExactFields(executable, const {
+    'byte_len',
+    'sha256',
+  }, 'revision-3 Quest outline $context executable');
+  final sha = _authoringRequiredString(executable, 'sha256', maxBytes: 64);
+  if (!_authoringSha256Pattern.hasMatch(sha)) {
+    throw const FormatException(
+      'authoring revision-3 Quest outline target SHA-256 is invalid',
+    );
+  }
+  return (
+    json: generation,
+    byteLength: _authoringRequiredInt(
+      executable,
+      'byte_len',
+      min: 1,
+      max: _maxAuthoringStoryAppliedRevision,
+    ),
+    sha256: sha,
+  );
+}
+
+String _questOutlineDisplayName(Map<String, Object?> json, String field) {
+  final value = _authoringRevision3QuestRequestString(json, field);
+  if (value.trim().isEmpty ||
+      value.trim() != value ||
+      utf8.encode(value).length > 256 ||
+      value.runes.any(
+        (rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f),
+      )) {
+    throw const FormatException(
+      'authoring revision-3 Quest outline display name is invalid',
+    );
+  }
+  return value;
+}
+
+String _questOutlineLiteral(Map<String, Object?> json, String field) {
+  final value = _authoringRevision3QuestRequestString(json, field);
+  _authoringRevision3QuestValidateObjectiveTitle(value, 'outline $field');
+  return value;
+}
+
+String _questOutlineEntityId(Map<String, Object?> json, String field) =>
+    _authoringRevision3QuestEntityId(json, field);
+
+void _questOutlineRequireFieldOrder(
+  Map<String, Object?> json,
+  List<String> expected,
+  String context,
+) {
+  final actual = json.keys.toList(growable: false);
+  if (!_sameQuestOutlineStrings(actual, expected)) {
+    throw FormatException(
+      'authoring revision-3 Quest outline $context has non-canonical field order',
+    );
+  }
+}
+
+bool _sameQuestOutlineStrings(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
+Map<String, Object?> _questOutlineClone(Map<String, Object?> value) =>
+    Map<String, Object?>.from(jsonDecode(jsonEncode(value)) as Map);
+
+Map<String, Object?> _questOutlineMutableObject(Object? value, String context) {
+  if (value is! Map) {
+    throw FormatException(
+      'authoring revision-3 Quest outline $context is not an object',
+    );
+  }
+  return value.cast<String, Object?>();
 }

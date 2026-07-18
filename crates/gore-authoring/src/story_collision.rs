@@ -4,15 +4,10 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::{EntityKind, EntityPayload, TypedRef};
-use crate::model_revision3::{
-    EntityKind as Revision3EntityKind, EntityPayload as Revision3EntityPayload,
-    TypedRef as Revision3TypedRef,
-};
+use crate::model_revision3::{EntityKind, EntityPayload, TypedRef};
 use crate::{
-    ContentSeal, DiagnosticCode, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision2,
-    ProjectRevision3, ProjectRevision3JsonError, Sha256Digest, StoryRegenerationError,
-    ValidationProfile,
+    ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
+    ProjectRevision3JsonError, Revision3NpcRegenerationError, Sha256Digest,
 };
 
 /// Closed collision identities regenerated from every typed NPC/Quest draft in one exact project.
@@ -77,19 +72,15 @@ impl ProjectStoryCollisionIdentities {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoryCollisionCollectionError {
-    #[error("could not serialize the exact revision-2 project snapshot: {0}")]
-    SerializeProject(#[source] serde_json::Error),
     #[error("could not serialize the exact native revision-3 project snapshot: {0}")]
     SerializeRevision3Project(#[source] ProjectRevision3JsonError),
-    #[error("project has {count} non-runtime Story validation blockers")]
-    InvalidProject { count: usize },
     #[error("invalid native revision-3 Quest-free Story basis: {reason}")]
     InvalidRevision3Basis { reason: String },
     #[error("could not regenerate Story draft {owner}: {source}")]
     Regeneration {
         owner: EntityId,
         #[source]
-        source: StoryRegenerationError,
+        source: Revision3NpcRegenerationError,
     },
     #[error(
         "project Story {kind} identity {value:?} collides between {first_owner} and {second_owner}"
@@ -131,30 +122,10 @@ pub(crate) enum BoundedStoryCollisionCollectionError {
     },
 }
 
-/// Regenerate the complete Story collision footprint for one exact revision-2 project.
-pub fn collect_project_story_collision_identities(
-    project: &ProjectRevision2,
-) -> Result<ProjectStoryCollisionIdentities, StoryCollisionCollectionError> {
-    collect_project_story_collision_identities_inner(project, None).map_err(|error| match error {
-        BoundedStoryCollisionCollectionError::Collection(error) => error,
-        BoundedStoryCollisionCollectionError::ResourceLimit { .. } => {
-            unreachable!("the unbounded public collector has no resource budget")
-        }
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn collect_project_story_collision_identities_bounded(
-    project: &ProjectRevision2,
-    limits: StoryCollisionCollectionLimits,
-) -> Result<ProjectStoryCollisionIdentities, BoundedStoryCollisionCollectionError> {
-    collect_project_story_collision_identities_inner(project, Some(limits))
-}
-
 /// Regenerate the complete Story collision footprint directly from one exact, Quest-free
 /// revision-3 project.
 ///
-/// The native R3 canonical project is sealed as-is. No revision-2 projection or migration occurs.
+/// The native R3 canonical project is sealed as-is.
 pub fn collect_revision3_story_collision_identities(
     project: &ProjectRevision3,
 ) -> Result<ProjectStoryCollisionIdentities, StoryCollisionCollectionError> {
@@ -194,127 +165,21 @@ fn collect_revision3_story_collision_identities_inner(
     let mut budget = limits.map(StoryCollisionBudget::new);
 
     for (owner, entity) in &project.entities {
-        let Revision3EntityPayload::NpcDraft(draft) = &entity.payload else {
+        let EntityPayload::NpcDraft(draft) = &entity.payload else {
             continue;
         };
         let module_ref = &draft.script_module;
         let identity = draft
-            .regenerate_script_module_with_identity(Revision3TypedRef::new(
+            .regenerate_script_module_with_identity(TypedRef::new(
                 project.project_id,
                 *owner,
-                Revision3EntityKind::NpcDraft,
+                EntityKind::NpcDraft,
             ))
             .map_err(|source| StoryCollisionCollectionError::Regeneration {
                 owner: *owner,
                 source,
             })?
             .1;
-        if module_ref.project_id != project.project_id
-            || module_ref.expected_kind != Revision3EntityKind::ScriptModule
-        {
-            return Err(
-                StoryCollisionCollectionError::InvalidModuleReference { owner: *owner }.into(),
-            );
-        }
-        if let Some(first_owner) = claimed_modules.insert(module_ref.id, *owner) {
-            return Err(StoryCollisionCollectionError::SharedModule {
-                module: module_ref.id,
-                first_owner,
-                second_owner: *owner,
-            }
-            .into());
-        }
-        insert_identity(
-            "module",
-            &mut modules,
-            identity.module_namespace,
-            *owner,
-            &mut budget,
-        )?;
-        insert_identity(
-            "relative path",
-            &mut relative_paths,
-            identity.module_relative_path,
-            *owner,
-            &mut budget,
-        )?;
-        for symbol in identity.symbols {
-            insert_identity("symbol", &mut symbols, symbol, *owner, &mut budget)?;
-        }
-    }
-
-    Ok(ProjectStoryCollisionIdentities {
-        project_id: project.project_id,
-        project_revision: project.revision,
-        target: project.target.clone(),
-        canonical_project,
-        modules,
-        relative_paths,
-        symbols,
-    })
-}
-
-fn collect_project_story_collision_identities_inner(
-    project: &ProjectRevision2,
-    limits: Option<StoryCollisionCollectionLimits>,
-) -> Result<ProjectStoryCollisionIdentities, BoundedStoryCollisionCollectionError> {
-    let diagnostics = if limits.is_some() {
-        project.validate_story_entities_for_bounded_collision_collection(
-            ValidationProfile::Experimental,
-        )
-    } else {
-        project.validate_story_entities_with_profile(ValidationProfile::Experimental)
-    };
-    let blockers = diagnostics
-        .into_iter()
-        .filter(|diagnostic| diagnostic.code != DiagnosticCode::RuntimeUnqualified)
-        .count();
-    if blockers != 0 {
-        return Err(StoryCollisionCollectionError::InvalidProject { count: blockers }.into());
-    }
-
-    let canonical = project
-        .to_canonical_json()
-        .map_err(StoryCollisionCollectionError::SerializeProject)?;
-    let canonical_project = seal_bytes(canonical.as_bytes());
-    let mut modules = BTreeMap::new();
-    let mut relative_paths = BTreeMap::new();
-    let mut symbols = BTreeMap::new();
-    let mut claimed_modules = BTreeMap::new();
-    let mut budget = limits.map(StoryCollisionBudget::new);
-
-    for (owner, entity) in &project.entities {
-        let (module_ref, identity) = match &entity.payload {
-            EntityPayload::NpcDraft(draft) => (
-                &draft.script_module,
-                draft
-                    .regenerate_script_module_with_identity(TypedRef::new(
-                        project.project_id,
-                        *owner,
-                        EntityKind::NpcDraft,
-                    ))
-                    .map_err(|source| StoryCollisionCollectionError::Regeneration {
-                        owner: *owner,
-                        source,
-                    })?
-                    .1,
-            ),
-            EntityPayload::QuestDraft(draft) => (
-                &draft.script_module,
-                draft
-                    .regenerate_script_module_with_identity(TypedRef::new(
-                        project.project_id,
-                        *owner,
-                        EntityKind::QuestDraft,
-                    ))
-                    .map_err(|source| StoryCollisionCollectionError::Regeneration {
-                        owner: *owner,
-                        source,
-                    })?
-                    .1,
-            ),
-            _ => continue,
-        };
         if module_ref.project_id != project.project_id
             || module_ref.expected_kind != EntityKind::ScriptModule
         {
@@ -437,9 +302,9 @@ fn seal_bytes(bytes: &[u8]) -> ContentSeal {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::model_revision2::{
+    use crate::model_revision3::{
         Entity, EntityKind, EntityPayload, NpcDraft, NpcDraftInput, NpcParentClassInput, OriginRef,
-        ProjectRevision2, SchemaRevisionV2, TypedRef,
+        ProjectRevision3, SchemaRevisionV3, TypedRef,
     };
     use crate::{
         AssetStoreIndex, FormatV2, ProjectMeta, LOGICAL_NPC_CLONE_GENERATOR_ID,
@@ -469,10 +334,10 @@ mod tests {
         }
     }
 
-    fn empty_project() -> ProjectRevision2 {
-        ProjectRevision2 {
+    fn empty_project() -> ProjectRevision3 {
+        ProjectRevision3 {
             format: FormatV2,
-            schema_revision: SchemaRevisionV2,
+            schema_revision: SchemaRevisionV3,
             project_id: project_id(1),
             revision: 7,
             meta: ProjectMeta {
@@ -502,7 +367,7 @@ mod tests {
     }
 
     fn add_npc(
-        project: &mut ProjectRevision2,
+        project: &mut ProjectRevision3,
         owner_value: u8,
         module_value: u8,
         module_namespace: &str,
@@ -535,6 +400,7 @@ mod tests {
                 ),
             },
             script_module: TypedRef::new(project.project_id, module_id, EntityKind::ScriptModule),
+            greetings: Vec::new(),
         };
         let script = draft.regenerate_script_module(owner.clone()).unwrap();
         project.entities.insert(
@@ -570,8 +436,8 @@ mod tests {
         let mut project = empty_project();
         add_npc(&mut project, 10, 11, "GoreMods.Npcs.TestClone", "TestClone");
 
-        let first = collect_project_story_collision_identities(&project).unwrap();
-        let second = collect_project_story_collision_identities(&project).unwrap();
+        let first = collect_revision3_story_collision_identities(&project).unwrap();
+        let second = collect_revision3_story_collision_identities(&project).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.project_id(), project.project_id);
         assert_eq!(first.project_revision(), 7);
@@ -607,8 +473,8 @@ mod tests {
         module.module_namespace = "Attacker.Controlled.Identity".into();
 
         assert!(matches!(
-            collect_project_story_collision_identities(&project),
-            Err(StoryCollisionCollectionError::InvalidProject { .. })
+            collect_revision3_story_collision_identities(&project),
+            Err(StoryCollisionCollectionError::InvalidRevision3Basis { .. })
         ));
     }
 
@@ -619,8 +485,8 @@ mod tests {
         add_npc(&mut project, 20, 21, "goremods.npcs.same", "SecondNpc");
 
         assert!(matches!(
-            collect_project_story_collision_identities(&project),
-            Err(StoryCollisionCollectionError::InvalidProject { .. })
+            collect_revision3_story_collision_identities(&project),
+            Err(StoryCollisionCollectionError::InvalidRevision3Basis { .. })
                 | Err(StoryCollisionCollectionError::Collision {
                     kind: "module" | "relative path",
                     ..
@@ -631,14 +497,14 @@ mod tests {
     #[test]
     fn exact_snapshot_seal_changes_with_project_revision() {
         let project = empty_project();
-        let first = collect_project_story_collision_identities(&project).unwrap();
+        let first = collect_revision3_story_collision_identities(&project).unwrap();
         assert!(first.modules().is_empty());
         assert!(first.relative_paths().is_empty());
         assert!(first.symbols().is_empty());
 
         let mut next = project;
         next.revision += 1;
-        let second = collect_project_story_collision_identities(&next).unwrap();
+        let second = collect_revision3_story_collision_identities(&next).unwrap();
         assert_ne!(first.canonical_project(), second.canonical_project());
     }
 
@@ -648,7 +514,7 @@ mod tests {
         add_npc(&mut project, 10, 11, "GoreMods.Npcs.Bounded", "BoundedNpc");
 
         assert!(matches!(
-            collect_project_story_collision_identities_bounded(
+            collect_revision3_story_collision_identities_bounded(
                 &project,
                 StoryCollisionCollectionLimits {
                     max_count: 1,
@@ -663,7 +529,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            collect_project_story_collision_identities_bounded(
+            collect_revision3_story_collision_identities_bounded(
                 &project,
                 StoryCollisionCollectionLimits {
                     max_count: 100,

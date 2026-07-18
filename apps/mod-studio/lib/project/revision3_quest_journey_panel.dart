@@ -41,15 +41,12 @@ final class Revision3QuestJourneyPanelCopy {
     required this.setupDraftBoundary,
     required this.setupQuestDetailsTitle,
     required this.setupOpeningDialogTitle,
-    required this.setupLegacyBehaviorTitle,
     required this.setupCompleteStatus,
     required this.setupNextStatus,
     required this.setupOpenStatus,
     required this.setupQuestDetailsComplete,
-    required this.setupQuestDetailsLegacy,
     required this.setupQuestDetailsUnavailable,
     required this.setupOpeningPending,
-    required this.setupLegacyBehaviorPending,
     required this.setupRecommendedNext,
     required this.setupWriteOpeningDialog,
     required this.setupReviewDialogVoice,
@@ -60,8 +57,6 @@ final class Revision3QuestJourneyPanelCopy {
     required this.mainQuestSubtitle,
     required this.objectivesTitle,
     required this.objectiveLabel,
-    required this.originalBehaviorLabel,
-    required this.originalBehaviorNote,
     required this.availableLabel,
     required this.startLabel,
     required this.successLabel,
@@ -75,7 +70,6 @@ final class Revision3QuestJourneyPanelCopy {
     required this.objectiveDialogEmpty,
     required this.generalDialogTitle,
     required this.generalDialogEmpty,
-    required this.legacyDialogBoundary,
     required this.showDialogLines,
     required this.hideDialogLines,
     required this.textLanguageCount,
@@ -112,20 +106,15 @@ final class Revision3QuestJourneyPanelCopy {
           'Draft setup tracks authored project content only. It is not Build-ready or proven playable.',
       setupQuestDetailsTitle = '1. Quest details',
       setupOpeningDialogTitle = '2. Opening dialog',
-      setupLegacyBehaviorTitle = 'Legacy behavior review',
       setupCompleteStatus = 'Saved in project',
       setupNextStatus = 'Recommended next step',
       setupOpenStatus = 'Still open',
       setupQuestDetailsComplete =
           'Name, objectives, Quest family, giver, and explicit behavior were saved together.',
-      setupQuestDetailsLegacy =
-          'Name, objectives, Quest family, and giver are saved together. Behavior still uses legacy fixed defaults.',
       setupQuestDetailsUnavailable =
           'The exact saved Quest details could not be verified.',
       setupOpeningPending =
           'Write a first project dialog line with text in at least one language.',
-      setupLegacyBehaviorPending =
-          'Review the legacy fixed behavior and save explicit states and transitions.',
       setupRecommendedNext = 'Recommended next step',
       setupWriteOpeningDialog = 'Write opening dialog',
       setupReviewDialogVoice = 'Review dialog & Voice',
@@ -138,9 +127,6 @@ final class Revision3QuestJourneyPanelCopy {
           'How the Quest itself can become available, start, succeed, or fail.',
       objectivesTitle = 'Objectives',
       objectiveLabel = _englishObjectiveLabel,
-      originalBehaviorLabel = 'Original fixed behavior',
-      originalBehaviorNote =
-          'This older Quest has an effective project behavior, but it does not store stable objective links for dialog.',
       availableLabel = 'Available',
       startLabel = 'Start',
       successLabel = 'Success',
@@ -154,8 +140,6 @@ final class Revision3QuestJourneyPanelCopy {
       objectiveDialogEmpty = 'No dialog is linked to this objective.',
       generalDialogTitle = 'General dialog',
       generalDialogEmpty = 'No general dialog is linked to this Quest.',
-      legacyDialogBoundary =
-          'This older Quest has no stored objective-to-dialog links. Its dialog stays here instead of being guessed into objectives.',
       showDialogLines = _englishShowDialogLines,
       hideDialogLines = 'Hide dialog lines',
       textLanguageCount = _englishTextLanguageCount,
@@ -193,20 +177,15 @@ final class Revision3QuestJourneyPanelCopy {
           'Der Entwurfsfortschritt zeigt nur Projektinhalte. Er bedeutet weder Build-Bereitschaft noch nachgewiesene Spielbarkeit.',
       setupQuestDetailsTitle = '1. Quest-Details',
       setupOpeningDialogTitle = '2. Eröffnungsdialog',
-      setupLegacyBehaviorTitle = 'Altes Verhalten prüfen',
       setupCompleteStatus = 'Im Projekt gespeichert',
       setupNextStatus = 'Empfohlener nächster Schritt',
       setupOpenStatus = 'Noch offen',
       setupQuestDetailsComplete =
           'Name, Ziele, Quest-Familie, Questgeber und ausdrückliches Verhalten wurden gemeinsam gespeichert.',
-      setupQuestDetailsLegacy =
-          'Name, Ziele, Quest-Familie und Questgeber sind gemeinsam gespeichert. Das Verhalten verwendet noch alte feste Vorgaben.',
       setupQuestDetailsUnavailable =
           'Die genau gespeicherten Quest-Details konnten nicht bestätigt werden.',
       setupOpeningPending =
           'Schreibe eine erste Projekt-Dialogzeile mit Text in mindestens einer Sprache.',
-      setupLegacyBehaviorPending =
-          'Prüfe das alte feste Verhalten und speichere eigene Zustände und Übergänge.',
       setupRecommendedNext = 'Empfohlener nächster Schritt',
       setupWriteOpeningDialog = 'Eröffnungsdialog schreiben',
       setupReviewDialogVoice = 'Dialog & Voice prüfen',
@@ -219,9 +198,6 @@ final class Revision3QuestJourneyPanelCopy {
           'Wie die Quest selbst verfügbar werden, starten, erfolgreich enden oder fehlschlagen kann.',
       objectivesTitle = 'Ziele',
       objectiveLabel = _germanObjectiveLabel,
-      originalBehaviorLabel = 'Ursprüngliches festes Verhalten',
-      originalBehaviorNote =
-          'Diese ältere Quest besitzt ein wirksames Projektverhalten, speichert aber keine stabilen Zielverknüpfungen für Dialogzeilen.',
       availableLabel = 'Verfügbar',
       startLabel = 'Start',
       successLabel = 'Erfolg',
@@ -237,8 +213,6 @@ final class Revision3QuestJourneyPanelCopy {
       generalDialogTitle = 'Allgemeiner Dialog',
       generalDialogEmpty =
           'Mit dieser Quest sind keine allgemeinen Dialogzeilen verknüpft.',
-      legacyDialogBoundary =
-          'Diese ältere Quest speichert keine Verknüpfungen zwischen Zielen und Dialogzeilen. Ihre Dialogzeilen bleiben deshalb hier, statt Zielen nur vermutungsweise zugeordnet zu werden.',
       showDialogLines = _germanShowDialogLines,
       hideDialogLines = 'Dialogzeilen ausblenden',
       textLanguageCount = _germanTextLanguageCount,
@@ -272,15 +246,12 @@ final class Revision3QuestJourneyPanelCopy {
   final String setupDraftBoundary;
   final String setupQuestDetailsTitle;
   final String setupOpeningDialogTitle;
-  final String setupLegacyBehaviorTitle;
   final String setupCompleteStatus;
   final String setupNextStatus;
   final String setupOpenStatus;
   final String setupQuestDetailsComplete;
-  final String setupQuestDetailsLegacy;
   final String setupQuestDetailsUnavailable;
   final String setupOpeningPending;
-  final String setupLegacyBehaviorPending;
   final String setupRecommendedNext;
   final String setupWriteOpeningDialog;
   final String setupReviewDialogVoice;
@@ -290,8 +261,6 @@ final class Revision3QuestJourneyPanelCopy {
   final String mainQuestSubtitle;
   final String objectivesTitle;
   final Revision3QuestJourneyObjectiveCopy objectiveLabel;
-  final String originalBehaviorLabel;
-  final String originalBehaviorNote;
   final String availableLabel;
   final String startLabel;
   final String successLabel;
@@ -305,7 +274,6 @@ final class Revision3QuestJourneyPanelCopy {
   final String objectiveDialogEmpty;
   final String generalDialogTitle;
   final String generalDialogEmpty;
-  final String legacyDialogBoundary;
   final Revision3QuestJourneyCountCopy showDialogLines;
   final String hideDialogLines;
   final Revision3QuestJourneyCountCopy textLanguageCount;
@@ -449,8 +417,6 @@ final class _Revision3QuestJourneyPanelState
   ) => switch (step) {
     Revision3QuestDraftSetupStepKind.questDetails => null,
     Revision3QuestDraftSetupStepKind.openingDialog => widget.onOpenDialogVoice,
-    Revision3QuestDraftSetupStepKind.legacyBehavior =>
-      widget.onEditStatesTransitions,
   };
 
   String? _setupActionSpecificDisabledReason(
@@ -459,15 +425,12 @@ final class _Revision3QuestJourneyPanelState
     Revision3QuestDraftSetupStepKind.questDetails => null,
     Revision3QuestDraftSetupStepKind.openingDialog =>
       widget.openDialogVoiceDisabledReason,
-    Revision3QuestDraftSetupStepKind.legacyBehavior =>
-      widget.editStatesTransitionsDisabledReason,
   });
 
   String _setupActionKey(Revision3QuestDraftSetupStepKind step) =>
       switch (step) {
         Revision3QuestDraftSetupStepKind.questDetails => 'quest-details',
         Revision3QuestDraftSetupStepKind.openingDialog => 'dialog-voice',
-        Revision3QuestDraftSetupStepKind.legacyBehavior => 'states-transitions',
       };
 
   String _setupActionLabel(
@@ -480,8 +443,6 @@ final class _Revision3QuestJourneyPanelState
       setup.openingDialogComplete
           ? widget.copy.setupReviewDialogVoice
           : widget.copy.setupWriteOpeningDialog,
-    Revision3QuestDraftSetupStepKind.legacyBehavior =>
-      widget.copy.editStatesTransitions,
   };
 
   @override
@@ -613,12 +574,7 @@ final class _Revision3QuestJourneyPanelState
                                     ? widget.copy.setupActionUnavailable
                                     : null);
                       final reasonAlreadyVisible =
-                          _busyAction != null ||
-                          globalReason != null ||
-                          (specificReason != null &&
-                              step ==
-                                  Revision3QuestDraftSetupStepKind
-                                      .legacyBehavior);
+                          _busyAction != null || globalReason != null;
                       return _DraftSetupOverview(
                         setup: setup,
                         copy: widget.copy,
@@ -733,9 +689,7 @@ final class _DraftSetupOverview extends StatelessWidget {
         kind: Revision3QuestDraftSetupStepKind.questDetails,
         title: copy.setupQuestDetailsTitle,
         detail: setup.questDetailsComplete
-            ? setup.legacyBehaviorReviewRequired
-                  ? copy.setupQuestDetailsLegacy
-                  : copy.setupQuestDetailsComplete
+            ? copy.setupQuestDetailsComplete
             : copy.setupQuestDetailsUnavailable,
       ),
       _DraftSetupStepData(
@@ -746,12 +700,6 @@ final class _DraftSetupOverview extends StatelessWidget {
             : copy.setupOpeningPending,
         supplement: setup.openingDialogComplete ? null : openingSupplement,
       ),
-      if (setup.legacyBehaviorReviewRequired)
-        _DraftSetupStepData(
-          kind: Revision3QuestDraftSetupStepKind.legacyBehavior,
-          title: copy.setupLegacyBehaviorTitle,
-          detail: copy.setupLegacyBehaviorPending,
-        ),
     ];
     final scheme = Theme.of(context).colorScheme;
     return Material(
@@ -1459,7 +1407,6 @@ final class _ObjectivesColumn extends StatelessWidget {
           key: Key('revision3-quest-journey-objective-$index'),
           ordinal: index + 1,
           objective: projection.objectives[index],
-          legacy: projection.legacySyntheticBehavior,
           copy: copy,
           busyAction: busyAction,
           canOpenDialog: canOpenDialog,
@@ -1476,7 +1423,6 @@ final class _ObjectiveCard extends StatelessWidget {
   const _ObjectiveCard({
     required this.ordinal,
     required this.objective,
-    required this.legacy,
     required this.copy,
     required this.busyAction,
     required this.canOpenDialog,
@@ -1486,7 +1432,6 @@ final class _ObjectiveCard extends StatelessWidget {
 
   final int ordinal;
   final Revision3QuestJourneyObjective objective;
-  final bool legacy;
   final Revision3QuestJourneyPanelCopy copy;
   final String? busyAction;
   final bool canOpenDialog;
@@ -1507,39 +1452,12 @@ final class _ObjectiveCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final title = _ObjectiveTitle(
-                  ordinal: ordinal,
-                  title: objective.title,
-                  label: copy.objectiveLabel(ordinal),
-                  scheme: scheme,
-                );
-                if (!legacy) return title;
-                final badge = _SmallBadge(
-                  icon: Icons.history,
-                  label: copy.originalBehaviorLabel,
-                );
-                if (constraints.maxWidth < 520) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[title, const SizedBox(height: 8), badge],
-                  );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Expanded(child: title),
-                    const SizedBox(width: 10),
-                    badge,
-                  ],
-                );
-              },
+            _ObjectiveTitle(
+              ordinal: ordinal,
+              title: objective.title,
+              label: copy.objectiveLabel(ordinal),
+              scheme: scheme,
             ),
-            if (legacy) ...<Widget>[
-              const SizedBox(height: 10),
-              Text(copy.originalBehaviorNote),
-            ],
             const SizedBox(height: 14),
             _BehaviorOverview(
               behavior: objective.behavior,
@@ -1552,9 +1470,7 @@ final class _ObjectiveCard extends StatelessWidget {
                 'revision3-quest-journey-objective-dialog-${ordinal - 1}',
               ),
               title: copy.objectiveDialogTitle,
-              emptyMessage: legacy
-                  ? copy.legacyDialogBoundary
-                  : copy.objectiveDialogEmpty,
+              emptyMessage: copy.objectiveDialogEmpty,
               lines: objective.dialogLines,
               copy: copy,
               busyAction: busyAction,
@@ -1787,13 +1703,6 @@ final class _GeneralDialogCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            if (projection.legacySyntheticBehavior) ...<Widget>[
-              _InlineNotice(
-                key: const Key('revision3-quest-journey-legacy-dialog-note'),
-                text: copy.legacyDialogBoundary,
-              ),
-              const SizedBox(height: 10),
-            ],
             _DialogGroup(
               title: copy.generalDialogTitle,
               emptyMessage: copy.generalDialogEmpty,
@@ -1998,22 +1907,6 @@ final class _SmallBadge extends StatelessWidget {
         ),
       ],
     ),
-  );
-}
-
-final class _InlineNotice extends StatelessWidget {
-  const _InlineNotice({required this.text, super.key});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(10),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Text(text),
   );
 }
 

@@ -189,7 +189,7 @@ void main() {
   ) async {
     final fixture = Revision3QuestOutlineFixture();
     final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-      currentProjectJson: fixture.semanticProjectJson,
+      currentProjectJson: fixture.projectJson,
       questId: revision3QuestOutlineQuestId,
       expectedQuestRevision: fixture.questRevision,
       expectedModuleId: revision3QuestOutlineModuleId,
@@ -200,7 +200,6 @@ void main() {
     var publishes = 0;
     await _open(
       tester,
-      semantic: true,
       settle: false,
       loadTransitionSeed:
           ({
@@ -351,82 +350,79 @@ void main() {
     );
   });
 
-  testWidgets(
-    'semantic Quest reorders stable slots without losing behavior identity',
-    (tester) async {
-      final fixture = Revision3QuestOutlineFixture();
-      final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-        currentProjectJson: fixture.semanticProjectJson,
-        questId: revision3QuestOutlineQuestId,
-        expectedQuestRevision: fixture.questRevision,
-        expectedModuleId: revision3QuestOutlineModuleId,
-        expectedModuleRevision: fixture.moduleRevision,
-      );
-      Revision3QuestOutlineEditInput? received;
-      await _open(
-        tester,
-        semantic: true,
-        loadTransitionSeed:
-            ({
-              required questId,
-              required expectedQuestRevision,
-              required expectedModuleId,
-              required expectedModuleRevision,
-            }) async => seed,
-        publish: ({required input}) async {
-          received = input;
-          return _publication(input);
-        },
-      );
+  testWidgets('Quest reorders stable slots without losing behavior identity', (
+    tester,
+  ) async {
+    final fixture = Revision3QuestOutlineFixture();
+    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+      currentProjectJson: fixture.projectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      expectedModuleId: revision3QuestOutlineModuleId,
+      expectedModuleRevision: fixture.moduleRevision,
+    );
+    Revision3QuestOutlineEditInput? received;
+    await _open(
+      tester,
+      loadTransitionSeed:
+          ({
+            required questId,
+            required expectedQuestRevision,
+            required expectedModuleId,
+            required expectedModuleRevision,
+          }) async => seed,
+      publish: ({required input}) async {
+        received = input;
+        return _publication(input);
+      },
+    );
 
-      expect(
-        find.byKey(const Key('revision3-quest-outline-loading-identities')),
-        findsNothing,
-      );
-      final moveDown = find.byKey(
-        const Key('revision3-quest-outline-objective-down-0'),
-      );
-      expect(
-        tester.widget<IconButton>(moveDown).onPressed,
-        isNotNull,
-        reason: tester
-            .widgetList<Text>(find.byType(Text))
-            .map((text) => text.data)
-            .whereType<String>()
-            .join(' | '),
-      );
-      await tester.ensureVisible(moveDown);
-      await tester.pump();
-      await tester.tap(moveDown);
-      await tester.pump();
-      await tester.enterText(
-        find.byKey(const Key('revision3-quest-outline-objective-0')),
-        'Inspect the secured gate',
-      );
-      await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
-      await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-loading-identities')),
+      findsNothing,
+    );
+    final moveDown = find.byKey(
+      const Key('revision3-quest-outline-objective-down-0'),
+    );
+    expect(
+      tester.widget<IconButton>(moveDown).onPressed,
+      isNotNull,
+      reason: tester
+          .widgetList<Text>(find.byType(Text))
+          .map((text) => text.data)
+          .whereType<String>()
+          .join(' | '),
+    );
+    await tester.ensureVisible(moveDown);
+    await tester.pump();
+    await tester.tap(moveDown);
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('revision3-quest-outline-objective-0')),
+      'Inspect the secured gate',
+    );
+    await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
+    await tester.pumpAndSettle();
 
-      expect(received, isNotNull);
-      expect(received!.usesStableObjectiveSlots, isTrue);
-      expect(received!.objectiveSlots, [2, 1, 3]);
-      expect(received!.objectiveTitles, [
-        'Inspect the secured gate',
-        'Ask Asghan about Homer',
-        'Report the secured gate',
-      ]);
-      expect(
-        received!.expectedTransitionPlanSeal?.sha256,
-        seed.transitionPlanSeal.sha256,
-      );
-    },
-  );
+    expect(received, isNotNull);
+    expect(received!.objectiveSlots, [2, 1, 3]);
+    expect(received!.objectiveTitles, [
+      'Inspect the secured gate',
+      'Ask Asghan about Homer',
+      'Report the secured gate',
+    ]);
+    expect(
+      received!.expectedTransitionPlanSeal.sha256,
+      seed.transitionPlanSeal.sha256,
+    );
+  });
 
   testWidgets(
     'failed identity load keeps objectives locked until retry succeeds',
     (tester) async {
       final fixture = Revision3QuestOutlineFixture();
       final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
-        currentProjectJson: fixture.semanticProjectJson,
+        currentProjectJson: fixture.projectJson,
         questId: revision3QuestOutlineQuestId,
         expectedQuestRevision: fixture.questRevision,
         expectedModuleId: revision3QuestOutlineModuleId,
@@ -435,7 +431,6 @@ void main() {
       var loadCalls = 0;
       await _open(
         tester,
-        semantic: true,
         loadTransitionSeed:
             ({
               required questId,
@@ -503,12 +498,24 @@ Future<void> _open(
   WidgetTester tester, {
   required Revision3QuestOutlineEditPublisher publish,
   Revision3QuestTransitionsSeedLoader? loadTransitionSeed,
-  bool semantic = false,
   bool settle = true,
 }) async {
-  final index = Revision3QuestOutlineFixture().contentIndex(
-    questGeneratorVersion: semantic ? 4 : 3,
-  );
+  final fixture = Revision3QuestOutlineFixture();
+  final index = fixture.contentIndex();
+  final seedLoader =
+      loadTransitionSeed ??
+      ({
+        required String questId,
+        required int expectedQuestRevision,
+        required String expectedModuleId,
+        required int expectedModuleRevision,
+      }) async => AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: fixture.projectJson,
+        questId: questId,
+        expectedQuestRevision: expectedQuestRevision,
+        expectedModuleId: expectedModuleId,
+        expectedModuleRevision: expectedModuleRevision,
+      );
   final quest = index.entityById(revision3QuestOutlineQuestId)!;
   await tester.pumpWidget(
     MaterialApp(
@@ -521,7 +528,7 @@ Future<void> _open(
                 index: index,
                 quest: quest,
                 publish: publish,
-                loadTransitionSeed: loadTransitionSeed,
+                loadTransitionSeed: seedLoader,
               ),
             ),
             child: const Text('Open'),

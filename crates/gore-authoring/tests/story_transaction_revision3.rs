@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    apply_revision3_quest_draft_transaction_v2, regenerate_revision3_quest_module_v2,
-    revision3_quest_input_fingerprint_v2, AssetMeta, AssetStoreIndex, ContentSeal,
+    apply_revision3_quest_draft_transaction_v2, regenerate_revision3_quest_module,
+    revision3_quest_input_fingerprint, AssetMeta, AssetStoreIndex, ContentSeal,
     DraftQuestCollisionKind, DraftQuestSkeletonError, EntityId, FormatV2, GameGenerationAnchor,
-    ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
-    QuestCollisionCatalogInput, Revision2NpcParentClassInput, Revision3Entity, Revision3EntityKind,
-    Revision3EntityPayload, Revision3NpcDraft, Revision3NpcDraftInput, Revision3OriginRef,
+    NpcParentClassInput, ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
+    QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision3NpcDraft, Revision3NpcDraftInput, Revision3OriginRef,
     Revision3QuestArtifactAuthorityV2, Revision3QuestDraftBuildStatusV2,
     Revision3QuestDraftInsertConflictV2, Revision3QuestDraftInsertErrorV2,
     Revision3QuestDraftInsertEvaluationV2, Revision3QuestDraftInsertOutcomeV2,
@@ -16,8 +16,9 @@ use gore_authoring::{
     Revision3QuestSourceInspectionStatusV2, Revision3StoryIdentityKindV2, Revision3TypedRef,
     SchemaRevisionV3, ScriptModuleStatus, Sha256Digest, LOGICAL_NPC_CLONE_GENERATOR_ID,
     LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_REVISION3_QUEST_DRAFT_REQUEST_JSON_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -45,7 +46,7 @@ fn target(value: u8) -> GameGenerationAnchor {
 fn artifact_reference(project: &ProjectRevision3) -> QuestCollisionArtifactRef {
     QuestCollisionArtifactRef {
         generation: project.target.clone(),
-        catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+        catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
         artifact: seal(0x41, 3_517_569),
         source_seal: seal(0x42, 3_517_569),
         basis_snapshot: seal(0x43, 640),
@@ -73,7 +74,7 @@ fn empty_basis() -> ProjectRevision3 {
         reference.artifact.sha256,
         AssetMeta {
             byte_len: reference.artifact.byte_len,
-            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.to_owned(),
+            media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.to_owned(),
         },
     );
     project
@@ -246,13 +247,12 @@ fn happy_insert_is_atomic_deterministic_canonical_and_permanently_unqualified() 
     ));
     assert_eq!(
         module.input_fingerprint,
-        revision3_quest_input_fingerprint_v2(&quest.input).unwrap()
+        revision3_quest_input_fingerprint(&quest.input).unwrap()
     );
-    // S3 shipped this exact domain/length/canonical-input spelling before the shared primitive
-    // moved into gore-authoring. Keep one fixed digest so a future refactor cannot silently drift.
+    // Keep one fixed v4 digest so a future refactor cannot silently drift the current contract.
     assert_eq!(
         module.input_fingerprint.to_string(),
-        "cde54f5389329424728b935fde804720c10915e5c4665bc2b497091189d7166f"
+        "963aa38baf276d98ad34ba1dbd79ba380c60209bb2ae519c94726226ded3e1b4"
     );
     assert_eq!(
         module.source_sha256,
@@ -448,21 +448,21 @@ fn shared_generator_binds_every_collision_provenance_field_to_the_artifact_ref()
     let mut wrong_generation = collision_input(&project);
     wrong_generation.generation = target(8);
     assert!(matches!(
-        regenerate_revision3_quest_module_v2(quest, wrong_generation),
+        regenerate_revision3_quest_module(quest, wrong_generation),
         Err(Revision3QuestGenerationError::CollisionGenerationMismatch)
     ));
 
     let mut wrong_source = collision_input(&project);
     wrong_source.source_seal.sha256 = Sha256Digest::from_bytes([0x81; 32]);
     assert!(matches!(
-        regenerate_revision3_quest_module_v2(quest, wrong_source),
+        regenerate_revision3_quest_module(quest, wrong_source),
         Err(Revision3QuestGenerationError::CollisionSourceSealMismatch)
     ));
 
     let mut wrong_layer = collision_input(&project);
-    wrong_layer.catalog_layer = "foreign.story-collisions.v1".to_owned();
+    wrong_layer.catalog_layer = "unsupported.story-collisions".to_owned();
     assert!(matches!(
-        regenerate_revision3_quest_module_v2(quest, wrong_layer),
+        regenerate_revision3_quest_module(quest, wrong_layer),
         Err(Revision3QuestGenerationError::CollisionCatalogLayerMismatch)
     ));
 }
@@ -583,13 +583,17 @@ fn revision_overflow_and_invalid_closed_parent_return_no_candidate() {
 }
 
 #[test]
-fn revision2_input_is_not_implicitly_migrated() {
+fn non_revision3_input_is_rejected() {
     let project = empty_basis();
     let revision3 = project.to_canonical_json().unwrap();
-    let revision2 = revision3.replacen("\"schema_revision\":3", "\"schema_revision\":2", 1);
+    let unsupported = revision3.replacen("\"schema_revision\":3", "\"schema_revision\":2", 1);
     let request = request(&project).to_canonical_json().unwrap();
     assert!(matches!(
-        apply_revision3_quest_draft_transaction_v2(&revision2, &request, collision_input(&project)),
+        apply_revision3_quest_draft_transaction_v2(
+            &unsupported,
+            &request,
+            collision_input(&project)
+        ),
         Err(Revision3QuestDraftInsertErrorV2::InvalidProject(_))
     ));
 }
@@ -599,8 +603,8 @@ fn npc_parent(
     seal_value: u8,
     selector: &str,
     runtime_class: &str,
-) -> Revision2NpcParentClassInput {
-    Revision2NpcParentClassInput {
+) -> NpcParentClassInput {
+    NpcParentClassInput {
         generation: project.target.clone(),
         source_seal: seal(seal_value, 10_000),
         catalog_layer: "base-game.g1r.characters".to_owned(),

@@ -14,9 +14,7 @@ use crate::model_revision3::{
     MAX_REVISION3_ITEM_PATCH_FIELDS_V1, MAX_REVISION3_ITEM_STRING_BYTES_V1,
     MAX_REVISION3_ITEM_STRING_TOTAL_BYTES_V1, MAX_REVISION3_NPC_GREETING_BINDINGS_V1,
     MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
-    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use crate::story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
@@ -290,7 +288,7 @@ impl ProjectRevision3 {
                 ));
             };
             // A LocalizationEntry is a general story identity until this line actually owns
-            // Voice content. Keep non-Voice dialog projects compatible; the Voice-take and
+            // Voice content. Non-Voice dialog projects remain valid; the Voice-take and
             // target transactions apply the same portable stem predicate before creating or
             // resolving the first slot.
             if !line.voice_slots.is_empty()
@@ -636,32 +634,11 @@ impl ProjectRevision3 {
             quest: quest_id,
             reason: reason.to_owned(),
         };
-        let supported_version = matches!(
-            quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION
-                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        );
-        if quest.generator_id != REVISION3_QUEST_GENERATOR_ID || !supported_version {
+        if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
+            || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        {
             return Err(invalid(
-                "generator contract is not supported revision-3 Quest version 2, 3, or 4",
-            ));
-        }
-        let shape_matches = match quest.generator_version {
-            REVISION3_QUEST_GENERATOR_VERSION => {
-                quest.input.additional_objective_titles.is_empty()
-                    && quest.input.transition_plan.is_none()
-            }
-            REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION => {
-                !quest.input.additional_objective_titles.is_empty()
-                    && quest.input.transition_plan.is_none()
-            }
-            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION => quest.input.transition_plan.is_some(),
-            _ => false,
-        };
-        if !shape_matches {
-            return Err(invalid(
-                "Quest objective list or transition plan does not match its generator version",
+                "generator contract is not the revision-3 Quest version 4 contract",
             ));
         }
         validate_draft_quest_objective_titles(
@@ -669,13 +646,11 @@ impl ProjectRevision3 {
             &quest.input.additional_objective_titles,
         )
         .map_err(|_| invalid("Quest objective list is not closed and bounded"))?;
-        if let Some(plan) = &quest.input.transition_plan {
-            validate_draft_quest_transition_plan_v1(
-                plan,
-                1 + quest.input.additional_objective_titles.len(),
-            )
-            .map_err(|_| invalid("Quest transition plan is not closed and bounded"))?;
-        }
+        validate_draft_quest_transition_plan_v1(
+            &quest.input.transition_plan,
+            1 + quest.input.additional_objective_titles.len(),
+        )
+        .map_err(|_| invalid("Quest transition plan is not closed and bounded"))?;
         self.validate_quest_transcript(quest_id, quest)?;
         if quest.input.quest_id != quest_id {
             return Err(invalid("quest input id does not match its entity id"));
@@ -815,12 +790,13 @@ impl ProjectRevision3 {
                 MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1
             )));
         }
-        let active_slots = quest.input.transition_plan.as_deref().map(|plan| {
-            plan.objective_slots
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-        });
+        let active_slots = quest
+            .input
+            .transition_plan
+            .objective_slots
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
         let mut line_ids = BTreeSet::new();
         for (index, binding) in quest.transcript.iter().enumerate() {
             if binding.line.project_id != self.project_id {
@@ -851,13 +827,8 @@ impl ProjectRevision3 {
                     binding.line.id
                 )));
             }
-            match (active_slots.as_ref(), binding.objective_slot) {
-                (None, Some(slot)) => {
-                    return Err(invalid(format!(
-                        "legacy Quest binding {index} cannot target objective slot {slot}"
-                    )));
-                }
-                (Some(active), Some(slot)) if !active.contains(&slot) => {
+            match binding.objective_slot {
+                Some(slot) if !active_slots.contains(&slot) => {
                     return Err(invalid(format!(
                         "binding {index} targets inactive objective slot {slot}"
                     )));

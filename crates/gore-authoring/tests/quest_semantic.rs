@@ -1,13 +1,11 @@
 use gore_authoring::{
     validate_draft_quest_transition_plan_v1, CatalogQualifiedParentQuest,
-    CatalogQualifiedQuestGiver, ContentSeal, DraftQuestCollisionCatalog, DraftQuestSkeletonError,
-    DraftQuestSkeletonInput, DraftQuestSkeletonInputV2, DraftQuestSkeletonInputV3,
-    DraftQuestSkeletonV1, DraftQuestSkeletonV2, DraftQuestSkeletonV3, EntityId,
-    GameGenerationAnchor, QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1,
-    QuestTransitionEdgeV1, QuestTransitionEffectKindV1, QuestTransitionEffectV1,
-    QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
-    QuestTransitionStateTestV1, Sha256Digest, MAX_QUEST_TRANSITION_EFFECTS_V1,
-    MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1,
+    CatalogQualifiedQuestGiver, ContentSeal, DraftQuestCollisionCatalog, DraftQuestSkeleton,
+    DraftQuestSkeletonError, DraftQuestSkeletonInput, EntityId, GameGenerationAnchor,
+    QuestTransitionConditionAtomV1, QuestTransitionConditionGroupV1, QuestTransitionEdgeV1,
+    QuestTransitionEffectKindV1, QuestTransitionEffectV1, QuestTransitionNodeV1,
+    QuestTransitionPlanV1, QuestTransitionPredicateV1, QuestTransitionStateTestV1, Sha256Digest,
+    MAX_QUEST_TRANSITION_EFFECTS_V1, MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1,
 };
 
 fn seal(byte: u8, byte_len: u64) -> ContentSeal {
@@ -50,6 +48,8 @@ fn input() -> DraftQuestSkeletonInput {
         title: "A semantic quest".into(),
         description: "Exercise the bounded transition renderer.".into(),
         objective_title: "First authored title".into(),
+        additional_objective_titles: Vec::new(),
+        transition_plan: QuestTransitionPlanV1::default_for_objectives(1).unwrap(),
         collision_catalog: DraftQuestCollisionCatalog::new(
             target,
             seal(5, 10),
@@ -60,6 +60,16 @@ fn input() -> DraftQuestSkeletonInput {
         )
         .unwrap(),
     }
+}
+
+fn input_with_plan(
+    additional_objective_titles: Vec<String>,
+    transition_plan: QuestTransitionPlanV1,
+) -> DraftQuestSkeletonInput {
+    let mut input = input();
+    input.additional_objective_titles = additional_objective_titles;
+    input.transition_plan = transition_plan;
+    input
 }
 
 fn node(slot: u16) -> QuestTransitionNodeV1 {
@@ -100,55 +110,42 @@ fn assert_invalid(plan: &QuestTransitionPlanV1) {
 }
 
 #[test]
-fn legacy_seed_has_stable_wire_and_reproduces_frozen_source_bytes() {
-    let one = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+fn default_for_objectives_has_stable_wire_and_deterministic_source() {
+    let one = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     assert_eq!(
         serde_json::to_string(&one).unwrap(),
         r#"{"objective_slots":[1],"objective_order":[1],"next_slot_ordinal":2,"transitions":[{"node":{"kind":"root"},"edge":"availability","external_allowed":true},{"node":{"kind":"root"},"edge":"start","external_allowed":true},{"node":{"kind":"objective","slot":1},"edge":"availability","external_allowed":true},{"node":{"kind":"objective","slot":1},"edge":"start","external_allowed":true},{"node":{"kind":"objective","slot":1},"edge":"success","external_allowed":true,"succeeds_parent":true}]}"#
     );
-    let frozen_one = DraftQuestSkeletonV1::new(input()).unwrap().generate();
-    let semantic_one = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
-        base: input(),
-        additional_objective_titles: Vec::new(),
-        transition_plan: one,
-    })
-    .unwrap()
-    .generate();
-    assert_eq!(semantic_one.source, frozen_one.source);
-    assert_eq!(semantic_one.source_sha256, frozen_one.source_sha256);
+    let generated_one = DraftQuestSkeleton::new(input_with_plan(Vec::new(), one))
+        .unwrap()
+        .generate();
+    let repeated_one = DraftQuestSkeleton::new(input()).unwrap().generate();
+    assert_eq!(generated_one.source, repeated_one.source);
+    assert_eq!(generated_one.source_sha256, repeated_one.source_sha256);
 
     let titles = vec![
         "Second authored title".to_owned(),
         "Third authored title".to_owned(),
     ];
-    let frozen_three = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
-        base: input(),
-        additional_objective_titles: titles.clone(),
-    })
-    .unwrap()
-    .generate();
-    let semantic_three = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
-        base: input(),
-        additional_objective_titles: titles,
-        transition_plan: QuestTransitionPlanV1::legacy_seed(3).unwrap(),
-    })
-    .unwrap()
-    .generate();
-    assert_eq!(semantic_three.source, frozen_three.source);
-    assert_eq!(semantic_three.source_sha256, frozen_three.source_sha256);
+    let plan = QuestTransitionPlanV1::default_for_objectives(3).unwrap();
+    let generated_three = DraftQuestSkeleton::new(input_with_plan(titles.clone(), plan.clone()))
+        .unwrap()
+        .generate();
+    let repeated_three = DraftQuestSkeleton::new(input_with_plan(titles, plan))
+        .unwrap()
+        .generate();
+    assert_eq!(generated_three.source, repeated_three.source);
+    assert_eq!(generated_three.source_sha256, repeated_three.source_sha256);
 }
 
 #[test]
 fn presentation_reorder_preserves_stable_slot_classes_and_getters() {
-    let mut plan = QuestTransitionPlanV1::legacy_seed(2).unwrap();
+    let mut plan = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
     plan.objective_order = vec![2, 1];
-    let generated = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
-        base: input(),
-        additional_objective_titles: vec!["Second authored title".into()],
-        transition_plan: plan,
-    })
-    .unwrap()
-    .generate();
+    let generated =
+        DraftQuestSkeleton::new(input_with_plan(vec!["Second authored title".into()], plan))
+            .unwrap()
+            .generate();
 
     let slot_two = generated
         .source
@@ -174,7 +171,7 @@ fn presentation_reorder_preserves_stable_slot_classes_and_getters() {
 
 #[test]
 fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
-    let mut plan = QuestTransitionPlanV1::legacy_seed(2).unwrap();
+    let mut plan = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
     transition_mut(
         &mut plan,
         QuestTransitionNodeV1::Root,
@@ -212,14 +209,11 @@ fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
     });
     validate_draft_quest_transition_plan_v1(&plan, 2).unwrap();
 
-    let source = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
-        base: input(),
-        additional_objective_titles: vec!["Second authored title".into()],
-        transition_plan: plan,
-    })
-    .unwrap()
-    .generate()
-    .source;
+    let source =
+        DraftQuestSkeleton::new(input_with_plan(vec!["Second authored title".into()], plan))
+            .unwrap()
+            .generate()
+            .source;
     for hook in [
         "bool ShouldBeAvailable_Implementation()",
         "bool ShouldSucceed_Implementation()",
@@ -252,23 +246,23 @@ fn predicates_external_overlap_and_effects_lower_to_exact_guarded_hooks() {
 
 #[test]
 fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts() {
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(2).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
     invalid.objective_slots.swap(0, 1);
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(2).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
     invalid.objective_order = vec![1, 1];
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(2).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(2).unwrap();
     invalid.next_slot_ordinal = 2;
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     invalid.transitions.push(invalid.transitions[0].clone());
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     let start = transition_mut(
         &mut invalid,
         QuestTransitionNodeV1::Root,
@@ -277,7 +271,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
     start.external_allowed = false;
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut invalid, node(1), QuestTransitionEdgeV1::Success).predicate =
         Some(QuestTransitionPredicateV1 {
             any_of: (0..=MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1)
@@ -292,7 +286,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         });
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut invalid, node(1), QuestTransitionEdgeV1::Success).predicate =
         Some(QuestTransitionPredicateV1 {
             any_of: vec![QuestTransitionConditionGroupV1 {
@@ -312,12 +306,12 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         });
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut invalid, node(1), QuestTransitionEdgeV1::Success).predicate =
         Some(predicate(node(9), QuestTransitionStateTestV1::Succeeded));
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut invalid, node(1), QuestTransitionEdgeV1::Success).effects =
         vec![QuestTransitionEffectV1 {
             target: node(1),
@@ -325,7 +319,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         }];
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(
         &mut invalid,
         QuestTransitionNodeV1::Root,
@@ -342,7 +336,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         }];
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     let shared = predicate(
         QuestTransitionNodeV1::Root,
         QuestTransitionStateTestV1::Running,
@@ -359,7 +353,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
     });
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(
         &mut invalid,
         QuestTransitionNodeV1::Root,
@@ -372,7 +366,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         QuestTransitionEffectKindV1::Succeed,
         QuestTransitionEffectKindV1::Fail,
     ] {
-        let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+        let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
         transition_mut(&mut invalid, node(1), QuestTransitionEdgeV1::Success).effects =
             vec![QuestTransitionEffectV1 {
                 target: QuestTransitionNodeV1::Root,
@@ -381,7 +375,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         assert_invalid(&invalid);
     }
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     invalid.transitions.push(gore_authoring::QuestTransitionV1 {
         node: QuestTransitionNodeV1::Root,
         edge: QuestTransitionEdgeV1::Success,
@@ -398,7 +392,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
         .sort_by_key(|transition| (transition.node, transition.edge));
     assert_invalid(&invalid);
 
-    let mut invalid = QuestTransitionPlanV1::legacy_seed(8).unwrap();
+    let mut invalid = QuestTransitionPlanV1::default_for_objectives(8).unwrap();
     transition_mut(
         &mut invalid,
         QuestTransitionNodeV1::Root,
@@ -419,7 +413,7 @@ fn closed_validator_rejects_shape_driver_predicate_effect_and_terminal_conflicts
 
 #[test]
 fn automatic_success_and_failure_predicates_must_be_provably_disjoint() {
-    let mut overlapping = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut overlapping = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut overlapping, node(1), QuestTransitionEdgeV1::Success).predicate =
         Some(predicate(
             QuestTransitionNodeV1::Root,
@@ -452,7 +446,7 @@ fn automatic_success_and_failure_predicates_must_be_provably_disjoint() {
         });
     assert_invalid(&overlapping);
 
-    let mut disjoint = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let mut disjoint = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     transition_mut(&mut disjoint, node(1), QuestTransitionEdgeV1::Success).predicate =
         Some(predicate(
             QuestTransitionNodeV1::Root,
@@ -476,7 +470,7 @@ fn automatic_success_and_failure_predicates_must_be_provably_disjoint() {
 
 #[test]
 fn wire_is_closed_and_plan_presence_is_explicit() {
-    let plan = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+    let plan = QuestTransitionPlanV1::default_for_objectives(1).unwrap();
     let mut value = serde_json::to_value(&plan).unwrap();
     value
         .as_object_mut()

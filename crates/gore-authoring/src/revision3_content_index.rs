@@ -17,8 +17,7 @@ use crate::model_revision3::{
 use crate::{
     ContentSeal, EntityId, GameGenerationAnchor, LocaleCode, ProjectId, Sha256Digest,
     DATAASSET_FIXED_LEAF_COMPONENT_MEDIA_TYPE_V1,
-    DATAASSET_FIXED_LEAF_STAGE_MANIFEST_MEDIA_TYPE_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+    DATAASSET_FIXED_LEAF_STAGE_MANIFEST_MEDIA_TYPE_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
 };
 
 /// Closed projection schema. A wire change requires a new version instead of widening this one.
@@ -130,10 +129,10 @@ pub enum Revision3ContentEntitySummaryV1 {
     NpcDraft {
         unique_name: String,
         module_namespace: String,
-        greeting_count: u64,
         parent_character_definition: String,
         parent_ai_agent_config: String,
         parent_spawn_definition: String,
+        greeting_count: u64,
     },
     QuestDraft {
         technical_id: String,
@@ -465,12 +464,7 @@ pub fn build_revision3_content_index_v1(
                     title: value.input.title.clone(),
                     objective_title: value.input.objective_title.clone(),
                     additional_objective_titles: value.input.additional_objective_titles.clone(),
-                    objective_slots: value
-                        .input
-                        .transition_plan
-                        .as_deref()
-                        .map(|plan| plan.objective_order.clone())
-                        .unwrap_or_default(),
+                    objective_slots: value.input.transition_plan.objective_order.clone(),
                     transcript_count: value.transcript.len() as u64,
                     module_namespace: value.input.module_namespace.clone(),
                     parent_runtime_class: value.input.parent_quest.runtime_class.clone(),
@@ -663,7 +657,7 @@ fn asset_reference(
 fn classify_asset(media_type: &str) -> Revision3ContentAssetClassV1 {
     match media_type {
         "audio/ogg" => Revision3ContentAssetClassV1::VoiceAudio,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE | QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2 => {
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2 => {
             Revision3ContentAssetClassV1::QuestCollisionArtifact
         }
         DATAASSET_FIXED_LEAF_STAGE_MANIFEST_MEDIA_TYPE_V1 => {
@@ -722,8 +716,8 @@ mod tests {
     };
     use crate::{
         AssetMeta, AssetRef, AssetStoreIndex, FormatV2, ProjectMeta, SchemaRevisionV3,
-        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-        REVISION3_QUEST_GENERATOR_ID,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
+        REVISION3_QUEST_GENERATOR_VERSION,
     };
 
     fn project_id(value: u8) -> ProjectId {
@@ -1002,7 +996,7 @@ mod tests {
                 revision: 0,
                 payload: EntityPayload::QuestDraft(QuestDraft {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                     input: QuestDraftInput {
                         target: target(),
                         quest_id,
@@ -1030,7 +1024,9 @@ mod tests {
                             "Inspect the thing".to_owned(),
                             "Report the thing".to_owned(),
                         ],
-                        transition_plan: None,
+                        transition_plan: Box::new(
+                            crate::QuestTransitionPlanV1::default_for_objectives(3).unwrap(),
+                        ),
                         collision_catalog: QuestCollisionArtifactRef {
                             generation: target(),
                             catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
@@ -1055,13 +1051,13 @@ mod tests {
                 display_name: "A test quest source".to_owned(),
                 origin: OriginRef::Generated {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                     owner: owner.clone(),
                 },
                 revision: 0,
                 payload: EntityPayload::ScriptModule(ScriptModule {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
                     owner,
                     module_namespace: "PROJECT.QUESTS.TEST".to_owned(),
                     module_relative_path: "Project/Quests/Test.as".to_owned(),

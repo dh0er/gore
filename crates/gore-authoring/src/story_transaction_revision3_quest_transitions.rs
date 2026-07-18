@@ -1,9 +1,7 @@
 //! Exact-head-bound, filesystem-free editing of one revision-3 Quest transition plan.
 //!
-//! Generator-v2/v3 Quests expose a deterministic synthetic plan matching their frozen emitted
-//! defaults. Supplying its exact seal explicitly upgrades the Quest and owned module to generator
-//! v4. Generator-v4 Quests instead edit their retained plan in place. No successful result grants
-//! artifact, build, compiler, publication, deployment, save, or runtime authority.
+//! Every Quest retains one generator-v4 semantic plan. No successful result grants artifact,
+//! build, compiler, publication, deployment, save, or runtime authority.
 
 use std::collections::BTreeSet;
 use std::io::{self, Write};
@@ -11,15 +9,14 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::QuestCollisionCatalogInput;
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, QuestDraft, QuestTransitionPlanV1,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use crate::quest::validate_draft_quest_transition_plan_v1;
-use crate::revision3_quest::regenerate_revision3_quest_module_v2;
+use crate::revision3_quest::regenerate_revision3_quest_module;
 use crate::strict_json::reject_duplicate_object_keys;
+use crate::QuestCollisionCatalogInput;
 use crate::{
     ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
     ProjectRevision3JsonError, Sha256Digest, WorkingHead,
@@ -31,55 +28,35 @@ const REVISION3_QUEST_TRANSITION_PLAN_SEAL_DOMAIN_V1: &[u8] =
 pub const MAX_REVISION3_QUEST_TRANSITION_PLAN_JSON_BYTES_V1: usize = 384 * 1024;
 pub const MAX_REVISION3_QUEST_TRANSITION_PLAN_EDIT_REQUEST_JSON_BYTES_V1: usize = 512 * 1024;
 
-/// The exact effective transition-plan basis of one supported revision-3 Quest.
-///
-/// `legacy_synthetic` distinguishes a plan synthesized from frozen v2/v3 defaults from a plan
-/// retained by v4. The seal is deterministic but is not runtime or artifact evidence.
+/// The exact transition-plan basis of one revision-3 Quest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Revision3QuestTransitionPlanBasisV1 {
     pub plan: QuestTransitionPlanV1,
     pub seal: ContentSeal,
-    pub generator_version: u32,
-    pub legacy_synthetic: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3QuestTransitionPlanBasisErrorV1 {
     #[error(
-        "unsupported Quest generator contract: expected {expected_id}@2, @3, or @4, got {actual_id}@{actual_version}"
+        "unsupported Quest generator contract: expected {expected_id}@4, got {actual_id}@{actual_version}"
     )]
     UnsupportedGeneratorContract {
         expected_id: &'static str,
         actual_id: String,
         actual_version: u32,
     },
-    #[error("generator-v2/v3 Quest unexpectedly retains a semantic transition plan")]
-    LegacyPlanPresent,
-    #[error("generator-v4 Quest is missing its semantic transition plan")]
-    SemanticPlanMissing,
-    #[error("Quest objective shape does not match generator version {generator_version}")]
-    ObjectiveGeneratorContract { generator_version: u32 },
     #[error("invalid Quest transition-plan basis: {reason}")]
     InvalidPlan { reason: String },
     #[error("could not seal Quest transition-plan basis: {0}")]
     Seal(#[from] Revision3QuestTransitionPlanSealErrorV1),
 }
 
-/// Return the effective plan and CAS seal for one supported Quest Draft.
-///
-/// For generator v2/v3 this produces the one deterministic synthetic plan matching the frozen
-/// external-start/external-success source shape. For v4 it returns the retained plan. The helper
-/// is pure and grants no authority over the Quest's collision artifact or source module.
+/// Return the retained plan and CAS seal for one Quest Draft.
 pub fn revision3_quest_transition_plan_basis_v1(
     quest: &QuestDraft,
 ) -> Result<Revision3QuestTransitionPlanBasisV1, Revision3QuestTransitionPlanBasisErrorV1> {
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || !matches!(
-            quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION
-                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
-        )
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
     {
         return Err(
             Revision3QuestTransitionPlanBasisErrorV1::UnsupportedGeneratorContract {
@@ -91,70 +68,14 @@ pub fn revision3_quest_transition_plan_basis_v1(
     }
 
     let objective_count = 1usize.saturating_add(quest.input.additional_objective_titles.len());
-    let (plan, legacy_synthetic) = match quest.generator_version {
-        REVISION3_QUEST_GENERATOR_VERSION => {
-            if !quest.input.additional_objective_titles.is_empty() {
-                return Err(
-                    Revision3QuestTransitionPlanBasisErrorV1::ObjectiveGeneratorContract {
-                        generator_version: quest.generator_version,
-                    },
-                );
-            }
-            if quest.input.transition_plan.is_some() {
-                return Err(Revision3QuestTransitionPlanBasisErrorV1::LegacyPlanPresent);
-            }
-            (
-                QuestTransitionPlanV1::legacy_seed(objective_count).map_err(|error| {
-                    Revision3QuestTransitionPlanBasisErrorV1::InvalidPlan {
-                        reason: error.to_string(),
-                    }
-                })?,
-                true,
-            )
-        }
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION => {
-            if quest.input.additional_objective_titles.is_empty() {
-                return Err(
-                    Revision3QuestTransitionPlanBasisErrorV1::ObjectiveGeneratorContract {
-                        generator_version: quest.generator_version,
-                    },
-                );
-            }
-            if quest.input.transition_plan.is_some() {
-                return Err(Revision3QuestTransitionPlanBasisErrorV1::LegacyPlanPresent);
-            }
-            (
-                QuestTransitionPlanV1::legacy_seed(objective_count).map_err(|error| {
-                    Revision3QuestTransitionPlanBasisErrorV1::InvalidPlan {
-                        reason: error.to_string(),
-                    }
-                })?,
-                true,
-            )
-        }
-        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION => {
-            let plan = quest
-                .input
-                .transition_plan
-                .as_deref()
-                .cloned()
-                .ok_or(Revision3QuestTransitionPlanBasisErrorV1::SemanticPlanMissing)?;
-            (plan, false)
-        }
-        _ => unreachable!("supported generator versions were closed above"),
-    };
+    let plan = (*quest.input.transition_plan).clone();
     validate_draft_quest_transition_plan_v1(&plan, objective_count).map_err(|error| {
         Revision3QuestTransitionPlanBasisErrorV1::InvalidPlan {
             reason: error.to_string(),
         }
     })?;
     let seal = revision3_quest_transition_plan_seal_v1(&plan)?;
-    Ok(Revision3QuestTransitionPlanBasisV1 {
-        plan,
-        seal,
-        generator_version: quest.generator_version,
-        legacy_synthetic,
-    })
+    Ok(Revision3QuestTransitionPlanBasisV1 { plan, seal })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -341,8 +262,6 @@ pub struct Revision3QuestTransitionPlanEditOutcomeV1 {
     pub basis_head: WorkingHead,
     pub quest_id: EntityId,
     pub script_module_id: EntityId,
-    pub previous_generator_version: u32,
-    pub upgraded_from_legacy: bool,
     pub quest_revision: u64,
     pub script_module_revision: u64,
     pub transition_plan_seal: ContentSeal,
@@ -533,7 +452,7 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
 
     let collision_input = empty_collision_input(&quest);
     let regenerated_existing =
-        match regenerate_revision3_quest_module_v2(&quest, collision_input.clone()) {
+        match regenerate_revision3_quest_module(&quest, collision_input.clone()) {
             Ok(module) => module,
             Err(error) => {
                 reject!(
@@ -572,7 +491,7 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
             }
         );
     }
-    if !basis.legacy_synthetic && request.transition_plan == basis.plan {
+    if request.transition_plan == basis.plan {
         reject!(Revision3QuestTransitionPlanEditConflictV1::NoChanges);
     }
     if request.transition_plan.objective_slots != basis.plan.objective_slots {
@@ -599,9 +518,8 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
     }
 
     let mut edited_quest = quest.clone();
-    edited_quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
-    edited_quest.input.transition_plan = Some(Box::new(request.transition_plan.clone()));
-    let edited_module = match regenerate_revision3_quest_module_v2(&edited_quest, collision_input) {
+    edited_quest.input.transition_plan = Box::new(request.transition_plan.clone());
+    let edited_module = match regenerate_revision3_quest_module(&edited_quest, collision_input) {
         Ok(module) => module,
         Err(error) => {
             reject!(
@@ -615,7 +533,7 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
         || edited_module.module_relative_path != existing_module.module_relative_path
         || edited_module.owner != existing_module.owner
         || edited_module.generator_id != existing_module.generator_id
-        || edited_module.generator_version != REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
+        || edited_module.generator_version != REVISION3_QUEST_GENERATOR_VERSION
         || edited_module.status != existing_module.status
     {
         reject!(Revision3QuestTransitionPlanEditConflictV1::TechnicalIdentityChanged);
@@ -643,7 +561,7 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
     module_entity.revision = next_script_module_revision;
     module_entity.origin = OriginRef::Generated {
         generator_id: origin_generator_id.clone(),
-        generator_version: REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
         owner: origin_owner.clone(),
     };
     module_entity.payload = EntityPayload::ScriptModule(edited_module);
@@ -677,8 +595,6 @@ pub fn apply_revision3_quest_transition_plan_transaction_v1(
             basis_head: exact_basis_head.clone(),
             quest_id: request.quest_id,
             script_module_id,
-            previous_generator_version: basis.generator_version,
-            upgraded_from_legacy: basis.legacy_synthetic,
             quest_revision: next_quest_revision,
             script_module_revision: next_script_module_revision,
             transition_plan_seal,

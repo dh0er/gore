@@ -120,8 +120,8 @@ final class Revision3QuestContextStaleCheckpointException implements Exception {
 }
 
 /// The exact stored runtime connections cannot be represented by this catalog.
-/// V1 never guesses a replacement because native collision authority forbids
-/// using a context edit as an implicit repair or migration operation.
+/// The editor never guesses a replacement because native collision authority
+/// requires an explicit catalog selection.
 final class Revision3QuestContextUnavailableException implements Exception {
   const Revision3QuestContextUnavailableException();
 }
