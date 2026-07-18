@@ -26,6 +26,7 @@ part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_dialog_voice_slot_creation.dart';
 part '../project/revision3_dialog_voice_slot_removal.dart';
 part '../project/revision3_managed_compiler_check.dart';
+part '../project/revision3_project_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_greeting.dart';
 part '../project/revision3_npc_profile_edit.dart';
@@ -729,6 +730,39 @@ class ModFfi {
         response,
         expectedHead: expectedHead,
         requestedNpcId: requestedNpcId,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Ask the game compiler to check every native-derived managed ScriptModule
+  /// from one exact revision-3 Store head in one common compiler run. Native
+  /// retains no compiled artifact and this result grants no build, deployment,
+  /// runtime, or publication authority.
+  Future<AuthoringRevision3ProjectCompilerCheckResult>
+  authoringStoreCheckRevision3ProjectCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_check_revision3_project_compiler_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('gameRoot', gameRoot),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'root': root,
+      'game_root': gameRoot,
+      'expected_head_json': expectedHead.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3ProjectCompilerCheckResult.fromJson(
+        response,
+        expectedHead: expectedHead,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

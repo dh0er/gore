@@ -3301,10 +3301,117 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'プロジェクト全体のコンパイラー結果はまだ接続されていません。そのため、スクリプトの確認は明示的に未評価のままです。';
+      'この正確な保存済みプロジェクト版の全スクリプトに対して、ゲームのコンパイラーを一度実行します。結果は確認証拠としてのみ使用され、出力は破棄されます。';
 
   @override
-  String get managedTestReleaseScriptsAction => 'スクリプトを確認';
+  String get managedTestReleaseScriptsAction => 'コンパイラー確認を実行';
+
+  @override
+  String get managedProjectCompilerRetryAction => 'コンパイラー確認を再実行';
+
+  @override
+  String get managedProjectCompilerReviewAction => '結果を確認／再チェック';
+
+  @override
+  String get managedProjectCompilerDialogTitle => '全プロジェクトスクリプトを確認';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      '開始前に Gothic 1 Remake を終了してください。Mod Studio は一時的にゲームのコンパイラーで全プロジェクトスクリプトを確認し、ゲームのインストールを復元して、すべてのコンパイラー出力を破棄します。この結果からプレイ可能なファイルを作成したり、Mod をインストールしたりすることはできません。';
+
+  @override
+  String get managedProjectCompilerCloseAction => '閉じる';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'この確認を実行する前に、設定で Gothic 1 Remake のインストール先を選択してください。';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'ゲームのインストールはコンパイラー確認の準備ができていません。ゲームを終了するか復旧警告を解決してから、再試行してください。';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'この正確な保存済みプロジェクト版ですべてのスクリプトが合格しました。コンパイラー出力は破棄されました。';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'この保存済みプロジェクトにはコンパイル対象のスクリプトがありません。空の結果が正確に確認されました。';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      '1 つ以上のプロジェクトスクリプトに問題が見つかりました。以下のメッセージを修正してから、再試行してください。';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'コンパイラーは起動しませんでした。ゲームを終了し、設定済みのインストールを確認してから再試行してください。';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'プロジェクトまたはゲーム入力が変更されたか、最終確認が正確ではなくなりました。この結果は破棄されました。現在の版で確認を再実行してください。';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      '別の正確なコンパイラー確認を行う前に、このプロジェクトを閉じて開き直す必要があります。';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      '非公開のコンパイラー出力のクリーンアップ、またはゲームのインストール環境の正確な復元が完了したことを確認できませんでした。新しい安全性チェックが成功するまで、以降のコンパイラーチェックとインストールはブロックされます。';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'コンパイラー確認を完了または検証できませんでした。結果は保持されていません。ゲームのインストールの準備が整ってから再試行してください。';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'コンパイラーメッセージ';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading => 'コンパイラーメッセージ';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      '構造化されたコンパイラーメッセージを取得しました。';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      '診断フックを利用できなかったため、通常のゲームコンパイラーによるフォールバックを使用しました。';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'コンパイラーメッセージの取得を検証できませんでした。';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'コンパイラー実行後に診断フックを利用できませんでした。2 回目の実行は不要でした。';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'コンパイラープロセスの終了を確認できませんでした。';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'この実行では構造化されたコンパイラーメッセージを利用できませんでした。';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'エラー';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => '警告';
+
+  @override
+  String get managedProjectCompilerSeverityNote => '注記';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'ファイル';
+
+  @override
+  String get managedProjectCompilerLineLabel => '行';
+
+  @override
+  String get managedProjectCompilerColumnLabel => '列';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics => '件の追加コンパイラーメッセージを省略';
 
   @override
   String get managedTestReleaseVoiceTitle => 'テキストと音声';

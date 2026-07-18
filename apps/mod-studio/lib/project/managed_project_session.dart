@@ -147,6 +147,26 @@ final class ManagedRevision3CompilerCheckReceipt {
   bool get recoveryRequired => result.recoveryRequired;
 }
 
+/// Evidence from one common project compiler check plus the app-side
+/// post-call Store audit. Native retains no compiler output and this receipt
+/// grants no build, deployment, runtime, or publication authority.
+final class ManagedRevision3ProjectCompilerCheckReceipt {
+  const ManagedRevision3ProjectCompilerCheckReceipt({
+    required this.result,
+    required this.storeStillExactCurrent,
+  });
+
+  final AuthoringRevision3ProjectCompilerCheckResult result;
+  final bool storeStillExactCurrent;
+
+  bool get exactCurrent => storeStillExactCurrent && result.exactCurrent;
+
+  bool get acceptedAtExactCurrent =>
+      storeStillExactCurrent && result.acceptedAtExactCurrent;
+
+  bool get recoveryRequired => result.recoveryRequired;
+}
+
 /// One fully verified in-session recovery of an uncertain revision-3 head.
 ///
 /// Recovery only reconciles the crash-safe project head while this session
@@ -961,6 +981,12 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String npcId,
   });
 
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  });
+
   Future<AuthoringRevision3DataAssetPackageIndexResult>
   readDataAssetPackageIndexV1({
     required String root,
@@ -1459,6 +1485,17 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     expectedHead: expectedHead,
     npcId: npcId,
+  );
+
+  @override
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreCheckRevision3ProjectCompilerV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
   );
 
   @override
@@ -4910,6 +4947,60 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3NpcSourceInspectionError,
   );
 
+  /// Run one common game-compiler check over every native-derived managed
+  /// ScriptModule in the exact serialized Store basis. Native returns only
+  /// bounded evidence and retains no compiler artifact.
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
+    required String gameRoot,
+  }) async {
+    final result = await _core
+        .readBasisSnapshot<AuthoringRevision3ProjectCompilerCheckResult>(
+          (basis) async {
+            final expected = _managedRevision3ProjectCompilerBasis(
+              basis.projectJson,
+            );
+            final result = await _store.checkProjectCompilerV1(
+              root: root.path,
+              gameRoot: gameRoot,
+              expectedHead: basis.head,
+            );
+            final projectBytes = utf8.encode(basis.projectJson);
+            if (result.head.canonicalJson != basis.head.canonicalJson ||
+                result.project.id != basis.projectId ||
+                result.project.revision != basis.projectRevision ||
+                result.project.seal.byteLength != projectBytes.length ||
+                result.project.seal.sha256 !=
+                    crypto.sha256.convert(projectBytes).toString() ||
+                result.coverage.scriptModuleCount !=
+                    expected.scriptModuleCount ||
+                result.coverage.questModuleCount != expected.questModuleCount ||
+                result.coverage.npcModuleCount != expected.npcModuleCount ||
+                result.coverage.moduleManifest.byteLength !=
+                    expected.moduleManifestByteLength ||
+                result.coverage.moduleManifest.sha256 !=
+                    expected.moduleManifestSha256 ||
+                result.gameInputs.executable.byteLength !=
+                    expected.executableByteLength ||
+                result.gameInputs.executable.sha256 !=
+                    expected.executableSha256) {
+              throw const ManagedProjectVerificationException(
+                'revision-3 project compiler evidence disagrees with its exact session basis',
+              );
+            }
+            if (result.closingAudit.storeRequiresReopen) {
+              _core.markRequiresReopenAfterPublicationUncertainty();
+            }
+            return result;
+          },
+          operation: 'checkProjectCompilerV1',
+          handleReadError: _core._throwRevision3ProjectCompilerCheckError,
+        );
+    return ManagedRevision3ProjectCompilerCheckReceipt(
+      result: result,
+      storeStillExactCurrent: !_core.requiresReopen,
+    );
+  }
+
   /// Run the game compiler against one native-derived Quest/NPC module from
   /// the exact serialized Store basis. Only the selected entity ID crosses the
   /// wire; the expected revisions and module identity are caller-side stale
@@ -5141,6 +5232,249 @@ bool revision3ManagedCompilerSelectionMatches({
       selection.moduleId == expectedModuleId &&
       selection.moduleRevision == expectedModuleRevision;
 }
+
+({
+  int scriptModuleCount,
+  int questModuleCount,
+  int npcModuleCount,
+  int moduleManifestByteLength,
+  String moduleManifestSha256,
+  int executableByteLength,
+  String executableSha256,
+})
+_managedRevision3ProjectCompilerBasis(String currentProjectJson) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(currentProjectJson);
+  } on FormatException catch (error) {
+    throw ManagedProjectVerificationException(
+      'canonical revision-3 project compiler basis is not JSON: ${error.message}',
+    );
+  }
+  final project = _managedRevision3CompilerObject(decoded, 'project');
+  final projectId = _managedRevision3CompilerId(
+    project['project_id'],
+    'project_id',
+  );
+  final projectRevision = _managedRevision3CompilerRevision(
+    project['revision'],
+    'project revision',
+  );
+  final target = _managedRevision3CompilerObject(
+    project['target'],
+    'project target',
+  );
+  final executable = _managedRevision3CompilerObject(
+    target['executable'],
+    'project target executable',
+  );
+  final executableByteLength = _managedRevision3CompilerRevision(
+    executable['byte_len'],
+    'project target executable byte length',
+  );
+  final executableSha256 = _managedRevision3CompilerString(
+    executable['sha256'],
+    'project target executable SHA-256',
+  );
+  if (executableByteLength == 0 ||
+      !_managedRevision3CompilerShaPattern.hasMatch(executableSha256)) {
+    throw const ManagedProjectVerificationException(
+      'canonical revision-3 project compiler target seal is invalid',
+    );
+  }
+
+  final entities = _managedRevision3CompilerObject(
+    project['entities'],
+    'project entities',
+  );
+  var scriptModuleCount = 0;
+  var questModuleCount = 0;
+  var npcModuleCount = 0;
+  final entityById = <String, Map<String, Object?>>{};
+  for (final entry in entities.entries) {
+    final entity = _managedRevision3CompilerObject(
+      entry.value,
+      'project compiler entity',
+    );
+    if (_managedRevision3CompilerId(entity['id'], 'project entity id') !=
+        entry.key) {
+      throw const ManagedProjectVerificationException(
+        'project compiler entity key and identity disagree',
+      );
+    }
+    entityById[entry.key] = entity;
+    final payload = _managedRevision3CompilerObject(
+      entity['payload'],
+      'project compiler entity payload',
+    );
+    switch (payload['kind']) {
+      case 'script_module':
+        scriptModuleCount++;
+      case 'quest_draft':
+        questModuleCount++;
+      case 'npc_draft':
+        npcModuleCount++;
+    }
+  }
+  if (scriptModuleCount > _managedRevision3ProjectCompilerModuleLimit ||
+      questModuleCount > _managedRevision3ProjectCompilerModuleLimit ||
+      npcModuleCount > _managedRevision3ProjectCompilerModuleLimit ||
+      questModuleCount + npcModuleCount != scriptModuleCount) {
+    throw const ManagedProjectVerificationException(
+      'canonical revision-3 project compiler coverage is invalid',
+    );
+  }
+
+  final claimedModuleIds = <String>{};
+  final manifestModules = <Map<String, Object?>>[];
+  for (final entry in entityById.entries) {
+    final ownerId = entry.key;
+    final ownerEntity = entry.value;
+    final ownerPayload = _managedRevision3CompilerObject(
+      ownerEntity['payload'],
+      'project compiler owner payload',
+    );
+    final ownerKind = switch (ownerPayload['kind']) {
+      'quest_draft' => 'quest_draft',
+      'npc_draft' => 'npc_draft',
+      _ => null,
+    };
+    if (ownerKind == null) continue;
+    final ownerRevision = _managedRevision3CompilerRevision(
+      ownerEntity['revision'],
+      'project compiler owner revision',
+    );
+    final ownerData = _managedRevision3CompilerObject(
+      ownerPayload['data'],
+      'project compiler owner data',
+    );
+    final moduleReference = _managedRevision3CompilerReference(
+      ownerData['script_module'],
+      context: 'project compiler ScriptModule reference',
+      expectedProjectId: projectId,
+      expectedKind: 'script_module',
+    );
+    if (moduleReference.id == ownerId ||
+        !claimedModuleIds.add(moduleReference.id)) {
+      throw const ManagedProjectVerificationException(
+        'project compiler ScriptModule ownership is not one-to-one',
+      );
+    }
+    final moduleEntity = entityById[moduleReference.id];
+    if (moduleEntity == null) {
+      throw const ManagedProjectVerificationException(
+        'project compiler owner references a missing ScriptModule',
+      );
+    }
+    final moduleRevision = _managedRevision3CompilerRevision(
+      moduleEntity['revision'],
+      'project compiler ScriptModule revision',
+    );
+    final modulePayload = _managedRevision3CompilerObject(
+      moduleEntity['payload'],
+      'project compiler ScriptModule payload',
+    );
+    if (modulePayload['kind'] != 'script_module') {
+      throw const ManagedProjectVerificationException(
+        'project compiler owner reference targets another entity kind',
+      );
+    }
+    final moduleData = _managedRevision3CompilerObject(
+      modulePayload['data'],
+      'project compiler ScriptModule data',
+    );
+    final moduleOwner = _managedRevision3CompilerReference(
+      moduleData['owner'],
+      context: 'project compiler ScriptModule owner',
+      expectedProjectId: projectId,
+      expectedKind: ownerKind,
+    );
+    if (moduleOwner.id != ownerId) {
+      throw const ManagedProjectVerificationException(
+        'project compiler ScriptModule belongs to another owner',
+      );
+    }
+    final moduleNamespace = _managedRevision3CompilerString(
+      moduleData['module_namespace'],
+      'project compiler ScriptModule namespace',
+    );
+    final moduleRelativePath = _managedRevision3CompilerString(
+      moduleData['module_relative_path'],
+      'project compiler ScriptModule path',
+    );
+    if (moduleRelativePath != '${moduleNamespace.replaceAll('.', '/')}.as') {
+      throw const ManagedProjectVerificationException(
+        'project compiler ScriptModule namespace and path disagree',
+      );
+    }
+    final source = _managedRevision3CompilerString(
+      moduleData['source'],
+      'project compiler ScriptModule source',
+    );
+    final sourceBytes = utf8.encode(source);
+    final sourceSha256 = crypto.sha256.convert(sourceBytes).toString();
+    if (moduleData['source_sha256'] != sourceSha256) {
+      throw const ManagedProjectVerificationException(
+        'project compiler ScriptModule source seal disagrees',
+      );
+    }
+    manifestModules.add(<String, Object?>{
+      'owner_kind': ownerKind,
+      'owner_id': ownerId,
+      'owner_revision': ownerRevision,
+      'module_id': moduleReference.id,
+      'module_revision': moduleRevision,
+      'module_namespace': moduleNamespace,
+      'module_relative_path': moduleRelativePath,
+      'source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': sourceSha256,
+      },
+    });
+  }
+  if (claimedModuleIds.length != scriptModuleCount ||
+      entityById.entries.any((entry) {
+        final payload = _managedRevision3CompilerObject(
+          entry.value['payload'],
+          'project compiler entity payload',
+        );
+        return payload['kind'] == 'script_module' &&
+            !claimedModuleIds.contains(entry.key);
+      })) {
+    throw const ManagedProjectVerificationException(
+      'project compiler module graph does not close exactly',
+    );
+  }
+  manifestModules.sort(
+    (left, right) =>
+        (left['module_id']! as String).compareTo(right['module_id']! as String),
+  );
+  final projectBytes = utf8.encode(currentProjectJson);
+  final manifestBytes = utf8.encode(
+    jsonEncode(<String, Object?>{
+      'format': 'revision3_project_compiler_module_manifest',
+      'schema_revision': 1,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'canonical_project': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': crypto.sha256.convert(projectBytes).toString(),
+      },
+      'modules': manifestModules,
+    }),
+  );
+  return (
+    scriptModuleCount: scriptModuleCount,
+    questModuleCount: questModuleCount,
+    npcModuleCount: npcModuleCount,
+    moduleManifestByteLength: manifestBytes.length,
+    moduleManifestSha256: crypto.sha256.convert(manifestBytes).toString(),
+    executableByteLength: executableByteLength,
+    executableSha256: executableSha256,
+  );
+}
+
+const _managedRevision3ProjectCompilerModuleLimit = 1024;
 
 final class _ManagedRevision3CompilerSelection {
   const _ManagedRevision3CompilerSelection({
@@ -6256,6 +6590,42 @@ class _ManagedProjectSessionCore {
     Error.throwWithStackTrace(
       const ManagedProjectVerificationException(
         'managed revision-3 compiler evidence could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3ProjectCompilerCheckError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_PROJECT_COMPILER_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ProjectCompilerCheckErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 project compiler evidence could not be verified exactly',
       ),
       stackTrace,
     );
@@ -7860,6 +8230,24 @@ bool _revision3ManagedCompilerCheckErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_COMPILER_STORE_ROOT_MISSING',
   'AUTHORING_REVISION3_COMPILER_HEAD_MISSING',
   'AUTHORING_REVISION3_COMPILER_ENTITY_INVALID',
+}.contains(code);
+
+bool _revision3ProjectCompilerCheckErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_INPUT_LIMIT',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_HEAD_INVALID',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_STORE_ROOT_MISSING',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_HEAD_MISSING',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_DRIFT',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_MISMATCH',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_INSTALL_UNAVAILABLE',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_STAGING_UNAVAILABLE',
+  'AUTHORING_REVISION3_PROJECT_COMPILER_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3DataAssetPackageIndexErrorIsRetryable(String code) => const {

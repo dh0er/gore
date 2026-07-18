@@ -505,6 +505,16 @@ final class Revision3ManagedCompilerCheckStaleCheckpointException
   const Revision3ManagedCompilerCheckStaleCheckpointException();
 }
 
+final class Revision3ProjectCompilerCheckRequiresReopenException
+    implements Exception {
+  const Revision3ProjectCompilerCheckRequiresReopenException();
+}
+
+final class Revision3ProjectCompilerCheckStaleCheckpointException
+    implements Exception {
+  const Revision3ProjectCompilerCheckStaleCheckpointException();
+}
+
 final class Revision3DataAssetPackageIndexRequiresReopenException
     implements Exception {
   const Revision3DataAssetPackageIndexRequiresReopenException();
@@ -575,6 +585,9 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   });
   Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
     required String npcId,
+  });
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
+    required String gameRoot,
   });
   Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
     required AuthoringRevision3ManagedCompilerEntityKind entityKind,
@@ -1208,6 +1221,11 @@ final class _ManagedRevision3SessionLease
     expectedModuleId: expectedModuleId,
     expectedModuleRevision: expectedModuleRevision,
   );
+
+  @override
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
+    required String gameRoot,
+  }) => _session.checkProjectCompilerV1(gameRoot: gameRoot);
 
   @override
   Future<AuthoringRevision3DataAssetPackageIndexResult>
@@ -2990,6 +3008,65 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3NpcSourceInspectionRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Check every managed ScriptModule from one exact visible revision-3
+  /// checkpoint in a single native game-compiler run. The returned receipt is
+  /// evidence-only and grants no build, deployment, runtime, publication, or
+  /// reusable-artifact authority.
+  Future<ManagedRevision3ProjectCompilerCheckReceipt>
+  checkCurrentRevision3ProjectCompiler({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'project compiler checks are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectCompilerCheckRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'project compiler checks require a game installation',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ProjectCompilerCheckStaleCheckpointException();
+    }
+    try {
+      final receipt = await lease.checkProjectCompilerV1(gameRoot: gameRoot);
+      final result = receipt.result;
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.project.id != expectedProjectId ||
+          result.project.revision != expectedProjectRevision ||
+          receipt.storeStillExactCurrent != !lease.requiresReopen) {
+        throw const CurrentProjectCoordinatorException(
+          'project compiler receipt disagrees with the selected exact checkpoint',
+        );
+      }
+      return receipt;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ProjectCompilerCheckRequiresReopenException(),
           stackTrace,
         );
       }

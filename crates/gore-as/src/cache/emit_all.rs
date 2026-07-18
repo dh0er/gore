@@ -864,6 +864,30 @@ struct ModuleLayout {
     key: String,
 }
 
+/// One sealed, add-only source overlay prepared for a project-wide compiler check.
+///
+/// This type deliberately carries source text rather than an input path: managed callers seal the
+/// bytes before entering gore-as, and the project check must never reopen caller-controlled files.
+#[derive(Debug, Clone)]
+pub(crate) struct CompileAddOverlay<'a> {
+    pub module_name: &'a str,
+    pub relative_path: &'a str,
+    pub source: &'a str,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedCompileAddOverlay {
+    pub module_name: String,
+    pub relative_path: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedModuleIdentity {
+    pub module_name: String,
+    pub relative_path: String,
+}
+
 fn windows_casefold(value: &str) -> String {
     value.chars().flat_map(char::to_lowercase).collect()
 }
@@ -954,6 +978,23 @@ fn validate_module_layout(mods: &[Module]) -> Result<Vec<ModuleLayout>, String> 
         layout.push(output);
     }
     Ok(layout)
+}
+
+/// Validate the exact module-name/path manifest produced by a regenerated cache. Keeping this on
+/// the emitter's layout primitive prevents the project checker from growing a second, subtly
+/// different Windows-path policy.
+pub(crate) fn validated_module_identities(
+    mods: &[Module],
+) -> Result<Vec<ValidatedModuleIdentity>, String> {
+    let layout = validate_module_layout(mods)?;
+    Ok(mods
+        .iter()
+        .zip(layout)
+        .map(|(module, output)| ValidatedModuleIdentity {
+            module_name: module.name.clone(),
+            relative_path: output.relative,
+        })
+        .collect())
 }
 
 fn path_keys_overlap(left: &str, right: &str) -> bool {
@@ -1117,6 +1158,109 @@ impl<'a> PreparedEmit<'a> {
         };
         let source = self.prepare_overlay(op, module_name, source)?;
         Ok((source, output_relative))
+    }
+
+    /// Prepare a complete set of sealed add-only overlays for one shared compiler tree.
+    ///
+    /// All identity and layout checks finish before any source is returned to the caller, which in
+    /// turn finishes before `emit_tree` can touch the workspace. The returned order is stable and
+    /// independent of store/entity iteration order.
+    pub(crate) fn prepare_compile_add_overlays(
+        &self,
+        overlays: &[CompileAddOverlay<'_>],
+    ) -> Result<Vec<PreparedCompileAddOverlay>, String> {
+        let mut overlay_names = BTreeMap::<String, usize>::new();
+        let mut overlay_paths = BTreeMap::<String, usize>::new();
+        let mut prepared = Vec::with_capacity(overlays.len());
+
+        for (index, overlay) in overlays.iter().enumerate() {
+            let name_key = module_name_key(overlay.module_name)?;
+            let namespace_segments = overlay.module_name.split('.').collect::<Vec<_>>();
+            if namespace_segments.iter().any(|segment| {
+                segment.is_empty()
+                    || !segment.chars().next().is_some_and(|character| {
+                        character == '_' || character.is_ascii_alphabetic()
+                    })
+                    || segment
+                        .chars()
+                        .any(|character| character != '_' && !character.is_ascii_alphanumeric())
+            }) {
+                return Err(format!(
+                    "add module namespace {:?} is not a dot-separated AngelScript identifier",
+                    overlay.module_name
+                ));
+            }
+
+            if let Some(base) = self
+                .mods
+                .iter()
+                .find(|module| windows_casefold(&module.name) == name_key)
+            {
+                return Err(format!(
+                    "add module namespace {:?} collides with base module {:?} under Windows case folding",
+                    overlay.module_name, base.name
+                ));
+            }
+            if let Some(previous) = overlay_names.insert(name_key.clone(), index) {
+                return Err(format!(
+                    "add module namespaces {:?} and {:?} collide under Windows case folding",
+                    overlays[previous].module_name, overlay.module_name
+                ));
+            }
+
+            let requested = normalize_output_path(overlay.relative_path)?;
+            if let Some((base_index, _)) = self
+                .layout
+                .iter()
+                .enumerate()
+                .find(|(_, base)| path_keys_overlap(&base.key, &requested.key))
+            {
+                return Err(format!(
+                    "add path {:?} collides with base module {:?} path {:?} as the same path or a file/directory ancestor",
+                    requested.relative,
+                    self.mods[base_index].name,
+                    self.layout[base_index].relative
+                ));
+            }
+            if let Some(previous) = overlapping_path(&overlay_paths, &requested.key) {
+                return Err(format!(
+                    "add paths {:?} and {:?} collide under Windows case folding as the same path or a file/directory ancestor",
+                    prepared
+                        .get(previous)
+                        .map(|value: &PreparedCompileAddOverlay| value.relative_path.as_str())
+                        .unwrap_or(overlays[previous].relative_path),
+                    requested.relative
+                ));
+            }
+            overlay_paths.insert(requested.key.clone(), index);
+
+            let expected =
+                normalize_output_path(&format!("{}.as", overlay.module_name.replace('.', "/")))?;
+            if requested.relative != expected.relative {
+                return Err(format!(
+                    "add module namespace {:?} requires relative path {:?}, got {:?}",
+                    overlay.module_name, expected.relative, requested.relative
+                ));
+            }
+
+            let source = self.prepare_overlay("add", overlay.module_name, overlay.source)?;
+            prepared.push(PreparedCompileAddOverlay {
+                module_name: overlay.module_name.to_owned(),
+                relative_path: requested.relative,
+                source,
+            });
+        }
+
+        prepared.sort_by(|left, right| {
+            windows_casefold(&left.relative_path)
+                .cmp(&windows_casefold(&right.relative_path))
+                .then_with(|| {
+                    windows_casefold(&left.module_name).cmp(&windows_casefold(&right.module_name))
+                })
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+                .then_with(|| left.module_name.cmp(&right.module_name))
+        });
+        Ok(prepared)
     }
 
     /// Emit the prepared full tree. Module identities and normalized paths were validated by

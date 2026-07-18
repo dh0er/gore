@@ -3348,10 +3348,122 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'Wynik kompilatora dla całego projektu nie jest jeszcze podłączony. Kontrole skryptów pozostają jawnie nieocenione.';
+      'Uruchom kompilator gry raz dla wszystkich skryptów tej dokładnie zapisanej wersji projektu. Wynik jest tylko dowodem kontroli; dane wyjściowe są usuwane.';
 
   @override
-  String get managedTestReleaseScriptsAction => 'Przejrzyj skrypty';
+  String get managedTestReleaseScriptsAction => 'Uruchom kontrolę kompilatora';
+
+  @override
+  String get managedProjectCompilerRetryAction =>
+      'Powtórz kontrolę kompilatora';
+
+  @override
+  String get managedProjectCompilerReviewAction =>
+      'Zobacz wynik / sprawdź ponownie';
+
+  @override
+  String get managedProjectCompilerDialogTitle =>
+      'Sprawdź wszystkie skrypty projektu';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      'Przed rozpoczęciem zamknij Gothic 1 Remake. Mod Studio tymczasowo sprawdzi wszystkie skrypty projektu kompilatorem gry, przywróci instalację i usunie wszystkie dane wyjściowe kompilatora. Ten wynik nie pozwala tworzyć grywalnych plików ani instalować moda.';
+
+  @override
+  String get managedProjectCompilerCloseAction => 'Zamknij';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'Przed uruchomieniem kontroli wybierz instalację Gothic 1 Remake w Ustawieniach.';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'Instalacja gry nie jest gotowa do kontroli kompilatora. Zamknij grę lub rozwiąż ostrzeżenie odzyskiwania, a następnie spróbuj ponownie.';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'Wszystkie skrypty projektu przeszły kontrolę dla tej dokładnie zapisanej wersji. Dane wyjściowe kompilatora zostały usunięte.';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'Ta zapisana wersja projektu nie zawiera skryptów do kompilacji. Pusty wynik został dokładnie sprawdzony.';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      'Kompilator znalazł problemy w co najmniej jednym skrypcie projektu. Popraw poniższe komunikaty i spróbuj ponownie.';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'Kompilator nie został uruchomiony. Zamknij grę, sprawdź skonfigurowaną instalację i spróbuj ponownie.';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'Projekt lub dane gry zmieniły się albo końcowa kontrola przestała być dokładna. Wynik został usunięty; uruchom kontrolę ponownie dla bieżącej wersji.';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      'Projekt trzeba zamknąć i otworzyć ponownie przed kolejną dokładną kontrolą kompilatora.';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      'Nie udało się potwierdzić ukończenia czyszczenia prywatnych danych wyjściowych kompilatora lub dokładnego przywracania instalacji gry. Dalsze kontrole kompilatora i instalowanie pozostają zablokowane do czasu pomyślnego zakończenia nowej kontroli bezpieczeństwa.';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'Nie udało się ukończyć lub zweryfikować kontroli. Nie zachowano wyniku; spróbuj ponownie, gdy instalacja gry będzie gotowa.';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'Komunikat kompilatora';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading =>
+      'Komunikaty kompilatora';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      'Przechwycono ustrukturyzowane komunikaty kompilatora.';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      'Łącze diagnostyczne było niedostępne, więc użyto zwykłego kompilatora gry jako rozwiązania zastępczego.';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'Nie udało się zweryfikować przechwycenia komunikatów kompilatora.';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'Łącze diagnostyczne było niedostępne po uruchomieniu kompilatora; drugi przebieg nie był potrzebny.';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'Proces kompilatora nie potwierdził zakończenia.';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'Dla tego przebiegu nie były dostępne ustrukturyzowane komunikaty kompilatora.';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'Błąd';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => 'Ostrzeżenie';
+
+  @override
+  String get managedProjectCompilerSeverityNote => 'Uwaga';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'Plik';
+
+  @override
+  String get managedProjectCompilerLineLabel => 'Wiersz';
+
+  @override
+  String get managedProjectCompilerColumnLabel => 'Kolumna';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics =>
+      'dodatkowych komunikatów kompilatora pominięto';
 
   @override
   String get managedTestReleaseVoiceTitle => 'Tekst i głosy';

@@ -3277,10 +3277,112 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      '尚未连接全项目编译器结果。因此脚本检查明确保持未评估状态。';
+      '对这个精确保存的项目版本中的所有脚本运行一次游戏编译器。结果仅作为检查证据；编译输出会被丢弃。';
 
   @override
-  String get managedTestReleaseScriptsAction => '查看脚本';
+  String get managedTestReleaseScriptsAction => '运行编译器检查';
+
+  @override
+  String get managedProjectCompilerRetryAction => '重试编译器检查';
+
+  @override
+  String get managedProjectCompilerReviewAction => '查看结果/再次检查';
+
+  @override
+  String get managedProjectCompilerDialogTitle => '检查所有项目脚本';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      '开始前请关闭 Gothic 1 Remake。Mod Studio 会暂时使用游戏编译器检查所有项目脚本，恢复游戏安装，并丢弃全部编译输出。此结果不能创建可玩文件，也不能安装模组。';
+
+  @override
+  String get managedProjectCompilerCloseAction => '关闭';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      '运行此检查前，请在设置中选择 Gothic 1 Remake 安装位置。';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      '游戏安装尚未准备好进行编译器检查。请关闭游戏或解决恢复警告，然后重试。';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      '所有项目脚本都已通过这个精确保存版本的检查。编译输出已被丢弃。';
+
+  @override
+  String get managedProjectCompilerEmpty => '这个保存的项目没有需要编译的脚本。空结果已得到精确检查。';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      '游戏编译器在一个或多个项目脚本中发现了问题。请修复下面的消息，然后重试。';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      '编译器未启动。请关闭游戏并检查已配置的安装，然后重试。';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      '项目或游戏输入发生了变化，或者最终核对不再精确。此结果已被丢弃；请为当前版本重新运行检查。';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      '再次进行精确编译器检查前，必须关闭并重新打开此项目。';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      '无法确认私有编译器输出清理或游戏安装精确还原已完成。在新的安全检查成功之前，后续编译器检查和安装将保持阻止状态。';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      '无法完成或验证编译器检查。未保留任何结果；请在游戏安装准备好后重试。';
+
+  @override
+  String get managedProjectCompilerFailureDetails => '编译器消息';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading => '编译器消息';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured => '已捕获结构化编译器消息。';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      '诊断挂钩不可用，因此使用了普通游戏编译器作为回退。';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid => '无法验证编译器消息捕获。';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      '编译器运行后诊断挂钩不可用；无需再次运行。';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed => '编译器进程未确认已经退出。';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled => '本次运行没有可用的结构化编译器消息。';
+
+  @override
+  String get managedProjectCompilerSeverityError => '错误';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => '警告';
+
+  @override
+  String get managedProjectCompilerSeverityNote => '备注';
+
+  @override
+  String get managedProjectCompilerFileLabel => '文件';
+
+  @override
+  String get managedProjectCompilerLineLabel => '行';
+
+  @override
+  String get managedProjectCompilerColumnLabel => '列';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics => '条其他编译器消息已省略';
 
   @override
   String get managedTestReleaseVoiceTitle => '文本与配音';
@@ -4626,10 +4728,112 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      '尚未连接全项目编译器结果。因此脚本检查明确保持未评估状态。';
+      '对这个精确保存的项目版本中的所有脚本运行一次游戏编译器。结果仅作为检查证据；编译输出会被丢弃。';
 
   @override
-  String get managedTestReleaseScriptsAction => '查看脚本';
+  String get managedTestReleaseScriptsAction => '运行编译器检查';
+
+  @override
+  String get managedProjectCompilerRetryAction => '重试编译器检查';
+
+  @override
+  String get managedProjectCompilerReviewAction => '查看结果/再次检查';
+
+  @override
+  String get managedProjectCompilerDialogTitle => '检查所有项目脚本';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      '开始前请关闭 Gothic 1 Remake。Mod Studio 会暂时使用游戏编译器检查所有项目脚本，恢复游戏安装，并丢弃全部编译输出。此结果不能创建可玩文件，也不能安装模组。';
+
+  @override
+  String get managedProjectCompilerCloseAction => '关闭';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      '运行此检查前，请在设置中选择 Gothic 1 Remake 安装位置。';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      '游戏安装尚未准备好进行编译器检查。请关闭游戏或解决恢复警告，然后重试。';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      '所有项目脚本都已通过这个精确保存版本的检查。编译输出已被丢弃。';
+
+  @override
+  String get managedProjectCompilerEmpty => '这个保存的项目没有需要编译的脚本。空结果已得到精确检查。';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      '游戏编译器在一个或多个项目脚本中发现了问题。请修复下面的消息，然后重试。';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      '编译器未启动。请关闭游戏并检查已配置的安装，然后重试。';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      '项目或游戏输入发生了变化，或者最终核对不再精确。此结果已被丢弃；请为当前版本重新运行检查。';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      '再次进行精确编译器检查前，必须关闭并重新打开此项目。';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      '无法确认私有编译器输出清理或游戏安装精确还原已完成。在新的安全检查成功之前，后续编译器检查和安装将保持阻止状态。';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      '无法完成或验证编译器检查。未保留任何结果；请在游戏安装准备好后重试。';
+
+  @override
+  String get managedProjectCompilerFailureDetails => '编译器消息';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading => '编译器消息';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured => '已捕获结构化编译器消息。';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      '诊断挂钩不可用，因此使用了普通游戏编译器作为回退。';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid => '无法验证编译器消息捕获。';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      '编译器运行后诊断挂钩不可用；无需再次运行。';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed => '编译器进程未确认已经退出。';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled => '本次运行没有可用的结构化编译器消息。';
+
+  @override
+  String get managedProjectCompilerSeverityError => '错误';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => '警告';
+
+  @override
+  String get managedProjectCompilerSeverityNote => '备注';
+
+  @override
+  String get managedProjectCompilerFileLabel => '文件';
+
+  @override
+  String get managedProjectCompilerLineLabel => '行';
+
+  @override
+  String get managedProjectCompilerColumnLabel => '列';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics => '条其他编译器消息已省略';
 
   @override
   String get managedTestReleaseVoiceTitle => '文本与配音';

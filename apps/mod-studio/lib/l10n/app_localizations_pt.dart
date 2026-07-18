@@ -3351,10 +3351,120 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'Ainda não está ligado um resultado do compilador para todo o projeto. As verificações de scripts permanecem explicitamente por avaliar.';
+      'Execute uma vez o compilador do jogo para todos os scripts desta versão exata guardada do projeto. O resultado serve apenas como evidência da verificação; a saída é eliminada.';
 
   @override
-  String get managedTestReleaseScriptsAction => 'Rever scripts';
+  String get managedTestReleaseScriptsAction => 'Executar verificação';
+
+  @override
+  String get managedProjectCompilerRetryAction => 'Repetir verificação';
+
+  @override
+  String get managedProjectCompilerReviewAction =>
+      'Ver resultado / verificar novamente';
+
+  @override
+  String get managedProjectCompilerDialogTitle => 'Verificar todos os scripts';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      'Feche o Gothic 1 Remake antes de começar. O Mod Studio verifica temporariamente todos os scripts do projeto com o compilador do jogo, restaura a instalação e elimina toda a saída do compilador. Este resultado não pode criar ficheiros jogáveis nem instalar o mod.';
+
+  @override
+  String get managedProjectCompilerCloseAction => 'Fechar';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'Escolha a instalação do Gothic 1 Remake nas Definições antes de executar esta verificação.';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'A instalação do jogo não está pronta para uma verificação. Feche o jogo ou resolva o aviso de recuperação e tente novamente.';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'Todos os scripts do projeto passaram nesta versão exata guardada. A saída do compilador foi eliminada.';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'Esta versão guardada não tem scripts para compilar. O resultado vazio foi verificado com exatidão.';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      'O compilador encontrou problemas num ou mais scripts do projeto. Corrija as mensagens abaixo e tente novamente.';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'O compilador não iniciou. Feche o jogo, verifique a instalação configurada e tente novamente.';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'O projeto ou os dados do jogo mudaram, ou a verificação final deixou de ser exata. O resultado foi eliminado; execute novamente para a versão atual.';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      'Este projeto tem de ser fechado e reaberto antes de outra verificação exata.';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      'Não foi possível comprovar a conclusão da limpeza da saída privada do compilador ou da restauração exata da instalação do jogo. Outras verificações do compilador e a instalação permanecem bloqueadas até que uma nova verificação de segurança seja concluída com sucesso.';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'Não foi possível concluir ou validar a verificação. Nenhum resultado foi mantido; tente novamente quando a instalação estiver pronta.';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'Mensagem do compilador';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading =>
+      'Mensagens do compilador';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      'Foram capturadas mensagens estruturadas do compilador.';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      'A ligação de diagnóstico não estava disponível, por isso foi usado o compilador normal do jogo como alternativa.';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'Não foi possível validar a captura das mensagens do compilador.';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'A ligação de diagnóstico não estava disponível após a execução; não foi necessária uma segunda execução.';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'O processo do compilador não confirmou que terminou.';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'Não estavam disponíveis mensagens estruturadas do compilador nesta execução.';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'Erro';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => 'Aviso';
+
+  @override
+  String get managedProjectCompilerSeverityNote => 'Nota';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'Ficheiro';
+
+  @override
+  String get managedProjectCompilerLineLabel => 'Linha';
+
+  @override
+  String get managedProjectCompilerColumnLabel => 'Coluna';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics =>
+      'mensagens adicionais do compilador omitidas';
 
   @override
   String get managedTestReleaseVoiceTitle => 'Texto e vozes';
@@ -4775,10 +4885,120 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'Ainda não há um resultado do compilador conectado para todo o projeto. As verificações de scripts permanecem explicitamente sem avaliação.';
+      'Execute uma vez o compilador do jogo para todos os scripts desta versão exata salva do projeto. O resultado serve apenas como evidência da verificação; a saída é descartada.';
 
   @override
-  String get managedTestReleaseScriptsAction => 'Revisar scripts';
+  String get managedTestReleaseScriptsAction => 'Executar verificação';
+
+  @override
+  String get managedProjectCompilerRetryAction => 'Repetir verificação';
+
+  @override
+  String get managedProjectCompilerReviewAction =>
+      'Ver resultado / verificar novamente';
+
+  @override
+  String get managedProjectCompilerDialogTitle => 'Verificar todos os scripts';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      'Feche o Gothic 1 Remake antes de começar. O Mod Studio verifica temporariamente todos os scripts do projeto com o compilador do jogo, restaura a instalação e descarta toda a saída do compilador. Esse resultado não pode criar arquivos jogáveis nem instalar o mod.';
+
+  @override
+  String get managedProjectCompilerCloseAction => 'Fechar';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'Escolha a instalação do Gothic 1 Remake nas Configurações antes de executar esta verificação.';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'A instalação do jogo não está pronta para uma verificação. Feche o jogo ou resolva o aviso de recuperação e tente novamente.';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'Todos os scripts do projeto foram aprovados nesta versão exata salva. A saída do compilador foi descartada.';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'Esta versão salva não tem scripts para compilar. O resultado vazio foi verificado com exatidão.';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      'O compilador encontrou problemas em um ou mais scripts do projeto. Corrija as mensagens abaixo e tente novamente.';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'O compilador não foi iniciado. Feche o jogo, verifique a instalação configurada e tente novamente.';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'O projeto ou os dados do jogo mudaram, ou a verificação final deixou de ser exata. O resultado foi descartado; execute novamente para a versão atual.';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      'Este projeto precisa ser fechado e reaberto antes de outra verificação exata.';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      'Não foi possível confirmar que a limpeza da saída privada do compilador ou a restauração exata da instalação do jogo foi concluída. Novas verificações do compilador e a instalação permanecem bloqueadas até que uma nova verificação de segurança seja bem-sucedida.';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'Não foi possível concluir ou validar a verificação. Nenhum resultado foi mantido; tente novamente quando a instalação estiver pronta.';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'Mensagem do compilador';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading =>
+      'Mensagens do compilador';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      'Foram capturadas mensagens estruturadas do compilador.';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      'A conexão de diagnóstico não estava disponível, então foi usado o compilador normal do jogo como alternativa.';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'Não foi possível validar a captura das mensagens do compilador.';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'A conexão de diagnóstico não estava disponível após a execução; não foi necessária uma segunda execução.';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'O processo do compilador não confirmou que terminou.';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'Não havia mensagens estruturadas do compilador disponíveis nesta execução.';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'Erro';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => 'Aviso';
+
+  @override
+  String get managedProjectCompilerSeverityNote => 'Nota';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'Arquivo';
+
+  @override
+  String get managedProjectCompilerLineLabel => 'Linha';
+
+  @override
+  String get managedProjectCompilerColumnLabel => 'Coluna';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics =>
+      'mensagens adicionais do compilador omitidas';
 
   @override
   String get managedTestReleaseVoiceTitle => 'Texto e vozes';

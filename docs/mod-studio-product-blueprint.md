@@ -190,8 +190,8 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 | Cinematics and presentation | No Studio integration. | No current authoring pipeline claim. | Scene timelines, cameras, staging, subtitle/audio sync, animation, and reusable sequences are **future Research-gated** capabilities. |
 | Gameplay systems | Only bounded existing scalar/default and Expert script paths are available. | Evidence is selector-, field-, and generator-specific. | General factions, AI, combat, talents, spells, economy, rules, and reusable runtime effects are **Research-gated**; Expert source cannot bypass qualification. |
 | UI and player-facing presentation | No semantic UI authoring integration. | Generic texture/script support is not evidence for mod-owned UI. | Journal/menu/icon behavior and new UI remain **future Research-gated** until their actual chains are recovered. |
-| Test and debug | Test & Release gives one managed-R3 home to six independent areas: project structure, scripts, Voice, DataAssets, playable build, and deployment. Current Problems and Voice continuations are embedded; other checks remain honestly unevaluated or unavailable. | Every evaluated card is accepted only with evidence for the exact project ID, revision, and canonical head. A changed checkpoint invalidates the visible result. This evidence boundary is presentation safety, not runtime proof. | Named isolated scenarios, managed test profiles, semantic observations/save diff, launch/postflight recovery, and runtime qualification are not integrated. Each gameplay action still needs its own risk profile and exact runtime evidence. |
-| Build and release | The primary **Test & Release** workspace does not claim a general managed build. Its playable-build and deployment cards remain blocked unless each receives exact checkpoint evidence and its own connected action; build evidence never unlocks deployment. The current bounded Voice readiness/offline-build continuation remains available in place. Useful standalone build/deploy jobs remain outside managed project authority while they are rehosted. | Existing bundle, deployment, compiler-report, install-guard, recovery, Voice-bundle, and reviewed DataAsset-pack components retain their separate bounded evidence. Exact-current Quest/NPC compiler checks are compiler acceptance only and discard their output. | Managed project-wide roots, dependency/risk preview, deterministic all-domain lowering, deploy/undeploy, isolated launch/postflight, rollback, immutable releases, provenance, and CI remain missing. Unsupported compiler-hook signatures continue through the normal compiler fallback and do not grant gameplay proof. |
+| Test and debug | Test & Release gives one managed-R3 home to six independent areas: project structure, scripts, Voice, DataAssets, playable build, and deployment. Current Problems and Voice continuations are embedded. Scripts now runs one common exact-current compiler check over every managed Quest/NPC module, while unsupported or unevaluated areas remain honestly separate. | Native re-derives the complete Store-owned module graph, emits one shared base-plus-project source tree, invokes the game compiler at most once, verifies the regenerated module manifest, neutralizes the private cache, and performs the Store/game closing audit under the same install guard. Store and game closing dispositions remain separate on the wire; Store uncertainty forces reopen, while game-only uncertainty remains independently retryable. The app independently derives the same sorted manifest seal from its exact canonical project and rejects any mismatch. The card retains only bounded diagnostics and Script-scoped evidence for the exact project ID, revision, and canonical head; checkpoint or game-root change invalidates it. This is compiler evidence, not runtime proof. | Named isolated scenarios, managed test profiles, semantic observations/save diff, launch/postflight recovery, and runtime qualification are not integrated. Each gameplay action still needs its own risk profile and exact runtime evidence. |
+| Build and release | The primary **Test & Release** workspace does not claim a general managed build. Its playable-build and deployment cards remain blocked unless each receives exact checkpoint evidence and its own connected action; Script evidence never unlocks either one, and build evidence never unlocks deployment. The current bounded Voice readiness/offline-build continuation remains available in place. Useful standalone build/deploy jobs remain outside managed project authority while they are rehosted. | Existing bundle, deployment, compiler-report, install-guard, recovery, Voice-bundle, and reviewed DataAsset-pack components retain their separate bounded evidence. The project-wide and per-entity Quest/NPC compiler checks are evidence-only and discard their output; neither returns a mini/cache path, build plan, deployment capability, publication right, or runtime qualification. | Managed project-wide roots, dependency/risk preview, deterministic all-domain lowering, deploy/undeploy, isolated launch/postflight, rollback, immutable releases, provenance, and CI remain missing. Unsupported compiler-hook signatures continue through the normal compiler fallback and do not grant gameplay proof. |
 | Collaboration and extension | No semantic collaboration workflow is integrated. | Managed-R3 primitives are groundwork, not merge/sync implementation. | Planned after the single-author managed-project/transaction contract; core authoring must not require a cloud account. |
 
 NPC Dialog & Voice addendum (2026-07-17): this supersedes the NPC table row's
@@ -382,12 +382,20 @@ reference problems, game-configuration state, and DataAsset-registry/stage
 limits. Quest/NPC targets open the exact Draft in Story **Problems & Checks**;
 other entities and project assets open through checkpoint-bound Content
 navigation; DataAsset findings filter, select, and expand the exact staged edit;
-configuration findings open Settings. Compiler evidence remains **Not
-evaluated**, general project-wide managed build remains **Blocked**, and runtime
-remains **Unqualified**; the
-bounded reviewed-DataAsset action is a separate offline build and does not turn
-this into an aggregate Ready verdict. The view performs no compiler check,
-general lowering, deployment, or gameplay proof. **Project > Close** releases
+configuration findings open Settings. Problems does not infer compiler status;
+the adjacent Scripts card now owns one independent exact-current project-wide
+compiler check. It regenerates every managed Quest/NPC `ScriptModule`, compiles
+the complete shared source tree once, verifies and destroys the private cache,
+and retains only bounded diagnostics after exact restoration and a same-guard
+closing audit. The closing receipt keeps Store and game drift/inspection
+outcomes distinct.
+The app independently recomputes the complete sorted module-manifest seal from
+the exact project before accepting the receipt. General project-wide managed
+build remains **Blocked**, and
+runtime remains **Unqualified**; the bounded reviewed-DataAsset action is a
+separate offline build and neither check turns this into an aggregate Ready
+verdict. The view performs no general lowering, deployment, or gameplay proof.
+**Project > Close** releases
 the coordinator-owned current
 session without deleting project data. Add, Manage, and Resolve Voice actions
 also fail closed until the current projection contains an intact

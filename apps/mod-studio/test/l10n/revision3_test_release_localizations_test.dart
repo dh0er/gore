@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
+import 'package:gore_mod/l10n/app_localizations_en.dart';
 
 const _arbFiles = <String>[
   'app_de.arb',
@@ -45,6 +46,36 @@ const _requiredKeys = <String>{
   'managedTestReleaseScriptsTitle',
   'managedTestReleaseScriptsDescription',
   'managedTestReleaseScriptsAction',
+  'managedProjectCompilerRetryAction',
+  'managedProjectCompilerReviewAction',
+  'managedProjectCompilerDialogTitle',
+  'managedProjectCompilerDialogIntroduction',
+  'managedProjectCompilerCloseAction',
+  'managedProjectCompilerNoGame',
+  'managedProjectCompilerSafetyBlocked',
+  'managedProjectCompilerCompiled',
+  'managedProjectCompilerEmpty',
+  'managedProjectCompilerRejected',
+  'managedProjectCompilerPreflightBlocked',
+  'managedProjectCompilerDrifted',
+  'managedProjectCompilerRequiresReopen',
+  'managedProjectCompilerRecoveryRequired',
+  'managedProjectCompilerFailed',
+  'managedProjectCompilerFailureDetails',
+  'managedProjectCompilerDiagnosticsHeading',
+  'managedProjectCompilerCaptureCaptured',
+  'managedProjectCompilerCaptureFallback',
+  'managedProjectCompilerCaptureInvalid',
+  'managedProjectCompilerCaptureUnavailable',
+  'managedProjectCompilerCaptureExitUnconfirmed',
+  'managedProjectCompilerCaptureDisabled',
+  'managedProjectCompilerSeverityError',
+  'managedProjectCompilerSeverityWarning',
+  'managedProjectCompilerSeverityNote',
+  'managedProjectCompilerFileLabel',
+  'managedProjectCompilerLineLabel',
+  'managedProjectCompilerColumnLabel',
+  'managedProjectCompilerOmittedDiagnostics',
   'managedTestReleaseVoiceTitle',
   'managedTestReleaseVoiceDescription',
   'managedTestReleaseVoiceAction',
@@ -131,6 +162,13 @@ void main() {
       }
     },
   );
+
+  test('compiler recovery copy covers both retained-output lanes', () {
+    final recovery =
+        AppLocalizationsEn().managedProjectCompilerRecoveryRequired;
+    expect(recovery, contains('private compiler output'));
+    expect(recovery, contains('exact restoration of the game installation'));
+  });
 }
 
 List<String> _testReleaseStrings(AppLocalizations l10n) => <String>[
@@ -159,6 +197,36 @@ List<String> _testReleaseStrings(AppLocalizations l10n) => <String>[
   l10n.managedTestReleaseScriptsTitle,
   l10n.managedTestReleaseScriptsDescription,
   l10n.managedTestReleaseScriptsAction,
+  l10n.managedProjectCompilerRetryAction,
+  l10n.managedProjectCompilerReviewAction,
+  l10n.managedProjectCompilerDialogTitle,
+  l10n.managedProjectCompilerDialogIntroduction,
+  l10n.managedProjectCompilerCloseAction,
+  l10n.managedProjectCompilerNoGame,
+  l10n.managedProjectCompilerSafetyBlocked,
+  l10n.managedProjectCompilerCompiled,
+  l10n.managedProjectCompilerEmpty,
+  l10n.managedProjectCompilerRejected,
+  l10n.managedProjectCompilerPreflightBlocked,
+  l10n.managedProjectCompilerDrifted,
+  l10n.managedProjectCompilerRequiresReopen,
+  l10n.managedProjectCompilerRecoveryRequired,
+  l10n.managedProjectCompilerFailed,
+  l10n.managedProjectCompilerFailureDetails,
+  l10n.managedProjectCompilerDiagnosticsHeading,
+  l10n.managedProjectCompilerCaptureCaptured,
+  l10n.managedProjectCompilerCaptureFallback,
+  l10n.managedProjectCompilerCaptureInvalid,
+  l10n.managedProjectCompilerCaptureUnavailable,
+  l10n.managedProjectCompilerCaptureExitUnconfirmed,
+  l10n.managedProjectCompilerCaptureDisabled,
+  l10n.managedProjectCompilerSeverityError,
+  l10n.managedProjectCompilerSeverityWarning,
+  l10n.managedProjectCompilerSeverityNote,
+  l10n.managedProjectCompilerFileLabel,
+  l10n.managedProjectCompilerLineLabel,
+  l10n.managedProjectCompilerColumnLabel,
+  l10n.managedProjectCompilerOmittedDiagnostics,
   l10n.managedTestReleaseVoiceTitle,
   l10n.managedTestReleaseVoiceDescription,
   l10n.managedTestReleaseVoiceAction,

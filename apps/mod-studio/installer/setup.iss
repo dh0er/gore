@@ -46,9 +46,6 @@ LicenseFile=..\..\..\LICENSE
 ; (%LOCALAPPDATA%\gore\gore-mod\ui_settings.json). Remove only gore-mod's
 ; own subfolder so gore-save / gore-cli data under gore survives.
 Type: filesandordirs; Name: "{localappdata}\gore\gore-mod"
-; Legacy per-app config dir (%APPDATA%\gore-mod), kept only as the one-time
-; settings migration source; drop it too.
-Type: filesandordirs; Name: "{userappdata}\gore-mod"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -171,6 +171,10 @@
 //! - `script_compile_report_v1` fails closed unless the deployment-aware pristine cache can be
 //!   resolved, runs the optional compiler hook with automatic normal-generator fallback, and
 //!   reports diagnostics plus exact live-install restoration separately from compile success.
+//! - `authoring_store_check_revision3_project_compiler_v1` fully reopens one exact managed head,
+//!   closes and regenerates every Quest/NPC ScriptModule, and checks the sealed set in one shared
+//!   compiler run. It returns only bounded exact-current evidence and no source, path, artifact,
+//!   build, deployment, publication, or runtime authority.
 //! - `script_compile_install_state_v1` is a bounded, strictly read-only native preflight for the
 //!   shipping-game process and every known compile/recovery artifact. It returns display-only
 //!   paths and never creates, removes, renames, repairs, launches, or writes anything.
@@ -199,6 +203,7 @@ mod authoring_dialog_voice_slot_remove_revision3;
 mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
+mod authoring_project_compiler_revision3;
 mod authoring_project_export_revision3;
 mod authoring_project_import_revision3;
 mod authoring_source_io;
@@ -264,6 +269,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_build_revision3_reviewed_dataasset_v1",
     "authoring_store_build_revision3_voice_v1",
     "authoring_store_check_revision3_npc_compiler_v1",
+    authoring_project_compiler_revision3::COMMAND,
     "authoring_store_check_revision3_quest_compiler_v1",
     authoring_project_export_revision3::COMMAND,
     "authoring_store_import_ogg",
@@ -588,6 +594,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_check_revision3_npc_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_npc_compiler_v1_raw,
+        ),
+        authoring_project_compiler_revision3::COMMAND => Some(
+            authoring_project_compiler_revision3::check_revision3_project_compiler_v1_raw,
         ),
         "authoring_store_check_revision3_quest_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_quest_compiler_v1_raw,
@@ -1804,6 +1813,7 @@ mod tests {
                     "authoring_store_build_revision3_reviewed_dataasset_v1",
                     "authoring_store_build_revision3_voice_v1",
                     "authoring_store_check_revision3_npc_compiler_v1",
+                    "authoring_store_check_revision3_project_compiler_v1",
                     "authoring_store_check_revision3_quest_compiler_v1",
                     "authoring_store_export_revision3_exact_snapshot_v2",
                     "authoring_store_import_ogg",

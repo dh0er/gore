@@ -3333,10 +3333,119 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'A project-wide compiler result is not connected yet. Script checks stay explicitly unevaluated.';
+      'Run the game compiler once across every script in this exact saved project. The result is check evidence only; its output is discarded.';
 
   @override
-  String get managedTestReleaseScriptsAction => 'Review scripts';
+  String get managedTestReleaseScriptsAction => 'Run compiler check';
+
+  @override
+  String get managedProjectCompilerRetryAction => 'Retry compiler check';
+
+  @override
+  String get managedProjectCompilerReviewAction =>
+      'Review result / check again';
+
+  @override
+  String get managedProjectCompilerDialogTitle => 'Check all project scripts';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      'Close Gothic 1 Remake before you start. Mod Studio temporarily checks every project script with the game compiler, restores the game installation, and discards all compiler output. This result cannot create playable files or install the mod.';
+
+  @override
+  String get managedProjectCompilerCloseAction => 'Close';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'Choose the Gothic 1 Remake installation in Settings before running this check.';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'The game installation is not ready for a compiler check. Close the game or resolve the recovery warning, then retry.';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'All project scripts passed at this exact saved project version. Compiler output was discarded.';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'This saved project has no scripts to compile. The empty result was checked exactly.';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      'The game compiler found problems in one or more project scripts. Fix the messages below, then retry.';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'The compiler did not start. Close the game and check the configured installation, then retry.';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'The project or game inputs changed, or the closing audit was no longer exact. This result was discarded; run the check again for the current version.';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      'This project must be closed and reopened before another exact compiler check.';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      'Cleanup of the private compiler output or exact restoration of the game installation could not be proven complete. Further compiler checks and installation stay blocked until a fresh safety check succeeds.';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'The compiler check could not be completed or verified. No result was kept; retry when the game installation is ready.';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'Compiler message';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading => 'Compiler messages';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      'Structured compiler messages were captured.';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      'The diagnostics hook was unavailable, so the normal game compiler fallback was used.';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'Compiler message capture could not be verified.';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'The diagnostics hook was unavailable after the compiler run; no second run was needed.';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'The compiler process did not confirm that it exited.';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'Structured compiler messages were unavailable for this run.';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'Error';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => 'Warning';
+
+  @override
+  String get managedProjectCompilerSeverityNote => 'Note';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'File';
+
+  @override
+  String get managedProjectCompilerLineLabel => 'Line';
+
+  @override
+  String get managedProjectCompilerColumnLabel => 'Column';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics =>
+      'additional compiler messages omitted';
 
   @override
   String get managedTestReleaseVoiceTitle => 'Text & Voice';

@@ -3350,10 +3350,121 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedTestReleaseScriptsDescription =>
-      'Результат компилятора для всего проекта ещё не подключён. Проверка скриптов явно остаётся без оценки.';
+      'Один раз запустите компилятор игры для всех скриптов этой точно сохранённой версии проекта. Результат служит только подтверждением проверки; выходные данные удаляются.';
 
   @override
-  String get managedTestReleaseScriptsAction => 'Просмотреть скрипты';
+  String get managedTestReleaseScriptsAction => 'Запустить проверку';
+
+  @override
+  String get managedProjectCompilerRetryAction => 'Повторить проверку';
+
+  @override
+  String get managedProjectCompilerReviewAction =>
+      'Посмотреть результат / проверить снова';
+
+  @override
+  String get managedProjectCompilerDialogTitle =>
+      'Проверить все скрипты проекта';
+
+  @override
+  String get managedProjectCompilerDialogIntroduction =>
+      'Перед началом закройте Gothic 1 Remake. Mod Studio временно проверит все скрипты проекта компилятором игры, восстановит установку и удалит все выходные данные компилятора. Этот результат не позволяет создавать игровые файлы или устанавливать мод.';
+
+  @override
+  String get managedProjectCompilerCloseAction => 'Закрыть';
+
+  @override
+  String get managedProjectCompilerNoGame =>
+      'Перед проверкой выберите установку Gothic 1 Remake в настройках.';
+
+  @override
+  String get managedProjectCompilerSafetyBlocked =>
+      'Установка игры не готова к проверке компилятором. Закройте игру или устраните предупреждение о восстановлении и повторите попытку.';
+
+  @override
+  String get managedProjectCompilerCompiled =>
+      'Все скрипты проекта прошли проверку для этой точно сохранённой версии. Выходные данные компилятора удалены.';
+
+  @override
+  String get managedProjectCompilerEmpty =>
+      'В этой сохранённой версии проекта нет скриптов для компиляции. Пустой результат точно проверен.';
+
+  @override
+  String get managedProjectCompilerRejected =>
+      'Компилятор обнаружил проблемы в одном или нескольких скриптах проекта. Исправьте сообщения ниже и повторите попытку.';
+
+  @override
+  String get managedProjectCompilerPreflightBlocked =>
+      'Компилятор не запустился. Закройте игру, проверьте настроенную установку и повторите попытку.';
+
+  @override
+  String get managedProjectCompilerDrifted =>
+      'Проект или данные игры изменились, либо итоговая сверка перестала быть точной. Результат удалён; запустите проверку снова для текущей версии.';
+
+  @override
+  String get managedProjectCompilerRequiresReopen =>
+      'Перед следующей точной проверкой проект необходимо закрыть и открыть заново.';
+
+  @override
+  String get managedProjectCompilerRecoveryRequired =>
+      'Не удалось подтвердить завершение очистки закрытых выходных данных компилятора или точного восстановления установки игры. Дальнейшие проверки компилятором и установка остаются заблокированными до успешного завершения новой проверки безопасности.';
+
+  @override
+  String get managedProjectCompilerFailed =>
+      'Не удалось завершить или подтвердить проверку. Результат не сохранён; повторите попытку, когда установка игры будет готова.';
+
+  @override
+  String get managedProjectCompilerFailureDetails => 'Сообщение компилятора';
+
+  @override
+  String get managedProjectCompilerDiagnosticsHeading =>
+      'Сообщения компилятора';
+
+  @override
+  String get managedProjectCompilerCaptureCaptured =>
+      'Структурированные сообщения компилятора получены.';
+
+  @override
+  String get managedProjectCompilerCaptureFallback =>
+      'Диагностический интерфейс был недоступен, поэтому использован обычный компилятор игры.';
+
+  @override
+  String get managedProjectCompilerCaptureInvalid =>
+      'Не удалось подтвердить получение сообщений компилятора.';
+
+  @override
+  String get managedProjectCompilerCaptureUnavailable =>
+      'Диагностический интерфейс был недоступен после запуска компилятора; повторный запуск не требовался.';
+
+  @override
+  String get managedProjectCompilerCaptureExitUnconfirmed =>
+      'Процесс компилятора не подтвердил завершение.';
+
+  @override
+  String get managedProjectCompilerCaptureDisabled =>
+      'Для этого запуска структурированные сообщения компилятора недоступны.';
+
+  @override
+  String get managedProjectCompilerSeverityError => 'Ошибка';
+
+  @override
+  String get managedProjectCompilerSeverityWarning => 'Предупреждение';
+
+  @override
+  String get managedProjectCompilerSeverityNote => 'Примечание';
+
+  @override
+  String get managedProjectCompilerFileLabel => 'Файл';
+
+  @override
+  String get managedProjectCompilerLineLabel => 'Строка';
+
+  @override
+  String get managedProjectCompilerColumnLabel => 'Столбец';
+
+  @override
+  String get managedProjectCompilerOmittedDiagnostics =>
+      'дополнительных сообщений компилятора скрыто';
 
   @override
   String get managedTestReleaseVoiceTitle => 'Текст и озвучка';

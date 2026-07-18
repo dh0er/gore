@@ -646,7 +646,7 @@ pub(super) fn compile_report_v1_raw(input: &str) -> Value {
         },
         guard,
     );
-    let diagnostics_rejection = compiled_diagnostics_rejection(report.diagnostics());
+    let diagnostics_rejection = diagnostics_rejection(report.diagnostics());
     let output_rejection = match &report.outcome {
         CompileModuleReportOutcome::Compiled(output) => {
             anchor_owned_compiled_mini(&staging, output).err()
@@ -888,7 +888,7 @@ pub(super) fn report_response(
     output_rejection: Option<String>,
 ) -> Value {
     let restore = report.install_restore_disposition();
-    let diagnostics_rejection = compiled_diagnostics_rejection(report.diagnostics());
+    let diagnostics_rejection = diagnostics_rejection(report.diagnostics());
     let diagnostics = report
         .diagnostics()
         .map(|report| diagnostics_json(report.disposition(), report.diagnostics()));
@@ -910,7 +910,7 @@ pub(super) fn report_response(
             recovery_required,
         ),
         CompileModuleReportOutcome::Failed(error) => {
-            let (code, message) = compile_error(error);
+            let (code, message) = compile_error_parts(error);
             preflight_failure_with_diagnostics(
                 code,
                 &message,
@@ -980,7 +980,7 @@ fn compiled_output_is_usable(
         && output_is_anchored
 }
 
-fn compiled_diagnostics_rejection(
+pub(super) fn diagnostics_rejection(
     report: Option<&gore_as::diagnostics::CompilerDiagnosticsReport>,
 ) -> Option<(&'static str, &'static str)> {
     match report {
@@ -989,6 +989,12 @@ fn compiled_diagnostics_rejection(
         }
         None => compiled_diagnostics_rejection_parts(None, &[]),
     }
+}
+
+pub(super) fn diagnostics_report_json(
+    report: &gore_as::diagnostics::CompilerDiagnosticsReport,
+) -> Value {
+    diagnostics_json(report.disposition(), report.diagnostics())
 }
 
 fn compiled_diagnostics_rejection_parts(
@@ -1053,7 +1059,7 @@ fn preflight_failure_with_diagnostics(
     })
 }
 
-fn compile_error(error: CompileError) -> (&'static str, String) {
+pub(super) fn compile_error_parts(error: CompileError) -> (&'static str, String) {
     let code = match &error {
         CompileError::Io(_) | CompileError::ArtifactIo { .. } => "COMPILE_IO",
         CompileError::Regen(_) => "COMPILER_REGEN_FAILED",
@@ -1063,7 +1069,7 @@ fn compile_error(error: CompileError) -> (&'static str, String) {
     (code, error.to_string())
 }
 
-fn install_restore_label(disposition: InstallRestoreDisposition) -> &'static str {
+pub(super) fn install_restore_label(disposition: InstallRestoreDisposition) -> &'static str {
     match disposition {
         InstallRestoreDisposition::NotStarted => "not_started",
         InstallRestoreDisposition::RestoredExact => "restored_exact",

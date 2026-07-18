@@ -2044,6 +2044,179 @@ void main() {
   );
 
   test(
+    'project compiler rejects stale visible identity and missing game before lease callback',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final projectJson = fixture.projectJson;
+      final managed = _FakeManagedLease(
+        root: Directory('project-compiler-stale'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: headFor(projectJson),
+        canonicalProjectJson: projectJson,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      for (final check
+          in <Future<ManagedRevision3ProjectCompilerCheckReceipt> Function()>[
+            () => _checkControllerProjectCompiler(
+              coordinator,
+              visible,
+              expectedRoot: 'another-root',
+            ),
+            () => _checkControllerProjectCompiler(
+              coordinator,
+              visible,
+              expectedProjectId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            ),
+            () => _checkControllerProjectCompiler(
+              coordinator,
+              visible,
+              expectedProjectRevision: fixture.projectRevision + 1,
+            ),
+            () => _checkControllerProjectCompiler(
+              coordinator,
+              visible,
+              expectedHead: _head(404),
+            ),
+          ]) {
+        await expectLater(
+          check(),
+          throwsA(isA<Revision3ProjectCompilerCheckStaleCheckpointException>()),
+        );
+      }
+      await expectLater(
+        _checkControllerProjectCompiler(coordinator, visible, gameRoot: ''),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+
+      expect(managed.projectCompilerCheckCalls, 0);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'project compiler returns exact evidence and recovery without publication',
+    () async {
+      for (final recoveryRequired in <bool>[false, true]) {
+        final fixture = Revision3QuestOutlineFixture();
+        final projectJson = fixture.projectJson;
+        late _FakeManagedLease managed;
+        managed = _FakeManagedLease(
+          root: Directory('project-compiler-exact-$recoveryRequired'),
+          projectIdValue: revision3QuestOutlineProjectId,
+          projectRevision: fixture.projectRevision,
+          head: headFor(projectJson),
+          canonicalProjectJson: projectJson,
+          onProjectCompilerCheck: (lease, gameRoot) {
+            expect(gameRoot, r'C:\Games\Gothic Remake');
+            return ManagedRevision3ProjectCompilerCheckReceipt(
+              result: _controllerProjectCompilerCheckResult(
+                head: lease.head,
+                projectJson: lease.canonicalProjectJson,
+                recoveryRequired: recoveryRequired,
+              ),
+              storeStillExactCurrent: true,
+            );
+          },
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        final visible = await coordinator.openManagedRevision3(managed.root);
+
+        final receipt = await _checkControllerProjectCompiler(
+          coordinator,
+          visible,
+        );
+
+        expect(receipt.storeStillExactCurrent, isTrue);
+        expect(receipt.recoveryRequired, recoveryRequired);
+        expect(receipt.acceptedAtExactCurrent, !recoveryRequired);
+        expect(managed.projectCompilerCheckCalls, 1);
+        expect(managed.projectCompilerCheckGameRoots, <String>[
+          r'C:\Games\Gothic Remake',
+        ]);
+        expect(managed.managedCompilerCheckCalls, 0);
+        expect(managed.questPublishCalls, 0);
+        expect(managed.npcPublishCalls, 0);
+        expect(managed.dataAssetPublishCalls, 0);
+        final after = coordinator.state as ManagedRevision3CurrentProjectState;
+        expect(after.head.canonicalJson, visible.head.canonicalJson);
+        expect(after.projectRevision, visible.projectRevision);
+        expect(after.requiresReopen, isFalse);
+        await coordinator.shutdown();
+        coordinator.dispose();
+      }
+    },
+  );
+
+  test(
+    'project compiler preserves evidence then locks the lease after post-call drift',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final projectJson = fixture.projectJson;
+      late _FakeManagedLease managed;
+      managed = _FakeManagedLease(
+        root: Directory('project-compiler-post-drift'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: headFor(projectJson),
+        canonicalProjectJson: projectJson,
+        onProjectCompilerCheck: (lease, _) {
+          final result = _controllerProjectCompilerCheckResult(
+            head: lease.head,
+            projectJson: lease.canonicalProjectJson,
+          );
+          lease.requiresReopenValue = true;
+          return ManagedRevision3ProjectCompilerCheckReceipt(
+            result: result,
+            storeStillExactCurrent: false,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final receipt = await _checkControllerProjectCompiler(
+        coordinator,
+        visible,
+      );
+
+      expect(receipt.result.compiler.compiledEvidenceOnly, isTrue);
+      expect(receipt.storeStillExactCurrent, isFalse);
+      expect(receipt.acceptedAtExactCurrent, isFalse);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        _checkControllerProjectCompiler(coordinator, visible),
+        throwsA(isA<Revision3ProjectCompilerCheckRequiresReopenException>()),
+      );
+      expect(managed.projectCompilerCheckCalls, 1);
+    },
+  );
+
+  test(
     'managed compiler rejects stale visible and selected identities before lease callback',
     () async {
       final fixture = Revision3QuestOutlineFixture();
@@ -8182,6 +8355,11 @@ typedef _ManagedCompilerCheckHook =
       String moduleId,
       int moduleRevision,
     );
+typedef _ProjectCompilerCheckHook =
+    FutureOr<ManagedRevision3ProjectCompilerCheckReceipt> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+    );
 typedef _VoicePublishHook =
     FutureOr<Revision3VoiceTakePublication> Function(
       _FakeManagedLease lease,
@@ -8316,6 +8494,7 @@ class _FakeManagedLease
     this.onDialogLocalizationEditSeed,
     this.onDialogLocalizationEditPublish,
     this.onManagedCompilerCheck,
+    this.onProjectCompilerCheck,
     this.onNpcPublish,
     this.onDialogLinePublish,
     this.onQuestPublish,
@@ -8361,6 +8540,7 @@ class _FakeManagedLease
   final _DialogLocalizationEditSeedHook? onDialogLocalizationEditSeed;
   final _DialogLocalizationEditPublishHook? onDialogLocalizationEditPublish;
   final _ManagedCompilerCheckHook? onManagedCompilerCheck;
+  final _ProjectCompilerCheckHook? onProjectCompilerCheck;
   final _NpcPublishHook? onNpcPublish;
   final _DialogLinePublishHook? onDialogLinePublish;
   final _QuestPublishHook? onQuestPublish;
@@ -8410,6 +8590,8 @@ class _FakeManagedLease
   final List<int> managedCompilerCheckEntityRevisions = <int>[];
   final List<String> managedCompilerCheckModuleIds = <String>[];
   final List<int> managedCompilerCheckModuleRevisions = <int>[];
+  int projectCompilerCheckCalls = 0;
+  final List<String> projectCompilerCheckGameRoots = <String>[];
   int npcPublishCalls = 0;
   int dialogLinePublishCalls = 0;
   int questPublishCalls = 0;
@@ -8598,6 +8780,19 @@ class _FakeManagedLease
       expectedModuleId,
       expectedModuleRevision,
     );
+  }
+
+  @override
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
+    required String gameRoot,
+  }) async {
+    projectCompilerCheckCalls++;
+    projectCompilerCheckGameRoots.add(gameRoot);
+    final check = onProjectCompilerCheck;
+    if (check == null) {
+      throw StateError('fake managed lease has no project compiler checker');
+    }
+    return check(this, gameRoot);
   }
 
   @override
@@ -9844,6 +10039,128 @@ Future<ManagedRevision3CompilerCheckReceipt> _checkControllerManagedCompiler(
   expectedModuleRevision: expectedModuleRevision ?? fixture.moduleRevision,
   gameRoot: r'C:\Games\Gothic Remake',
 );
+
+Future<ManagedRevision3ProjectCompilerCheckReceipt>
+_checkControllerProjectCompiler(
+  CurrentProjectCoordinator coordinator,
+  ManagedRevision3CurrentProjectState visible, {
+  String? expectedRoot,
+  String? expectedProjectId,
+  int? expectedProjectRevision,
+  AuthoringWorkingHead? expectedHead,
+  String gameRoot = r'C:\Games\Gothic Remake',
+}) => coordinator.checkCurrentRevision3ProjectCompiler(
+  expectedRoot: expectedRoot ?? visible.root.path,
+  expectedProjectId: expectedProjectId ?? visible.projectId,
+  expectedProjectRevision: expectedProjectRevision ?? visible.projectRevision,
+  expectedHead: expectedHead ?? visible.head,
+  gameRoot: gameRoot,
+);
+
+AuthoringRevision3ProjectCompilerCheckResult
+_controllerProjectCompilerCheckResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  bool recoveryRequired = false,
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  var scriptCount = 0;
+  var questCount = 0;
+  var npcCount = 0;
+  for (final value in entities.values) {
+    final entity = (value as Map).cast<String, Object?>();
+    final payload = (entity['payload']! as Map).cast<String, Object?>();
+    switch (payload['kind']) {
+      case 'script_module':
+        scriptCount++;
+      case 'quest_draft':
+        questCount++;
+      case 'npc_draft':
+        npcCount++;
+    }
+  }
+  final target = (project['target']! as Map).cast<String, Object?>();
+  final executable = (target['executable']! as Map).cast<String, Object?>();
+  final projectBytes = utf8.encode(projectJson);
+  return AuthoringRevision3ProjectCompilerCheckResult.fromJson(<
+    String,
+    Object?
+  >{
+    'ok': true,
+    'outcome': 'project_compiler_check_only',
+    'exact_current': true,
+    'closing_audit': <String, Object?>{'store': 'exact', 'game': 'exact'},
+    'head_json': head.canonicalJson,
+    'project': <String, Object?>{
+      'id': project['project_id'],
+      'revision': project['revision'],
+      'seal': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': crypto.sha256.convert(projectBytes).toString(),
+      },
+    },
+    'game_inputs': <String, Object?>{
+      'executable': executable,
+      'shipping_cache': <String, Object?>{
+        'byte_len': 128,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
+      'binds_cache': <String, Object?>{
+        'byte_len': 64,
+        'sha256':
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+      'story_catalog': <String, Object?>{
+        'byte_len': 256,
+        'sha256':
+            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      },
+    },
+    'coverage': <String, Object?>{
+      'script_module_count': scriptCount,
+      'quest_module_count': questCount,
+      'npc_module_count': npcCount,
+      'module_manifest': <String, Object?>{
+        'byte_len': 128,
+        'sha256':
+            'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+      },
+    },
+    'compiler': recoveryRequired
+        ? <String, Object?>{
+            'outcome': 'failed',
+            'run_count': 0,
+            'compile_error': <String, Object?>{
+              'code': 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+              'message': 'restore requires explicit recovery',
+            },
+            'compiler_diagnostics': null,
+            'install_restore': 'not_started',
+            'recovery_required': true,
+            'output_disposition': 'recovery_retained',
+          }
+        : <String, Object?>{
+            'outcome': 'compiled_evidence_only',
+            'run_count': 1,
+            'compile_error': null,
+            'compiler_diagnostics': <String, Object?>{
+              'capture': 'captured',
+              'messages': <Object?>[],
+              'omitted': 0,
+            },
+            'install_restore': 'restored_exact',
+            'recovery_required': false,
+            'output_disposition': 'discarded',
+          },
+    'scope': 'project_compiler_check_only',
+    'build_status': 'blocked',
+    'deploy_status': 'not_supported',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  }, expectedHead: head);
+}
 
 AuthoringRevision3ManagedCompilerCheckResult
 _controllerManagedCompilerCheckResult({

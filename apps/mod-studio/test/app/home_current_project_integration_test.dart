@@ -37,6 +37,7 @@ import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
+import 'package:gore_mod/project/revision3_test_release_workspace.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_journey_view.dart';
@@ -55,6 +56,8 @@ import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_target_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_wizard.dart';
+import 'package:gore_mod/scripts/domain/script_compile_install_state.dart';
+import 'package:gore_mod/scripts/domain/script_compile_install_state_provider.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
@@ -2589,6 +2592,29 @@ void main() {
         find.byKey(const Key('revision3-project-problems-view')),
         findsOneWidget,
       );
+      final scriptsCheck = find.byKey(
+        const Key('revision3-test-release-scripts-action'),
+      );
+      expect(scriptsCheck, findsOneWidget);
+      await tester.ensureVisible(scriptsCheck);
+      await tester.tap(scriptsCheck);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-compiler-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-project-compiler-run')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-close')),
+      );
+      await tester.pumpAndSettle();
       final verifyAssessment = find.byKey(
         const Key('revision3-project-problems-verify-current-project'),
       );
@@ -2656,6 +2682,96 @@ void main() {
         find.byKey(const Key('revision3-project-dashboard')),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'Test and Release runs the project compiler through the coordinator only',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_project_compiler_home',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\project-compiler-home'),
+        projectId: '45454545454545454545454545454545',
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onProjectCompilerCheck: (_, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          throw const ModFfiException(
+            command: 'authoring_store_check_revision3_project_compiler_v1',
+            code:
+                'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+            message: 'closing game audit failed',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final safety = ScriptCompileInstallSafetyController(
+        (_) async => ScriptCompileInstallState.fromJson(<String, Object?>{
+          'ok': true,
+          'disposition': 'safe_to_compile',
+          'safe_to_compile': true,
+          'game_process': 'not_running',
+          'artifacts': <Object?>[],
+          'issues': <Object?>[],
+        }),
+        gameRoot: gameRoot.path,
+        autoRefresh: false,
+      );
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        scriptCompileSafety: safety,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final scriptsAction = find.byKey(
+        const Key('revision3-test-release-scripts-action'),
+      );
+      await tester.ensureVisible(scriptsAction);
+      await tester.tap(scriptsAction);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
+      await tester.pumpAndSettle();
+
+      expect(managed.projectCompilerCheckCalls, 1);
+      expect(find.text('Retry compiler check'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-close')),
+      );
+      await tester.pumpAndSettle();
+      final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.scripts.state, Revision3TestReleaseCheckState.blocked);
+      expect(
+        workspace.scripts.evidence?.scope,
+        Revision3TestReleaseEvidenceScope.scripts,
+      );
+      expect(workspace.playableBuild.evidence, isNull);
+      expect(workspace.playableBuild.onPressed, isNull);
+      expect(workspace.deployment.evidence, isNull);
+      expect(workspace.deployment.onPressed, isNull);
     },
   );
 
@@ -4224,6 +4340,26 @@ void main() {
       );
       expect(first.questPublishCalls, 0);
       expect(second.questPublishCalls, 0);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final switchedProjectScripts = find.byKey(
+        const Key('revision3-test-release-scripts-action'),
+      );
+      await tester.ensureVisible(switchedProjectScripts);
+      await tester.tap(switchedProjectScripts);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-compiler-dialog')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-close')),
+      );
+      await tester.pumpAndSettle();
     },
   );
 
@@ -11037,6 +11173,7 @@ ProviderContainer _container({
   DataAssetExtractReceiptInspector? inspectDataAssetExtractReceipt,
   Revision3QuestCatalogLoader? loadQuestCatalog,
   Revision3BaseGameContentCatalogLoader? loadBaseGameCatalog,
+  ScriptCompileInstallSafetyController? scriptCompileSafety,
 }) => ProviderContainer(
   overrides: [
     sharedConfigProvider.overrideWithValue(_testSharedConfig(gamePath)),
@@ -11048,6 +11185,10 @@ ProviderContainer _container({
       ),
     ),
     currentProjectCoordinatorProvider.overrideWith((ref) => coordinator),
+    if (scriptCompileSafety != null)
+      scriptCompileInstallSafetyProvider.overrideWith(
+        (ref) => scriptCompileSafety,
+      ),
     managedRevision3DirectoryPickerProvider.overrideWithValue(pickManaged),
     if (pickProjectBackup != null)
       managedRevision3ProjectBackupPickerProvider.overrideWithValue(
@@ -11674,6 +11815,7 @@ class _FakeManagedLease
     this.onQuestPublish,
     this.onQuestSourceInspection,
     this.onNpcSourceInspection,
+    this.onProjectCompilerCheck,
     this.onManagedCompilerCheck,
     this.onQuestOutlinePublish,
     this.onQuestTransitionsSeed,
@@ -11738,6 +11880,11 @@ class _FakeManagedLease
     String npcId,
   )?
   onNpcSourceInspection;
+  final Future<ManagedRevision3ProjectCompilerCheckReceipt> Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+  )?
+  onProjectCompilerCheck;
   final Future<ManagedRevision3CompilerCheckReceipt> Function(
     _FakeManagedLease lease,
     AuthoringRevision3ManagedCompilerEntityKind entityKind,
@@ -11860,6 +12007,7 @@ class _FakeManagedLease
   int questPublishCalls = 0;
   int questSourceInspectionCalls = 0;
   int npcSourceInspectionCalls = 0;
+  int projectCompilerCheckCalls = 0;
   int managedCompilerCheckCalls = 0;
   final List<String> npcSourceInspectionNpcIds = <String>[];
   int questOutlinePublishCalls = 0;
@@ -12009,6 +12157,18 @@ class _FakeManagedLease
       expectedModuleId,
       expectedModuleRevision,
     );
+  }
+
+  @override
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
+    required String gameRoot,
+  }) async {
+    projectCompilerCheckCalls++;
+    final check = onProjectCompilerCheck;
+    if (check == null) {
+      throw UnimplementedError('project compiler is not used by this fixture');
+    }
+    return check(this, gameRoot);
   }
 
   @override

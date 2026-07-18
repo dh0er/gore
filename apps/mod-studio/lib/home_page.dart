@@ -69,6 +69,7 @@ import 'project/revision3_project_import.dart';
 import 'project/revision3_project_import_dialog.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
+import 'project/revision3_project_compiler_check_panel.dart';
 import 'project/revision3_project_command_bar.dart';
 import 'project/revision3_project_workspace.dart';
 import 'project/revision3_test_release_workspace.dart';
@@ -1807,6 +1808,15 @@ class _HomePageState extends ConsumerState<HomePage> {
                 expectedHead: currentProject.head,
                 npcId: npcId,
               ),
+          checkProjectCompiler: ({required gameRoot}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .checkCurrentRevision3ProjectCompiler(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                gameRoot: gameRoot,
+              ),
           checkManagedCompiler:
               ({
                 required entityKind,
@@ -1938,6 +1948,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.editQuestContext,
     required this.inspectQuestSource,
     required this.inspectNpcSource,
+    required this.checkProjectCompiler,
     required this.checkManagedCompiler,
   });
 
@@ -2026,6 +2037,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3QuestContextTechnicalPublisher editQuestContext;
   final Revision3QuestSourceInspectionLoader inspectQuestSource;
   final Revision3NpcSourceInspectionLoader inspectNpcSource;
+  final Revision3ProjectCompilerChecker checkProjectCompiler;
   final Revision3ManagedCompilerPublisher checkManagedCompiler;
 
   @override
@@ -2040,6 +2052,7 @@ class _ManagedRevision3ProjectViewState
   late Revision3LocalizationVoiceWorkspaceController
   _localizationVoiceWorkspaceController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
+  late Revision3ProjectCompilerCheckController _projectCompilerController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
   late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
@@ -2060,6 +2073,12 @@ class _ManagedRevision3ProjectViewState
   ManagedRevision3CurrentProjectState? get currentManagedProject =>
       widget.readCurrentManagedProject();
   String? get gameRoot => widget.gameRoot;
+  Revision3ProjectCompilerCheckpoint get _projectCompilerCheckpoint =>
+      Revision3ProjectCompilerCheckpoint(
+        projectId: project.projectId,
+        projectRevision: project.projectRevision,
+        checkpointIdentity: project.head.canonicalJson,
+      );
   Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
   Revision3ContentIndexLoader get loadContentIndex =>
       _loadContentIndexAndRememberProjectName;
@@ -2298,6 +2317,11 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
+    _projectCompilerController = Revision3ProjectCompilerCheckController(
+      checkpoint: _projectCompilerCheckpoint,
+      gameRoot: gameRoot,
+      requiresReopen: project.requiresReopen,
+    );
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
@@ -2322,6 +2346,13 @@ class _ManagedRevision3ProjectViewState
     final checkpointChanged =
         oldWidget.project.projectRevision != project.projectRevision ||
         oldWidget.project.head.canonicalJson != project.head.canonicalJson;
+    if (!identityChanged) {
+      _projectCompilerController.synchronize(
+        checkpoint: _projectCompilerCheckpoint,
+        gameRoot: gameRoot,
+        requiresReopen: project.requiresReopen,
+      );
+    }
     if (identityChanged) {
       _storyAuthorityEpoch = 0;
     } else if (oldWidget.project.requiresReopen && !project.requiresReopen) {
@@ -2348,7 +2379,13 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
     _dataAssetStagePanelController.dispose();
+    _projectCompilerController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
+    _projectCompilerController = Revision3ProjectCompilerCheckController(
+      checkpoint: _projectCompilerCheckpoint,
+      gameRoot: gameRoot,
+      requiresReopen: project.requiresReopen,
+    );
     _scopedContentBrowserController.dispose();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
@@ -2450,6 +2487,7 @@ class _ManagedRevision3ProjectViewState
     _storyWorkspaceController.dispose();
     _localizationVoiceWorkspaceController.dispose();
     _dataAssetStagePanelController.dispose();
+    _projectCompilerController.dispose();
     _scopedContentBrowserController.dispose();
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
@@ -4109,91 +4147,100 @@ class _ManagedRevision3ProjectViewState
       context,
       Revision3ProjectWorkspaceLocation(section, secondary: secondary),
     );
-    return Revision3TestReleaseWorkspace(
-      projectId: project.projectId,
-      projectRevision: project.projectRevision,
-      checkpointIdentity: project.head.canonicalJson,
-      focus: switch (location.secondary) {
-        'checks' => Revision3TestReleaseFocus.checks,
-        'release' => Revision3TestReleaseFocus.release,
-        'problems' => Revision3TestReleaseFocus.problems,
-        'voice' => Revision3TestReleaseFocus.voice,
-        _ => Revision3TestReleaseFocus.overview,
-      },
-      copy: Revision3TestReleaseCopy(
-        title: l10n.managedTestReleaseTitle,
-        description: l10n.managedTestReleaseDescription,
-        evidenceBoundary: l10n.managedTestReleaseEvidenceBoundary,
-        checksHeading: l10n.managedTestReleaseChecksHeading,
-        releaseHeading: l10n.managedTestReleaseReleaseHeading,
-        notEvaluatedLabel: l10n.managedTestReleaseStatusNotChecked,
-        checkingLabel: l10n.managedTestReleaseStatusChecking,
-        passedLabel: l10n.managedTestReleaseStatusChecked,
-        needsAttentionLabel: l10n.managedTestReleaseStatusNeedsAttention,
-        blockedLabel: l10n.managedTestReleaseStatusBlocked,
-        unavailableLabel: l10n.managedTestReleaseStatusNotAvailable,
-        availableLabel: l10n.managedTestReleaseStatusAvailable,
-        evidenceLabel: l10n.managedTestReleaseEvidenceLabel,
-        staleEvidenceDescription:
-            l10n.managedTestReleaseStaleEvidenceDescription,
-        actionNotConnectedDescription:
-            l10n.managedTestReleaseActionNotConnectedDescription,
-        problemsHeading: l10n.managedTestReleaseProblemsHeading,
-        voiceContinuationHeading: l10n.managedTestReleaseVoiceHeading,
-      ),
-      projectStructure: Revision3TestReleaseCheck(
-        state: Revision3TestReleaseCheckState.notEvaluated,
-        title: l10n.managedTestReleaseProjectStructureTitle,
-        description: l10n.managedTestReleaseProjectStructureDescription,
-        actionLabel: l10n.managedTestReleaseProjectStructureAction,
-        onPressed: () => navigate(
-          Revision3ProjectWorkspaceSection.testRelease,
-          secondary: 'problems',
+    final checkpoint = _projectCompilerCheckpoint;
+    return AnimatedBuilder(
+      animation: _projectCompilerController,
+      builder: (context, _) => Revision3TestReleaseWorkspace(
+        projectId: checkpoint.projectId,
+        projectRevision: checkpoint.projectRevision,
+        checkpointIdentity: checkpoint.checkpointIdentity,
+        focus: switch (location.secondary) {
+          'checks' => Revision3TestReleaseFocus.checks,
+          'release' => Revision3TestReleaseFocus.release,
+          'problems' => Revision3TestReleaseFocus.problems,
+          'voice' => Revision3TestReleaseFocus.voice,
+          _ => Revision3TestReleaseFocus.overview,
+        },
+        copy: Revision3TestReleaseCopy(
+          title: l10n.managedTestReleaseTitle,
+          description: l10n.managedTestReleaseDescription,
+          evidenceBoundary: l10n.managedTestReleaseEvidenceBoundary,
+          checksHeading: l10n.managedTestReleaseChecksHeading,
+          releaseHeading: l10n.managedTestReleaseReleaseHeading,
+          notEvaluatedLabel: l10n.managedTestReleaseStatusNotChecked,
+          checkingLabel: l10n.managedTestReleaseStatusChecking,
+          passedLabel: l10n.managedTestReleaseStatusChecked,
+          needsAttentionLabel: l10n.managedTestReleaseStatusNeedsAttention,
+          blockedLabel: l10n.managedTestReleaseStatusBlocked,
+          unavailableLabel: l10n.managedTestReleaseStatusNotAvailable,
+          availableLabel: l10n.managedTestReleaseStatusAvailable,
+          evidenceLabel: l10n.managedTestReleaseEvidenceLabel,
+          staleEvidenceDescription:
+              l10n.managedTestReleaseStaleEvidenceDescription,
+          actionNotConnectedDescription:
+              l10n.managedTestReleaseActionNotConnectedDescription,
+          problemsHeading: l10n.managedTestReleaseProblemsHeading,
+          voiceContinuationHeading: l10n.managedTestReleaseVoiceHeading,
         ),
-      ),
-      scripts: Revision3TestReleaseCheck(
-        state: Revision3TestReleaseCheckState.notEvaluated,
-        title: l10n.managedTestReleaseScriptsTitle,
-        description: l10n.managedTestReleaseScriptsDescription,
-        actionLabel: l10n.managedTestReleaseScriptsAction,
-        onPressed: () => navigate(Revision3ProjectWorkspaceSection.story),
-      ),
-      voice: Revision3TestReleaseCheck(
-        state: Revision3TestReleaseCheckState.notEvaluated,
-        title: l10n.managedTestReleaseVoiceTitle,
-        description: l10n.managedTestReleaseVoiceDescription,
-        actionLabel: l10n.managedTestReleaseVoiceAction,
-        onPressed: () => navigate(
-          Revision3ProjectWorkspaceSection.testRelease,
-          secondary: 'voice',
+        projectStructure: Revision3TestReleaseCheck(
+          state: Revision3TestReleaseCheckState.notEvaluated,
+          title: l10n.managedTestReleaseProjectStructureTitle,
+          description: l10n.managedTestReleaseProjectStructureDescription,
+          actionLabel: l10n.managedTestReleaseProjectStructureAction,
+          onPressed: () => navigate(
+            Revision3ProjectWorkspaceSection.testRelease,
+            secondary: 'problems',
+          ),
         ),
-      ),
-      dataAssets: Revision3TestReleaseCheck(
-        state: Revision3TestReleaseCheckState.notEvaluated,
-        title: l10n.managedTestReleaseDataAssetsTitle,
-        description: l10n.managedTestReleaseDataAssetsDescription,
-        actionLabel: l10n.managedTestReleaseDataAssetsAction,
-        onPressed: () => navigate(
-          Revision3ProjectWorkspaceSection.content,
-          secondary: Revision3ContentWorkspaceView.dataAssets.secondaryRoute,
+        scripts: _projectCompilerController.snapshot.toTestReleaseCheck(
+          l10n: l10n,
+          onPressed: () => unawaited(
+            showRevision3ProjectCompilerCheckDialog(
+              context,
+              controller: _projectCompilerController,
+              checkpoint: checkpoint,
+              gameRoot: gameRoot,
+              check: widget.checkProjectCompiler,
+            ),
+          ),
         ),
+        voice: Revision3TestReleaseCheck(
+          state: Revision3TestReleaseCheckState.notEvaluated,
+          title: l10n.managedTestReleaseVoiceTitle,
+          description: l10n.managedTestReleaseVoiceDescription,
+          actionLabel: l10n.managedTestReleaseVoiceAction,
+          onPressed: () => navigate(
+            Revision3ProjectWorkspaceSection.testRelease,
+            secondary: 'voice',
+          ),
+        ),
+        dataAssets: Revision3TestReleaseCheck(
+          state: Revision3TestReleaseCheckState.notEvaluated,
+          title: l10n.managedTestReleaseDataAssetsTitle,
+          description: l10n.managedTestReleaseDataAssetsDescription,
+          actionLabel: l10n.managedTestReleaseDataAssetsAction,
+          onPressed: () => navigate(
+            Revision3ProjectWorkspaceSection.content,
+            secondary: Revision3ContentWorkspaceView.dataAssets.secondaryRoute,
+          ),
+        ),
+        playableBuild: Revision3TestReleaseCapability(
+          title: l10n.managedTestReleasePlayableBuildTitle,
+          description: l10n.managedTestReleasePlayableBuildDescription,
+          blockedReason: l10n.managedTestReleasePlayableBuildBlockedReason,
+          actionLabel: l10n.managedTestReleaseCreatePlayableFilesAction,
+        ),
+        deployment: Revision3TestReleaseCapability(
+          title: l10n.managedTestReleaseDeploymentTitle,
+          description: l10n.managedTestReleaseDeploymentDescription,
+          blockedReason: l10n.managedTestReleaseDeploymentBlockedReason,
+          actionLabel: l10n.managedTestReleaseInstallAction,
+        ),
+        problemsBuilder: (context) =>
+            SizedBox(height: 680, child: _buildProjectProblems(context, l10n)),
+        voiceContinuationBuilder: (context) =>
+            _buildVoiceReadiness(context, l10n),
       ),
-      playableBuild: Revision3TestReleaseCapability(
-        title: l10n.managedTestReleasePlayableBuildTitle,
-        description: l10n.managedTestReleasePlayableBuildDescription,
-        blockedReason: l10n.managedTestReleasePlayableBuildBlockedReason,
-        actionLabel: l10n.managedTestReleaseCreatePlayableFilesAction,
-      ),
-      deployment: Revision3TestReleaseCapability(
-        title: l10n.managedTestReleaseDeploymentTitle,
-        description: l10n.managedTestReleaseDeploymentDescription,
-        blockedReason: l10n.managedTestReleaseDeploymentBlockedReason,
-        actionLabel: l10n.managedTestReleaseInstallAction,
-      ),
-      problemsBuilder: (context) =>
-          SizedBox(height: 680, child: _buildProjectProblems(context, l10n)),
-      voiceContinuationBuilder: (context) =>
-          _buildVoiceReadiness(context, l10n),
     );
   }
 

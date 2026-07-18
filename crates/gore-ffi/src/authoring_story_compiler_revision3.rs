@@ -717,7 +717,7 @@ fn compiler_evidence_with_private_paths(
     })
 }
 
-fn redact_private_paths(value: &mut Value, private_paths: &[&Path]) {
+pub(super) fn redact_private_paths(value: &mut Value, private_paths: &[&Path]) {
     let variants = private_path_variants(private_paths);
     redact_private_path_variants(value, &variants);
 }

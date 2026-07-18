@@ -5759,6 +5759,366 @@ void main() {
   );
 
   test(
+    'project compiler check binds the complete exact module graph and publishes nothing',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_exact',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final projectJson = _managedCompilerQuestProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.storeStillExactCurrent, isTrue);
+      expect(receipt.exactCurrent, isTrue);
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(receipt.recoveryRequired, isFalse);
+      expect(receipt.result.project.id, session.projectId);
+      expect(receipt.result.project.revision, 14);
+      expect(receipt.result.coverage.scriptModuleCount, 1);
+      expect(receipt.result.coverage.questModuleCount, 1);
+      expect(receipt.result.coverage.npcModuleCount, 0);
+      expect(receipt.result.compiler.runCount, 1);
+      expect(store.projectCompilerCheckCalls, 1);
+      expect(store.projectCompilerCheckRoots, <String>[root.path]);
+      expect(store.projectCompilerCheckGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.projectCompilerCheckExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(store.managedCompilerCheckCalls, 0);
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler accepts an empty graph without invoking a run',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_empty',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 14, name: 'Empty compiler graph'),
+      );
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(receipt.result.coverage.isEmpty, isTrue);
+      expect(receipt.result.compiler.notNeededEmpty, isTrue);
+      expect(receipt.result.compiler.runCount, 0);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler preserves evidence but invalidates the lease after post-call drift',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_post_drift',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+      final external = store.register(
+        _projectJson(revision: 91, name: 'External project compiler winner'),
+      );
+      store.afterProjectCompilerCheck = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(external.canonicalJson, flush: true);
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.result.compiler.compiledEvidenceOnly, isTrue);
+      expect(receipt.storeStillExactCurrent, isFalse);
+      expect(receipt.exactCurrent, isFalse);
+      expect(receipt.acceptedAtExactCurrent, isFalse);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), external.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler rejection and recovery are evidence, not Store mutation',
+    () async {
+      for (final outcome in <String>['failed', 'recovery']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_$outcome',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = outcome;
+        final projectJson = _managedCompilerQuestProjectJson();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: projectJson,
+        );
+        final headBytes = await session.headFile.readAsBytes();
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.acceptedAtExactCurrent, isFalse, reason: outcome);
+        expect(
+          receipt.recoveryRequired,
+          outcome == 'recovery',
+          reason: outcome,
+        );
+        expect(receipt.storeStillExactCurrent, isTrue, reason: outcome);
+        expect(session.requiresReopen, isFalse, reason: outcome);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(headBytes),
+          reason: outcome,
+        );
+        expect(session.projectJson, projectJson, reason: outcome);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler closing Store audit invalidates the lease but preserves evidence',
+    () async {
+      for (final status in <String>['drift', 'inspection_failed']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_store_audit_$status',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerStoreAudit = status;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.compiler.failure, isNotNull, reason: status);
+        expect(receipt.result.exactCurrent, isFalse, reason: status);
+        expect(receipt.storeStillExactCurrent, isFalse, reason: status);
+        expect(receipt.acceptedAtExactCurrent, isFalse, reason: status);
+        expect(session.requiresReopen, isTrue, reason: status);
+        await expectLater(
+          session.checkProjectCompilerV1(gameRoot: r'D:\Games\Gothic Remake'),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: status,
+        );
+        expect(store.projectCompilerCheckCalls, 1, reason: status);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler Game-only and not-run audits preserve a retryable lease',
+    () async {
+      for (final status in <String>['drift', 'inspection_failed']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_game_audit_$status',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerGameAudit = status;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.compiler.failure, isNotNull, reason: status);
+        expect(receipt.result.exactCurrent, isFalse, reason: status);
+        expect(receipt.storeStillExactCurrent, isTrue, reason: status);
+        expect(session.requiresReopen, isFalse, reason: status);
+        expect(
+          (await session.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          )).acceptedAtExactCurrent,
+          isTrue,
+          reason: status,
+        );
+        expect(store.projectCompilerCheckCalls, 2, reason: status);
+        await session.close();
+      }
+
+      for (final audits in <({String store, String game})>[
+        (store: 'not_run', game: 'exact'),
+        (store: 'exact', game: 'not_run'),
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_not_run_${audits.store}_${audits.game}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerStoreAudit = audits.store
+          ..nextProjectCompilerGameAudit = audits.game;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.exactCurrent, isFalse);
+        expect(receipt.storeStillExactCurrent, isTrue);
+        expect(session.requiresReopen, isFalse);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler mismatched evidence fails closed and retryable game input does not',
+    () async {
+      for (final mismatch in <String>[
+        'project-id',
+        'revision',
+        'coverage',
+        'manifest',
+        'executable',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_mismatch_$mismatch',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerCheckResponseMismatch = mismatch;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        await expectLater(
+          session.checkProjectCompilerV1(gameRoot: r'D:\Games\Gothic Remake'),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+        expect(session.requiresReopen, isTrue, reason: mismatch);
+        await session.close();
+      }
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_STAGING_UNAVAILABLE',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_RESPONSE_LIMIT',
+      ]) {
+        final retryRoot = await _projectRoot(
+          fixture,
+          suffix:
+              'project_compiler_retryable_${code.split('_').last.toLowerCase()}',
+        );
+        final retryStore = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerCheckError = ModFfiException(
+            command: 'authoring_store_check_revision3_project_compiler_v1',
+            code: code,
+            message: 'fake retryable project compiler failure',
+          );
+        final retrySession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: retryRoot,
+              store: retryStore,
+              projectJson: _managedCompilerQuestProjectJson(),
+            );
+        await expectLater(
+          retrySession.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(isA<ModFfiException>()),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+        expect(
+          (await retrySession.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          )).acceptedAtExactCurrent,
+          isTrue,
+          reason: code,
+        );
+        await retrySession.close();
+      }
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_closing_store_audit_failed',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextProjectCompilerCheckError = const ModFfiException(
+          command: 'authoring_store_check_revision3_project_compiler_v1',
+          code:
+              'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_STORE_AUDIT_FAILED',
+          message: 'fake failed closing Store audit',
+        );
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _managedCompilerQuestProjectJson(),
+          );
+      await expectLater(
+        poisonSession.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await expectLater(
+        poisonSession.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.projectCompilerCheckCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
     'managed compiler check binds exact Quest selection and publishes nothing',
     () async {
       final root = await _projectRoot(
@@ -8059,6 +8419,13 @@ typedef _AfterManagedCompilerCheck =
       String projectJson,
     );
 
+typedef _AfterProjectCompilerCheck =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
 typedef _AfterDataAssetPackageIndex =
     FutureOr<void> Function(
       String root,
@@ -8438,6 +8805,7 @@ class _FakeRevision3Store
   int questInspectionCalls = 0;
   int npcInspectionCalls = 0;
   int managedCompilerCheckCalls = 0;
+  int projectCompilerCheckCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
   int installedDataAssetInspectionCalls = 0;
   int installedDataAssetEditPrepareCalls = 0;
@@ -8456,6 +8824,7 @@ class _FakeRevision3Store
   _AfterQuestInspection? afterQuestInspection;
   _AfterNpcInspection? afterNpcInspection;
   _AfterManagedCompilerCheck? afterManagedCompilerCheck;
+  _AfterProjectCompilerCheck? afterProjectCompilerCheck;
   _AfterDataAssetPackageIndex? afterDataAssetPackageIndex;
   _AfterInstalledDataAssetInspection? afterInstalledDataAssetInspection;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
@@ -8532,6 +8901,11 @@ class _FakeRevision3Store
   Object? nextManagedCompilerCheckError;
   String? nextManagedCompilerCheckResponseMismatch;
   bool nextManagedCompilerCheckRecovery = false;
+  Object? nextProjectCompilerCheckError;
+  String? nextProjectCompilerCheckResponseMismatch;
+  String nextProjectCompilerOutcome = 'compiled';
+  String nextProjectCompilerStoreAudit = 'exact';
+  String nextProjectCompilerGameAudit = 'exact';
   Object? nextDataAssetPackageIndexError;
   String? nextDataAssetPackageIndexResponseMismatch;
   Object? nextInstalledDataAssetInspectionError;
@@ -8563,6 +8937,9 @@ class _FakeRevision3Store
   final List<String> managedCompilerCheckGameRoots = <String>[];
   final List<String> managedCompilerCheckExpectedHeads = <String>[];
   final List<String> managedCompilerCheckEntityIds = <String>[];
+  final List<String> projectCompilerCheckRoots = <String>[];
+  final List<String> projectCompilerCheckGameRoots = <String>[];
+  final List<String> projectCompilerCheckExpectedHeads = <String>[];
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
   final List<String> dataAssetPackageIndexRoots = <String>[];
   final List<String> dataAssetPackageIndexExpectedHeads = <String>[];
@@ -10087,6 +10464,54 @@ class _FakeRevision3Store
     entityId: npcId,
   );
 
+  @override
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    projectCompilerCheckCalls++;
+    projectCompilerCheckRoots.add(root);
+    projectCompilerCheckGameRoots.add(gameRoot);
+    projectCompilerCheckExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextProjectCompilerCheckError;
+    nextProjectCompilerCheckError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_check_revision3_project_compiler_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_COMPILER_HEAD_CONFLICT',
+        message: 'fake native project compiler basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown project compiler checkpoint head');
+    }
+    final mismatch = nextProjectCompilerCheckResponseMismatch;
+    nextProjectCompilerCheckResponseMismatch = null;
+    final outcome = nextProjectCompilerOutcome;
+    nextProjectCompilerOutcome = 'compiled';
+    final storeAudit = nextProjectCompilerStoreAudit;
+    nextProjectCompilerStoreAudit = 'exact';
+    final gameAudit = nextProjectCompilerGameAudit;
+    nextProjectCompilerGameAudit = 'exact';
+    final result = _projectCompilerCheckResult(
+      head: expectedHead,
+      projectJson: projectJson,
+      responseMismatch: mismatch,
+      outcome: outcome,
+      storeAudit: storeAudit,
+      gameAudit: gameAudit,
+    );
+    final hook = afterProjectCompilerCheck;
+    afterProjectCompilerCheck = null;
+    await hook?.call(root, expectedHead, projectJson);
+    return result;
+  }
+
   Future<AuthoringRevision3ManagedCompilerCheckResult> _checkManagedCompilerV1({
     required String root,
     required String gameRoot,
@@ -11316,6 +11741,231 @@ AuthoringRevision3ManagedCompilerCheckResult _managedCompilerCheckResult({
     expectedHead: head,
     requestedEntityId: entityId,
     expectedKind: entityKind,
+  );
+}
+
+AuthoringRevision3ProjectCompilerCheckResult _projectCompilerCheckResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  String? responseMismatch,
+  String outcome = 'compiled',
+  String storeAudit = 'exact',
+  String gameAudit = 'exact',
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  var scriptCount = 0;
+  var questCount = 0;
+  var npcCount = 0;
+  for (final value in entities.values) {
+    final entity = (value as Map).cast<String, Object?>();
+    final payload = (entity['payload']! as Map).cast<String, Object?>();
+    switch (payload['kind']) {
+      case 'script_module':
+        scriptCount++;
+      case 'quest_draft':
+        questCount++;
+      case 'npc_draft':
+        npcCount++;
+    }
+  }
+  if (responseMismatch == 'coverage') {
+    scriptCount++;
+    npcCount++;
+  }
+  final target = (project['target']! as Map).cast<String, Object?>();
+  final executable = (target['executable']! as Map).cast<String, Object?>();
+  final projectBytes = utf8.encode(projectJson);
+  final projectSha = crypto.sha256.convert(projectBytes).toString();
+  final manifest = _projectCompilerModuleManifest(projectJson);
+  final empty = scriptCount == 0;
+  final recovery = outcome == 'recovery';
+  final compiler = empty
+      ? <String, Object?>{
+          'outcome': 'not_needed_empty',
+          'run_count': 0,
+          'compile_error': null,
+          'compiler_diagnostics': null,
+          'install_restore': 'not_started',
+          'recovery_required': false,
+          'output_disposition': 'not_created',
+        }
+      : recovery
+      ? <String, Object?>{
+          'outcome': 'failed',
+          'run_count': 0,
+          'compile_error': <String, Object?>{
+            'code': 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+            'message': 'restore requires explicit recovery',
+          },
+          'compiler_diagnostics': null,
+          'install_restore': 'not_started',
+          'recovery_required': true,
+          'output_disposition': 'recovery_retained',
+        }
+      : outcome == 'failed'
+      ? <String, Object?>{
+          'outcome': 'failed',
+          'run_count': 1,
+          'compile_error': <String, Object?>{
+            'code': 'COMPILER_REGEN_FAILED',
+            'message': 'project compiler rejected one common source tree',
+          },
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'captured',
+            'messages': <Object?>[
+              <String, Object?>{
+                'file': 'GoreMods/Project/Quest.as',
+                'line': 7,
+                'column': 3,
+                'severity': 'error',
+                'message': 'bounded project compiler error',
+              },
+            ],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+          'output_disposition': 'discarded',
+        }
+      : <String, Object?>{
+          'outcome': 'compiled_evidence_only',
+          'run_count': 1,
+          'compile_error': null,
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'captured',
+            'messages': <Object?>[],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+          'output_disposition': 'discarded',
+        };
+  return AuthoringRevision3ProjectCompilerCheckResult.fromJson(<
+    String,
+    Object?
+  >{
+    'ok': true,
+    'outcome': 'project_compiler_check_only',
+    'exact_current': storeAudit == 'exact' && gameAudit == 'exact',
+    'closing_audit': <String, Object?>{'store': storeAudit, 'game': gameAudit},
+    'head_json': head.canonicalJson,
+    'project': <String, Object?>{
+      'id': responseMismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id'],
+      'revision': responseMismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision'],
+      'seal': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': responseMismatch == 'project-seal'
+            ? '9999999999999999999999999999999999999999999999999999999999999999'
+            : projectSha,
+      },
+    },
+    'game_inputs': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': responseMismatch == 'executable'
+            ? (executable['byte_len']! as int) + 1
+            : executable['byte_len'],
+        'sha256': executable['sha256'],
+      },
+      'shipping_cache': <String, Object?>{
+        'byte_len': 128,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
+      'binds_cache': <String, Object?>{
+        'byte_len': 64,
+        'sha256':
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+      'story_catalog': <String, Object?>{
+        'byte_len': 256,
+        'sha256':
+            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      },
+    },
+    'coverage': <String, Object?>{
+      'script_module_count': scriptCount,
+      'quest_module_count': questCount,
+      'npc_module_count': npcCount,
+      'module_manifest': <String, Object?>{
+        'byte_len': manifest.byteLength,
+        'sha256': responseMismatch == 'manifest'
+            ? 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+            : manifest.sha256,
+      },
+    },
+    'compiler': compiler,
+    'scope': 'project_compiler_check_only',
+    'build_status': 'blocked',
+    'deploy_status': 'not_supported',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  }, expectedHead: head);
+}
+
+({int byteLength, String sha256}) _projectCompilerModuleManifest(
+  String projectJson,
+) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final projectId = project['project_id']! as String;
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final modules = <Map<String, Object?>>[];
+  for (final ownerEntry in entities.entries) {
+    final owner = (ownerEntry.value as Map).cast<String, Object?>();
+    final payload = (owner['payload']! as Map).cast<String, Object?>();
+    final ownerKind = switch (payload['kind']) {
+      'quest_draft' => 'quest_draft',
+      'npc_draft' => 'npc_draft',
+      _ => null,
+    };
+    if (ownerKind == null) continue;
+    final ownerData = (payload['data']! as Map).cast<String, Object?>();
+    final moduleReference = (ownerData['script_module']! as Map)
+        .cast<String, Object?>();
+    final moduleId = moduleReference['id']! as String;
+    final module = (entities[moduleId]! as Map).cast<String, Object?>();
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final sourceBytes = utf8.encode(moduleData['source']! as String);
+    modules.add(<String, Object?>{
+      'owner_kind': ownerKind,
+      'owner_id': ownerEntry.key,
+      'owner_revision': owner['revision'],
+      'module_id': moduleId,
+      'module_revision': module['revision'],
+      'module_namespace': moduleData['module_namespace'],
+      'module_relative_path': moduleData['module_relative_path'],
+      'source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': crypto.sha256.convert(sourceBytes).toString(),
+      },
+    });
+  }
+  modules.sort(
+    (left, right) =>
+        (left['module_id']! as String).compareTo(right['module_id']! as String),
+  );
+  final projectBytes = utf8.encode(projectJson);
+  final manifestBytes = utf8.encode(
+    jsonEncode(<String, Object?>{
+      'format': 'revision3_project_compiler_module_manifest',
+      'schema_revision': 1,
+      'project_id': projectId,
+      'project_revision': project['revision'],
+      'canonical_project': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': crypto.sha256.convert(projectBytes).toString(),
+      },
+      'modules': modules,
+    }),
+  );
+  return (
+    byteLength: manifestBytes.length,
+    sha256: crypto.sha256.convert(manifestBytes).toString(),
   );
 }
 

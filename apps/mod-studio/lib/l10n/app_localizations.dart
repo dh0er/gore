@@ -5643,14 +5643,194 @@ abstract class AppLocalizations {
   /// No description provided for @managedTestReleaseScriptsDescription.
   ///
   /// In en, this message translates to:
-  /// **'A project-wide compiler result is not connected yet. Script checks stay explicitly unevaluated.'**
+  /// **'Run the game compiler once across every script in this exact saved project. The result is check evidence only; its output is discarded.'**
   String get managedTestReleaseScriptsDescription;
 
   /// No description provided for @managedTestReleaseScriptsAction.
   ///
   /// In en, this message translates to:
-  /// **'Review scripts'**
+  /// **'Run compiler check'**
   String get managedTestReleaseScriptsAction;
+
+  /// No description provided for @managedProjectCompilerRetryAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry compiler check'**
+  String get managedProjectCompilerRetryAction;
+
+  /// No description provided for @managedProjectCompilerReviewAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review result / check again'**
+  String get managedProjectCompilerReviewAction;
+
+  /// No description provided for @managedProjectCompilerDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Check all project scripts'**
+  String get managedProjectCompilerDialogTitle;
+
+  /// No description provided for @managedProjectCompilerDialogIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Close Gothic 1 Remake before you start. Mod Studio temporarily checks every project script with the game compiler, restores the game installation, and discards all compiler output. This result cannot create playable files or install the mod.'**
+  String get managedProjectCompilerDialogIntroduction;
+
+  /// No description provided for @managedProjectCompilerCloseAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedProjectCompilerCloseAction;
+
+  /// No description provided for @managedProjectCompilerNoGame.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the Gothic 1 Remake installation in Settings before running this check.'**
+  String get managedProjectCompilerNoGame;
+
+  /// No description provided for @managedProjectCompilerSafetyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation is not ready for a compiler check. Close the game or resolve the recovery warning, then retry.'**
+  String get managedProjectCompilerSafetyBlocked;
+
+  /// No description provided for @managedProjectCompilerCompiled.
+  ///
+  /// In en, this message translates to:
+  /// **'All project scripts passed at this exact saved project version. Compiler output was discarded.'**
+  String get managedProjectCompilerCompiled;
+
+  /// No description provided for @managedProjectCompilerEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'This saved project has no scripts to compile. The empty result was checked exactly.'**
+  String get managedProjectCompilerEmpty;
+
+  /// No description provided for @managedProjectCompilerRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The game compiler found problems in one or more project scripts. Fix the messages below, then retry.'**
+  String get managedProjectCompilerRejected;
+
+  /// No description provided for @managedProjectCompilerPreflightBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler did not start. Close the game and check the configured installation, then retry.'**
+  String get managedProjectCompilerPreflightBlocked;
+
+  /// No description provided for @managedProjectCompilerDrifted.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or game inputs changed, or the closing audit was no longer exact. This result was discarded; run the check again for the current version.'**
+  String get managedProjectCompilerDrifted;
+
+  /// No description provided for @managedProjectCompilerRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project must be closed and reopened before another exact compiler check.'**
+  String get managedProjectCompilerRequiresReopen;
+
+  /// No description provided for @managedProjectCompilerRecoveryRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Cleanup of the private compiler output or exact restoration of the game installation could not be proven complete. Further compiler checks and installation stay blocked until a fresh safety check succeeds.'**
+  String get managedProjectCompilerRecoveryRequired;
+
+  /// No description provided for @managedProjectCompilerFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler check could not be completed or verified. No result was kept; retry when the game installation is ready.'**
+  String get managedProjectCompilerFailed;
+
+  /// No description provided for @managedProjectCompilerFailureDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler message'**
+  String get managedProjectCompilerFailureDetails;
+
+  /// No description provided for @managedProjectCompilerDiagnosticsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler messages'**
+  String get managedProjectCompilerDiagnosticsHeading;
+
+  /// No description provided for @managedProjectCompilerCaptureCaptured.
+  ///
+  /// In en, this message translates to:
+  /// **'Structured compiler messages were captured.'**
+  String get managedProjectCompilerCaptureCaptured;
+
+  /// No description provided for @managedProjectCompilerCaptureFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'The diagnostics hook was unavailable, so the normal game compiler fallback was used.'**
+  String get managedProjectCompilerCaptureFallback;
+
+  /// No description provided for @managedProjectCompilerCaptureInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler message capture could not be verified.'**
+  String get managedProjectCompilerCaptureInvalid;
+
+  /// No description provided for @managedProjectCompilerCaptureUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The diagnostics hook was unavailable after the compiler run; no second run was needed.'**
+  String get managedProjectCompilerCaptureUnavailable;
+
+  /// No description provided for @managedProjectCompilerCaptureExitUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler process did not confirm that it exited.'**
+  String get managedProjectCompilerCaptureExitUnconfirmed;
+
+  /// No description provided for @managedProjectCompilerCaptureDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Structured compiler messages were unavailable for this run.'**
+  String get managedProjectCompilerCaptureDisabled;
+
+  /// No description provided for @managedProjectCompilerSeverityError.
+  ///
+  /// In en, this message translates to:
+  /// **'Error'**
+  String get managedProjectCompilerSeverityError;
+
+  /// No description provided for @managedProjectCompilerSeverityWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Warning'**
+  String get managedProjectCompilerSeverityWarning;
+
+  /// No description provided for @managedProjectCompilerSeverityNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Note'**
+  String get managedProjectCompilerSeverityNote;
+
+  /// No description provided for @managedProjectCompilerFileLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get managedProjectCompilerFileLabel;
+
+  /// No description provided for @managedProjectCompilerLineLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Line'**
+  String get managedProjectCompilerLineLabel;
+
+  /// No description provided for @managedProjectCompilerColumnLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Column'**
+  String get managedProjectCompilerColumnLabel;
+
+  /// No description provided for @managedProjectCompilerOmittedDiagnostics.
+  ///
+  /// In en, this message translates to:
+  /// **'additional compiler messages omitted'**
+  String get managedProjectCompilerOmittedDiagnostics;
 
   /// No description provided for @managedTestReleaseVoiceTitle.
   ///
