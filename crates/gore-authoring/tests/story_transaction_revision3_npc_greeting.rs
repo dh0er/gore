@@ -3,24 +3,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::model_revision3::{DialogLine, LocalizationEntry};
 use gore_authoring::{
     apply_revision3_npc_greeting_edit_transaction_v1, build_revision3_content_index_v1,
-    migrate_revision2_to_revision3, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
-    GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3,
-    ProjectRevision3ValidationError, Revision2Entity, Revision2EntityKind, Revision2EntityPayload,
-    Revision2NpcDraft, Revision2NpcDraftInput, Revision2NpcParentClassInput, Revision2OriginRef,
-    Revision2ScriptModule, Revision2TypedRef, Revision3ContentEntitySummaryV1,
-    Revision3ContentReferenceRoleV1, Revision3DialogEmptyVoiceSlotIntentV1,
-    Revision3DialogLineInsertRequestV1, Revision3DialogLocalizationActionV1,
-    Revision3DialogLocalizationIntentV1, Revision3Entity, Revision3EntityKind,
-    Revision3EntityPayload, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
+    AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
+    ProjectRevision3, ProjectRevision3ValidationError, Revision2NpcDraftInput,
+    Revision2NpcParentClassInput, Revision3ContentEntitySummaryV1, Revision3ContentReferenceRoleV1,
+    Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogLineInsertRequestV1,
+    Revision3DialogLocalizationActionV1, Revision3DialogLocalizationIntentV1, Revision3Entity,
+    Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcGreetingBindingV1,
     Revision3NpcGreetingBuildStatusV1, Revision3NpcGreetingEditConflictV1,
     Revision3NpcGreetingEditEvaluationV1, Revision3NpcGreetingEditOutcomeV1,
     Revision3NpcGreetingEditRequestJsonErrorV1, Revision3NpcGreetingEditRequestV1,
     Revision3NpcGreetingIntentV1, Revision3NpcGreetingModeV1,
     Revision3NpcGreetingPublicationStatusV1, Revision3NpcGreetingRuntimeStatusV1,
-    Revision3NpcGreetingTopicAuthorityV1, Revision3OriginRef, Revision3TypedRef, SchemaRevisionV2,
-    SchemaRevisionV3, Sha256Digest, WorkingHead, WorkingStoreFormat,
-    LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-    MAX_REVISION3_NPC_GREETING_BINDINGS_V1, MAX_REVISION3_NPC_GREETING_REQUEST_JSON_BYTES_V1,
+    Revision3NpcGreetingTopicAuthorityV1, Revision3OriginRef, Revision3TypedRef, SchemaRevisionV3,
+    Sha256Digest, WorkingHead, WorkingStoreFormat, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_REVISION3_NPC_GREETING_BINDINGS_V1,
+    MAX_REVISION3_NPC_GREETING_REQUEST_JSON_BYTES_V1,
 };
 
 const NPC: u8 = 0x21;
@@ -285,128 +282,6 @@ fn rejected(value: Revision3NpcGreetingEditEvaluationV1) -> Revision3NpcGreeting
         Revision3NpcGreetingEditEvaluationV1::Rejected(rejection) => rejection.conflict,
         Revision3NpcGreetingEditEvaluationV1::Applied(_) => panic!("unexpected candidate"),
     }
-}
-
-#[test]
-fn empty_greetings_preserve_pre_feature_npc_and_project_canonical_bytes() {
-    let (project, _) = project();
-    let r3 = npc(&project);
-    let r2 = Revision2NpcDraft {
-        generator_id: r3.generator_id.clone(),
-        generator_version: r3.generator_version,
-        input: r3.input.clone(),
-        script_module: Revision2TypedRef::new(
-            r3.script_module.project_id,
-            r3.script_module.id,
-            Revision2EntityKind::ScriptModule,
-        ),
-    };
-    assert_eq!(
-        serde_json::to_vec(r3).unwrap(),
-        serde_json::to_vec(&r2).unwrap()
-    );
-
-    let json = project.to_canonical_json().unwrap();
-    assert!(!json.contains("\"greetings\""));
-    assert_eq!(ProjectRevision3::from_json(&json).unwrap(), project);
-    assert_eq!(project.to_canonical_json().unwrap(), json);
-}
-
-#[test]
-fn revision2_npc_migration_produces_empty_r3_greetings_without_wire_drift() {
-    let (project, _) = project();
-    let r3_npc = npc(&project);
-    let npc_id = id(NPC);
-    let module_id = id(MODULE);
-    let r2_npc = Revision2NpcDraft {
-        generator_id: r3_npc.generator_id.clone(),
-        generator_version: r3_npc.generator_version,
-        input: r3_npc.input.clone(),
-        script_module: Revision2TypedRef::new(
-            r3_npc.script_module.project_id,
-            r3_npc.script_module.id,
-            Revision2EntityKind::ScriptModule,
-        ),
-    };
-    let source = ProjectRevision2 {
-        format: FormatV2,
-        schema_revision: SchemaRevisionV2,
-        project_id: project.project_id,
-        revision: project.revision,
-        meta: project.meta.clone(),
-        target: project.target.clone(),
-        authoring_locales: project.authoring_locales.clone(),
-        entities: BTreeMap::from([
-            (
-                npc_id,
-                Revision2Entity {
-                    id: npc_id,
-                    display_name: project.entities[&npc_id].display_name.clone(),
-                    origin: Revision2OriginRef::New {
-                        authored_runtime_id: r3_npc.input.unique_name.clone(),
-                    },
-                    revision: project.entities[&npc_id].revision,
-                    payload: Revision2EntityPayload::NpcDraft(r2_npc.clone()),
-                },
-            ),
-            (
-                module_id,
-                Revision2Entity {
-                    id: module_id,
-                    display_name: project.entities[&module_id].display_name.clone(),
-                    origin: Revision2OriginRef::Generated {
-                        generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
-                        generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-                        owner: Revision2TypedRef::new(
-                            project.project_id,
-                            npc_id,
-                            Revision2EntityKind::NpcDraft,
-                        ),
-                    },
-                    revision: project.entities[&module_id].revision,
-                    payload: match &project.entities[&module_id].payload {
-                        Revision3EntityPayload::ScriptModule(module) => {
-                            Revision2EntityPayload::ScriptModule(Revision2ScriptModule {
-                                generator_id: module.generator_id.clone(),
-                                generator_version: module.generator_version,
-                                owner: Revision2TypedRef::new(
-                                    module.owner.project_id,
-                                    module.owner.id,
-                                    Revision2EntityKind::NpcDraft,
-                                ),
-                                module_namespace: module.module_namespace.clone(),
-                                module_relative_path: module.module_relative_path.clone(),
-                                source: module.source.clone(),
-                                source_sha256: module.source_sha256,
-                                input_fingerprint: module.input_fingerprint,
-                                status: module.status,
-                            })
-                        }
-                        _ => unreachable!(),
-                    },
-                },
-            ),
-        ]),
-        asset_store: AssetStoreIndex::default(),
-    };
-    source.to_canonical_json().unwrap();
-
-    let migrated = migrate_revision2_to_revision3(&source).unwrap();
-    let Revision3EntityPayload::NpcDraft(migrated_npc) =
-        &migrated.project.entities[&npc_id].payload
-    else {
-        unreachable!()
-    };
-    assert!(migrated_npc.greetings.is_empty());
-    assert_eq!(
-        serde_json::to_vec(migrated_npc).unwrap(),
-        serde_json::to_vec(&r2_npc).unwrap()
-    );
-    assert!(!migrated
-        .project
-        .to_canonical_json()
-        .unwrap()
-        .contains("\"greetings\""));
 }
 
 #[test]

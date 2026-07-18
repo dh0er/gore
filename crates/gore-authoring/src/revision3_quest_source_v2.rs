@@ -3,7 +3,7 @@
 //! Persisted Quest artifacts and their historical `basis_snapshot` fields are deliberately not
 //! authority inputs here. The only source is one fully reconstituted current revision-3 project.
 //! Every prior Quest/module pair is regenerated collision-independently, removed from an exact
-//! non-Quest projection, and then recomposed to prove that the split lost no current state.
+//! native non-Quest basis, and then recomposed to prove that the split lost no current state.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -20,12 +20,11 @@ use crate::model_revision3::{
 };
 use crate::revision3_quest::regenerate_revision3_quest_module_v2_with_identity;
 use crate::story_collision::{
-    collect_project_story_collision_identities_bounded, BoundedStoryCollisionCollectionError,
+    collect_revision3_story_collision_identities_bounded, BoundedStoryCollisionCollectionError,
     StoryCollisionCollectionLimits,
 };
 use crate::{
-    migrate_revision2_to_revision3, project_revision3_quest_free_basis_to_revision2, ContentSeal,
-    EntityId, GameGenerationAnchor, ProjectId, ProjectRevision2, ProjectRevision3,
+    ContentSeal, EntityId, GameGenerationAnchor, ProjectId, ProjectRevision3,
     ProjectStoryCollisionIdentities, Sha256Digest, WorkingHead, WorkingStoreError,
     MAX_PROJECT_JSON_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
@@ -97,12 +96,12 @@ impl Revision3PriorQuestEvidenceV2 {
     }
 }
 
-/// Exact Quest-free revision-2 collision basis derived from one current revision-3 project.
+/// Exact native revision-3 Quest-free collision basis derived from one current revision-3 project.
 ///
 /// Its fields are private and the type is not `Clone`: downstream consumers can inspect it or
 /// consume it, but cannot construct or casually duplicate this source-bound evidence wrapper.
 pub struct Revision3NonQuestCollisionBasisV2 {
-    project: ProjectRevision2,
+    project: ProjectRevision3,
     canonical_project: ContentSeal,
     story_identities: ProjectStoryCollisionIdentities,
 }
@@ -125,7 +124,7 @@ impl fmt::Debug for Revision3NonQuestCollisionBasisV2 {
 }
 
 impl Revision3NonQuestCollisionBasisV2 {
-    pub fn project(&self) -> &ProjectRevision2 {
+    pub fn project(&self) -> &ProjectRevision3 {
         &self.project
     }
 
@@ -350,8 +349,8 @@ pub enum Revision3QuestCollisionSourceErrorV2 {
         first_owner: EntityId,
         second_owner: EntityId,
     },
-    #[error("invalid exact non-Quest projection: {reason}")]
-    NonQuestProjectionInvalid { reason: String },
+    #[error("invalid exact native non-Quest basis: {reason}")]
+    NonQuestBasisInvalid { reason: String },
     #[error("revision-3 current-project source limit exceeded for {kind}: {actual} > {limit}")]
     Limit {
         kind: &'static str,
@@ -513,94 +512,29 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
         }
     }
 
-    let nonquest_project = project_revision3_quest_free_basis_to_revision2(&nonquest_revision3)
-        .map_err(
-            |error| Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                reason: error.to_string(),
-            },
-        )?;
-    let mut migrated = migrate_revision2_to_revision3(&nonquest_project).map_err(|error| {
-        Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-            reason: error.to_string(),
-        }
-    })?;
-    // The revision-2 collision-source model cannot represent revision-3-only, authoring-only NPC
-    // greeting edges. Restore them after the generation-bearing roundtrip before proving exact
-    // split/recomposition; they do not contribute any Story collision identity.
-    for (id, source_entity) in &nonquest_revision3.entities {
-        if matches!(source_entity.payload, EntityPayload::ItemPatch(_)) {
-            if migrated
-                .project
-                .entities
-                .insert(*id, source_entity.clone())
-                .is_some()
-            {
-                return Err(
-                    Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                        reason: format!("ItemPatch restoration collided at entity {id}"),
-                    },
-                );
-            }
-            continue;
-        }
-        let EntityPayload::NpcDraft(source_npc) = &source_entity.payload else {
-            continue;
-        };
-        if source_npc.greetings.is_empty() {
-            continue;
-        }
-        let Some(migrated_entity) = migrated.project.entities.get_mut(id) else {
-            return Err(
-                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                    reason: format!("NPC greeting restoration lost entity {id}"),
-                },
-            );
-        };
-        let EntityPayload::NpcDraft(migrated_npc) = &mut migrated_entity.payload else {
-            return Err(
-                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                    reason: format!("NPC greeting restoration changed entity kind at {id}"),
-                },
-            );
-        };
-        migrated_npc.greetings = source_npc.greetings.clone();
-    }
-    if migrated.project != nonquest_revision3 {
-        return Err(
-            Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                reason: "revision-3 to revision-2 to revision-3 roundtrip drifted".to_owned(),
-            },
-        );
-    }
-
-    let mut recomposed = migrated.project;
+    let nonquest_project = nonquest_revision3;
+    let mut recomposed = nonquest_project.clone();
     for (id, entity) in removed_entities {
         if recomposed.entities.insert(id, entity).is_some() {
-            return Err(
-                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                    reason: format!("recomposition collided at entity {id}"),
-                },
-            );
+            return Err(Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
+                reason: format!("recomposition collided at entity {id}"),
+            });
         }
     }
     for (digest, meta) in removed_assets {
         if recomposed.asset_store.assets.insert(digest, meta).is_some() {
-            return Err(
-                Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                    reason: format!("recomposition collided at asset {digest}"),
-                },
-            );
+            return Err(Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
+                reason: format!("recomposition collided at asset {digest}"),
+            });
         }
     }
     if recomposed != *project {
-        return Err(
-            Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                reason: "exact current project did not survive split/recomposition".to_owned(),
-            },
-        );
+        return Err(Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
+            reason: "exact current project did not survive split/recomposition".to_owned(),
+        });
     }
 
-    let story_identities = collect_project_story_collision_identities_bounded(
+    let story_identities = collect_revision3_story_collision_identities_bounded(
         &nonquest_project,
         StoryCollisionCollectionLimits {
             max_count: MAX_REVISION3_COLLISION_IDENTITIES_V2,
@@ -619,7 +553,7 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
             limit,
         },
         BoundedStoryCollisionCollectionError::Collection(other) => {
-            Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
+            Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
                 reason: other.to_string(),
             }
         }
@@ -627,18 +561,15 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
     validate_union_identities(&story_identities, &prior_quests)?;
 
     let canonical_nonquest = nonquest_project.to_canonical_json().map_err(|error| {
-        Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
+        Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
             reason: error.to_string(),
         }
     })?;
     let canonical_project = raw_seal(canonical_nonquest.as_bytes());
     if story_identities.canonical_project() != &canonical_project {
-        return Err(
-            Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid {
-                reason: "non-Quest collision collector bound a different canonical project"
-                    .to_owned(),
-            },
-        );
+        return Err(Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid {
+            reason: "non-Quest collision collector bound a different canonical project".to_owned(),
+        });
     }
     let prior_quest_evidence = seal_prior_evidence(&prior_quests)?;
 
@@ -1442,10 +1373,10 @@ mod tests {
             .expect("authoring-only NPC greetings do not break exact Quest collision source");
         assert_eq!(prepared.prior_quest_count(), 1);
         assert_eq!(prepared.nonquest_basis().project().entities.len(), 4);
-        let revision2_npc = &prepared.nonquest_basis().project().entities[&npc_id];
+        let native_npc = &prepared.nonquest_basis().project().entities[&npc_id];
         assert!(matches!(
-            revision2_npc.payload,
-            crate::Revision2EntityPayload::NpcDraft(_)
+            native_npc.payload,
+            crate::Revision3EntityPayload::NpcDraft(_)
         ));
     }
 
@@ -1477,13 +1408,12 @@ mod tests {
         project.validate_closed_model().unwrap();
 
         let prepared = prepare_exact_revision3_quest_collision_source_v2(&project, head)
-            .expect("native ItemPatch is retained around the Story-only projection");
+            .expect("native ItemPatch is retained in the native Story collision basis");
         assert_eq!(prepared.prior_quest_count(), 1);
-        assert!(!prepared
-            .nonquest_basis()
-            .project()
-            .entities
-            .contains_key(&item_id));
+        assert_eq!(
+            prepared.nonquest_basis().project().entities[&item_id],
+            project.entities[&item_id]
+        );
     }
 
     #[test]

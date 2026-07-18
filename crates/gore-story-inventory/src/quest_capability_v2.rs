@@ -1481,7 +1481,7 @@ where
     {
         return Err(
             Revision3QuestCollisionCapabilityErrorV2::SourceBindingDrift {
-                reason: "non-Quest identity projection differs from its retained basis".to_owned(),
+                reason: "native non-Quest identities differ from their retained basis".to_owned(),
             },
         );
     }

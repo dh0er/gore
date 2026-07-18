@@ -101,53 +101,6 @@ impl TypedRef {
             expected_kind,
         }
     }
-
-    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::TypedRef> {
-        Some(crate::model_revision2::TypedRef::new(
-            self.project_id,
-            self.id,
-            self.expected_kind.to_revision2()?,
-        ))
-    }
-}
-
-impl From<crate::model_revision2::TypedRef> for TypedRef {
-    fn from(value: crate::model_revision2::TypedRef) -> Self {
-        Self {
-            project_id: value.project_id,
-            id: value.id,
-            expected_kind: EntityKind::from_revision2(value.expected_kind),
-        }
-    }
-}
-
-impl EntityKind {
-    pub(crate) const fn to_revision2(self) -> Option<crate::model_revision2::EntityKind> {
-        use crate::model_revision2::EntityKind as Revision2;
-        Some(match self {
-            Self::LocalizationEntry => Revision2::LocalizationEntry,
-            Self::DialogLine => Revision2::DialogLine,
-            Self::VoiceSlot => Revision2::VoiceSlot,
-            Self::VoiceTake => Revision2::VoiceTake,
-            Self::NpcDraft => Revision2::NpcDraft,
-            Self::QuestDraft => Revision2::QuestDraft,
-            Self::ScriptModule => Revision2::ScriptModule,
-            Self::ItemPatch => return None,
-        })
-    }
-
-    pub(crate) const fn from_revision2(value: crate::model_revision2::EntityKind) -> Self {
-        use crate::model_revision2::EntityKind as Revision2;
-        match value {
-            Revision2::LocalizationEntry => Self::LocalizationEntry,
-            Revision2::DialogLine => Self::DialogLine,
-            Revision2::VoiceSlot => Self::VoiceSlot,
-            Revision2::VoiceTake => Self::VoiceTake,
-            Revision2::NpcDraft => Self::NpcDraft,
-            Revision2::QuestDraft => Self::QuestDraft,
-            Revision2::ScriptModule => Self::ScriptModule,
-        }
-    }
 }
 
 /// Durable revision-3 entity provenance.
@@ -176,88 +129,6 @@ pub enum OriginRef {
     },
 }
 
-impl OriginRef {
-    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::OriginRef> {
-        Some(match self {
-            Self::New {
-                authored_runtime_id,
-            } => crate::model_revision2::OriginRef::New {
-                authored_runtime_id: authored_runtime_id.clone(),
-            },
-            Self::Vanilla {
-                generation,
-                catalog_layer,
-                canonical_selector,
-                source_seal,
-            } => crate::model_revision2::OriginRef::Vanilla {
-                generation: generation.clone(),
-                catalog_layer: catalog_layer.clone(),
-                canonical_selector: canonical_selector.clone(),
-                source_seal: source_seal.clone(),
-            },
-            Self::Imported {
-                importer,
-                source_seal,
-                external_identity,
-            } => crate::model_revision2::OriginRef::Imported {
-                importer: importer.clone(),
-                source_seal: source_seal.clone(),
-                external_identity: external_identity.clone(),
-            },
-            Self::Generated {
-                generator_id,
-                generator_version,
-                owner,
-            } => crate::model_revision2::OriginRef::Generated {
-                generator_id: generator_id.clone(),
-                generator_version: *generator_version,
-                owner: owner.to_revision2()?,
-            },
-        })
-    }
-}
-
-impl From<crate::model_revision2::OriginRef> for OriginRef {
-    fn from(value: crate::model_revision2::OriginRef) -> Self {
-        match value {
-            crate::model_revision2::OriginRef::New {
-                authored_runtime_id,
-            } => Self::New {
-                authored_runtime_id,
-            },
-            crate::model_revision2::OriginRef::Vanilla {
-                generation,
-                catalog_layer,
-                canonical_selector,
-                source_seal,
-            } => Self::Vanilla {
-                generation,
-                catalog_layer,
-                canonical_selector,
-                source_seal,
-            },
-            crate::model_revision2::OriginRef::Imported {
-                importer,
-                source_seal,
-                external_identity,
-            } => Self::Imported {
-                importer,
-                source_seal,
-                external_identity,
-            },
-            crate::model_revision2::OriginRef::Generated {
-                generator_id,
-                generator_version,
-                owner,
-            } => Self::Generated {
-                generator_id,
-                generator_version,
-                owner: owner.into(),
-            },
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DialogLine {
@@ -266,34 +137,6 @@ pub struct DialogLine {
     pub speaker_hint: Option<String>,
     #[serde(default, deserialize_with = "deserialize_unique_btree_map")]
     pub voice_slots: BTreeMap<LocaleCode, TypedRef>,
-}
-
-impl DialogLine {
-    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::DialogLine> {
-        Some(crate::model_revision2::DialogLine {
-            localization: self.localization.to_revision2()?,
-            speaker_hint: self.speaker_hint.clone(),
-            voice_slots: self
-                .voice_slots
-                .iter()
-                .map(|(locale, reference)| Some((locale.clone(), reference.to_revision2()?)))
-                .collect::<Option<_>>()?,
-        })
-    }
-}
-
-impl From<crate::model_revision2::DialogLine> for DialogLine {
-    fn from(value: crate::model_revision2::DialogLine) -> Self {
-        Self {
-            localization: value.localization.into(),
-            speaker_hint: value.speaker_hint,
-            voice_slots: value
-                .voice_slots
-                .into_iter()
-                .map(|(locale, reference)| (locale, reference.into()))
-                .collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,35 +148,6 @@ pub struct VoiceSlot {
     pub candidates: Vec<TypedRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<TypedRef>,
-}
-
-impl VoiceSlot {
-    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::VoiceSlot> {
-        Some(crate::model_revision2::VoiceSlot {
-            locale: self.locale.clone(),
-            target_resolution: self.target_resolution.clone(),
-            candidates: self
-                .candidates
-                .iter()
-                .map(TypedRef::to_revision2)
-                .collect::<Option<_>>()?,
-            selected: match &self.selected {
-                Some(reference) => Some(reference.to_revision2()?),
-                None => None,
-            },
-        })
-    }
-}
-
-impl From<crate::model_revision2::VoiceSlot> for VoiceSlot {
-    fn from(value: crate::model_revision2::VoiceSlot) -> Self {
-        Self {
-            locale: value.locale,
-            target_resolution: value.target_resolution,
-            candidates: value.candidates.into_iter().map(Into::into).collect(),
-            selected: value.selected.map(Into::into),
-        }
-    }
 }
 
 /// Deterministically generated source owned by exactly one revision-3 NPC or Quest draft.
@@ -349,42 +163,6 @@ pub struct ScriptModule {
     pub source_sha256: Sha256Digest,
     pub input_fingerprint: Sha256Digest,
     pub status: ScriptModuleStatus,
-}
-
-impl From<crate::model_revision2::ScriptModule> for ScriptModule {
-    fn from(value: crate::model_revision2::ScriptModule) -> Self {
-        Self {
-            generator_id: value.generator_id,
-            generator_version: value.generator_version,
-            owner: TypedRef {
-                project_id: value.owner.project_id,
-                id: value.owner.id,
-                expected_kind: EntityKind::from_revision2(value.owner.expected_kind),
-            },
-            module_namespace: value.module_namespace,
-            module_relative_path: value.module_relative_path,
-            source: value.source,
-            source_sha256: value.source_sha256,
-            input_fingerprint: value.input_fingerprint,
-            status: value.status,
-        }
-    }
-}
-
-impl ScriptModule {
-    pub(crate) fn to_revision2(&self) -> Option<crate::model_revision2::ScriptModule> {
-        Some(crate::model_revision2::ScriptModule {
-            generator_id: self.generator_id.clone(),
-            generator_version: self.generator_version,
-            owner: self.owner.to_revision2()?,
-            module_namespace: self.module_namespace.clone(),
-            module_relative_path: self.module_relative_path.clone(),
-            source: self.source.clone(),
-            source_sha256: self.source_sha256,
-            input_fingerprint: self.input_fingerprint,
-            status: self.status,
-        })
-    }
 }
 
 fn is_false(value: &bool) -> bool {
@@ -643,23 +421,6 @@ pub struct NpcDraft {
 }
 
 impl NpcDraft {
-    fn revision2_generation_core(
-        &self,
-    ) -> Result<crate::model_revision2::NpcDraft, crate::model_revision2::StoryRegenerationError>
-    {
-        let script_module = self.script_module.to_revision2().ok_or_else(|| {
-            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
-                "NPC ScriptModule reference declares an ItemPatch kind".to_owned(),
-            )
-        })?;
-        Ok(crate::model_revision2::NpcDraft {
-            generator_id: self.generator_id.clone(),
-            generator_version: self.generator_version,
-            input: self.input.clone(),
-            script_module,
-        })
-    }
-
     /// Rebuild the exact owned module from durable generation intent only.
     ///
     /// Greeting metadata is intentionally excluded from generation.
@@ -667,14 +428,8 @@ impl NpcDraft {
         &self,
         owner: TypedRef,
     ) -> Result<ScriptModule, crate::model_revision2::StoryRegenerationError> {
-        let owner = owner.to_revision2().ok_or_else(|| {
-            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
-                "NPC generator owner declares an ItemPatch kind".to_owned(),
-            )
-        })?;
-        self.revision2_generation_core()?
-            .regenerate_script_module(owner)
-            .map(Into::into)
+        self.regenerate_script_module_with_identity(owner)
+            .map(|(module, _)| module)
     }
 
     pub(crate) fn regenerate_script_module_with_identity(
@@ -684,14 +439,57 @@ impl NpcDraft {
         (ScriptModule, crate::model_revision2::GeneratedStoryIdentity),
         crate::model_revision2::StoryRegenerationError,
     > {
-        let owner = owner.to_revision2().ok_or_else(|| {
-            crate::model_revision2::StoryRegenerationError::InvalidNpcProvenance(
-                "NPC generator owner declares an ItemPatch kind".to_owned(),
-            )
-        })?;
-        self.revision2_generation_core()?
-            .regenerate_script_module_with_identity(owner)
-            .map(|(module, identity)| (module.into(), identity))
+        use crate::model_revision2::StoryRegenerationError;
+
+        crate::model_revision2::validate_generator_contract(
+            &self.generator_id,
+            self.generator_version,
+            crate::LOGICAL_NPC_CLONE_GENERATOR_ID,
+            crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+        )?;
+        if owner.expected_kind != EntityKind::NpcDraft {
+            return Err(StoryRegenerationError::InvalidNpcProvenance(
+                "NPC generator owner must declare native NpcDraft kind".to_owned(),
+            ));
+        }
+        if self.script_module.expected_kind != EntityKind::ScriptModule {
+            return Err(StoryRegenerationError::InvalidNpcProvenance(
+                "NPC ScriptModule reference must declare native ScriptModule kind".to_owned(),
+            ));
+        }
+        crate::model_revision2::validate_npc_input_provenance(&self.input)?;
+        let draft = crate::LogicalNpcCloneDraft::new(
+            self.input.module_namespace.clone(),
+            self.input.unique_name.clone(),
+            self.input.parent_character_definition.runtime_class.clone(),
+            self.input.parent_ai_agent_config.runtime_class.clone(),
+            self.input.parent_spawn_definition.runtime_class.clone(),
+        )
+        .map_err(StoryRegenerationError::InvalidNpcIntent)?;
+        let generated = draft.generate();
+        let input_fingerprint = crate::model_revision2::fingerprint_npc_input(&self.input)
+            .map_err(StoryRegenerationError::NpcFingerprint)?;
+        let identity = crate::model_revision2::GeneratedStoryIdentity {
+            module_namespace: generated.module_namespace.clone(),
+            module_relative_path: generated.module_relative_path.clone(),
+            symbols: vec![
+                generated.classes.character_definition.clone(),
+                generated.classes.ai_agent_config.clone(),
+                generated.classes.spawn_definition.clone(),
+            ],
+        };
+        let module = ScriptModule {
+            generator_id: generated.generator_id.to_owned(),
+            generator_version: generated.generator_version,
+            owner,
+            module_namespace: generated.module_namespace,
+            module_relative_path: generated.module_relative_path,
+            source: generated.source,
+            source_sha256: generated.source_sha256,
+            input_fingerprint,
+            status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
+        };
+        Ok((module, identity))
     }
 }
 

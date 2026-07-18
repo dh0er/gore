@@ -1,15 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    migrate_revision2_to_revision3, AssetStoreIndex, ContentSeal, DraftQuestSkeletonError,
-    EntityId, FormatV2, GameGenerationAnchor, OpenedRevision3Checkpoint, ProjectId, ProjectMeta,
-    ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput, Revision3Entity,
-    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3QuestGenerationError, Revision3QuestGiverInput,
-    Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
-    Sha256Digest, WorkingHead, WorkingStoreFormat, QUEST_COLLISION_CATALOG_LAYER,
-    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    AssetStoreIndex, ContentSeal, DraftQuestSkeletonError, EntityId, FormatV2,
+    GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef,
+    QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+    Revision3QuestGenerationError, Revision3QuestGiverInput, Revision3QuestParentInput,
+    Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, Sha256Digest,
+    QUEST_COLLISION_CATALOG_LAYER, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use gore_story_inventory::{
     QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability,
@@ -19,13 +18,13 @@ use sha2::{Digest as _, Sha256};
 
 use crate::revision3_quest::{
     prepare_revision3_quest_source_inspection, prepare_revision3_quest_source_inspection_v3,
-    project_revision3_basis_to_revision2, regenerate_revision3_quest_module,
-    revision3_quest_input_fingerprint, PlanFormat, PlanSchemaRevision,
-    PreparedRevision3QuestSourceInspection, PreparedRevision3QuestSourceInspectionV3,
-    QuestInspectionBuildStatus, QuestInspectionPublicationStatus,
-    QuestInspectionRuntimeQualification, QuestInspectionScope, Revision3QuestInspectionError,
-    Revision3QuestInspectionModule, Revision3QuestInspectionProvenance,
-    Revision3QuestSourceInspectionPlanV2, Revision3QuestSourceInspectionPlanV3,
+    regenerate_revision3_quest_module, revision3_quest_input_fingerprint, validate_revision3_basis,
+    PlanFormat, PlanSchemaRevision, PreparedRevision3QuestSourceInspection,
+    PreparedRevision3QuestSourceInspectionV3, QuestInspectionBuildStatus,
+    QuestInspectionPublicationStatus, QuestInspectionRuntimeQualification, QuestInspectionScope,
+    Revision3QuestInspectionError, Revision3QuestInspectionModule,
+    Revision3QuestInspectionProvenance, Revision3QuestSourceInspectionPlanV2,
+    Revision3QuestSourceInspectionPlanV3,
 };
 
 fn project_id(value: u8) -> ProjectId {
@@ -140,16 +139,6 @@ fn empty_basis() -> ProjectRevision3 {
         authoring_locales: BTreeSet::new(),
         entities: BTreeMap::new(),
         asset_store: AssetStoreIndex::default(),
-    }
-}
-
-fn opened_basis(project: ProjectRevision3) -> OpenedRevision3Checkpoint {
-    OpenedRevision3Checkpoint {
-        head: WorkingHead {
-            store_format: WorkingStoreFormat,
-            snapshot: artifact_ref().basis_snapshot,
-        },
-        project,
     }
 }
 
@@ -310,13 +299,9 @@ fn s3_lowering_propagates_all_shared_collision_reference_mismatches() {
 }
 
 #[test]
-fn basis_projection_roundtrips_and_rejects_recursive_or_residual_quest_state() {
+fn native_basis_validation_accepts_clean_r3_and_rejects_recursive_or_residual_quest_state() {
     let clean = empty_basis();
-    let lowered = project_revision3_basis_to_revision2(&opened_basis(clean.clone())).unwrap();
-    assert_eq!(
-        migrate_revision2_to_revision3(&lowered).unwrap().project,
-        clean
-    );
+    validate_revision3_basis(&clean).unwrap();
 
     let mut recursive = empty_basis();
     let draft = quest(recursive.project_id);
@@ -324,7 +309,7 @@ fn basis_projection_roundtrips_and_rejects_recursive_or_residual_quest_state() {
         .entities
         .insert(draft.input.quest_id, quest_entity(draft));
     assert!(matches!(
-        project_revision3_basis_to_revision2(&opened_basis(recursive)),
+        validate_revision3_basis(&recursive),
         Err(Revision3QuestInspectionError::RecursiveQuestBasis { .. })
     ));
 
@@ -335,7 +320,7 @@ fn basis_projection_roundtrips_and_rejects_recursive_or_residual_quest_state() {
         .entities
         .insert(entity_id(11), module_entity(residual.project_id, module));
     assert!(matches!(
-        project_revision3_basis_to_revision2(&opened_basis(residual)),
+        validate_revision3_basis(&residual),
         Err(Revision3QuestInspectionError::ResidualQuestBasis { .. })
     ));
 }

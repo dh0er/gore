@@ -5,14 +5,9 @@
 //! authenticates a collision artifact, qualifies runtime behavior, or grants build/publication
 //! authority.
 
-use std::collections::BTreeMap;
-
 use sha2::{Digest as _, Sha256};
 
-use crate::model_revision2::{
-    Entity as Revision2Entity, EntityPayload as Revision2EntityPayload, GeneratedStoryIdentity,
-    ProjectRevision2, QuestCollisionCatalogInput, SchemaRevisionV2,
-};
+use crate::model_revision2::{GeneratedStoryIdentity, QuestCollisionCatalogInput};
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, ProjectRevision3, QuestDraft, QuestDraftInput,
     ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
@@ -23,7 +18,7 @@ use crate::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestCollisionCatalog,
     DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonInputV2,
     DraftQuestSkeletonInputV3, DraftQuestSkeletonV1, DraftQuestSkeletonV2, DraftQuestSkeletonV3,
-    EntityId, FormatV2, Sha256Digest,
+    EntityId, Sha256Digest,
 };
 
 // This domain shipped first with the S3 verifier. Its exact bytes are retained so moving the
@@ -307,27 +302,16 @@ pub enum Revision3QuestFreeBasisError {
     RecursiveQuest { entity: EntityId },
     #[error("revision-3 Quest-free basis contains residual Quest-generated state {entity}")]
     ResidualQuestState { entity: EntityId },
-    #[error(
-        "revision-3 entity {entity} field {field} references native kind {kind:?}, which the Story collision projection cannot represent"
-    )]
-    NativeReferenceNotRepresentable {
-        entity: EntityId,
-        field: &'static str,
-        kind: EntityKind,
-    },
 }
 
-/// Project a closed Quest-free revision-3 project into the revision-2 collision-source model
-/// without changing any generation-bearing value. Quest or residual Quest-owned generator state
-/// is rejected rather than interpreted. Revision-3-only authoring metadata such as NPC greeting
-/// bindings is intentionally absent from the collision-source projection and must be restored by
-/// callers that round-trip the project envelope.
+/// Validate one native revision-3 project as a closed, Quest-free Story collision basis.
 ///
-/// This conversion performs no migration, artifact access, or authority grant. Callers that need
-/// immutable-basis proof must separately reopen and verify the pinned snapshot.
-pub fn project_revision3_quest_free_basis_to_revision2(
+/// No schema projection, migration, artifact access, or authority grant occurs. Quest Drafts and
+/// residual Quest-owned generator state are rejected rather than interpreted. Callers that need
+/// immutable-basis proof must separately reopen and verify the pinned revision-3 snapshot.
+pub fn validate_revision3_quest_free_basis(
     source: &ProjectRevision3,
-) -> Result<ProjectRevision2, Revision3QuestFreeBasisError> {
+) -> Result<(), Revision3QuestFreeBasisError> {
     // Classify recursive/residual Quest state before general validation so callers receive the
     // stable boundary conflict even when that forbidden state is itself incomplete.
     for (id, entity) in &source.entities {
@@ -338,98 +322,7 @@ pub fn project_revision3_quest_free_basis_to_revision2(
             reason: error.to_string(),
         }
     })?;
-    let mut entities = BTreeMap::new();
-    for (id, entity) in &source.entities {
-        let payload = match &entity.payload {
-            EntityPayload::LocalizationEntry(value) => {
-                Revision2EntityPayload::LocalizationEntry(value.clone())
-            }
-            EntityPayload::DialogLine(value) => {
-                Revision2EntityPayload::DialogLine(value.to_revision2().ok_or(
-                    Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-                        entity: *id,
-                        field: "dialog_line.reference",
-                        kind: EntityKind::ItemPatch,
-                    },
-                )?)
-            }
-            EntityPayload::VoiceSlot(value) => {
-                Revision2EntityPayload::VoiceSlot(value.to_revision2().ok_or(
-                    Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-                        entity: *id,
-                        field: "voice_slot.reference",
-                        kind: EntityKind::ItemPatch,
-                    },
-                )?)
-            }
-            EntityPayload::VoiceTake(value) => Revision2EntityPayload::VoiceTake(value.clone()),
-            EntityPayload::NpcDraft(value) => {
-                Revision2EntityPayload::NpcDraft(crate::Revision2NpcDraft {
-                    generator_id: value.generator_id.clone(),
-                    generator_version: value.generator_version,
-                    input: value.input.clone(),
-                    script_module: value.script_module.to_revision2().ok_or(
-                        Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-                            entity: *id,
-                            field: "npc_draft.script_module",
-                            kind: value.script_module.expected_kind,
-                        },
-                    )?,
-                })
-            }
-            EntityPayload::ScriptModule(value) => {
-                Revision2EntityPayload::ScriptModule(value.to_revision2().ok_or(
-                    Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-                        entity: *id,
-                        field: "script_module.owner",
-                        kind: value.owner.expected_kind,
-                    },
-                )?)
-            }
-            EntityPayload::QuestDraft(_) => {
-                return Err(Revision3QuestFreeBasisError::RecursiveQuest { entity: *id });
-            }
-            // Item patches carry no Story collision identity. The revision-2 collision-only
-            // projection cannot represent them; exact revision-3 callers retain and restore the
-            // untouched native entities around this temporary projection.
-            EntityPayload::ItemPatch(_) => continue,
-        };
-        entities.insert(
-            *id,
-            Revision2Entity {
-                id: entity.id,
-                display_name: entity.display_name.clone(),
-                origin: entity.origin.to_revision2().ok_or(
-                    Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-                        entity: *id,
-                        field: "origin.owner",
-                        kind: generated_origin_owner_kind(&entity.origin)
-                            .unwrap_or(EntityKind::ItemPatch),
-                    },
-                )?,
-                revision: entity.revision,
-                payload,
-            },
-        );
-    }
-    Ok(ProjectRevision2 {
-        format: FormatV2,
-        schema_revision: SchemaRevisionV2,
-        project_id: source.project_id,
-        revision: source.revision,
-        meta: source.meta.clone(),
-        target: source.target.clone(),
-        authoring_locales: source.authoring_locales.clone(),
-        entities,
-        asset_store: source.asset_store.clone(),
-    })
-}
-
-fn generated_origin_owner_kind(origin: &OriginRef) -> Option<EntityKind> {
-    match origin {
-        OriginRef::Generated { owner, .. } => Some(owner.expected_kind),
-        _ => None,
-    }
+    Ok(())
 }
 
 fn reject_quest_basis_state(

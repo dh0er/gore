@@ -374,9 +374,9 @@ mod tests {
     use gore_authoring::model_revision3::LocalizationEntry as Revision3LocalizationEntry;
     use gore_authoring::{
         AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor, LocaleCode, ProjectId,
-        ProjectMeta, ProjectRevision3, Revision2DialogLine, Revision2EntityKind, Revision2TypedRef,
-        Revision3Entity, Revision3EntityPayload, Revision3OriginRef, SchemaRevisionV3,
-        Sha256Digest,
+        ProjectMeta, ProjectRevision3, Revision3DialogLine, Revision3Entity,
+        Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3TypedRef,
+        SchemaRevisionV3, Sha256Digest,
     };
     use serde_json::{json, Map};
     use tempfile::TempDir;
@@ -672,11 +672,11 @@ mod tests {
                     authored_runtime_id: "GORE_DIALOG_WRONG_KIND".to_owned(),
                 },
                 revision: 3,
-                payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
-                    localization: Revision2TypedRef::new(
+                payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
+                    localization: Revision3TypedRef::new(
                         project.project_id,
                         localization_id,
-                        Revision2EntityKind::LocalizationEntry,
+                        Revision3EntityKind::LocalizationEntry,
                     ),
                     speaker_hint: None,
                     voice_slots: BTreeMap::new(),

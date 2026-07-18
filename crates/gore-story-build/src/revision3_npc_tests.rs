@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ProjectId,
     ProjectMeta, ProjectRevision3, QuestCollisionArtifactRef, QuestTransitionPlanV1,
-    Revision2DialogLine, Revision2LocalizationEntry, Revision2NpcParentClassInput, Revision3Entity,
+    Revision2LocalizationEntry, Revision2NpcParentClassInput, Revision3DialogLine, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3NpcDraft, Revision3NpcDraftInput,
     Revision3NpcGreetingBindingV1, Revision3OriginRef, Revision3QuestDraft,
     Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
@@ -414,7 +414,7 @@ fn authoring_only_greetings_leave_npc_source_inspection_and_verification_exact()
                 authored_runtime_id: "GORE_INSPECTION_GREETING_LINE".to_owned(),
             },
             revision: 2,
-            payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+            payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
                 localization: Revision3TypedRef::new(
                     project.project_id,
                     localization_id,

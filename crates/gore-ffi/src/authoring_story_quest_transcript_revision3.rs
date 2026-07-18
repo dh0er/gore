@@ -659,7 +659,7 @@ fn map_current_source_error(error: Revision3QuestCollisionSourceErrorV2) -> Fail
         | Revision3QuestCollisionSourceErrorV2::PersistedModuleDrift { .. }
         | Revision3QuestCollisionSourceErrorV2::DuplicateRuntimeId { .. }
         | Revision3QuestCollisionSourceErrorV2::PriorIdentityCollision { .. }
-        | Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid { .. } => Failure::new(
+        | Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid { .. } => Failure::new(
             "AUTHORING_REVISION3_QUEST_TRANSCRIPT_PROJECT_INVALID",
             "the exact current revision-3 project is not a valid Quest transcript basis",
         ),

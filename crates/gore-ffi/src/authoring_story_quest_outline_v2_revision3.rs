@@ -737,11 +737,9 @@ fn map_current_source_error(error: Revision3QuestCollisionSourceErrorV2) -> Fail
         | Revision3QuestCollisionSourceErrorV2::PersistedModuleDrift { .. }
         | Revision3QuestCollisionSourceErrorV2::DuplicateRuntimeId { .. }
         | Revision3QuestCollisionSourceErrorV2::PriorIdentityCollision { .. }
-        | Revision3QuestCollisionSourceErrorV2::NonQuestProjectionInvalid { .. } => {
-            project_invalid(
-                "the exact current revision-3 project is not a valid Quest-outline-v2 basis",
-            )
-        }
+        | Revision3QuestCollisionSourceErrorV2::NonQuestBasisInvalid { .. } => project_invalid(
+            "the exact current revision-3 project is not a valid Quest-outline-v2 basis",
+        ),
     }
 }
 

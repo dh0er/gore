@@ -1,20 +1,19 @@
 //! Source-bound inspection planning for one schema-revision-3 Quest.
 //!
-//! This module is deliberately separate from the frozen revision-2 `StoryBuildPlan`. Plan V2
-//! preserves the original version-1 artifact/basis projection path. Plan V3 opens the production
-//! version-2 artifact and reconstructs its exact immutable historical head through a distinct,
-//! inspection-only source and capability. Both paths require fresh source binding before source is
-//! regenerated. Neither result grants compilation, build, deployment, runtime, fixed-head, or
-//! publication authority.
+//! This module is deliberately separate from the revision-2 `StoryBuildPlan`. Both revision-3 plan
+//! variants retain and validate native revision-3 basis projects: Plan V2 reads the version-1
+//! artifact, while Plan V3 opens the version-2 artifact and reconstructs its exact immutable
+//! historical head through a distinct inspection-only source and capability. Both require fresh
+//! source binding before source is regenerated. Neither result grants compilation, build,
+//! deployment, runtime, fixed-head, or publication authority.
 
 use std::fmt;
 
 use gore_authoring::{
-    migrate_revision2_to_revision3, project_revision3_quest_free_basis_to_revision2,
-    regenerate_revision3_quest_module_v2, revision3_quest_input_fingerprint_v2, AssetVerification,
-    ContentSeal, DraftQuestSkeletonError, EntityId, OpenedRevision3Checkpoint,
-    PreparedRevision3QuestCollisionInspectionSourceV2, ProjectDocument, ProjectDocumentError,
-    ProjectId, ProjectRevision2, ProjectRevision3, Revision3Entity, Revision3EntityKind,
+    regenerate_revision3_quest_module_v2, revision3_quest_input_fingerprint_v2,
+    validate_revision3_quest_free_basis, AssetVerification, ContentSeal, DraftQuestSkeletonError,
+    EntityId, PreparedRevision3QuestCollisionInspectionSourceV2, ProjectDocument,
+    ProjectDocumentError, ProjectId, ProjectRevision3, Revision3Entity, Revision3EntityKind,
     Revision3EntityPayload, Revision3OriginRef, Revision3QuestCollisionSourceErrorV2,
     Revision3QuestDraft, Revision3QuestDraftInput, Revision3QuestFreeBasisError,
     Revision3QuestGenerationError, Revision3ScriptModule, Revision3TypedRef, ScriptModuleStatus,
@@ -648,14 +647,15 @@ impl Revision3QuestSourceInspectionPlanV3 {
     }
 }
 
-/// Opaque store-verified state. It exposes only the exact revision-2 collision source project so
-/// callers can freshly bind trusted base-game and Story-catalog sources before lowering.
+/// Opaque store-verified state. It exposes only the exact native revision-3 collision source
+/// project so callers can freshly bind trusted base-game and Story-catalog sources before
+/// lowering.
 pub struct PreparedRevision3QuestSourceInspection {
     canonical_project_json: String,
     project: ProjectRevision3,
     quest_id: EntityId,
     basis_snapshot: ContentSeal,
-    collision_source_project: ProjectRevision2,
+    collision_source_project: ProjectRevision3,
     collision_source_project_seal: ContentSeal,
     artifact: QuestCollisionCapabilityArtifactV1,
 }
@@ -681,8 +681,8 @@ impl PreparedRevision3QuestSourceInspection {
         self.quest_id
     }
 
-    /// Exact Quest-free revision-2 projection against which the caller must bind fresh sources.
-    pub fn collision_source_project(&self) -> &ProjectRevision2 {
+    /// Exact native Quest-free revision-3 basis against which the caller must bind fresh sources.
+    pub fn collision_source_project(&self) -> &ProjectRevision3 {
         &self.collision_source_project
     }
 
@@ -719,7 +719,7 @@ impl PreparedRevision3QuestSourceInspection {
         }
 
         let collision_input = capability
-            .into_quest_collision_input(&self.collision_source_project)
+            .into_revision3_quest_collision_input(&self.collision_source_project)
             .map_err(Revision3QuestInspectionError::CollisionAuthority)?;
         let reference = &quest.input.collision_catalog;
         if collision_input.generation != reference.generation
@@ -1173,12 +1173,8 @@ pub fn prepare_revision3_quest_source_inspection(
         });
     }
 
-    let collision_source_project = project_revision3_basis_to_revision2(&basis)?;
-    let forward = migrate_revision2_to_revision3(&collision_source_project)
-        .map_err(Revision3QuestInspectionError::BasisForwardProjection)?;
-    if forward.project != basis.project {
-        return Err(Revision3QuestInspectionError::BasisRoundtripDrift);
-    }
+    validate_revision3_basis(&basis.project)?;
+    let collision_source_project = basis.project;
     let collision_source_json = collision_source_project
         .to_canonical_json()
         .map_err(Revision3QuestInspectionError::SerializeCollisionSourceProject)?;
@@ -1216,10 +1212,10 @@ pub fn prepare_revision3_quest_source_inspection(
     })
 }
 
-pub(crate) fn project_revision3_basis_to_revision2(
-    opened: &OpenedRevision3Checkpoint,
-) -> Result<ProjectRevision2, Revision3QuestInspectionError> {
-    project_revision3_quest_free_basis_to_revision2(&opened.project).map_err(|error| match error {
+pub(crate) fn validate_revision3_basis(
+    project: &ProjectRevision3,
+) -> Result<(), Revision3QuestInspectionError> {
+    validate_revision3_quest_free_basis(project).map_err(|error| match error {
         Revision3QuestFreeBasisError::InvalidProject { reason } => {
             Revision3QuestInspectionError::InvalidBasisProject(reason)
         }
@@ -1228,9 +1224,6 @@ pub(crate) fn project_revision3_basis_to_revision2(
         }
         Revision3QuestFreeBasisError::ResidualQuestState { entity } => {
             Revision3QuestInspectionError::ResidualQuestBasis { entity }
-        }
-        error @ Revision3QuestFreeBasisError::NativeReferenceNotRepresentable { .. } => {
-            Revision3QuestInspectionError::InvalidBasisProject(error.to_string())
         }
     })
 }
@@ -1451,12 +1444,8 @@ pub enum Revision3QuestInspectionError {
     ResidualQuestBasis { entity: EntityId },
     #[error("revision-3 Quest-free basis is not a closed valid project: {0}")]
     InvalidBasisProject(String),
-    #[error("revision-3 basis could not roundtrip through its Quest-free revision-2 source: {0}")]
-    BasisForwardProjection(#[source] gore_authoring::Revision2ToRevision3Error),
-    #[error("revision-3 basis changed during the exact Quest-free revision-2 roundtrip")]
-    BasisRoundtripDrift,
-    #[error("could not serialize the Quest-free revision-2 collision source project: {0}")]
-    SerializeCollisionSourceProject(#[source] serde_json::Error),
+    #[error("could not serialize the native Quest-free revision-3 collision source project: {0}")]
+    SerializeCollisionSourceProject(#[source] gore_authoring::ProjectRevision3JsonError),
     #[error("collision artifact basis drift at {field:?}")]
     ArtifactBasisDrift { field: ArtifactBasisField },
     #[error("fresh source-bound capability does not exactly verify the stored artifact: {0}")]

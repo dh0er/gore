@@ -828,13 +828,13 @@ mod tests {
         NpcParentClassInput, OriginRef, ProjectRevision2, SchemaRevisionV2, TypedRef,
     };
     use gore_authoring::{
-        apply_revision3_quest_transition_plan_transaction_v1, migrate_revision2_to_revision3,
+        apply_revision3_quest_transition_plan_transaction_v1,
         revision3_quest_transition_plan_basis_v1, AssetMeta, AssetStoreIndex, AssetVerification,
         ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
         GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef,
-        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision2DialogLine,
-        Revision2LocalizationEntry, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-        Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision2LocalizationEntry,
+        Revision3DialogLine, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+        Revision3NpcDraft, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
         Revision3QuestTranscriptBindingV1, Revision3QuestTransitionPlanEditEvaluationV1,
         Revision3QuestTransitionPlanEditRequestV1, Revision3TypedRef,
         Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
@@ -1016,6 +1016,24 @@ mod tests {
         }
     }
 
+    fn empty_revision3_authoring_project() -> gore_authoring::ProjectRevision3 {
+        gore_authoring::ProjectRevision3 {
+            format: FormatV2,
+            schema_revision: gore_authoring::SchemaRevisionV3,
+            project_id: authoring_project_id(1),
+            revision: 4,
+            meta: ProjectMeta {
+                name: "verified collision capability".into(),
+                version: "0.1.0".into(),
+                author: "test".into(),
+            },
+            target: authoring_target(),
+            authoring_locales: BTreeSet::new(),
+            entities: Default::default(),
+            asset_store: AssetStoreIndex::default(),
+        }
+    }
+
     fn npc_parent(
         target: &GameGenerationAnchor,
         seal_value: u8,
@@ -1095,6 +1113,74 @@ mod tests {
                 },
                 revision: 0,
                 payload: AuthoringEntityPayload::ScriptModule(script),
+            },
+        );
+    }
+
+    fn add_revision3_authoring_npc(
+        project: &mut gore_authoring::ProjectRevision3,
+        module_namespace: &str,
+        unique_name: &str,
+    ) {
+        let owner_id = authoring_entity_id(10);
+        let module_id = authoring_entity_id(11);
+        let owner =
+            Revision3TypedRef::new(project.project_id, owner_id, Revision3EntityKind::NpcDraft);
+        let draft = Revision3NpcDraft {
+            generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.into(),
+            generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+            input: AuthoringNpcDraftInput {
+                target: project.target.clone(),
+                module_namespace: module_namespace.into(),
+                unique_name: unique_name.into(),
+                parent_character_definition: npc_parent(
+                    &project.target,
+                    10,
+                    "UCharacterDefinition_Human_Base",
+                ),
+                parent_ai_agent_config: npc_parent(
+                    &project.target,
+                    11,
+                    "UAIAgentConfig_Human_Base",
+                ),
+                parent_spawn_definition: npc_parent(
+                    &project.target,
+                    12,
+                    "USpawnAIAgentDefinition_Base",
+                ),
+            },
+            script_module: Revision3TypedRef::new(
+                project.project_id,
+                module_id,
+                Revision3EntityKind::ScriptModule,
+            ),
+            greetings: Vec::new(),
+        };
+        let script = draft.regenerate_script_module(owner.clone()).unwrap();
+        project.entities.insert(
+            owner_id,
+            Revision3Entity {
+                id: owner_id,
+                display_name: unique_name.into(),
+                origin: Revision3OriginRef::New {
+                    authored_runtime_id: unique_name.into(),
+                },
+                revision: 0,
+                payload: Revision3EntityPayload::NpcDraft(draft),
+            },
+        );
+        project.entities.insert(
+            module_id,
+            Revision3Entity {
+                id: module_id,
+                display_name: format!("{unique_name} script"),
+                origin: Revision3OriginRef::Generated {
+                    generator_id: script.generator_id.clone(),
+                    generator_version: script.generator_version,
+                    owner,
+                },
+                revision: 0,
+                payload: Revision3EntityPayload::ScriptModule(script),
             },
         );
     }
@@ -1755,14 +1841,14 @@ mod tests {
         _root: S3TestRoot,
         store: WorkingProjectStore,
         catalog: StoryCatalogFile,
-        collision_source: ProjectRevision2,
+        collision_source: gore_authoring::ProjectRevision3,
         project: gore_authoring::ProjectRevision3,
         quest_id: AuthoringEntityId,
     }
 
     impl S3Fixture {
         fn fresh_capability(&self) -> VerifiedQuestCollisionCapability {
-            VerifiedQuestCollisionCapability::bind(
+            VerifiedQuestCollisionCapability::bind_revision3(
                 artifact(),
                 &self.catalog,
                 &self.collision_source,
@@ -1779,17 +1865,18 @@ mod tests {
         let root = S3TestRoot::new(label);
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let collision_source = empty_authoring_project();
-        let basis = migrate_revision2_to_revision3(&collision_source)
-            .unwrap()
-            .project;
+        let collision_source = empty_revision3_authoring_project();
+        let basis = collision_source.clone();
         let basis_checkpoint = store.prepare_revision3_checkpoint(None, &basis).unwrap();
 
-        let collision_artifact =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
-                .unwrap()
-                .into_artifact()
-                .unwrap();
+        let collision_artifact = VerifiedQuestCollisionCapability::bind_revision3(
+            artifact(),
+            &catalog,
+            &collision_source,
+        )
+        .unwrap()
+        .into_artifact()
+        .unwrap();
         let imported = store
             .import_quest_collision_artifact_v1(collision_artifact.canonical_json(), None)
             .unwrap();
@@ -1798,9 +1885,12 @@ mod tests {
             authoring_seal(collision_artifact.artifact_seal())
         );
 
-        let selection =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
-                .unwrap();
+        let selection = VerifiedQuestCollisionCapability::bind_revision3(
+            artifact(),
+            &catalog,
+            &collision_source,
+        )
+        .unwrap();
         let parent = selection
             .resolve_parent("g1r:quest-parent:swampcamp_scchapter2")
             .unwrap();
@@ -1850,11 +1940,14 @@ mod tests {
             ),
             transcript: Vec::new(),
         };
-        let collision_input =
-            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
-                .unwrap()
-                .into_quest_collision_input(&collision_source)
-                .unwrap();
+        let collision_input = VerifiedQuestCollisionCapability::bind_revision3(
+            artifact(),
+            &catalog,
+            &collision_source,
+        )
+        .unwrap()
+        .into_revision3_quest_collision_input(&collision_source)
+        .unwrap();
         let module = regenerate_revision3_quest_module(&quest, collision_input).unwrap();
         let owner = Revision3TypedRef::new(
             project.project_id,
@@ -1941,7 +2034,7 @@ mod tests {
                     authored_runtime_id: "GORE_CONTEXT_TRANSCRIPT_LINE".to_owned(),
                 },
                 revision: 4,
-                payload: Revision3EntityPayload::DialogLine(Revision2DialogLine {
+                payload: Revision3EntityPayload::DialogLine(Revision3DialogLine {
                     localization: Revision3TypedRef::new(
                         project.project_id,
                         localization_id,
@@ -2635,8 +2728,7 @@ mod tests {
         let root = S3TestRoot::new("v2-zero-prior");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let revision2 = empty_authoring_project();
-        let project = migrate_revision2_to_revision3(&revision2).unwrap().project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let project_json = project.to_canonical_json().unwrap();
 
@@ -2771,15 +2863,12 @@ mod tests {
     fn revision3_v2_capability_unions_npc_and_two_prior_quests_deterministically() {
         let mut fixture = s3_fixture("v2-two-prior");
 
-        let mut npc_revision2 = empty_authoring_project();
-        add_authoring_npc(
-            &mut npc_revision2,
+        let mut npc_revision3 = empty_revision3_authoring_project();
+        add_revision3_authoring_npc(
+            &mut npc_revision3,
             "Project.Npcs.MultiQuestWitness",
             "MultiQuestWitness",
         );
-        let npc_revision3 = migrate_revision2_to_revision3(&npc_revision2)
-            .unwrap()
-            .project;
         for (id, entity) in npc_revision3.entities {
             assert!(fixture.project.entities.insert(id, entity).is_none());
         }
@@ -2840,7 +2929,7 @@ mod tests {
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
         let revision2 = empty_authoring_project();
-        let project = migrate_revision2_to_revision3(&revision2).unwrap().project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let v1 = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &revision2)
             .unwrap()
@@ -2882,9 +2971,7 @@ mod tests {
         let root = S3TestRoot::new("v2-forgery");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let artifact_v2 = VerifiedRevision3QuestCollisionCapabilityV2::bind(
             artifact(),
@@ -2906,9 +2993,7 @@ mod tests {
         let root = S3TestRoot::new("v2-inspection-forgery");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let (artifact_v2, parent, giver) = exact_v2_artifact_and_context(&store, &head, &catalog);
 
@@ -2922,9 +3007,7 @@ mod tests {
         let root = S3TestRoot::new("v2-inspection-context");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let (artifact_v2, parent, giver) = exact_v2_artifact_and_context(&store, &head, &catalog);
 
@@ -3075,8 +3158,8 @@ mod tests {
     fn revision3_v2_bind_rejects_base_collisions_for_nonquest_and_prior_in_all_domains() {
         let catalog = trusted_catalog();
 
-        let mut revision2 = empty_authoring_project();
-        add_authoring_npc(&mut revision2, "Project.Npcs.Collision", "CollisionNpc");
+        let mut project = empty_revision3_authoring_project();
+        add_revision3_authoring_npc(&mut project, "Project.Npcs.Collision", "CollisionNpc");
         let nonquest_cases = [
             ("module", "project.npcs.collision"),
             ("relative path", "project/npcs/collision.as"),
@@ -3085,7 +3168,6 @@ mod tests {
         for (kind, value) in nonquest_cases {
             let root = S3TestRoot::new(&format!("v2-nonquest-{kind}"));
             let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
-            let project = migrate_revision2_to_revision3(&revision2).unwrap().project;
             let head = publish_revision3_head(&root, &store, &project);
             let source = store
                 .prepare_current_revision3_quest_collision_source_v2(&head)
@@ -3150,8 +3232,7 @@ mod tests {
     #[test]
     fn revision3_v2_bind_requires_exact_base_catalog_and_project_target() {
         let catalog = trusted_catalog();
-        let revision2 = empty_authoring_project();
-        let project = migrate_revision2_to_revision3(&revision2).unwrap().project;
+        let project = empty_revision3_authoring_project();
         let root = S3TestRoot::new("v2-bindings");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let head = publish_revision3_head(&root, &store, &project);
@@ -3175,12 +3256,9 @@ mod tests {
             Err(Revision3QuestCollisionCapabilityErrorV2::CatalogBindingMismatch)
         ));
 
-        let mut wrong_target_revision2 = empty_authoring_project();
-        wrong_target_revision2.target.executable.sha256 =
+        let mut wrong_target_project = empty_revision3_authoring_project();
+        wrong_target_project.target.executable.sha256 =
             AuthoringSha256Digest::from_bytes([0xb1; 32]);
-        let wrong_target_project = migrate_revision2_to_revision3(&wrong_target_revision2)
-            .unwrap()
-            .project;
         let wrong_root = S3TestRoot::new("v2-target");
         let wrong_store =
             WorkingProjectStore::at(&wrong_root.0, WorkingStoreLimits::default()).unwrap();
@@ -3200,13 +3278,8 @@ mod tests {
     #[test]
     fn revision3_v2_bind_budget_accepts_exact_combined_limits_and_rejects_plus_one() {
         let catalog = trusted_catalog();
-        let mut revision2 = empty_authoring_project();
-        add_authoring_npc(
-            &mut revision2,
-            "Project.Npcs.BudgetWitness",
-            "BudgetWitness",
-        );
-        let project = migrate_revision2_to_revision3(&revision2).unwrap().project;
+        let mut project = empty_revision3_authoring_project();
+        add_revision3_authoring_npc(&mut project, "Project.Npcs.BudgetWitness", "BudgetWitness");
         let root = S3TestRoot::new("v2-bind-budget");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let head = publish_revision3_head(&root, &store, &project);
@@ -3386,9 +3459,7 @@ mod tests {
         let root = S3TestRoot::new(label);
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let mut project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let mut project = empty_revision3_authoring_project();
         let mut head = publish_revision3_head(&root, &store, &project);
         let artifact_basis_head = head.clone();
         let mut request = request_v3(&project, &head, 1);
@@ -3544,9 +3615,7 @@ mod tests {
         let root = S3TestRoot::new("plan-v3-wrong-historical-head");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let basis_head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &basis_head, 1);
         let outcome = apply_v3(&store, &basis_head, &catalog, &project, &request);
@@ -3694,9 +3763,7 @@ mod tests {
         let root = S3TestRoot::new("v3-first-quest");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &head, 1);
         let original_json = project.to_canonical_json().unwrap();
@@ -3784,9 +3851,7 @@ mod tests {
         let root = S3TestRoot::new("v3-multi-quest");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let mut project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let mut project = empty_revision3_authoring_project();
         let mut head = publish_revision3_head(&root, &store, &project);
         let initial_revision = project.revision;
 
@@ -3836,9 +3901,7 @@ mod tests {
         let root = S3TestRoot::new("v3-persist-two");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let mut project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let mut project = empty_revision3_authoring_project();
         let mut head = publish_revision3_head(&root, &store, &project);
 
         for ordinal in 1..=2 {
@@ -3925,9 +3988,7 @@ mod tests {
         let root = S3TestRoot::new("v3-persist-dedupe");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &head, 1);
         let first_outcome = apply_v3(&store, &head, &catalog, &project, &request);
@@ -3957,9 +4018,7 @@ mod tests {
         let root = S3TestRoot::new("v3-persist-forged");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &head, 1);
 
@@ -4121,9 +4180,7 @@ mod tests {
         let root = S3TestRoot::new("v3-persist-after-import-race");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &head, 1);
         let outcome = apply_v3(&store, &head, &catalog, &project, &request);
@@ -4167,9 +4224,7 @@ mod tests {
         let root = S3TestRoot::new("v3-transport-binding");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let canonical_project = project.to_canonical_json().unwrap();
         let request = request_v3(&project, &head, 1);
@@ -4283,9 +4338,7 @@ mod tests {
         let root = S3TestRoot::new("v3-seven-generated-collisions");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
         let catalog = trusted_catalog();
-        let project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let request = request_v3(&project, &head, 1);
         let project_json = project.to_canonical_json().unwrap();
@@ -4359,13 +4412,12 @@ mod tests {
         let runtime_root = S3TestRoot::new("v3-runtime-collision");
         let runtime_store =
             WorkingProjectStore::at(&runtime_root.0, WorkingStoreLimits::default()).unwrap();
-        let mut revision2 = empty_authoring_project();
-        add_authoring_npc(
-            &mut revision2,
+        let mut runtime_project = empty_revision3_authoring_project();
+        add_revision3_authoring_npc(
+            &mut runtime_project,
             "Project.Npcs.RuntimeCollisionWitness",
             "GORE_AUTHORITY_QUEST_1",
         );
-        let runtime_project = migrate_revision2_to_revision3(&revision2).unwrap().project;
         let runtime_head = publish_revision3_head(&runtime_root, &runtime_store, &runtime_project);
         let runtime_request = request_v3(&runtime_project, &runtime_head, 1);
         assert!(matches!(
@@ -4382,26 +4434,23 @@ mod tests {
         let nonstory_root = S3TestRoot::new("v3-nonstory-runtime-is-not-collision");
         let nonstory_store =
             WorkingProjectStore::at(&nonstory_root.0, WorkingStoreLimits::default()).unwrap();
-        let mut nonstory_revision2 = empty_authoring_project();
+        let mut nonstory_project = empty_revision3_authoring_project();
         let localization_id = authoring_entity_id(0x61);
-        nonstory_revision2.entities.insert(
+        nonstory_project.entities.insert(
             localization_id,
-            AuthoringEntity {
+            Revision3Entity {
                 id: localization_id,
                 display_name: "Non-Story runtime witness".to_owned(),
-                origin: OriginRef::New {
+                origin: Revision3OriginRef::New {
                     authored_runtime_id: "GORE_AUTHORITY_QUEST_1".to_owned(),
                 },
                 revision: 0,
-                payload: AuthoringEntityPayload::LocalizationEntry(AuthoringLocalizationEntry {
+                payload: Revision3EntityPayload::LocalizationEntry(AuthoringLocalizationEntry {
                     loc_id: "GORE_NONSTORY_RUNTIME_WITNESS".to_owned(),
                     texts: Default::default(),
                 }),
             },
         );
-        let nonstory_project = migrate_revision2_to_revision3(&nonstory_revision2)
-            .unwrap()
-            .project;
         let nonstory_head =
             publish_revision3_head(&nonstory_root, &nonstory_store, &nonstory_project);
         let nonstory_request = request_v3(&nonstory_project, &nonstory_head, 1);
@@ -4418,9 +4467,7 @@ mod tests {
 
         let root = S3TestRoot::new("v3-semantic-conflicts");
         let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
-        let mut project = migrate_revision2_to_revision3(&empty_authoring_project())
-            .unwrap()
-            .project;
+        let mut project = empty_revision3_authoring_project();
         let head = publish_revision3_head(&root, &store, &project);
         let project_json = project.to_canonical_json().unwrap();
         let evaluate = |request: &Revision3QuestDraftInsertRequestV3| {

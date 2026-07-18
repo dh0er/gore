@@ -17,9 +17,9 @@ use crate::model_revision3::{
 use crate::revision3_quest::regenerate_revision3_quest_module_v2_with_identity;
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
-    collect_project_story_collision_identities, project_revision3_quest_free_basis_to_revision2,
-    ContentSeal, DraftQuestCollisionKind, DraftQuestSkeletonError, EntityId, GameGenerationAnchor,
-    ProjectId, ProjectRevision3, ProjectRevision3JsonError, QuestCollisionArtifactRef,
+    collect_revision3_story_collision_identities, validate_revision3_quest_free_basis, ContentSeal,
+    DraftQuestCollisionKind, DraftQuestSkeletonError, EntityId, GameGenerationAnchor, ProjectId,
+    ProjectRevision3, ProjectRevision3JsonError, QuestCollisionArtifactRef,
     QuestCollisionCatalogInput, Revision3QuestFreeBasisError, Revision3QuestGenerationError,
     Revision3QuestGiverInput, Revision3QuestParentInput, Sha256Digest,
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITIES, MAX_REVISION3_SNAPSHOT_BYTES,
@@ -320,8 +320,8 @@ pub fn apply_revision3_quest_draft_transaction_v2(
         reject!(Revision3QuestDraftInsertConflictV2::EntityCapacityExceeded);
     }
 
-    let revision2_basis = match project_revision3_quest_free_basis_to_revision2(&project) {
-        Ok(basis) => basis,
+    match validate_revision3_quest_free_basis(&project) {
+        Ok(()) => {}
         Err(Revision3QuestFreeBasisError::InvalidProject { reason }) => {
             reject!(Revision3QuestDraftInsertConflictV2::InvalidBasisStoryState { reason });
         }
@@ -331,15 +331,8 @@ pub fn apply_revision3_quest_draft_transaction_v2(
         Err(Revision3QuestFreeBasisError::ResidualQuestState { entity }) => {
             reject!(Revision3QuestDraftInsertConflictV2::ResidualQuestBasis { entity });
         }
-        Err(error @ Revision3QuestFreeBasisError::NativeReferenceNotRepresentable { .. }) => {
-            reject!(
-                Revision3QuestDraftInsertConflictV2::InvalidBasisStoryState {
-                    reason: error.to_string(),
-                }
-            );
-        }
-    };
-    let existing_story = match collect_project_story_collision_identities(&revision2_basis) {
+    }
+    let existing_story = match collect_revision3_story_collision_identities(&project) {
         Ok(identities) => identities,
         Err(error) => {
             reject!(

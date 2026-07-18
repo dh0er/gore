@@ -5,10 +5,12 @@ use std::fmt;
 use std::io::{self, Write};
 
 use gore_authoring::{
-    collect_project_story_collision_identities, ContentSeal as AuthoringContentSeal, EntityId,
-    GameGenerationAnchor, ProjectId, ProjectRevision2, QuestCollisionCatalogInput,
-    Revision2QuestGiverInput as QuestGiverInput, Revision2QuestParentInput as QuestParentInput,
-    Sha256Digest as AuthoringSha256Digest, StoryCollisionCollectionError, MAX_PROJECT_JSON_BYTES,
+    collect_project_story_collision_identities, collect_revision3_story_collision_identities,
+    ContentSeal as AuthoringContentSeal, EntityId, GameGenerationAnchor, ProjectId,
+    ProjectRevision2, ProjectRevision3, ProjectStoryCollisionIdentities,
+    QuestCollisionCatalogInput, Revision2QuestGiverInput as QuestGiverInput,
+    Revision2QuestParentInput as QuestParentInput, Sha256Digest as AuthoringSha256Digest,
+    StoryCollisionCollectionError, MAX_PROJECT_JSON_BYTES,
 };
 use gore_story_catalog::{CatalogError, StoryCatalogFile, MAX_CATALOG_JSON_BYTES};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -248,6 +250,27 @@ impl VerifiedQuestCollisionCapability {
         catalog: &StoryCatalogFile,
         project: &ProjectRevision2,
     ) -> Result<Self, QuestCollisionCapabilityError> {
+        let project_identities = collect_project_story_collision_identities(project)?;
+        Self::bind_project_identities(base, catalog, &project.target, project_identities)
+    }
+
+    /// Bind closed base/catalog capabilities directly to one exact native revision-3 Quest-free
+    /// project snapshot.
+    pub fn bind_revision3(
+        base: BaseGameCollisionInventory,
+        catalog: &StoryCatalogFile,
+        project: &ProjectRevision3,
+    ) -> Result<Self, QuestCollisionCapabilityError> {
+        let project_identities = collect_revision3_story_collision_identities(project)?;
+        Self::bind_project_identities(base, catalog, &project.target, project_identities)
+    }
+
+    fn bind_project_identities(
+        base: BaseGameCollisionInventory,
+        catalog: &StoryCatalogFile,
+        project_target: &GameGenerationAnchor,
+        project_identities: ProjectStoryCollisionIdentities,
+    ) -> Result<Self, QuestCollisionCapabilityError> {
         let selections = catalog.authoring_selections()?;
         if base.generation() != catalog.generation()
             || base.story_catalog_seal() != catalog.catalog_seal()
@@ -255,11 +278,10 @@ impl VerifiedQuestCollisionCapability {
             return Err(QuestCollisionCapabilityError::CatalogBindingMismatch);
         }
         let expected_target = authoring_generation(catalog.generation());
-        if project.target != expected_target {
+        if project_target != &expected_target {
             return Err(QuestCollisionCapabilityError::TargetMismatch);
         }
 
-        let project_identities = collect_project_story_collision_identities(project)?;
         let project_id = project_identities.project_id();
         let project_revision = project_identities.project_revision();
         let project_target = project_identities.target().clone();
@@ -449,6 +471,23 @@ impl VerifiedQuestCollisionCapability {
         project: &ProjectRevision2,
     ) -> Result<QuestCollisionCatalogInput, QuestCollisionCapabilityError> {
         let current = collect_project_story_collision_identities(project)?;
+        self.into_collision_input_for_identities(current)
+    }
+
+    /// Consume this capability against the exact native revision-3 Quest-free project that
+    /// originally bound it.
+    pub fn into_revision3_quest_collision_input(
+        self,
+        project: &ProjectRevision3,
+    ) -> Result<QuestCollisionCatalogInput, QuestCollisionCapabilityError> {
+        let current = collect_revision3_story_collision_identities(project)?;
+        self.into_collision_input_for_identities(current)
+    }
+
+    fn into_collision_input_for_identities(
+        self,
+        current: ProjectStoryCollisionIdentities,
+    ) -> Result<QuestCollisionCatalogInput, QuestCollisionCapabilityError> {
         if current.project_id() != self.project_id
             || current.project_revision() != self.project_revision
             || current.target() != &self.project_target

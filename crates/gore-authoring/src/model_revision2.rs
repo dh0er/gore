@@ -694,8 +694,8 @@ impl NpcDraft {
         )
         .map_err(StoryRegenerationError::InvalidNpcIntent)?;
         let generated = draft.generate();
-        let input_fingerprint = fingerprint_npc_revision2_input(&self.input)
-            .map_err(StoryRegenerationError::NpcFingerprint)?;
+        let input_fingerprint =
+            fingerprint_npc_input(&self.input).map_err(StoryRegenerationError::NpcFingerprint)?;
         let identity = GeneratedStoryIdentity {
             module_namespace: generated.module_namespace.clone(),
             module_relative_path: generated.module_relative_path.clone(),
@@ -816,7 +816,7 @@ impl QuestDraft {
     }
 }
 
-fn validate_generator_contract(
+pub(crate) fn validate_generator_contract(
     actual_id: &str,
     actual_version: u32,
     expected_id: &'static str,
@@ -834,7 +834,9 @@ fn validate_generator_contract(
     }
 }
 
-fn validate_npc_input_provenance(input: &NpcDraftInput) -> Result<(), StoryRegenerationError> {
+pub(crate) fn validate_npc_input_provenance(
+    input: &NpcDraftInput,
+) -> Result<(), StoryRegenerationError> {
     if input.target.executable.byte_len == 0 {
         return Err(StoryRegenerationError::InvalidNpcProvenance(
             "target executable seal has zero byte length".to_owned(),
@@ -928,7 +930,7 @@ fn validate_canonical_collision_inventory(
     Ok(())
 }
 
-fn fingerprint_npc_revision2_input(
+pub(crate) fn fingerprint_npc_input(
     input: &NpcDraftInput,
 ) -> Result<Sha256Digest, serde_json::Error> {
     let canonical = serde_json::to_vec(input)?;

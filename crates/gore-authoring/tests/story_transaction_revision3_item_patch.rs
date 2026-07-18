@@ -5,15 +5,14 @@ use gore_authoring::{
     apply_revision3_item_patch_transaction_v1, build_revision3_content_index_v1, AssetStoreIndex,
     ContentSeal, EntityId, FormatV2, GameGenerationAnchor, ItemFiniteFloatErrorV1,
     ItemFiniteFloatV1, ItemPatchV1, ItemScalarTypeV1, ItemScalarValueV1, ProjectId, ProjectMeta,
-    ProjectRevision3, ProjectRevision3ValidationError, Revision2LocalizationEntry,
-    Revision3ContentEntitySummaryV1, Revision3EntityKind, Revision3ItemPatchBuildStatusV1,
-    Revision3ItemPatchChangeV1, Revision3ItemPatchConflictV1, Revision3ItemPatchEvaluationV1,
-    Revision3ItemPatchMutationV1, Revision3ItemPatchPublicationStatusV1,
-    Revision3ItemPatchRequestJsonErrorV1, Revision3ItemPatchRequestV1,
-    Revision3ItemPatchRuntimeStatusV1, Revision3QuestFreeBasisError, Revision3ScriptModule,
-    Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest, WorkingHead,
-    WorkingStoreFormat, MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1, MAX_REVISION3_ITEM_PATCH_FIELDS_V1,
-    MAX_REVISION3_ITEM_PATCH_REQUEST_JSON_BYTES_V1, MAX_REVISION3_ITEM_STRING_BYTES_V1,
+    ProjectRevision3, ProjectRevision3ValidationError, Revision3ContentEntitySummaryV1,
+    Revision3EntityKind, Revision3ItemPatchBuildStatusV1, Revision3ItemPatchChangeV1,
+    Revision3ItemPatchConflictV1, Revision3ItemPatchEvaluationV1, Revision3ItemPatchMutationV1,
+    Revision3ItemPatchPublicationStatusV1, Revision3ItemPatchRequestJsonErrorV1,
+    Revision3ItemPatchRequestV1, Revision3ItemPatchRuntimeStatusV1, SchemaRevisionV3, Sha256Digest,
+    WorkingHead, WorkingStoreFormat, MAX_REVISION3_ITEM_FIELD_NAME_BYTES_V1,
+    MAX_REVISION3_ITEM_PATCH_FIELDS_V1, MAX_REVISION3_ITEM_PATCH_REQUEST_JSON_BYTES_V1,
+    MAX_REVISION3_ITEM_STRING_BYTES_V1,
 };
 
 const ITEM_ID: u8 = 0x41;
@@ -559,88 +558,5 @@ fn request_parser_rejects_arbitrary_values_duplicate_keys_noncanonical_and_overs
             &"x".repeat(MAX_REVISION3_ITEM_PATCH_REQUEST_JSON_BYTES_V1 + 1)
         ),
         Err(Revision3ItemPatchRequestJsonErrorV1::InputTooLarge { .. })
-    ));
-}
-
-#[test]
-fn story_collision_projection_rejects_native_item_refs_without_panicking() {
-    let mut generated_origin_project = empty_project();
-    let item = item_entity(&generated_origin_project, ITEM_CLASS, 0x40);
-    generated_origin_project.entities.insert(item.id, item);
-    let generated_entity_id = id(0x50);
-    generated_origin_project.entities.insert(
-        generated_entity_id,
-        Entity {
-            id: generated_entity_id,
-            display_name: "Generated localization".to_owned(),
-            origin: OriginRef::Generated {
-                generator_id: "tests.generated-localization".to_owned(),
-                generator_version: 1,
-                owner: Revision3TypedRef::new(
-                    generated_origin_project.project_id,
-                    id(ITEM_ID),
-                    Revision3EntityKind::ItemPatch,
-                ),
-            },
-            revision: 0,
-            payload: EntityPayload::LocalizationEntry(Revision2LocalizationEntry {
-                loc_id: "GORE_ITEM_PATCH_OWNER".to_owned(),
-                texts: BTreeMap::new(),
-            }),
-        },
-    );
-    generated_origin_project.validate_closed_model().unwrap();
-    assert!(matches!(
-        gore_authoring::project_revision3_quest_free_basis_to_revision2(
-            &generated_origin_project
-        ),
-        Err(Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-            entity,
-            field: "origin.owner",
-            kind: Revision3EntityKind::ItemPatch,
-        }) if entity == generated_entity_id
-    ));
-
-    let mut module_owner_project = empty_project();
-    let item = item_entity(&module_owner_project, ITEM_CLASS, 0x40);
-    module_owner_project.entities.insert(item.id, item);
-    let module_id = id(0x51);
-    let source = "// native ItemPatch owner test\n";
-    module_owner_project.entities.insert(
-        module_id,
-        Entity {
-            id: module_id,
-            display_name: "Native-owned module".to_owned(),
-            origin: OriginRef::Imported {
-                importer: "tests".to_owned(),
-                source_seal: seal(0x60, source.len() as u64),
-                external_identity: None,
-            },
-            revision: 0,
-            payload: EntityPayload::ScriptModule(Revision3ScriptModule {
-                generator_id: "tests.native-owner".to_owned(),
-                generator_version: 1,
-                owner: Revision3TypedRef::new(
-                    module_owner_project.project_id,
-                    id(ITEM_ID),
-                    Revision3EntityKind::ItemPatch,
-                ),
-                module_namespace: "Tests.NativeOwner".to_owned(),
-                module_relative_path: "Tests/NativeOwner.as".to_owned(),
-                source: source.to_owned(),
-                source_sha256: seal(0x61, source.len() as u64).sha256,
-                input_fingerprint: seal(0x62, 32).sha256,
-                status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-            }),
-        },
-    );
-    module_owner_project.validate_closed_model().unwrap();
-    assert!(matches!(
-        gore_authoring::project_revision3_quest_free_basis_to_revision2(&module_owner_project),
-        Err(Revision3QuestFreeBasisError::NativeReferenceNotRepresentable {
-            entity,
-            field: "script_module.owner",
-            kind: Revision3EntityKind::ItemPatch,
-        }) if entity == module_id
     ));
 }

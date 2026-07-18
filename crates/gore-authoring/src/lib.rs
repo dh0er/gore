@@ -10,7 +10,6 @@ mod dataasset_build_receipt;
 mod dataasset_stage;
 mod document;
 mod ids;
-mod migration_revision3;
 mod model;
 pub mod model_revision2;
 pub mod model_revision3;
@@ -79,10 +78,6 @@ pub use dataasset_stage::{
 };
 pub use document::{ProjectDocument, ProjectDocumentError};
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
-pub use migration_revision3::{
-    migrate_revision2_to_revision3, Revision2ToRevision3Error, Revision2ToRevision3Migration,
-    Revision2ToRevision3Report,
-};
 pub use model::{
     ArchiveSeal, AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, DialogLine, Entity, EntityKind,
     EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, LocaleCodeError, LocalizationEntry,
@@ -174,8 +169,8 @@ pub use revision3_content_index::{
     REVISION3_CONTENT_INDEX_SCHEMA_V1,
 };
 pub use revision3_quest::{
-    project_revision3_quest_free_basis_to_revision2, regenerate_revision3_quest_module_v2,
-    revision3_quest_input_fingerprint_v2, Revision3QuestFreeBasisError,
+    regenerate_revision3_quest_module_v2, revision3_quest_input_fingerprint_v2,
+    validate_revision3_quest_free_basis, Revision3QuestFreeBasisError,
     Revision3QuestGenerationError,
 };
 pub use revision3_quest_source_v2::{
@@ -202,8 +197,8 @@ pub use revision3_voice_preview::{
     MAX_REVISION3_VOICE_TAKE_PREVIEW_REQUEST_JSON_BYTES_V1,
 };
 pub use story_collision::{
-    collect_project_story_collision_identities, ProjectStoryCollisionIdentities,
-    StoryCollisionCollectionError,
+    collect_project_story_collision_identities, collect_revision3_story_collision_identities,
+    ProjectStoryCollisionIdentities, StoryCollisionCollectionError,
 };
 pub use story_transaction::{
     story_draft_insert_request_binding_sha256, NpcDraftCreateInput, QuestDraftCreateInput,

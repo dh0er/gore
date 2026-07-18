@@ -1127,12 +1127,12 @@ impl WorkingProjectStore {
                 source_head.clone(),
             )?;
 
-        // Verify only the exact non-Quest projection. Historical Quest artifacts removed by the
+        // Verify only the exact native non-Quest basis. Historical Quest artifacts removed by the
         // splitter and their historical basis snapshots are deliberately absent from this I/O.
         let nonquest = prepared.nonquest_basis().project();
-        validate_revision2_persistability(nonquest, &self.limits)?;
+        validate_revision3_persistability(nonquest, &self.limits)?;
         self.verify_asset_index(&nonquest.asset_store, AssetVerification::Full)?;
-        self.verify_revision2_voice_take_ogg_metadata(nonquest, AssetVerification::Full)?;
+        self.verify_revision3_voice_take_ogg_metadata(nonquest, AssetVerification::Full)?;
 
         Ok(prepared)
     }
