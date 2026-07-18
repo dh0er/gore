@@ -354,7 +354,7 @@ void _validateCanonicalLocale(String locale) {
     throw const FormatException('voice locale language is not canonical');
   }
 
-  // Format 1 deliberately supports the stable language[-Script][-REGION]
+  // Studio deliberately supports the stable language[-Script][-REGION]
   // subset used by Studio language slots. Accepting arbitrary alphanumeric
   // segments here would make malformed tags such as `de-a` or `de-DE-DE`
   // appear canonical and create semantic keys that no language catalog owns.

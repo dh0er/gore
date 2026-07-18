@@ -362,16 +362,13 @@ class AppLocalizationsZh extends AppLocalizations {
       'mod-manager 的 loadout 已启用。请先在 gore-manager 中执行 undeploy。';
 
   @override
-  String get projectOpenLegacy => 'Open legacy project…';
+  String get projectOpenManagedRevision3 => 'Open mod project…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Open Mod Studio project…';
+  String get projectVerifyCurrentHead => 'Check project';
 
   @override
-  String get projectVerifyCurrentHead => 'Verify current head';
-
-  @override
-  String get projectManagedRevision3Title => 'Mod Studio project';
+  String get projectManagedRevision3Title => 'Mod project';
 
   @override
   String get projectClose => 'Close project';
@@ -380,10 +377,6 @@ class AppLocalizationsZh extends AppLocalizations {
   String projectCloseFailed(String error) {
     return 'Project could not be closed: $error';
   }
-
-  @override
-  String get projectManagedRevision3IdentityOnly =>
-      'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
 
   @override
   String get projectRoot => 'Root';
@@ -404,38 +397,35 @@ class AppLocalizationsZh extends AppLocalizations {
   String get projectNoCurrent => 'No current project';
 
   @override
-  String get projectManagedRevision3Opened => 'Mod Studio project opened.';
+  String get projectManagedRevision3Opened => 'Mod project opened.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Mod Studio project could not be opened: $error';
+    return 'Mod project could not be opened: $error';
   }
 
   @override
-  String get projectManagedRevision3Verified => 'Project checkpoint verified.';
+  String get projectManagedRevision3Verified => 'Project checked.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Project checkpoint could not be verified: $error';
+    return 'Project check failed: $error';
   }
 
   @override
   String get projectManagedRevision3RequiresReopen =>
-      'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.';
+      'The project could not be checked safely. Recover or reopen it before continuing.';
 
   @override
   String get projectManagedRevision3VerifyBlocked =>
-      'Verification is blocked until the managed project is reopened.';
+      'Recover or reopen the project before checking it again.';
 
   @override
   String get projectTransitionCleanupWarning =>
       '新项目已打开，但无法完全清理上一个项目的会话。不会再次尝试清理。重新打开上一个项目前，请重启 Mod Studio。';
 
   @override
-  String get projectNewManagedRevision3 => '新建托管模组项目…';
-
-  @override
-  String get projectNewLegacy => '新建旧版项目';
+  String get projectNewManagedRevision3 => '新建模组项目…';
 
   @override
   String get projectCreateGamePathRequired =>
@@ -446,12 +436,12 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return '已创建托管模组项目 $projectId';
+    return '已创建模组项目 $projectId';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return '无法创建托管模组项目：$error';
+    return '无法创建模组项目：$error';
   }
 
   @override
@@ -1097,18 +1087,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
 
   @override
-  String get managedProjectLandingTitle => '托管项目工作区';
+  String get managedProjectLandingTitle => '开始模组项目';
 
   @override
-  String get managedProjectLandingDescription =>
-      '在一个托管项目中使用新的主页、内容、剧情、语音、验证和发布工作流程。';
-
-  @override
-  String get legacyCompatibilityToolsTitle => '旧版兼容工具';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      '下方标签页是旧版直接替换工具。在托管项目工作区逐步完善期间，这些工具仍可使用。';
+  String get managedProjectLandingDescription => '创建项目、打开现有项目文件夹或从备份恢复项目。';
 
   @override
   String get managedProjectTechnicalDetails => '项目技术详情';
@@ -3580,10 +3562,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       '新项目已打开，但无法完全清理上一个项目的会话。不会再次尝试清理。重新打开上一个项目前，请重启 Mod Studio。';
 
   @override
-  String get projectNewManagedRevision3 => '新建托管模组项目…';
-
-  @override
-  String get projectNewLegacy => '新建旧版项目';
+  String get projectNewManagedRevision3 => '新建模组项目…';
 
   @override
   String get projectCreateGamePathRequired =>
@@ -3594,12 +3573,12 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return '已创建托管模组项目 $projectId';
+    return '已创建模组项目 $projectId';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return '无法创建托管模组项目：$error';
+    return '无法创建模组项目：$error';
   }
 
   @override
@@ -3771,18 +3750,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
 
   @override
-  String get managedProjectLandingTitle => '托管项目工作区';
+  String get managedProjectLandingTitle => '开始模组项目';
 
   @override
-  String get managedProjectLandingDescription =>
-      '在一个托管项目中使用新的主页、内容、剧情、语音、验证和发布工作流程。';
-
-  @override
-  String get legacyCompatibilityToolsTitle => '旧版兼容工具';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      '下方标签页是旧版直接替换工具。在托管项目工作区逐步完善期间，这些工具仍可使用。';
+  String get managedProjectLandingDescription => '创建项目、打开现有项目文件夹或从备份恢复项目。';
 
   @override
   String get managedProjectTechnicalDetails => '项目技术详情';

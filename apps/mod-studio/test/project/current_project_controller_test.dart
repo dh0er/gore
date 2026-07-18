@@ -9,7 +9,6 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
-import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
@@ -42,53 +41,46 @@ import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
-  test(
-    'managed create adopts only a fully opened candidate and closes legacy',
-    () async {
-      final legacy = _FakeLegacyLease(path: 'before-create.goremod');
-      final managed = _FakeManagedLease(
-        root: Directory('created-managed'),
-        projectIdValue: 'abababababababababababababababab',
-        projectRevision: 0,
-        head: _head(41),
-      );
-      ManagedRevision3ProjectCreateRequest? received;
-      final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        createManagedRevision3: (request) async {
-          received = request;
-          return managed;
-        },
-        openManagedRevision3: (_) async => throw UnimplementedError(),
-      );
-      addTearDown(() async {
-        await coordinator.shutdown();
-        coordinator.dispose();
-      });
-      final request = ManagedRevision3ProjectCreateRequest(
-        root: Directory('chosen-empty-root'),
-        gameRoot: r'C:\Games\Gothic 1 Remake',
-        name: 'My first managed mod',
-        version: '0.1.0',
-        author: 'Author',
-        authoringLocales: const <String>['de', 'en'],
-      );
+  test('managed create adopts only a fully opened candidate', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('created-managed'),
+      projectIdValue: 'abababababababababababababababab',
+      projectRevision: 0,
+      head: _head(41),
+    );
+    ManagedRevision3ProjectCreateRequest? received;
+    final coordinator = CurrentProjectCoordinator(
+      createManagedRevision3: (request) async {
+        received = request;
+        return managed;
+      },
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final request = ManagedRevision3ProjectCreateRequest(
+      root: Directory('chosen-empty-root'),
+      gameRoot: r'C:\Games\Gothic 1 Remake',
+      name: 'My first managed mod',
+      version: '0.1.0',
+      author: 'Author',
+      authoringLocales: const <String>['de', 'en'],
+    );
 
-      final created = await coordinator.createManagedRevision3(request);
+    final created = await coordinator.createManagedRevision3(request);
 
-      expect(received, same(request));
-      expect(created.root.path, managed.root.path);
-      expect(created.projectId, managed.projectId);
-      expect(created.projectRevision, 0);
-      expect(legacy.closeCalls, 1);
-      expect(managed.closeCalls, 0);
-    },
-  );
+    expect(received, same(request));
+    expect(created.root.path, managed.root.path);
+    expect(created.projectId, managed.projectId);
+    expect(created.projectRevision, 0);
+    expect(managed.closeCalls, 0);
+  });
 
   test(
-    'failed managed create preserves current lease and closes bad candidate',
+    'failed managed create preserves empty state and closes bad candidate',
     () async {
-      final legacy = _FakeLegacyLease(path: 'preserved-create.goremod');
       final candidate = _FakeManagedLease(
         root: Directory('bad-created-managed'),
         projectIdValue: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
@@ -97,7 +89,6 @@ void main() {
         projectIdError: StateError('created project failed full reopen'),
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         createManagedRevision3: (_) async => candidate,
         openManagedRevision3: (_) async => throw UnimplementedError(),
       );
@@ -122,21 +113,15 @@ void main() {
       );
 
       expect(coordinator.state, same(before));
-      expect(legacy.closeCalls, 0);
       expect(candidate.closeCalls, 1);
     },
   );
 
   test(
-    'failed managed open preserves the exact legacy current project',
+    'failed managed open preserves the empty current-project state',
     () async {
-      final legacy = _FakeLegacyLease(
-        path: 'current.goremod',
-        hasUnsavedChanges: true,
-      );
       final expectedError = StateError('candidate could not be opened');
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async => throw expectedError,
       );
       addTearDown(() async {
@@ -151,9 +136,7 @@ void main() {
       );
 
       expect(coordinator.state, same(before));
-      expect(coordinator.state, isA<LegacyCurrentProjectState>());
-      expect(legacy.closeCalls, 0);
-      expect(legacy.saveCalls, 0);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
     },
   );
 
@@ -171,7 +154,6 @@ void main() {
         projectRevision: 9,
         head: head,
       );
-      final legacy = _FakeLegacyLease(path: 'before-import.goremod');
       final candidate = _FakeManagedLease(
         root: Directory(p.normalize(p.absolute(destination))),
         projectIdValue: projectId,
@@ -180,7 +162,6 @@ void main() {
       );
       Directory? openedRoot;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (root) async {
           openedRoot = root;
           return candidate;
@@ -202,7 +183,6 @@ void main() {
       expect(opened.projectRevision, 9);
       expect(opened.head.canonicalJson, head.canonicalJson);
       expect(opened.requiresReopen, isFalse);
-      expect(legacy.closeCalls, 1);
       expect(candidate.closeCalls, 0);
     },
   );
@@ -229,10 +209,6 @@ void main() {
           projectRevision: 12,
           head: expectedHead,
         );
-        final legacy = _FakeLegacyLease(
-          path: 'preserved-before-import.goremod',
-          hasUnsavedChanges: true,
-        );
         final candidate = _FakeManagedLease(
           root: mismatch == 'root'
               ? Directory(p.join(p.absolute('different-import'), 'project'))
@@ -245,7 +221,6 @@ void main() {
         );
         candidate.requiresReopenValue = mismatch == 'requires reopen';
         final coordinator = CurrentProjectCoordinator(
-          initialLegacy: legacy,
           openManagedRevision3: (_) async => candidate,
         );
         addTearDown(() async {
@@ -260,7 +235,6 @@ void main() {
         );
 
         expect(coordinator.state, same(before));
-        expect(legacy.closeCalls, 0);
         expect(candidate.closeCalls, 1);
       },
     );
@@ -323,10 +297,8 @@ void main() {
         projectRevision: 4,
         head: _head(94),
       );
-      final legacy = _FakeLegacyLease(path: 'preserved-opener.goremod');
       final expectedError = StateError('imported candidate open failed');
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async => throw expectedError,
       );
       addTearDown(() async {
@@ -341,7 +313,6 @@ void main() {
       );
 
       expect(coordinator.state, same(before));
-      expect(legacy.closeCalls, 0);
     },
   );
 
@@ -358,7 +329,6 @@ void main() {
         projectRevision: 5,
         head: _head(95),
       );
-      final legacy = _FakeLegacyLease(path: 'preserved-snapshot.goremod');
       final candidate = _FakeManagedLease(
         root: Directory(destination),
         projectIdValue: '95959595959595959595959595959595',
@@ -367,7 +337,6 @@ void main() {
         projectIdError: StateError('candidate snapshot failed'),
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async => candidate,
       );
       addTearDown(() async {
@@ -382,7 +351,6 @@ void main() {
       );
 
       expect(coordinator.state, same(before));
-      expect(legacy.closeCalls, 0);
       expect(candidate.closeCalls, 1);
     },
   );
@@ -393,15 +361,17 @@ void main() {
       final events = <String>[];
       final saveEntered = Completer<void>();
       final releaseSave = Completer<void>();
-      final legacy = _FakeLegacyLease(
-        path: 'ordered-import.goremod',
-        onSave: () async {
+      final current = _FakeManagedLease(
+        root: Directory('ordered-current'),
+        projectIdValue: '95959595959595959595959595959595',
+        projectRevision: 5,
+        head: _head(95),
+        onVerify: (_) async {
           events.add('save-enter');
           saveEntered.complete();
           await releaseSave.future;
           events.add('save-exit');
         },
-        onClose: () => events.add('legacy-close'),
       );
       final destination = p.join(p.absolute('ordered-import'), 'project');
       final head = _head(96);
@@ -419,9 +389,9 @@ void main() {
       );
       var openCalls = 0;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async {
           openCalls++;
+          if (openCalls == 1) return current;
           events.add('import-open');
           return candidate;
         },
@@ -430,29 +400,25 @@ void main() {
         await coordinator.shutdown();
         coordinator.dispose();
       });
+      await coordinator.openManagedRevision3(current.root);
 
       final save = coordinator.saveCurrent();
       await saveEntered.future;
       final open = coordinator.openImportedManagedRevision3(receipt);
       await Future<void>.delayed(Duration.zero);
-      expect(openCalls, 0);
+      expect(openCalls, 1);
 
       releaseSave.complete();
       await save;
       await open;
-      expect(events, <String>[
-        'save-enter',
-        'save-exit',
-        'import-open',
-        'legacy-close',
-      ]);
+      expect(events, <String>['save-enter', 'save-exit', 'import-open']);
+      expect(current.closeCalls, 1);
     },
   );
 
   test(
-    'managed adoption closes legacy and save verifies without a managed write',
+    'managed open and save expose and verify the exact checkpoint',
     () async {
-      final legacy = _FakeLegacyLease(path: 'old.goremod');
       final managed = _FakeManagedLease(
         root: Directory('managed'),
         projectIdValue: '01010101010101010101010101010101',
@@ -460,7 +426,6 @@ void main() {
         head: _head(7),
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async => managed,
       );
       addTearDown(() async {
@@ -475,7 +440,6 @@ void main() {
       expect(opened.projectId, managed.projectId);
       expect(opened.projectRevision, 7);
       expect(opened.head.canonicalJson, managed.head.canonicalJson);
-      expect(legacy.closeCalls, 1);
       expect(managed.verifyCalls, 0);
 
       final saved = await coordinator.saveCurrent();
@@ -489,61 +453,9 @@ void main() {
     },
   );
 
-  test('save and managed open share one invocation-ordered lane', () async {
-    final events = <String>[];
-    final saveEntered = Completer<void>();
-    final releaseSave = Completer<void>();
-    final legacy = _FakeLegacyLease(
-      path: 'ordered.goremod',
-      onSave: () async {
-        events.add('save-enter');
-        saveEntered.complete();
-        await releaseSave.future;
-        events.add('save-exit');
-      },
-      onClose: () => events.add('legacy-close'),
-    );
-    final managed = _FakeManagedLease(
-      root: Directory('ordered-managed'),
-      projectIdValue: '02020202020202020202020202020202',
-      projectRevision: 2,
-      head: _head(2),
-    );
-    var openCalls = 0;
-    final coordinator = CurrentProjectCoordinator(
-      initialLegacy: legacy,
-      openManagedRevision3: (_) async {
-        openCalls++;
-        events.add('managed-open');
-        return managed;
-      },
-    );
-    addTearDown(() async {
-      await coordinator.shutdown();
-      coordinator.dispose();
-    });
-
-    final save = coordinator.saveCurrent();
-    await saveEntered.future;
-    final open = coordinator.openManagedRevision3(Directory('managed'));
-    await Future<void>.delayed(Duration.zero);
-    expect(openCalls, 0);
-
-    releaseSave.complete();
-    await save;
-    await open;
-    expect(events, <String>[
-      'save-enter',
-      'save-exit',
-      'managed-open',
-      'legacy-close',
-    ]);
-  });
-
   test(
-    'invalid managed candidate snapshot is closed and legacy remains current',
+    'invalid managed candidate snapshot is closed and state stays empty',
     () async {
-      final legacy = _FakeLegacyLease(path: 'preserved.goremod');
       final candidate = _FakeManagedLease(
         root: Directory('invalid'),
         projectIdValue: '03030303030303030303030303030303',
@@ -552,7 +464,6 @@ void main() {
         projectIdError: StateError('invalid candidate identity'),
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (_) async => candidate,
       );
       addTearDown(() async {
@@ -565,8 +476,7 @@ void main() {
         throwsA(isA<StateError>()),
       );
 
-      expect(coordinator.state, isA<LegacyCurrentProjectState>());
-      expect(legacy.closeCalls, 0);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
       expect(candidate.closeCalls, 1);
     },
   );
@@ -1117,92 +1027,34 @@ void main() {
     expect(managed.contentReadCalls, 1);
   });
 
-  test('adopting legacy retires the managed lease exactly once', () async {
-    final managed = _FakeManagedLease(
-      root: Directory('before-legacy'),
-      projectIdValue: '05050505050505050505050505050505',
-      projectRevision: 5,
-      head: _head(5),
+  test('production coordinator starts with no current project', () async {
+    final container = ProviderContainer.test(
+      overrides: [
+        managedRevision3CurrentProjectCreatorProvider.overrideWithValue((
+          _,
+        ) async {
+          throw UnimplementedError();
+        }),
+        managedRevision3CurrentProjectOpenerProvider.overrideWithValue((
+          _,
+        ) async {
+          throw UnimplementedError();
+        }),
+      ],
     );
-    final legacy = _FakeLegacyLease(
-      path: 'adopted.goremod',
-      hasUnsavedChanges: false,
-    );
-    final coordinator = CurrentProjectCoordinator(
-      openManagedRevision3: (_) async => managed,
+    final coordinator = container.read(
+      currentProjectCoordinatorProvider.notifier,
     );
     addTearDown(() async {
       await coordinator.shutdown();
-      coordinator.dispose();
+      container.dispose();
     });
-    await coordinator.openManagedRevision3(Directory('before-legacy'));
 
-    final state = await coordinator.adoptLegacy(legacy);
-
-    expect(state.path, 'adopted.goremod');
-    expect(coordinator.state, isA<LegacyCurrentProjectState>());
-    expect(managed.closeCalls, 1);
-    expect(legacy.closeCalls, 0);
-    await coordinator.saveCurrent();
-    expect(legacy.saveCalls, 1);
-    await expectLater(
-      coordinator.verifyCurrent(),
-      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    expect(
+      container.read(currentProjectCoordinatorProvider),
+      isA<NoCurrentProjectState>(),
     );
   });
-
-  test(
-    'production legacy factory creates one-shot leases across a format round trip',
-    () async {
-      final container = ProviderContainer.test();
-      final factory = container.read(legacyCurrentProjectLeaseFactoryProvider);
-      final firstLegacy = factory();
-      final firstManaged = _FakeManagedLease(
-        root: Directory('first-managed'),
-        projectIdValue: '08080808080808080808080808080808',
-        projectRevision: 8,
-        head: _head(8),
-      );
-      final secondManaged = _FakeManagedLease(
-        root: Directory('second-managed'),
-        projectIdValue: '09090909090909090909090909090909',
-        projectRevision: 9,
-        head: _head(9),
-      );
-      final managed = <_FakeManagedLease>[firstManaged, secondManaged];
-      var nextManaged = 0;
-      container.read(currentProjectPathProvider.notifier).state =
-          'first.goremod';
-      final coordinator = CurrentProjectCoordinator(
-        initialLegacy: firstLegacy,
-        openManagedRevision3: (_) async => managed[nextManaged++],
-      );
-      addTearDown(() async {
-        await coordinator.shutdown();
-        coordinator.dispose();
-        container.dispose();
-      });
-
-      await coordinator.openManagedRevision3(Directory('first-managed'));
-      expect(container.read(currentProjectPathProvider), isNull);
-
-      container.read(currentProjectPathProvider.notifier).state =
-          'second.goremod';
-      final secondLegacy = factory();
-      expect(secondLegacy, isNot(same(firstLegacy)));
-      final legacyState = await coordinator.adoptLegacy(secondLegacy);
-      expect(legacyState.path, 'second.goremod');
-      expect(firstManaged.closeCalls, 1);
-
-      await coordinator.openManagedRevision3(Directory('second-managed'));
-      expect(container.read(currentProjectPathProvider), isNull);
-      await expectLater(
-        coordinator.adoptLegacy(firstLegacy),
-        throwsA(isA<StateError>()),
-      );
-      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
-    },
-  );
 
   test(
     'close failure is terminal diagnostic state and is never retried',
@@ -1244,9 +1096,12 @@ void main() {
   test(
     'retired close failure does not fail adoption or retry during shutdown',
     () async {
-      final legacy = _FakeLegacyLease(
-        path: 'terminal-retired.goremod',
-        onClose: () => throw StateError('injected retired close failure'),
+      final previous = _FakeManagedLease(
+        root: Directory('terminal-retired'),
+        projectIdValue: '09090909090909090909090909090909',
+        projectRevision: 9,
+        head: _head(9),
+        closeFailuresRemaining: 1,
       );
       final managed = _FakeManagedLease(
         root: Directory('after-terminal-retire'),
@@ -1254,25 +1109,27 @@ void main() {
         projectRevision: 10,
         head: _head(10),
       );
+      var openCalls = 0;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        openManagedRevision3: (_) async => managed,
+        openManagedRevision3: (_) async =>
+            ++openCalls == 1 ? previous : managed,
       );
       addTearDown(coordinator.dispose);
+      await coordinator.openManagedRevision3(previous.root);
 
       final opened = await coordinator.openManagedRevision3(
         Directory('after-terminal-retire'),
       );
       expect(opened.projectRevision, 10);
-      expect(legacy.closeCalls, 1);
+      expect(previous.closeCalls, 1);
       expect(coordinator.terminalCleanupFailures, hasLength(1));
       expect(
         coordinator.terminalCleanupFailures.single.projectKind,
-        CurrentProjectKind.legacyFormat1,
+        CurrentProjectKind.managedRevision3,
       );
 
       await coordinator.shutdown();
-      expect(legacy.closeCalls, 1);
+      expect(previous.closeCalls, 1);
       expect(managed.closeCalls, 1);
       expect(coordinator.terminalCleanupFailures, hasLength(1));
     },
@@ -1281,7 +1138,6 @@ void main() {
   test('shutdown drains an accepted late open and closes its result', () async {
     final openEntered = Completer<void>();
     final releaseOpen = Completer<void>();
-    final legacy = _FakeLegacyLease(path: 'initial.goremod');
     final managed = _FakeManagedLease(
       root: Directory('late'),
       projectIdValue: '07070707070707070707070707070707',
@@ -1289,7 +1145,6 @@ void main() {
       head: _head(7),
     );
     final coordinator = CurrentProjectCoordinator(
-      initialLegacy: legacy,
       openManagedRevision3: (_) async {
         openEntered.complete();
         await releaseOpen.future;
@@ -1309,7 +1164,6 @@ void main() {
     await opening;
     await shutdown;
 
-    expect(legacy.closeCalls, 1);
     expect(managed.closeCalls, 1);
     expect(coordinator.state, isA<NoCurrentProjectState>());
   });
@@ -1319,17 +1173,20 @@ void main() {
     () async {
       final saveEntered = Completer<void>();
       final releaseSave = Completer<void>();
-      final legacy = _FakeLegacyLease(
-        path: 'dispose.goremod',
-        onSave: () async {
+      final managed = _FakeManagedLease(
+        root: Directory('dispose-managed'),
+        projectIdValue: '10101010101010101010101010101010',
+        projectRevision: 10,
+        head: _head(10),
+        onVerify: (_) async {
           saveEntered.complete();
           await releaseSave.future;
         },
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        openManagedRevision3: (_) async => throw UnimplementedError(),
+        openManagedRevision3: (_) async => managed,
       );
+      await coordinator.openManagedRevision3(managed.root);
 
       final saving = coordinator.saveCurrent();
       await saveEntered.future;
@@ -1337,103 +1194,11 @@ void main() {
       releaseSave.complete();
 
       final saved = await saving;
-      expect(saved, isA<LegacyCurrentProjectState>());
+      expect(saved, isA<ManagedRevision3CurrentProjectState>());
       await coordinator.shutdown();
-      expect(legacy.closeCalls, 1);
-    },
-  );
-
-  test(
-    'legacy open is validated in the coordinator lane before replacing managed',
-    () async {
-      final candidate = _FakeLegacyLease();
-      final managed = _FakeManagedLease(
-        root: Directory('managed-before-legacy-open'),
-        projectIdValue: '11111111111111111111111111111111',
-        projectRevision: 11,
-        head: _head(11),
-      );
-      final coordinator = CurrentProjectCoordinator(
-        createLegacy: () => candidate,
-        openManagedRevision3: (_) async => managed,
-      );
-      addTearDown(() async {
-        await coordinator.shutdown();
-        coordinator.dispose();
-      });
-      await coordinator.openManagedRevision3(managed.root);
-
-      final opened = await coordinator.openLegacyFromPath('opened.goremod');
-
-      expect(opened.path, 'opened.goremod');
-      expect(coordinator.state, isA<LegacyCurrentProjectState>());
-      expect(candidate.openFromPathCalls, 1);
-      expect(candidate.closeCalls, 0);
       expect(managed.closeCalls, 1);
     },
   );
-
-  test(
-    'failed legacy candidate open preserves the exact managed current project',
-    () async {
-      final expectedError = StateError('legacy candidate is invalid');
-      final candidate = _FakeLegacyLease(
-        onOpenFromPath: (_) => throw expectedError,
-      );
-      final managed = _FakeManagedLease(
-        root: Directory('managed-preserved'),
-        projectIdValue: '12121212121212121212121212121212',
-        projectRevision: 12,
-        head: _head(12),
-      );
-      final coordinator = CurrentProjectCoordinator(
-        createLegacy: () => candidate,
-        openManagedRevision3: (_) async => managed,
-      );
-      addTearDown(() async {
-        await coordinator.shutdown();
-        coordinator.dispose();
-      });
-      await coordinator.openManagedRevision3(managed.root);
-      final before = coordinator.state;
-
-      await expectLater(
-        coordinator.openLegacyFromPath('invalid.goremod'),
-        throwsA(same(expectedError)),
-      );
-
-      expect(coordinator.state, same(before));
-      expect(candidate.openFromPathCalls, 1);
-      expect(candidate.closeCalls, 1);
-      expect(managed.closeCalls, 0);
-    },
-  );
-
-  test('managed current project rejects compatibility Save As', () async {
-    final managed = _FakeManagedLease(
-      root: Directory('managed-no-save-as'),
-      projectIdValue: '13131313131313131313131313131313',
-      projectRevision: 13,
-      head: _head(13),
-    );
-    final coordinator = CurrentProjectCoordinator(
-      createLegacy: () => _FakeLegacyLease(),
-      openManagedRevision3: (_) async => managed,
-    );
-    addTearDown(() async {
-      await coordinator.shutdown();
-      coordinator.dispose();
-    });
-    await coordinator.openManagedRevision3(managed.root);
-
-    await expectLater(
-      coordinator.saveLegacyToPath('forbidden.goremod'),
-      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
-    );
-
-    expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
-    expect(managed.verifyCalls, 0);
-  });
 
   test(
     'managed content read uses the current lease and refreshes poison state',
@@ -8088,7 +7853,7 @@ void main() {
     expect(managed.historyRestoreCalls, 0);
   });
 
-  test('content read rejects absent and legacy current projects', () async {
+  test('content read rejects an absent current project', () async {
     final empty = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => throw UnimplementedError(),
     );
@@ -8100,76 +7865,7 @@ void main() {
       empty.readCurrentRevision3ContentIndex(),
       throwsA(isA<NoCurrentProjectException>()),
     );
-
-    final legacy = CurrentProjectCoordinator(
-      initialLegacy: _FakeLegacyLease(path: 'legacy.goremod'),
-      openManagedRevision3: (_) async => throw UnimplementedError(),
-    );
-    addTearDown(() async {
-      await legacy.shutdown();
-      legacy.dispose();
-    });
-    await expectLater(
-      legacy.readCurrentRevision3ContentIndex(),
-      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
-    );
   });
-}
-
-final class _FakeLegacyLease implements LegacyCurrentProjectLease {
-  _FakeLegacyLease({
-    this.path,
-    this.hasUnsavedChanges = false,
-    this.onSave,
-    this.onOpenFromPath,
-    this.onClose,
-  });
-
-  String? path;
-  @override
-  final bool hasUnsavedChanges;
-  final FutureOr<void> Function()? onSave;
-  final FutureOr<void> Function(String path)? onOpenFromPath;
-  final FutureOr<void> Function()? onClose;
-  int saveCalls = 0;
-  int saveToPathCalls = 0;
-  int openFromPathCalls = 0;
-  int newProjectCalls = 0;
-  int closeCalls = 0;
-
-  @override
-  String? get currentPath => path;
-
-  @override
-  Future<void> saveCurrent() async {
-    saveCalls++;
-    await onSave?.call();
-  }
-
-  @override
-  Future<void> saveToPath(String path) async {
-    saveToPathCalls++;
-    this.path = path;
-  }
-
-  @override
-  Future<void> openFromPath(String path) async {
-    openFromPathCalls++;
-    await onOpenFromPath?.call(path);
-    this.path = path;
-  }
-
-  @override
-  Future<void> newProject() async {
-    newProjectCalls++;
-    path = null;
-  }
-
-  @override
-  Future<void> close() async {
-    closeCalls++;
-    await onClose?.call();
-  }
 }
 
 AuthoringRevision3QuestTransitionsSeed _questTransitionsSeed(

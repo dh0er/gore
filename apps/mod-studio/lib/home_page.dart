@@ -6,33 +6,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
-import 'app/domain/asset_entry_tracker.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
 import 'app/ui/about_dialog.dart';
-import 'app/ui/game_path_scope.dart';
-import 'app/ui/keep_alive_tab.dart';
-import 'app/ui/tab_entry_listener.dart';
 import 'app/ui/window_chrome.dart';
-import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
 import 'dataasset/ui/dataasset_lab.dart';
 import 'dataasset/ui/installed_package_browser_dialog.dart';
 import 'dataasset/ui/installed_dataasset_semantic_edit_dialog.dart';
 import 'dataasset/ui/dataasset_semantic_edit_panel.dart';
-import 'audio/ui/audio_tab.dart';
-import 'dialog/ui/dialoge_tab.dart';
-import 'editor/domain/overrides_notifier.dart';
-import 'editor/ui/changes_tab.dart';
-import 'export/ui/build_deploy_dialog.dart';
 import 'l10n/app_localizations.dart';
-import 'loc/domain/loc_catalog_provider.dart';
-import 'loc/domain/loc_notifier.dart';
-import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/managed_project_session.dart';
-import 'project/project_controller.dart';
 import 'project/revision3_base_game_content_browser.dart';
 import 'project/revision3_content_index.dart';
 import 'project/revision3_content_library.dart';
@@ -111,11 +97,7 @@ import 'project/revision3_voice_take_selection_dialog.dart';
 import 'project/revision3_voice_take_status_authoring.dart';
 import 'project/revision3_voice_target_dialog.dart';
 import 'project/revision3_voice_wizard.dart';
-import 'scripts/domain/script_modules_provider.dart';
-import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
-import 'story/domain/story_workspace_launcher.dart';
-import 'story/ui/story_workspace_flow.dart';
 
 typedef ManagedRevision3DirectoryPicker =
     Future<String?> Function(String confirmButtonText);
@@ -280,51 +262,6 @@ final managedRevision3DataAssetExtractReceiptInspectorProvider =
               ),
     );
 
-/// Main tab indices, matching the [TabBar] tab order in [HomePage].
-const _scriptsTabIndex = 3;
-const _changesTabIndex = 4;
-
-/// Entry refresh for the kept-alive main tabs (see the [TabEntryListener]
-/// in [HomePage]): invalidates the install-bound data providers backing the
-/// entered tab so it refetches — the pre-keep-alive freshness semantics.
-///
-/// Runs on EVERY settled tab entry, first entries included; whether an
-/// entry actually refreshes is the session-wide [AssetEntryTracker]'s call.
-/// A per-tab "first entry = fresh build, skip" shortcut would be wrong
-/// here: the Changes tab embeds the same Scripts view, and while
-/// its embed keeps the shared `autoDispose` provider alive a deploy,
-/// undeploy, or game patch can stale the value before the standalone tab is
-/// ever opened. Only the very first display of an asset kind ANYWHERE
-/// skips the invalidate — that build creates the provider fresh, so
-/// invalidating would double-fetch.
-///
-/// For the Changes tab, in parity with the standalone tab cases, only the
-/// provider of the asset section it CURRENTLY displays is refreshed (no
-/// over-fetch for sections that aren't on screen; nothing for
-/// All/Items/Dialogs/Audio). Section entry INSIDE the Changes tab is
-/// handled by [ChangesTab]'s own selection logic, against the same tracker.
-///
-/// Top-level so tests can exercise the real mapping against a real
-/// [TabEntryListener] without pumping the FFI-heavy [HomePage].
-void handleMainTabEntered(WidgetRef ref, int index) {
-  final tracker = ref.read(assetEntryTrackerProvider);
-  switch (index) {
-    case _scriptsTabIndex:
-      if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
-        ref.invalidate(scriptModulesProvider);
-      }
-    case _changesTabIndex:
-      switch (ref.read(changesAssetSectionProvider)) {
-        case ChangesAssetSection.scripts:
-          if (tracker.shouldInvalidateOnEntry(AssetKind.scriptModules)) {
-            ref.invalidate(scriptModulesProvider);
-          }
-        case null:
-          break;
-      }
-  }
-}
-
 /// A completed folder publication may notify only the exact project that
 /// opened its dialog and only after that exact receipt became current.
 bool revision3VoiceFolderPublicationMatchesCurrent(
@@ -348,8 +285,7 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage>
-    with WidgetsBindingObserver {
+class _HomePageState extends ConsumerState<HomePage> {
   bool _projectActionBusy = false;
   bool _managedWorkspaceDirty = false;
   bool _managedDirtyRebuildScheduled = false;
@@ -370,11 +306,6 @@ class _HomePageState extends ConsumerState<HomePage>
   void initState() {
     super.initState();
     _managedWorkspaceDirtyListener = _onManagedWorkspaceDirtyChanged;
-    WidgetsBinding.instance.addObserver(this);
-    // First-run, optional: after the first frame, if no localized text has
-    // been extracted yet and the user hasn't been prompted before, offer to
-    // extract it.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeFirstRunPrompt());
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeAutoDetectGamePath(),
     );
@@ -392,38 +323,6 @@ class _HomePageState extends ConsumerState<HomePage>
     } catch (_) {
       // best-effort; user can still set it manually in Settings
     }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Another tool (or `gore-cli loc extract`) may have written the shared
-    // loc_catalog.json while this app was in the background. Re-read it on
-    // resume so item names pick up a catalog that appeared after first load.
-    if (state == AppLifecycleState.resumed) {
-      ref.invalidate(locCatalogProvider);
-    }
-  }
-
-  Future<void> _maybeFirstRunPrompt() async {
-    if (ref.read(locExtractPromptedProvider)) return;
-    final present = await ref.read(locProvider.notifier).status();
-    // Only prompt when the catalog is definitively absent: a null status means
-    // the query failed (e.g. core unavailable), where extraction can't work, so
-    // don't nag with the dialog.
-    if (!mounted || present != false) return;
-    final shouldExtract = await showLocFirstRunDialog(context);
-    if (!mounted || !shouldExtract) return;
-    // Record only once the user actually chose to extract, so the prompt isn't
-    // marked as shown when the dialog never appeared, and deferring ("Not now")
-    // lets the optional prompt offer again on a later launch.
-    ref.read(locExtractPromptedProvider.notifier).markPrompted();
-    await runLocExtractFlow(context, ref);
   }
 
   void _snack(String message) {
@@ -449,15 +348,6 @@ class _HomePageState extends ConsumerState<HomePage>
     final l10n = AppLocalizations.of(context);
     try {
       switch (current) {
-        case LegacyCurrentProjectState(:final path):
-          if (path == null) {
-            await _saveLegacyProjectAs(coordinator);
-            return;
-          }
-          final saved = await coordinator.saveCurrent();
-          _snack(
-            'Saved project to ${(saved as LegacyCurrentProjectState).path}',
-          );
         case ManagedRevision3CurrentProjectState(:final requiresReopen):
           if (requiresReopen) {
             _snack(l10n.projectManagedRevision3VerifyBlocked);
@@ -469,11 +359,7 @@ class _HomePageState extends ConsumerState<HomePage>
           _snack('There is no current project to save.');
       }
     } catch (e) {
-      if (current is ManagedRevision3CurrentProjectState) {
-        _snack(l10n.projectManagedRevision3VerifyFailed('$e'));
-      } else {
-        _snack('Save failed: $e');
-      }
+      _snack(l10n.projectManagedRevision3VerifyFailed('$e'));
     }
   });
 
@@ -546,15 +432,6 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   }
 
-  Future<void> _saveProjectAs() => _runProjectAction(() async {
-    try {
-      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
-      await _saveLegacyProjectAs(coordinator);
-    } catch (e) {
-      _snack('Save failed: $e');
-    }
-  });
-
   Future<void> _closeProject() => _runProjectAction(() async {
     final l10n = AppLocalizations.of(context);
     if (!await _confirmDiscardIfDirty()) return;
@@ -565,20 +442,8 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   });
 
-  Future<void> _saveLegacyProjectAs(
-    CurrentProjectCoordinator coordinator,
-  ) async {
-    final path = await pickProjectSavePath(ref);
-    if (path == null) return;
-    final saved = await coordinator.saveLegacyToPath(path);
-    _snack('Saved project to ${saved.path}');
-  }
-
-  // Unsaved = there is staged content AND it differs from the last saved/loaded project, so a
-  // project that was just saved doesn't prompt to discard on New/Open.
   bool _hasUnsavedEdits() {
     return switch (ref.read(currentProjectCoordinatorProvider)) {
-      LegacyCurrentProjectState() => hasUnsavedChanges(ref),
       ManagedRevision3CurrentProjectState() => _managedWorkspaceDirty,
       NoCurrentProjectState() => false,
     };
@@ -587,51 +452,26 @@ class _HomePageState extends ConsumerState<HomePage>
   /// Confirm before discarding staged (unsaved) edits. Returns true to proceed.
   Future<bool> _confirmDiscardIfDirty() async {
     if (!_hasUnsavedEdits()) return true;
-    final managed =
-        ref.read(currentProjectCoordinatorProvider)
-            is ManagedRevision3CurrentProjectState;
     final l10n = AppLocalizations.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(
-          managed
-              ? l10n.managedLocalizationUnsavedTitle
-              : 'Discard unsaved changes?',
-        ),
-        content: Text(
-          managed
-              ? l10n.managedLocalizationUnsavedDescription
-              : 'You have staged edits that are not saved to a project. Continue and discard them?',
-        ),
+        title: Text(l10n.managedLocalizationUnsavedTitle),
+        content: Text(l10n.managedLocalizationUnsavedDescription),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: Text(
-              managed ? l10n.managedLocalizationKeepEditing : 'Cancel',
-            ),
+            child: Text(l10n.managedLocalizationKeepEditing),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text(managed ? l10n.managedLocalizationDiscard : 'Discard'),
+            child: Text(l10n.managedLocalizationDiscard),
           ),
         ],
       ),
     );
     return ok ?? false;
   }
-
-  Future<void> _newProject() => _runProjectAction(() async {
-    if (!await _confirmDiscardIfDirty()) return;
-    try {
-      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
-      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
-      await coordinator.newLegacyProject();
-      _showTransitionCleanupWarningIfAdded(coordinator, cleanupFailuresBefore);
-    } catch (e) {
-      _snack('New project failed: $e');
-    }
-  });
 
   Future<void> _newManagedRevision3Project() => _runProjectAction(() async {
     if (!await _confirmDiscardIfDirty() || !mounted) return;
@@ -806,25 +646,6 @@ class _HomePageState extends ConsumerState<HomePage>
         current.head.canonicalJson == created.head.canonicalJson;
   }
 
-  Future<void> _openProject() => _runProjectAction(() async {
-    if (!await _confirmDiscardIfDirty()) return;
-    try {
-      final path = await pickProjectOpenPath();
-      if (path == null) return;
-      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
-      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
-      final opened = await coordinator.openLegacyFromPath(path);
-      if (!_showTransitionCleanupWarningIfAdded(
-        coordinator,
-        cleanupFailuresBefore,
-      )) {
-        _snack('Loaded project ${opened.path}');
-      }
-    } catch (e) {
-      _snack('Open failed: $e');
-    }
-  });
-
   Future<void> _openManagedRevision3Project() => _runProjectAction(() async {
     if (!await _confirmDiscardIfDirty() || !mounted) return;
     final l10n = AppLocalizations.of(context);
@@ -951,82 +772,22 @@ class _HomePageState extends ConsumerState<HomePage>
     return true;
   }
 
-  Future<void> _openStoryWorkspace(StoryWorkspaceFlowMode mode) async {
-    final configuredGamePath = ref.read(gameExePathProvider);
-    if (configuredGamePath == null || configuredGamePath.isEmpty) {
-      _snack('Set the Gothic 1 Remake game path in Settings first.');
-      return;
-    }
-    await runStoryWorkspaceFlow(
-      context: context,
-      mode: mode,
-      // Pass the configured value through unchanged. The hardened Story
-      // launcher owns exact install-root/executable resolution.
-      configuredGamePath: configuredGamePath,
-      launcher: ManagedStoryWorkspaceFlowLauncher(
-        StoryWorkspaceLauncher(ModFfi(ref.read(coreServiceProvider))),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    // Switching the model data source invalidates pending overrides and the
-    // current selection: fields may be removed/renamed or enum backing values
-    // may change, so exporting old assignments could be wrong. Clear both when
-    // the dump source changes.
-    ref.listen(dumpPathProvider, (prev, next) {
-      if (prev != next &&
-          ref.read(currentProjectCoordinatorProvider)
-              is LegacyCurrentProjectState) {
-        ref.read(overridesProvider.notifier).clearAll();
-        ref.read(selectedItemProvider.notifier).state = null;
-      }
-    });
-
     final currentProject = ref.watch(currentProjectCoordinatorProvider);
-    final legacyCurrent = currentProject is LegacyCurrentProjectState;
     final managedCurrent =
         currentProject is ManagedRevision3CurrentProjectState;
     final managedVerificationBlocked =
         currentProject is ManagedRevision3CurrentProjectState &&
         currentProject.requiresReopen;
-    // Never read a hidden compatibility graph as build input while a managed
-    // project is authoritative. Short-circuiting also drops those provider
-    // subscriptions after the format switch.
-    final dirty = legacyCurrent && projectIsDirty(ref);
-    // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
-    // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
-    final gameConfigured = gameRoot != null;
     final textureCatalogAdapter = Revision3TextureCatalogNativeAdapter(
       ModFfi(ref.read(coreServiceProvider)),
     );
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
-    final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final l10n = AppLocalizations.of(context);
     final compactWindowChrome = MediaQuery.sizeOf(context).width < 760;
-    final legacyEntryBanner = _ManagedProjectEntryBanner(
-      bannerKey: const Key('legacy-compatibility-banner'),
-      title: l10n.managedProjectLandingTitle,
-      description: l10n.managedProjectLandingDescription,
-      createLabel: l10n.projectNewManagedRevision3,
-      openLabel: l10n.projectOpenManagedRevision3,
-      restoreLabel: l10n.projectRestoreActionTitle,
-      legacyTitle: l10n.legacyCompatibilityToolsTitle,
-      legacyDescription: l10n.legacyCompatibilityToolsDescription,
-      onCreateManaged: _projectActionBusy
-          ? null
-          : () => unawaited(_newManagedRevision3Project()),
-      onOpenManaged: _projectActionBusy
-          ? null
-          : () => unawaited(_openManagedRevision3Project()),
-      onRestoreBackup: _projectActionBusy
-          ? null
-          : () => unawaited(_restoreManagedRevision3Project()),
-    );
-
     final scaffold = Scaffold(
       appBar: AppBar(
         title: WindowDragArea(
@@ -1066,10 +827,6 @@ class _HomePageState extends ConsumerState<HomePage>
               switch (value) {
                 case 'newManagedRevision3':
                   await _newManagedRevision3Project();
-                case 'new':
-                  await _newProject();
-                case 'open':
-                  await _openProject();
                 case 'openManagedRevision3':
                   await _openManagedRevision3Project();
                 case 'restoreManagedRevision3':
@@ -1081,14 +838,8 @@ class _HomePageState extends ConsumerState<HomePage>
                       case final ManagedRevision3CurrentProjectState project) {
                     await _exportManagedRevision3Project(project);
                   }
-                case 'saveAs':
-                  await _saveProjectAs();
                 case 'close':
                   await _closeProject();
-                case 'storyCreate':
-                  await _openStoryWorkspace(StoryWorkspaceFlowMode.create);
-                case 'storyOpen':
-                  await _openStoryWorkspace(StoryWorkspaceFlowMode.open);
               }
             },
             itemBuilder: (_) => <PopupMenuEntry<String>>[
@@ -1097,17 +848,6 @@ class _HomePageState extends ConsumerState<HomePage>
                 value: 'newManagedRevision3',
                 enabled: !_projectActionBusy,
                 child: Text(l10n.projectNewManagedRevision3),
-              ),
-              PopupMenuItem(
-                key: const Key('project-new-legacy'),
-                value: 'new',
-                enabled: !_projectActionBusy,
-                child: Text(l10n.projectNewLegacy),
-              ),
-              PopupMenuItem(
-                value: 'open',
-                enabled: !_projectActionBusy,
-                child: Text(l10n.projectOpenLegacy),
               ),
               PopupMenuItem(
                 key: const Key('project-open-managed-revision3'),
@@ -1129,11 +869,7 @@ class _HomePageState extends ConsumerState<HomePage>
                     !_projectActionBusy &&
                     currentProject is! NoCurrentProjectState &&
                     !managedVerificationBlocked,
-                child: Text(
-                  managedCurrent
-                      ? l10n.projectVerifyCurrentHead
-                      : 'Save project',
-                ),
+                child: Text(l10n.projectVerifyCurrentHead),
               ),
               if (managedCurrent)
                 PopupMenuItem(
@@ -1153,53 +889,8 @@ class _HomePageState extends ConsumerState<HomePage>
                     currentProject is! NoCurrentProjectState,
                 child: Text(l10n.projectClose),
               ),
-              PopupMenuItem(
-                key: const Key('project-save-as'),
-                value: 'saveAs',
-                enabled: !_projectActionBusy && legacyCurrent,
-                child: const Text('Save project as…'),
-              ),
-              const PopupMenuDivider(),
-              PopupMenuItem(
-                key: const Key('project-create-story-workspace'),
-                value: 'storyCreate',
-                enabled: !_projectActionBusy && legacyCurrent,
-                child: const Text('Create Story workspace (drafts)...'),
-              ),
-              PopupMenuItem(
-                key: const Key('project-open-story-workspace'),
-                value: 'storyOpen',
-                enabled: !_projectActionBusy && legacyCurrent,
-                child: const Text('Open Story workspace (drafts)...'),
-              ),
             ],
           ),
-          if (legacyCurrent && compactWindowChrome)
-            IconButton(
-              key: const Key('legacy-build-deploy-compact'),
-              icon: const Icon(Icons.rocket_launch_outlined),
-              tooltip: 'Build / Deploy',
-              onPressed: !_projectActionBusy && (dirty || gameConfigured)
-                  ? () => showDialog(
-                      context: context,
-                      builder: (_) => const BuildDeployDialog(),
-                    )
-                  : null,
-            ),
-          if (legacyCurrent && !compactWindowChrome)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: FilledButton.icon(
-                icon: const Icon(Icons.rocket_launch_outlined, size: 18),
-                label: const Text('Build / Deploy'),
-                onPressed: !_projectActionBusy && (dirty || gameConfigured)
-                    ? () => showDialog(
-                        context: context,
-                        builder: (_) => const BuildDeployDialog(),
-                      )
-                    : null,
-              ),
-            ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             tooltip: l10n.about,
@@ -2152,112 +1843,6 @@ class _HomePageState extends ConsumerState<HomePage>
           onOpenSettings: _projectActionBusy
               ? null
               : () => unawaited(_showModStudioSettingsDialog(context)),
-        ),
-        LegacyCurrentProjectState() => DefaultTabController(
-          length: 7,
-          // KeepAliveTab keeps every tab (and its autoDispose providers)
-          // mounted across switches, so the script module list would go stale
-          // after a deploy, undeploy, or game patch. Entering that tab refetches
-          // (tracker-gated: only the asset kind's very
-          // first display anywhere builds fresh instead) — the pre-keep-alive
-          // freshness semantics — while the tabs' UI state survives.
-          child: TabEntryListener(
-            onTabEntered: (index) => handleMainTabEntered(ref, index),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-                  child: compactWindowChrome
-                      ? ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 220),
-                          child: SingleChildScrollView(
-                            key: const Key(
-                              'legacy-compatibility-banner-scroll',
-                            ),
-                            child: legacyEntryBanner,
-                          ),
-                        )
-                      : legacyEntryBanner,
-                ),
-                Container(
-                  color: scheme.surfaceContainerLowest,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TabBar(
-                          isScrollable: true,
-                          // Material 3 defaults scrollable tab bars to a 52px
-                          // leading inset (TabAlignment.startOffset); start flush
-                          // with just a small gap instead.
-                          tabAlignment: TabAlignment.start,
-                          padding: const EdgeInsetsDirectional.only(start: 4),
-                          tabs: [
-                            Tab(
-                              icon: const Icon(Icons.inventory_2_outlined),
-                              text: l10n.tabItems,
-                            ),
-                            Tab(
-                              icon: const Icon(Icons.forum_outlined),
-                              text: l10n.tabDialogs,
-                            ),
-                            Tab(
-                              icon: const Icon(Icons.audiotrack_outlined),
-                              text: l10n.tabAudio,
-                            ),
-                            Tab(
-                              icon: const Icon(Icons.code),
-                              text: l10n.tabScripts,
-                            ),
-                            Tab(
-                              icon: const Icon(Icons.edit_note_outlined),
-                              text: l10n.tabOverrides,
-                            ),
-                            Tab(
-                              icon: const Icon(Icons.settings_outlined),
-                              text: l10n.tabSettings,
-                            ),
-                            const Tab(
-                              icon: Icon(Icons.data_object_outlined),
-                              text: 'DataAsset Lab',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      // Items: catalog browser + field editor.
-                      const KeepAliveTab(child: ItemsTab()),
-                      // Dialoge: localized dialog/bark line editor.
-                      const KeepAliveTab(child: DialogeTab()),
-                      // Audio: FMOD bank sample browser + replacement.
-                      // (GamePathScope: these tabs' kept UI state is
-                      // bound to the configured install and resets when the
-                      // game path changes.)
-                      const KeepAliveTab(
-                        child: GamePathScope(child: AudioTab()),
-                      ),
-                      // AngelScript: stage .as mods, compile, splice.
-                      const KeepAliveTab(
-                        child: GamePathScope(child: ScriptTab()),
-                      ),
-                      // Changes: per-domain sidebar over all staged changes
-                      // ("All" = the flat OverridesPanel list, other sections =
-                      // the main-tab views filtered to staged entries).
-                      const KeepAliveTab(child: ChangesTab()),
-                      // Settings.
-                      const KeepAliveTab(child: SettingsTab()),
-                      // Bounded offline DataAsset evidence (never stages edits).
-                      const KeepAliveTab(child: DataAssetLab()),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
         ),
       },
     );
@@ -7685,12 +7270,7 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
     required this.onRestoreBackup,
     this.settingsLabel,
     this.onOpenSettings,
-    this.legacyTitle,
-    this.legacyDescription,
-  }) : assert(
-         (legacyTitle == null) == (legacyDescription == null),
-         'Legacy title and description must be provided together.',
-       );
+  });
 
   final Key bannerKey;
   final String title;
@@ -7703,8 +7283,6 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
   final VoidCallback? onOpenManaged;
   final VoidCallback? onRestoreBackup;
   final VoidCallback? onOpenSettings;
-  final String? legacyTitle;
-  final String? legacyDescription;
 
   @override
   Widget build(BuildContext context) {
@@ -7811,41 +7389,6 @@ class _ManagedProjectEntryBanner extends StatelessWidget {
                     ),
                   ],
                 ),
-              if (legacyTitle != null) ...[
-                const SizedBox(height: 14),
-                const Divider(height: 1),
-                const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.build_circle_outlined,
-                      size: 20,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text.rich(
-                        TextSpan(
-                          children: [
-                            TextSpan(
-                              text: '$legacyTitle — ',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            TextSpan(text: legacyDescription),
-                          ],
-                        ),
-                        key: const Key(
-                          'legacy-compatibility-tools-description',
-                        ),
-                        style: TextStyle(color: scheme.onSurfaceVariant),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
         ),

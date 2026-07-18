@@ -369,16 +369,13 @@ class AppLocalizationsRu extends AppLocalizations {
       'Активен loadout mod-manager. Сначала выполните undeploy в gore-manager.';
 
   @override
-  String get projectOpenLegacy => 'Open legacy project…';
+  String get projectOpenManagedRevision3 => 'Open mod project…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Open Mod Studio project…';
+  String get projectVerifyCurrentHead => 'Check project';
 
   @override
-  String get projectVerifyCurrentHead => 'Verify current head';
-
-  @override
-  String get projectManagedRevision3Title => 'Mod Studio project';
+  String get projectManagedRevision3Title => 'Mod project';
 
   @override
   String get projectClose => 'Close project';
@@ -387,10 +384,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String projectCloseFailed(String error) {
     return 'Project could not be closed: $error';
   }
-
-  @override
-  String get projectManagedRevision3IdentityOnly =>
-      'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
 
   @override
   String get projectRoot => 'Root';
@@ -411,38 +404,35 @@ class AppLocalizationsRu extends AppLocalizations {
   String get projectNoCurrent => 'No current project';
 
   @override
-  String get projectManagedRevision3Opened => 'Mod Studio project opened.';
+  String get projectManagedRevision3Opened => 'Mod project opened.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Mod Studio project could not be opened: $error';
+    return 'Mod project could not be opened: $error';
   }
 
   @override
-  String get projectManagedRevision3Verified => 'Project checkpoint verified.';
+  String get projectManagedRevision3Verified => 'Project checked.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Project checkpoint could not be verified: $error';
+    return 'Project check failed: $error';
   }
 
   @override
   String get projectManagedRevision3RequiresReopen =>
-      'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.';
+      'The project could not be checked safely. Recover or reopen it before continuing.';
 
   @override
   String get projectManagedRevision3VerifyBlocked =>
-      'Verification is blocked until the managed project is reopened.';
+      'Recover or reopen the project before checking it again.';
 
   @override
   String get projectTransitionCleanupWarning =>
       'Новый проект открыт, но не удалось полностью очистить сеанс предыдущего проекта. Повторная очистка выполняться не будет. Перезапустите Mod Studio, прежде чем снова открывать предыдущий проект.';
 
   @override
-  String get projectNewManagedRevision3 => 'Новый управляемый проект мода…';
-
-  @override
-  String get projectNewLegacy => 'Новый проект старого формата';
+  String get projectNewManagedRevision3 => 'Новый проект мода…';
 
   @override
   String get projectCreateGamePathRequired =>
@@ -454,12 +444,12 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return 'Управляемый проект мода $projectId создан';
+    return 'Проект мода $projectId создан';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return 'Не удалось создать управляемый проект мода: $error';
+    return 'Не удалось создать проект мода: $error';
   }
 
   @override
@@ -1112,20 +1102,11 @@ class AppLocalizationsRu extends AppLocalizations {
       'Рабочая область для автономного редактирования, точно соответствующая текущей версии';
 
   @override
-  String get managedProjectLandingTitle =>
-      'Рабочая область управляемого проекта';
+  String get managedProjectLandingTitle => 'Начать проект мода';
 
   @override
   String get managedProjectLandingDescription =>
-      'Используйте новый процесс работы с разделами «Главная», «Контент», «Сюжет», «Озвучка», «Проверка» и «Выпуск» в одном управляемом проекте.';
-
-  @override
-  String get legacyCompatibilityToolsTitle =>
-      'Инструменты совместимости старого формата';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      'Вкладки ниже содержат прежние инструменты прямой замены. Они останутся доступными, пока рабочая область управляемого проекта развивается.';
+      'Создайте проект, откройте существующую папку проекта или восстановите резервную копию.';
 
   @override
   String get managedProjectTechnicalDetails => 'Технические сведения о проекте';

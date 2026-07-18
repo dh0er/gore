@@ -4,16 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app/domain/desktop_updater.dart';
-import 'app/domain/ui_settings.dart';
 import 'core/core_service.dart';
 import 'core/providers.dart';
 import 'gore_mod_app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Recover settings/loc caches left behind by the gore-tools → gore rename,
-  // before any settings or loc caches are read.
-  migrateLegacyUmbrellaDirForPlatform();
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(

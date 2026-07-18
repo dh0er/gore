@@ -11,7 +11,6 @@ import 'package:path/path.dart' as p;
 import '../core/mod_ffi.dart';
 import '../core/providers.dart';
 import 'managed_project_session.dart';
-import 'project_controller.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_dialog_localization_authoring.dart';
@@ -36,7 +35,7 @@ import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
-enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
+enum CurrentProjectKind { none, managedRevision3 }
 
 sealed class CurrentProjectState {
   const CurrentProjectState();
@@ -49,23 +48,6 @@ final class NoCurrentProjectState extends CurrentProjectState {
 
   @override
   CurrentProjectKind get kind => CurrentProjectKind.none;
-}
-
-/// Snapshot of the compatibility `.goremod` session.
-///
-/// The legacy provider graph remains owned by [ProjectSessionController]; this
-/// state deliberately does not reinterpret it as a managed authoring document.
-final class LegacyCurrentProjectState extends CurrentProjectState {
-  const LegacyCurrentProjectState({
-    required this.path,
-    required this.hasUnsavedChanges,
-  });
-
-  final String? path;
-  final bool hasUnsavedChanges;
-
-  @override
-  CurrentProjectKind get kind => CurrentProjectKind.legacyFormat1;
 }
 
 /// Durable identity of the exact revision-3 checkpoint owned by the app.
@@ -577,18 +559,6 @@ final class CurrentProjectCleanupFailure {
   final StackTrace stackTrace;
 }
 
-/// Minimal ownership seam around the existing format-1 compatibility session.
-abstract interface class LegacyCurrentProjectLease {
-  String? get currentPath;
-  bool get hasUnsavedChanges;
-
-  Future<void> saveCurrent();
-  Future<void> saveToPath(String path);
-  Future<void> openFromPath(String path);
-  Future<void> newProject();
-  Future<void> close();
-}
-
 /// Minimal ownership seam around one fully-opened managed revision-3 session.
 abstract interface class ManagedRevision3CurrentProjectLease {
   Directory get root;
@@ -824,8 +794,8 @@ abstract interface class ManagedRevision3VoiceTakeMediaQaLease {
 
 /// Optional authority for one read-only Voice-folder plan and one atomic
 /// project-only publication of its complete ready set. Keeping this capability
-/// separate prevents legacy leases and narrow test doubles from accidentally
-/// gaining folder-read or batch-mutation authority.
+/// separate prevents narrow test doubles from accidentally gaining folder-read
+/// or batch-mutation authority.
 abstract interface class ManagedRevision3VoiceBatchLease {
   bool get supportsVoiceBatch;
 
@@ -995,69 +965,6 @@ typedef ManagedRevision3CurrentProjectCreator =
     Future<ManagedRevision3CurrentProjectLease> Function(
       ManagedRevision3ProjectCreateRequest request,
     );
-
-typedef LegacyCurrentProjectLeaseFactory = LegacyCurrentProjectLease Function();
-
-/// Compatibility adapter kept intentionally narrow so the existing provider
-/// graph and archive session do not have to know about managed projects.
-final class ProjectSessionLegacyCurrentProjectLease
-    implements LegacyCurrentProjectLease {
-  ProjectSessionLegacyCurrentProjectLease(this._session);
-
-  final ProjectSessionController _session;
-  Future<void>? _closeFuture;
-  bool _closed = false;
-
-  @override
-  String? get currentPath {
-    _requireOpen();
-    return _session.currentPath;
-  }
-
-  @override
-  bool get hasUnsavedChanges {
-    _requireOpen();
-    return _session.hasUnsavedChanges;
-  }
-
-  @override
-  Future<void> saveCurrent() async {
-    _requireOpen();
-    await _session.saveToCurrentPath();
-  }
-
-  @override
-  Future<void> saveToPath(String path) async {
-    _requireOpen();
-    await _session.saveToPath(path);
-  }
-
-  @override
-  Future<void> openFromPath(String path) async {
-    _requireOpen();
-    await _session.openFromPath(path);
-  }
-
-  @override
-  Future<void> newProject() async {
-    _requireOpen();
-    await _session.newProject();
-  }
-
-  @override
-  Future<void> close() {
-    final existing = _closeFuture;
-    if (existing != null) return existing;
-    _closed = true;
-    return _closeFuture = Future<void>.sync(_session.newProject);
-  }
-
-  void _requireOpen() {
-    if (_closed) {
-      throw StateError('legacy current-project lease is already closed');
-    }
-  }
-}
 
 final class _ManagedRevision3SessionLease
     implements
@@ -2007,16 +1914,6 @@ final class _ManagedRevision3SessionLease
   Future<void> close() => _session.close();
 }
 
-/// Produces a fresh one-shot ownership token for each legacy adoption.
-///
-/// The underlying compatibility session remains provider-scoped, but a closed
-/// lease can never be adopted again or accidentally skip a later `newProject`.
-final legacyCurrentProjectLeaseFactoryProvider =
-    Provider<LegacyCurrentProjectLeaseFactory>((ref) {
-      final session = ref.read(projectSessionProvider);
-      return () => ProjectSessionLegacyCurrentProjectLease(session);
-    });
-
 final managedRevision3StoryGenerationLoaderProvider =
     Provider<ManagedRevision3StoryGenerationLoader>((ref) {
       final ffi = ModFfi(ref.read(coreServiceProvider));
@@ -2181,10 +2078,7 @@ final currentProjectCoordinatorProvider =
     StateNotifierProvider<CurrentProjectCoordinator, CurrentProjectState>((
       ref,
     ) {
-      final createLegacy = ref.read(legacyCurrentProjectLeaseFactoryProvider);
       return CurrentProjectCoordinator(
-        initialLegacy: createLegacy(),
-        createLegacy: createLegacy,
         createManagedRevision3: ref.read(
           managedRevision3CurrentProjectCreatorProvider,
         ),
@@ -2310,7 +2204,7 @@ String? _managedRevision3CanonicalTargetForCheckpoint({
   }
 }
 
-/// Single app-wide owner for compatibility and managed project lifetimes.
+/// Single app-wide owner for managed project lifetimes.
 ///
 /// Candidate opens complete before adoption, so a failed open cannot disturb
 /// the current project. Open/adopt/save/verify/close operations share one lane;
@@ -2321,34 +2215,16 @@ String? _managedRevision3CanonicalTargetForCheckpoint({
 final class CurrentProjectCoordinator
     extends StateNotifier<CurrentProjectState> {
   factory CurrentProjectCoordinator({
-    LegacyCurrentProjectLease? initialLegacy,
-    LegacyCurrentProjectLeaseFactory? createLegacy,
     ManagedRevision3CurrentProjectCreator? createManagedRevision3,
     required ManagedRevision3CurrentProjectOpener openManagedRevision3,
-  }) {
-    final initial = initialLegacy == null
-        ? null
-        : _OwnedLegacyCurrentProject(initialLegacy);
-    return CurrentProjectCoordinator._(
-      current: initial,
-      initialState: initial == null
-          ? const NoCurrentProjectState()
-          : _stateOf(initial),
-      createLegacy: createLegacy,
-      createManagedRevision3: createManagedRevision3,
-      openManagedRevision3: openManagedRevision3,
-    );
-  }
+  }) =>
+      CurrentProjectCoordinator._(createManagedRevision3, openManagedRevision3);
 
-  CurrentProjectCoordinator._({
-    required this._current,
-    required CurrentProjectState initialState,
-    required this._createLegacy,
-    required this._createManagedRevision3,
-    required this._openManagedRevision3,
-  }) : super(initialState);
+  CurrentProjectCoordinator._(
+    this._createManagedRevision3,
+    this._openManagedRevision3,
+  ) : super(const NoCurrentProjectState());
 
-  final LegacyCurrentProjectLeaseFactory? _createLegacy;
   final ManagedRevision3CurrentProjectCreator? _createManagedRevision3;
   final ManagedRevision3CurrentProjectOpener _openManagedRevision3;
   _OwnedCurrentProject? _current;
@@ -2360,8 +2236,8 @@ final class CurrentProjectCoordinator
   bool _notifierDisposed = false;
 
   /// Terminal close failures retained for diagnostics. No failed lease is
-  /// retained or closed again because both production lease types memoize the
-  /// first close attempt.
+  /// retained or closed again because the production lease memoizes its first
+  /// close attempt.
   List<CurrentProjectCleanupFailure> get terminalCleanupFailures =>
       List<CurrentProjectCleanupFailure>.unmodifiable(_terminalCleanupFailures);
 
@@ -2461,90 +2337,13 @@ final class CurrentProjectCoordinator
     }
   });
 
-  /// Adopt an independently-opened compatibility lease.
-  ///
-  /// Ownership transfers when this invocation reaches the serialized lane.
-  Future<LegacyCurrentProjectState> adoptLegacy(
-    LegacyCurrentProjectLease lease,
-  ) => _enqueue(() async {
-    final current = _current;
-    if (current is _OwnedLegacyCurrentProject &&
-        identical(current.lease, lease)) {
-      final refreshed = _stateOf(current) as LegacyCurrentProjectState;
-      _publish(refreshed);
-      return refreshed;
-    }
-    final candidate = _OwnedLegacyCurrentProject(lease);
-    try {
-      final candidateState = _stateOf(candidate) as LegacyCurrentProjectState;
-      await _adopt(candidate, candidateState);
-      return candidateState;
-    } catch (error, stackTrace) {
-      if (!identical(_current, candidate)) await _closeUnadopted(candidate);
-      Error.throwWithStackTrace(error, stackTrace);
-    }
-  });
-
-  /// Start a clean compatibility project inside the same cross-format lane.
-  ///
-  /// When a managed project is current, the fresh compatibility lease remains
-  /// a candidate until its provider graph has been reset successfully. A
-  /// failure therefore leaves the managed lease authoritative.
-  Future<LegacyCurrentProjectState> newLegacyProject() =>
-      _operateOnLegacy((lease) => lease.newProject());
-
-  /// Fully load a compatibility archive before adopting it as current.
-  ///
-  /// Candidate cleanup is terminal and best-effort, matching managed-open
-  /// semantics. A failed load never displaces the current managed lease.
-  Future<LegacyCurrentProjectState> openLegacyFromPath(String path) =>
-      _operateOnLegacy((lease) => lease.openFromPath(path));
-
-  /// Save the current compatibility project to [path] and refresh its exact
-  /// path/dirty snapshot. Managed projects intentionally have no Save As path
-  /// until a native clone/fork transaction exists.
-  Future<LegacyCurrentProjectState> saveLegacyToPath(String path) =>
-      _enqueue(() async {
-        final current = _current;
-        if (current == null) throw const NoCurrentProjectException();
-        if (current is! _OwnedLegacyCurrentProject) {
-          throw const CurrentProjectOperationUnsupportedException(
-            'Save As is unavailable for managed revision-3 projects',
-          );
-        }
-        await current.lease.saveToPath(path);
-        return _refreshCurrentIfUnchanged(current) as LegacyCurrentProjectState;
-      });
-
-  /// Ctrl+S-sized durability action for the active backend.
-  ///
-  /// Compatibility projects write their captured provider snapshot. Managed
-  /// revision-3 projects already publish every semantic transaction, so this
-  /// performs only an exact-head, full-asset reopen verification.
-  Future<CurrentProjectState> saveCurrent() => _enqueue(() async {
-    final current = _current;
-    if (current == null) throw const NoCurrentProjectException();
-    late CurrentProjectState refreshed;
-    try {
-      switch (current) {
-        case _OwnedLegacyCurrentProject(:final lease):
-          await lease.saveCurrent();
-        case _OwnedManagedRevision3CurrentProject(:final lease):
-          if (lease.requiresReopen) {
-            throw const CurrentProjectOperationUnsupportedException(
-              'managed revision-3 verification is blocked until the project is reopened',
-            );
-          }
-          await lease.verifyCurrentHead();
-      }
-    } finally {
-      refreshed = _refreshCurrentIfUnchanged(current);
-    }
-    return refreshed;
-  });
+  /// Managed projects publish every semantic transaction immediately, so
+  /// Ctrl+S performs the same exact-head, full-asset reopen verification as
+  /// [verifyCurrent].
+  Future<ManagedRevision3CurrentProjectState> saveCurrent() => verifyCurrent();
 
   /// Read-only exact-head verification for a managed revision-3 current
-  /// project. Legacy archives have no equivalent full-reopen contract.
+  /// project.
   Future<ManagedRevision3CurrentProjectState>
   verifyCurrent() => _enqueue(() async {
     final current = _current;
@@ -2819,8 +2618,8 @@ final class CurrentProjectCoordinator
 
   /// Read the semantic index of the exact managed revision-3 current project.
   ///
-  /// This shares the app-wide project lane with save/open/close transitions. A legacy project has
-  /// no equivalent semantic projection, and a poisoned managed lease must first be reopened.
+  /// This shares the app-wide project lane with save/open/close transitions. A
+  /// poisoned managed lease must first be reopened.
   Future<Revision3ContentIndex>
   readCurrentRevision3ContentIndex() => _enqueue(() async {
     final current = _current;
@@ -6358,11 +6157,7 @@ final class CurrentProjectCoordinator
   ) {
     _terminalCleanupFailures.add(
       CurrentProjectCleanupFailure(
-        projectKind: switch (owned) {
-          _OwnedLegacyCurrentProject() => CurrentProjectKind.legacyFormat1,
-          _OwnedManagedRevision3CurrentProject() =>
-            CurrentProjectKind.managedRevision3,
-        },
+        projectKind: CurrentProjectKind.managedRevision3,
         error: error,
         stackTrace: stackTrace,
       ),
@@ -6394,40 +6189,6 @@ final class CurrentProjectCoordinator
     _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
-
-  Future<LegacyCurrentProjectState> _operateOnLegacy(
-    Future<void> Function(LegacyCurrentProjectLease lease) operation,
-  ) => _enqueue(() async {
-    final current = _current;
-    if (current case _OwnedLegacyCurrentProject(:final lease)) {
-      await operation(lease);
-      return _refreshCurrentIfUnchanged(current) as LegacyCurrentProjectState;
-    }
-
-    final createLegacy = _createLegacy;
-    if (createLegacy == null) {
-      throw const CurrentProjectOperationUnsupportedException(
-        'this coordinator cannot create a compatibility project lease',
-      );
-    }
-
-    LegacyCurrentProjectLease? candidateLease;
-    var adopted = false;
-    try {
-      candidateLease = createLegacy();
-      await operation(candidateLease);
-      final candidate = _OwnedLegacyCurrentProject(candidateLease);
-      final candidateState = _stateOf(candidate) as LegacyCurrentProjectState;
-      await _adopt(candidate, candidateState);
-      adopted = true;
-      return candidateState;
-    } catch (error, stackTrace) {
-      if (candidateLease != null && !adopted) {
-        await _closeUnadopted(_OwnedLegacyCurrentProject(candidateLease));
-      }
-      Error.throwWithStackTrace(error, stackTrace);
-    }
-  });
 
   @override
   void dispose() {
@@ -6504,12 +6265,6 @@ sealed class _OwnedCurrentProject {
   const _OwnedCurrentProject();
 }
 
-final class _OwnedLegacyCurrentProject extends _OwnedCurrentProject {
-  const _OwnedLegacyCurrentProject(this.lease);
-
-  final LegacyCurrentProjectLease lease;
-}
-
 final class _OwnedManagedRevision3CurrentProject extends _OwnedCurrentProject {
   const _OwnedManagedRevision3CurrentProject(this.lease);
 
@@ -6517,10 +6272,6 @@ final class _OwnedManagedRevision3CurrentProject extends _OwnedCurrentProject {
 }
 
 CurrentProjectState _stateOf(_OwnedCurrentProject owned) => switch (owned) {
-  _OwnedLegacyCurrentProject(:final lease) => LegacyCurrentProjectState(
-    path: lease.currentPath,
-    hasUnsavedChanges: lease.hasUnsavedChanges,
-  ),
   _OwnedManagedRevision3CurrentProject(:final lease) =>
     ManagedRevision3CurrentProjectState(
       root: lease.root,
@@ -6532,7 +6283,6 @@ CurrentProjectState _stateOf(_OwnedCurrentProject owned) => switch (owned) {
 };
 
 Future<void> _closeOwned(_OwnedCurrentProject owned) => switch (owned) {
-  _OwnedLegacyCurrentProject(:final lease) => lease.close(),
   _OwnedManagedRevision3CurrentProject(:final lease) => lease.close(),
 };
 

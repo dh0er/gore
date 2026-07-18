@@ -369,16 +369,13 @@ class AppLocalizationsDe extends AppLocalizations {
       'Ein mod-manager-Loadout ist aktiv. Bitte zuerst in gore-manager undeployen.';
 
   @override
-  String get projectOpenLegacy => 'Legacy-Projekt öffnen…';
+  String get projectOpenManagedRevision3 => 'Mod-Projekt öffnen…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Mod-Studio-Projekt öffnen…';
+  String get projectVerifyCurrentHead => 'Projekt prüfen';
 
   @override
-  String get projectVerifyCurrentHead => 'Aktuellen Head verifizieren';
-
-  @override
-  String get projectManagedRevision3Title => 'Mod-Studio-Projekt';
+  String get projectManagedRevision3Title => 'Mod-Projekt';
 
   @override
   String get projectClose => 'Projekt schließen';
@@ -387,10 +384,6 @@ class AppLocalizationsDe extends AppLocalizations {
   String projectCloseFailed(String error) {
     return 'Das Projekt konnte nicht geschlossen werden: $error';
   }
-
-  @override
-  String get projectManagedRevision3IdentityOnly =>
-      'Diese Oberfläche zeigt derzeit ausschließlich die verifizierte Projektidentität. Strg+S öffnet den exakten aktuellen Head erneut und verifiziert ihn; Legacy-Editoren, Build/Deploy und Speichern unter sind nicht verfügbar.';
 
   @override
   String get projectRoot => 'Projektordner';
@@ -411,56 +404,51 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectNoCurrent => 'Kein aktuelles Projekt';
 
   @override
-  String get projectManagedRevision3Opened => 'Mod-Studio-Projekt geöffnet.';
+  String get projectManagedRevision3Opened => 'Mod-Projekt geöffnet.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Mod-Studio-Projekt konnte nicht geöffnet werden: $error';
+    return 'Mod-Projekt konnte nicht geöffnet werden: $error';
   }
 
   @override
-  String get projectManagedRevision3Verified =>
-      'Projekt-Checkpoint verifiziert.';
+  String get projectManagedRevision3Verified => 'Projekt geprüft.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Projekt-Checkpoint konnte nicht verifiziert werden: $error';
+    return 'Projektprüfung fehlgeschlagen: $error';
   }
 
   @override
   String get projectManagedRevision3RequiresReopen =>
-      'Die Verifizierung des exakten Heads konnte nicht sicher abgeschlossen werden. Diese Sitzung muss jetzt wiederhergestellt werden; weitere Verifizierungen sind gesperrt. Schließe Mod Studio und öffne dieses Projekt danach erneut.';
+      'Das Projekt konnte nicht sicher geprüft werden. Stelle es wieder her oder öffne es erneut, bevor du fortfährst.';
 
   @override
   String get projectManagedRevision3VerifyBlocked =>
-      'Die Verifizierung ist gesperrt, bis das verwaltete Projekt erneut geöffnet wurde.';
+      'Stelle das Projekt wieder her oder öffne es erneut, bevor du es noch einmal prüfst.';
 
   @override
   String get projectTransitionCleanupWarning =>
       'Das neue Projekt ist geöffnet, aber die vorherige Projektsitzung konnte nicht vollständig bereinigt werden. Es wird kein erneuter Bereinigungsversuch durchgeführt. Starte Mod Studio neu, bevor du das vorherige Projekt erneut öffnest.';
 
   @override
-  String get projectNewManagedRevision3 => 'Neues verwaltetes Mod-Projekt…';
-
-  @override
-  String get projectNewLegacy => 'Neues Legacy-Projekt';
+  String get projectNewManagedRevision3 => 'Neues Mod-Projekt…';
 
   @override
   String get projectCreateGamePathRequired =>
       'Lege vor dem Erstellen eines Mod-Projekts unter Einstellungen den Pfad zu Gothic 1 Remake fest.';
 
   @override
-  String get projectCreateDirectoryPickerTitle =>
-      'Verwaltetes Mod-Projekt hier erstellen';
+  String get projectCreateDirectoryPickerTitle => 'Mod-Projekt hier erstellen';
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return 'Verwaltetes Mod-Projekt $projectId erstellt';
+    return 'Mod-Projekt $projectId erstellt';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return 'Verwaltetes Mod-Projekt konnte nicht erstellt werden: $error';
+    return 'Mod-Projekt konnte nicht erstellt werden: $error';
   }
 
   @override
@@ -1130,20 +1118,11 @@ class AppLocalizationsDe extends AppLocalizations {
       'Offline-Arbeitsbereich auf exakt aktuellem Stand';
 
   @override
-  String get managedProjectLandingTitle =>
-      'Arbeitsbereich für verwaltete Projekte';
+  String get managedProjectLandingTitle => 'Mod-Projekt starten';
 
   @override
   String get managedProjectLandingDescription =>
-      'Nutze den neuen Ablauf für Start, Inhalte, Story, Sprachausgabe, Prüfung und Veröffentlichung in einem einzigen verwalteten Projekt.';
-
-  @override
-  String get legacyCompatibilityToolsTitle =>
-      'Kompatibilitätswerkzeuge für Legacy-Projekte';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      'Die Tabs unten enthalten ältere Werkzeuge für direkte Ersetzungen. Sie bleiben verfügbar, während der Arbeitsbereich für verwaltete Projekte weiter ausgebaut wird.';
+      'Erstelle ein Projekt, öffne einen vorhandenen Projektordner oder stelle ein Projekt-Backup wieder her.';
 
   @override
   String get managedProjectTechnicalDetails => 'Technische Projektdetails';

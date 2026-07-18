@@ -189,10 +189,9 @@
     }
   },
   "managerDeployActive": "A mod-manager loadout is active. Undeploy it in gore-manager first.",
-  "projectOpenLegacy": "Open legacy project…",
-  "projectOpenManagedRevision3": "Open Mod Studio project…",
-  "projectVerifyCurrentHead": "Verify current head",
-  "projectManagedRevision3Title": "Mod Studio project",
+  "projectOpenManagedRevision3": "Open mod project…",
+  "projectVerifyCurrentHead": "Check project",
+  "projectManagedRevision3Title": "Mod project",
   "projectClose": "Close project",
   "projectCloseFailed": "Project could not be closed: {error}",
   "@projectCloseFailed": {
@@ -200,15 +199,14 @@
       "error": {"type": "String"}
     }
   },
-  "projectManagedRevision3IdentityOnly": "This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.",
   "projectRoot": "Root",
   "projectId": "Project ID",
   "projectRevision": "Project revision",
   "projectHeadSha256": "Head SHA-256",
   "projectSnapshotBytes": "Snapshot bytes",
   "projectNoCurrent": "No current project",
-  "projectManagedRevision3Opened": "Mod Studio project opened.",
-  "projectManagedRevision3OpenFailed": "Mod Studio project could not be opened: {error}",
+  "projectManagedRevision3Opened": "Mod project opened.",
+  "projectManagedRevision3OpenFailed": "Mod project could not be opened: {error}",
   "@projectManagedRevision3OpenFailed": {
     "placeholders": {
       "error": {
@@ -216,8 +214,8 @@
       }
     }
   },
-  "projectManagedRevision3Verified": "Project checkpoint verified.",
-  "projectManagedRevision3VerifyFailed": "Project checkpoint could not be verified: {error}",
+  "projectManagedRevision3Verified": "Project checked.",
+  "projectManagedRevision3VerifyFailed": "Project check failed: {error}",
   "@projectManagedRevision3VerifyFailed": {
     "placeholders": {
       "error": {
@@ -225,14 +223,13 @@
       }
     }
   },
-  "projectManagedRevision3RequiresReopen": "Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.",
-  "projectManagedRevision3VerifyBlocked": "Verification is blocked until the managed project is reopened.",
+  "projectManagedRevision3RequiresReopen": "The project could not be checked safely. Recover or reopen it before continuing.",
+  "projectManagedRevision3VerifyBlocked": "Recover or reopen the project before checking it again.",
   "projectTransitionCleanupWarning": "The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.",
-  "projectNewManagedRevision3": "New managed mod project…",
-  "projectNewLegacy": "New legacy project",
+  "projectNewManagedRevision3": "New mod project…",
   "projectCreateGamePathRequired": "Set the Gothic 1 Remake game path in Settings before creating a mod project.",
-  "projectCreateDirectoryPickerTitle": "Create managed mod project here",
-  "projectManagedRevision3Created": "Created managed mod project {projectId}",
+  "projectCreateDirectoryPickerTitle": "Create mod project here",
+  "projectManagedRevision3Created": "Created mod project {projectId}",
   "@projectManagedRevision3Created": {
     "placeholders": {
       "projectId": {
@@ -240,7 +237,7 @@
       }
     }
   },
-  "projectManagedRevision3CreateFailed": "Managed mod project creation failed: {error}",
+  "projectManagedRevision3CreateFailed": "Mod project creation failed: {error}",
   "@projectManagedRevision3CreateFailed": {
     "placeholders": {
       "error": {
@@ -541,10 +538,8 @@
   "managedCapabilityPlanned": "Planned",
   "managedCapabilityUnavailable": "Unavailable",
   "managedProjectSubtitle": "Exact-current offline authoring workspace",
-  "managedProjectLandingTitle": "Managed project workspace",
-  "managedProjectLandingDescription": "Use the new Home, Content, Story, Voice, validation, and release workflow in one managed project.",
-  "legacyCompatibilityToolsTitle": "Legacy compatibility tools",
-  "legacyCompatibilityToolsDescription": "The tabs below are older direct-replacement tools. They remain available while the managed project workspace grows.",
+  "managedProjectLandingTitle": "Start a mod project",
+  "managedProjectLandingDescription": "Create a project, open an existing project folder, or restore a project backup.",
   "managedProjectTechnicalDetails": "Technical project details",
   "managedProjectRecoveryContentLocked": "Recover or reopen the managed project before reading its content.",
   "managedProjectRecoveryDescription": "Mod Studio will safely reopen this project while keeping its lock. This does not change the game or any save.",

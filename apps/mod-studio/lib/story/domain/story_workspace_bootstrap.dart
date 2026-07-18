@@ -123,7 +123,7 @@ final class StoryWorkspaceHandle {
 }
 
 /// Creates or opens one managed schema-revision-2 Story workspace without any
-/// picker, legacy project state, deployment, or runtime coupling.
+/// picker, project state, deployment, or runtime coupling.
 abstract final class StoryWorkspaceBootstrap {
   static Future<StoryWorkspaceHandle> create({
     required Directory root,

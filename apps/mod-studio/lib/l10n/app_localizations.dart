@@ -776,28 +776,22 @@ abstract class AppLocalizations {
   /// **'A mod-manager loadout is active. Undeploy it in gore-manager first.'**
   String get managerDeployActive;
 
-  /// No description provided for @projectOpenLegacy.
-  ///
-  /// In en, this message translates to:
-  /// **'Open legacy project…'**
-  String get projectOpenLegacy;
-
   /// No description provided for @projectOpenManagedRevision3.
   ///
   /// In en, this message translates to:
-  /// **'Open Mod Studio project…'**
+  /// **'Open mod project…'**
   String get projectOpenManagedRevision3;
 
   /// No description provided for @projectVerifyCurrentHead.
   ///
   /// In en, this message translates to:
-  /// **'Verify current head'**
+  /// **'Check project'**
   String get projectVerifyCurrentHead;
 
   /// No description provided for @projectManagedRevision3Title.
   ///
   /// In en, this message translates to:
-  /// **'Mod Studio project'**
+  /// **'Mod project'**
   String get projectManagedRevision3Title;
 
   /// No description provided for @projectClose.
@@ -811,12 +805,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Project could not be closed: {error}'**
   String projectCloseFailed(String error);
-
-  /// No description provided for @projectManagedRevision3IdentityOnly.
-  ///
-  /// In en, this message translates to:
-  /// **'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.'**
-  String get projectManagedRevision3IdentityOnly;
 
   /// No description provided for @projectRoot.
   ///
@@ -857,37 +845,37 @@ abstract class AppLocalizations {
   /// No description provided for @projectManagedRevision3Opened.
   ///
   /// In en, this message translates to:
-  /// **'Mod Studio project opened.'**
+  /// **'Mod project opened.'**
   String get projectManagedRevision3Opened;
 
   /// No description provided for @projectManagedRevision3OpenFailed.
   ///
   /// In en, this message translates to:
-  /// **'Mod Studio project could not be opened: {error}'**
+  /// **'Mod project could not be opened: {error}'**
   String projectManagedRevision3OpenFailed(String error);
 
   /// No description provided for @projectManagedRevision3Verified.
   ///
   /// In en, this message translates to:
-  /// **'Project checkpoint verified.'**
+  /// **'Project checked.'**
   String get projectManagedRevision3Verified;
 
   /// No description provided for @projectManagedRevision3VerifyFailed.
   ///
   /// In en, this message translates to:
-  /// **'Project checkpoint could not be verified: {error}'**
+  /// **'Project check failed: {error}'**
   String projectManagedRevision3VerifyFailed(String error);
 
   /// No description provided for @projectManagedRevision3RequiresReopen.
   ///
   /// In en, this message translates to:
-  /// **'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.'**
+  /// **'The project could not be checked safely. Recover or reopen it before continuing.'**
   String get projectManagedRevision3RequiresReopen;
 
   /// No description provided for @projectManagedRevision3VerifyBlocked.
   ///
   /// In en, this message translates to:
-  /// **'Verification is blocked until the managed project is reopened.'**
+  /// **'Recover or reopen the project before checking it again.'**
   String get projectManagedRevision3VerifyBlocked;
 
   /// No description provided for @projectTransitionCleanupWarning.
@@ -899,14 +887,8 @@ abstract class AppLocalizations {
   /// No description provided for @projectNewManagedRevision3.
   ///
   /// In en, this message translates to:
-  /// **'New managed mod project…'**
+  /// **'New mod project…'**
   String get projectNewManagedRevision3;
-
-  /// No description provided for @projectNewLegacy.
-  ///
-  /// In en, this message translates to:
-  /// **'New legacy project'**
-  String get projectNewLegacy;
 
   /// No description provided for @projectCreateGamePathRequired.
   ///
@@ -917,19 +899,19 @@ abstract class AppLocalizations {
   /// No description provided for @projectCreateDirectoryPickerTitle.
   ///
   /// In en, this message translates to:
-  /// **'Create managed mod project here'**
+  /// **'Create mod project here'**
   String get projectCreateDirectoryPickerTitle;
 
   /// No description provided for @projectManagedRevision3Created.
   ///
   /// In en, this message translates to:
-  /// **'Created managed mod project {projectId}'**
+  /// **'Created mod project {projectId}'**
   String projectManagedRevision3Created(String projectId);
 
   /// No description provided for @projectManagedRevision3CreateFailed.
   ///
   /// In en, this message translates to:
-  /// **'Managed mod project creation failed: {error}'**
+  /// **'Mod project creation failed: {error}'**
   String projectManagedRevision3CreateFailed(String error);
 
   /// No description provided for @projectCreateDialogTitle.
@@ -1961,26 +1943,14 @@ abstract class AppLocalizations {
   /// No description provided for @managedProjectLandingTitle.
   ///
   /// In en, this message translates to:
-  /// **'Managed project workspace'**
+  /// **'Start a mod project'**
   String get managedProjectLandingTitle;
 
   /// No description provided for @managedProjectLandingDescription.
   ///
   /// In en, this message translates to:
-  /// **'Use the new Home, Content, Story, Voice, validation, and release workflow in one managed project.'**
+  /// **'Create a project, open an existing project folder, or restore a project backup.'**
   String get managedProjectLandingDescription;
-
-  /// No description provided for @legacyCompatibilityToolsTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Legacy compatibility tools'**
-  String get legacyCompatibilityToolsTitle;
-
-  /// No description provided for @legacyCompatibilityToolsDescription.
-  ///
-  /// In en, this message translates to:
-  /// **'The tabs below are older direct-replacement tools. They remain available while the managed project workspace grows.'**
-  String get legacyCompatibilityToolsDescription;
 
   /// No description provided for @managedProjectTechnicalDetails.
   ///

@@ -8,8 +8,6 @@ import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/core/providers.dart';
-import 'package:gore_mod/project/project_io.dart';
-import 'package:gore_mod/project/project_model.dart';
 import 'package:gore_mod/scripts/domain/script_mods_notifier.dart';
 import 'package:gore_mod/scripts/domain/script_modules_provider.dart';
 import 'package:gore_mod/scripts/ui/script_tab.dart';
@@ -903,36 +901,6 @@ void main() {
     expect(find.text('Select or add a script mod'), findsOneWidget);
     // No stale-module action is reachable: no vanilla Edit button anywhere.
     expect(find.text('Edit'), findsNothing);
-  });
-
-  // Project persistence is all-or-nothing: an unsafe runtime-relative path is
-  // rejected instead of silently dropping that authored script on reopen.
-  test('saveProject rejects script mods with an unsafe relPath', () async {
-    final tmp = await Directory.systemTemp.createTemp('goremod_relpath_test_');
-    addTearDown(() => tmp.deleteSync(recursive: true));
-    final asFile = File(p.join(tmp.path, 'New.as'))
-      ..writeAsStringSync('void Foo(){}');
-    for (final relative in ['../evil.as', '/etc/evil.as', '']) {
-      final out = p.join(tmp.path, '${relative.hashCode}.goremod');
-      await expectLater(
-        saveProject(
-          ModProject(
-            name: 'M',
-            scripts: [
-              ScriptMod(
-                op: ScriptOp.add,
-                moduleName: 'Unsafe',
-                relPath: relative,
-                asPath: asFile.path,
-              ),
-            ],
-          ),
-          out,
-        ),
-        throwsFormatException,
-      );
-      expect(File(out).existsSync(), isFalse);
-    }
   });
 }
 

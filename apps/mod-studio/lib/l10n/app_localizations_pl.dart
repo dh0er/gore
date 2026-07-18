@@ -366,16 +366,13 @@ class AppLocalizationsPl extends AppLocalizations {
       'Aktywny jest loadout mod-managera. Najpierw wykonaj undeploy w gore-manager.';
 
   @override
-  String get projectOpenLegacy => 'Open legacy project…';
+  String get projectOpenManagedRevision3 => 'Open mod project…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Open Mod Studio project…';
+  String get projectVerifyCurrentHead => 'Check project';
 
   @override
-  String get projectVerifyCurrentHead => 'Verify current head';
-
-  @override
-  String get projectManagedRevision3Title => 'Mod Studio project';
+  String get projectManagedRevision3Title => 'Mod project';
 
   @override
   String get projectClose => 'Close project';
@@ -384,10 +381,6 @@ class AppLocalizationsPl extends AppLocalizations {
   String projectCloseFailed(String error) {
     return 'Project could not be closed: $error';
   }
-
-  @override
-  String get projectManagedRevision3IdentityOnly =>
-      'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
 
   @override
   String get projectRoot => 'Root';
@@ -408,38 +401,35 @@ class AppLocalizationsPl extends AppLocalizations {
   String get projectNoCurrent => 'No current project';
 
   @override
-  String get projectManagedRevision3Opened => 'Mod Studio project opened.';
+  String get projectManagedRevision3Opened => 'Mod project opened.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Mod Studio project could not be opened: $error';
+    return 'Mod project could not be opened: $error';
   }
 
   @override
-  String get projectManagedRevision3Verified => 'Project checkpoint verified.';
+  String get projectManagedRevision3Verified => 'Project checked.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Project checkpoint could not be verified: $error';
+    return 'Project check failed: $error';
   }
 
   @override
   String get projectManagedRevision3RequiresReopen =>
-      'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.';
+      'The project could not be checked safely. Recover or reopen it before continuing.';
 
   @override
   String get projectManagedRevision3VerifyBlocked =>
-      'Verification is blocked until the managed project is reopened.';
+      'Recover or reopen the project before checking it again.';
 
   @override
   String get projectTransitionCleanupWarning =>
       'Nowy projekt jest otwarty, ale nie udało się całkowicie wyczyścić sesji poprzedniego projektu. Czyszczenie nie zostanie ponowione. Uruchom ponownie Mod Studio przed ponownym otwarciem poprzedniego projektu.';
 
   @override
-  String get projectNewManagedRevision3 => 'Nowy zarządzany projekt moda…';
-
-  @override
-  String get projectNewLegacy => 'Nowy projekt starszego typu';
+  String get projectNewManagedRevision3 => 'Nowy projekt moda…';
 
   @override
   String get projectCreateGamePathRequired =>
@@ -451,12 +441,12 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return 'Utworzono zarządzany projekt moda $projectId';
+    return 'Utworzono projekt moda $projectId';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return 'Nie udało się utworzyć zarządzanego projektu moda: $error';
+    return 'Nie udało się utworzyć projektu moda: $error';
   }
 
   @override
@@ -1110,19 +1100,11 @@ class AppLocalizationsPl extends AppLocalizations {
       'Obszar tworzenia offline zgodny dokładnie z bieżącą wersją';
 
   @override
-  String get managedProjectLandingTitle =>
-      'Obszar roboczy zarządzanego projektu';
+  String get managedProjectLandingTitle => 'Rozpocznij projekt moda';
 
   @override
   String get managedProjectLandingDescription =>
-      'Korzystaj z nowych sekcji: Strona główna, Zawartość, Fabuła, Głos, Walidacja i Wydanie — wszystko w jednym zarządzanym projekcie.';
-
-  @override
-  String get legacyCompatibilityToolsTitle => 'Starsze narzędzia zgodności';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      'Karty poniżej zawierają starsze narzędzia do bezpośredniego zastępowania. Pozostaną dostępne podczas rozbudowy obszaru zarządzanego projektu.';
+      'Utwórz projekt, otwórz istniejący folder projektu albo przywróć kopię zapasową.';
 
   @override
   String get managedProjectTechnicalDetails => 'Szczegóły techniczne projektu';

@@ -362,16 +362,13 @@ class AppLocalizationsJa extends AppLocalizations {
       'mod-manager のロードアウトが有効です。先に gore-manager で undeploy してください。';
 
   @override
-  String get projectOpenLegacy => 'Open legacy project…';
+  String get projectOpenManagedRevision3 => 'Open mod project…';
 
   @override
-  String get projectOpenManagedRevision3 => 'Open Mod Studio project…';
+  String get projectVerifyCurrentHead => 'Check project';
 
   @override
-  String get projectVerifyCurrentHead => 'Verify current head';
-
-  @override
-  String get projectManagedRevision3Title => 'Mod Studio project';
+  String get projectManagedRevision3Title => 'Mod project';
 
   @override
   String get projectClose => 'Close project';
@@ -380,10 +377,6 @@ class AppLocalizationsJa extends AppLocalizations {
   String projectCloseFailed(String error) {
     return 'Project could not be closed: $error';
   }
-
-  @override
-  String get projectManagedRevision3IdentityOnly =>
-      'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
 
   @override
   String get projectRoot => 'Root';
@@ -404,38 +397,35 @@ class AppLocalizationsJa extends AppLocalizations {
   String get projectNoCurrent => 'No current project';
 
   @override
-  String get projectManagedRevision3Opened => 'Mod Studio project opened.';
+  String get projectManagedRevision3Opened => 'Mod project opened.';
 
   @override
   String projectManagedRevision3OpenFailed(String error) {
-    return 'Mod Studio project could not be opened: $error';
+    return 'Mod project could not be opened: $error';
   }
 
   @override
-  String get projectManagedRevision3Verified => 'Project checkpoint verified.';
+  String get projectManagedRevision3Verified => 'Project checked.';
 
   @override
   String projectManagedRevision3VerifyFailed(String error) {
-    return 'Project checkpoint could not be verified: $error';
+    return 'Project check failed: $error';
   }
 
   @override
   String get projectManagedRevision3RequiresReopen =>
-      'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.';
+      'The project could not be checked safely. Recover or reopen it before continuing.';
 
   @override
   String get projectManagedRevision3VerifyBlocked =>
-      'Verification is blocked until the managed project is reopened.';
+      'Recover or reopen the project before checking it again.';
 
   @override
   String get projectTransitionCleanupWarning =>
       '新しいプロジェクトは開いていますが、以前のプロジェクトセッションを完全にクリーンアップできませんでした。クリーンアップは再試行されません。以前のプロジェクトを再度開く前に Mod Studio を再起動してください。';
 
   @override
-  String get projectNewManagedRevision3 => '新しい管理対象 Mod プロジェクト…';
-
-  @override
-  String get projectNewLegacy => '新しいレガシープロジェクト';
+  String get projectNewManagedRevision3 => '新しい Mod プロジェクト…';
 
   @override
   String get projectCreateGamePathRequired =>
@@ -446,12 +436,12 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String projectManagedRevision3Created(String projectId) {
-    return '管理対象 Mod プロジェクト $projectId を作成しました';
+    return 'Mod プロジェクト $projectId を作成しました';
   }
 
   @override
   String projectManagedRevision3CreateFailed(String error) {
-    return '管理対象 Mod プロジェクトを作成できませんでした: $error';
+    return 'Mod プロジェクトを作成できませんでした: $error';
   }
 
   @override
@@ -1099,18 +1089,11 @@ class AppLocalizationsJa extends AppLocalizations {
   String get managedProjectSubtitle => '現在の正確なバージョンに対応するオフライン制作ワークスペース';
 
   @override
-  String get managedProjectLandingTitle => '管理プロジェクトのワークスペース';
+  String get managedProjectLandingTitle => 'Mod プロジェクトを開始';
 
   @override
   String get managedProjectLandingDescription =>
-      'ホーム、コンテンツ、ストーリー、音声、検証、リリースの新しい制作フローを、1つの管理プロジェクトで利用できます。';
-
-  @override
-  String get legacyCompatibilityToolsTitle => '従来版の互換ツール';
-
-  @override
-  String get legacyCompatibilityToolsDescription =>
-      '下のタブは、以前からある直接置換用のツールです。管理プロジェクトのワークスペースを拡充している間も引き続き利用できます。';
+      'プロジェクトを作成するか、既存のプロジェクトフォルダーを開くか、バックアップを復元します。';
 
   @override
   String get managedProjectTechnicalDetails => 'プロジェクトの技術的な詳細';

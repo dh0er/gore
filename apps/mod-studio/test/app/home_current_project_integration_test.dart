@@ -18,7 +18,6 @@ import 'package:gore_mod/dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
-import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
@@ -135,7 +134,7 @@ void main() {
     },
   );
 
-  testWidgets('visible Legacy entry creates and adopts a managed R3 project', (
+  testWidgets('project landing creates and adopts a managed R3 project', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -148,7 +147,6 @@ void main() {
       if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
       if (destination.existsSync()) destination.deleteSync(recursive: true);
     });
-    final legacy = _FakeLegacyLease(path: 'before-create.goremod');
     final managed = _FakeManagedLease(
       root: destination,
       projectId: 'edededededededededededededededed',
@@ -159,7 +157,6 @@ void main() {
     var pickerCalls = 0;
     String? pickerLabel;
     final coordinator = CurrentProjectCoordinator(
-      initialLegacy: legacy,
       createManagedRevision3: (request) async {
         received = request;
         return managed;
@@ -178,21 +175,7 @@ void main() {
     addTearDown(container.dispose);
 
     await _pumpApp(tester, container);
-    expect(
-      find.byKey(const Key('legacy-compatibility-banner')),
-      findsOneWidget,
-    );
-    final compatibilityCopy = tester.widget<Text>(
-      find.byKey(const Key('legacy-compatibility-tools-description')),
-    );
-    expect(
-      compatibilityCopy.textSpan?.toPlainText(),
-      contains('Legacy compatibility tools'),
-    );
-    expect(
-      compatibilityCopy.textSpan?.toPlainText(),
-      contains('older direct-replacement tools'),
-    );
+    expect(find.byKey(const Key('managed-project-landing')), findsOneWidget);
     expect(
       find.byKey(const Key('managed-project-entry-create')),
       findsOneWidget,
@@ -224,7 +207,7 @@ void main() {
     }
 
     expect(pickerCalls, 1);
-    expect(pickerLabel, 'Create managed mod project here');
+    expect(pickerLabel, 'Create mod project here');
     expect(received?.root.path, destination.path);
     expect(received?.gameRoot, gameRoot.path);
     expect(received?.name, 'Asghan Expanded');
@@ -232,12 +215,11 @@ void main() {
     expect(received?.author, 'Gore Team');
     expect(received?.authoringLocales, const <String>['de', 'en-US']);
     expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
-    expect(legacy.closeCalls, 1);
     expect(
       find.byKey(const Key('managed-revision3-project-view')),
       findsOneWidget,
     );
-    expect(find.textContaining('Created managed mod project'), findsOneWidget);
+    expect(find.textContaining('Created mod project'), findsOneWidget);
   });
 
   testWidgets(
@@ -503,60 +485,6 @@ void main() {
     );
   });
 
-  testWidgets(
-    'compact Legacy shell keeps managed entries and all tabs reachable',
-    (tester) async {
-      await _setNarrowShortTestSurface(tester);
-      final legacy = _FakeLegacyLease(path: 'compact-legacy.goremod');
-      final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        openManagedRevision3: (_) async => throw UnimplementedError(),
-      );
-      final container = _container(
-        coordinator: coordinator,
-        pickManaged: (_) async => null,
-      );
-      container.read(localeProvider.notifier).setLocale('de');
-      addTearDown(container.dispose);
-
-      await _pumpApp(tester, container);
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(tester.takeException(), isNull);
-      expect(
-        find.byKey(const Key('legacy-build-deploy-compact')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('legacy-compatibility-banner-scroll')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('legacy-compatibility-banner')),
-        findsOneWidget,
-      );
-      final tabBar = tester.widget<TabBar>(find.byType(TabBar));
-      expect(tabBar.tabs, hasLength(7));
-      expect(find.byType(TabBarView), findsOneWidget);
-
-      for (final key in const [
-        Key('managed-project-entry-create'),
-        Key('managed-project-entry-open'),
-        Key('managed-project-entry-restore'),
-      ]) {
-        final entry = find.byKey(key);
-        expect(entry, findsOneWidget);
-        await tester.ensureVisible(entry);
-        await tester.pump();
-        expect(entry.hitTestable(), findsOneWidget);
-        expect(tester.takeException(), isNull);
-      }
-
-      expect(find.byType(TabBar), findsOneWidget);
-      expect(find.byType(TabBarView), findsOneWidget);
-    },
-  );
-
   testWidgets('new managed project requires a configured game root first', (
     tester,
   ) async {
@@ -581,7 +509,6 @@ void main() {
 
     await _pumpApp(tester, container);
     expect(find.byKey(const Key('managed-project-landing')), findsOneWidget);
-    expect(find.byKey(const Key('legacy-compatibility-banner')), findsNothing);
     expect(
       find.byKey(const Key('managed-project-entry-settings')),
       findsOneWidget,
@@ -639,7 +566,6 @@ void main() {
     'managed open owns the shell, Ctrl+S verifies, and Close releases it',
     (tester) async {
       await _setDesktopTestSurface(tester);
-      final legacy = _FakeLegacyLease(path: 'legacy.goremod');
       final managed = _FakeManagedLease(
         root: Directory(r'C:\mods\managed-r3'),
         projectId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -648,7 +574,6 @@ void main() {
       );
       Directory? requestedRoot;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (root) async {
           requestedRoot = root;
           return managed;
@@ -661,22 +586,18 @@ void main() {
       addTearDown(container.dispose);
 
       await _pumpApp(tester, container);
-      expect(find.text('Build / Deploy'), findsOneWidget);
-      final legacyMenuFinder = find.byKey(const Key('project-menu'));
+      expect(find.byKey(const Key('managed-project-landing')), findsOneWidget);
+      final menuFinder = find.byKey(const Key('project-menu'));
       expect(
         tester
-            .widget<PopupMenuButton<String>>(legacyMenuFinder)
-            .itemBuilder(tester.element(legacyMenuFinder))
+            .widget<PopupMenuButton<String>>(menuFinder)
+            .itemBuilder(tester.element(menuFinder))
             .whereType<PopupMenuItem<String>>()
             .where(
               (item) =>
                   item.key == const Key('project-export-managed-revision3'),
             ),
         isEmpty,
-      );
-      expect(
-        find.byKey(const Key('legacy-compatibility-banner')),
-        findsOneWidget,
       );
       expect(
         find.byKey(const Key('managed-project-entry-open')),
@@ -692,16 +613,11 @@ void main() {
         find.byKey(const Key('managed-revision3-project-view')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const Key('legacy-compatibility-banner')),
-        findsNothing,
-      );
       await _expandManagedTechnicalDetails(tester);
       expect(find.text(managed.root.path), findsOneWidget);
       expect(find.text(managed.projectId), findsOneWidget);
       expect(find.text('${managed.projectRevision}'), findsOneWidget);
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
-      expect(find.text('Build / Deploy'), findsNothing);
       expect(
         find.byKey(const Key('revision3-project-workspace-tabbar')),
         findsOneWidget,
@@ -717,7 +633,6 @@ void main() {
       );
       expect(find.textContaining('Support is checked'), findsOneWidget);
       expect(managed.dataAssetListCalls, 1);
-      expect(legacy.closeCalls, 1);
 
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
       await tester.tap(find.byKey(const Key('managed-open-settings')));
@@ -728,20 +643,13 @@ void main() {
         findsOneWidget,
       );
 
-      final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
-      final saveAs = menu
-          .itemBuilder(tester.element(menuFinder))
-          .whereType<PopupMenuItem<String>>()
-          .singleWhere((item) => item.key == const Key('project-save-as'));
-      expect(saveAs.enabled, isFalse);
       final close = menu
           .itemBuilder(tester.element(menuFinder))
           .whereType<PopupMenuItem<String>>()
           .singleWhere((item) => item.key == const Key('project-close'));
       expect(close.enabled, isTrue);
       expect((close.child as Text).data, 'Close project');
-      expect((saveAs.child as Text).data, 'Save project as…');
 
       await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
@@ -937,19 +845,24 @@ void main() {
         projectRevision: projectRevision,
         head: head,
       );
-      final legacy = _FakeLegacyLease(
-        path: 'legacy-before-restore.goremod',
-        closeError: StateError(r'cleanup failed at C:\private\legacy.lock'),
+      final previous = _FakeManagedLease(
+        root: Directory(r'C:\mods\restore-previous'),
+        projectId: 'dededededededededededededededede',
+        projectRevision: 4,
+        head: _head(4),
+        closeError: StateError(r'cleanup failed at C:\private\project.lock'),
       );
       var openerCalls = 0;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (root) async {
           openerCalls++;
+          if (root.path == previous.root.path) return previous;
           expect(root.path, destination);
           return candidate;
         },
       );
+      await coordinator.openManagedRevision3(previous.root);
+      openerCalls = 0;
       var sourcePickerCalls = 0;
       var inspectorCalls = 0;
       var importerCalls = 0;
@@ -990,11 +903,11 @@ void main() {
       addTearDown(container.dispose);
 
       await _pumpApp(tester, container);
-      expect(
-        find.byKey(const Key('managed-project-entry-restore')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('managed-project-entry-restore')));
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('restoreManagedRevision3');
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 300));
       expect(
@@ -1047,7 +960,7 @@ void main() {
       expect(current.projectId, projectId);
       expect(current.projectRevision, projectRevision);
       expect(current.head.canonicalJson, head.canonicalJson);
-      expect(legacy.closeCalls, 1);
+      expect(previous.closeCalls, 1);
       expect(candidate.closeCalls, 0);
       expect(
         find.text(l10n.projectRestoreOpenedCleanupWarning),
@@ -1090,10 +1003,8 @@ void main() {
           'candidate cleanup failed at $candidateCleanupPrivatePath',
         ),
       );
-      final legacy = _FakeLegacyLease(path: 'legacy-stays-current.goremod');
       var openerCalls = 0;
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
         openManagedRevision3: (root) async {
           openerCalls++;
           expect(root.path, destination);
@@ -1157,9 +1068,8 @@ void main() {
       expect(importerCalls, 1);
       expect(openerCalls, 1);
       expect(mismatchedCandidate.closeCalls, 1);
-      expect(legacy.closeCalls, 0);
       expect(coordinator.terminalCleanupFailures, hasLength(1));
-      expect(coordinator.state, isA<LegacyCurrentProjectState>());
+      expect(coordinator.state, isA<NoCurrentProjectState>());
       expect(
         find.text(
           l10n.projectRestoreOpenFailed('restored-project-r$projectRevision'),
@@ -5217,7 +5127,6 @@ void main() {
       ]) {
         expect(find.textContaining(unsupportedClaim), findsNothing);
       }
-      expect(find.text('Build / Deploy'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );
@@ -7117,7 +7026,6 @@ void main() {
       );
       expect(find.textContaining('Character draft saved'), findsOneWidget);
       expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
-      expect(find.text('Build / Deploy'), findsNothing);
       for (final technicalIdentity in const <String>[
         _homeCreatedNpcId,
         _homeCreatedNpcModuleId,
@@ -7574,7 +7482,6 @@ void main() {
         find.text(l10n.managedActionNewDialogLineSaved(8)),
         findsOneWidget,
       );
-      expect(find.text('Build / Deploy'), findsNothing);
     },
   );
 
@@ -7905,7 +7812,6 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-voice-wizard')), findsNothing);
-      expect(find.text('Build / Deploy'), findsNothing);
     },
   );
 
@@ -9648,7 +9554,6 @@ void main() {
         5,
       );
       expect(find.text('TestAsset'), findsOneWidget);
-      expect(find.text('Build / Deploy'), findsNothing);
 
       await tester.tap(find.text('TestAsset'));
       await tester.pumpAndSettle();
@@ -9701,7 +9606,6 @@ void main() {
         find.byKey(const Key('revision3-dataasset-stage-empty')),
         findsOneWidget,
       );
-      expect(find.text('Build / Deploy'), findsNothing);
     },
   );
 
@@ -9838,18 +9742,15 @@ void main() {
       expect(state.head.canonicalJson, fixture.stagedHead.canonicalJson);
       expect(find.byKey(const Key('dataasset-semantic-wizard')), findsNothing);
       expect(find.text('TestAsset'), findsOneWidget);
-      expect(find.text('Build / Deploy'), findsNothing);
     },
   );
 
-  testWidgets('failed managed menu open leaves the legacy shell current', (
+  testWidgets('failed managed menu open leaves the project landing current', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
-    final legacy = _FakeLegacyLease(path: 'preserved.goremod');
     final expectedError = StateError('candidate rejected');
     final coordinator = CurrentProjectCoordinator(
-      initialLegacy: legacy,
       openManagedRevision3: (_) async => throw expectedError,
     );
     final container = _container(
@@ -9867,74 +9768,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(coordinator.state, same(before));
-    expect(coordinator.state, isA<LegacyCurrentProjectState>());
-    expect(legacy.closeCalls, 0);
-    expect(find.byType(TabBar), findsOneWidget);
-    expect(find.text('Build / Deploy'), findsOneWidget);
+    expect(coordinator.state, isA<NoCurrentProjectState>());
+    expect(find.byKey(const Key('managed-project-landing')), findsOneWidget);
     expect(
-      find.textContaining('Mod Studio project could not be opened:'),
+      find.textContaining('Mod project could not be opened:'),
       findsOneWidget,
     );
   });
-
-  testWidgets(
-    'dirty legacy cancel blocks managed picker and opener without displacement',
-    (tester) async {
-      await _setDesktopTestSurface(tester);
-      final legacy = _FakeLegacyLease(path: 'dirty-preserved.goremod');
-      var pickerCalls = 0;
-      var openerCalls = 0;
-      final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        openManagedRevision3: (_) async {
-          openerCalls++;
-          throw StateError('opener must not run');
-        },
-      );
-      final container = _container(
-        coordinator: coordinator,
-        pickManaged: (_) async {
-          pickerCalls++;
-          return r'C:\mods\must-not-be-picked';
-        },
-      );
-      addTearDown(container.dispose);
-      final before = coordinator.state;
-
-      await _pumpApp(tester, container);
-      container
-          .read(dialogTopicsProvider.notifier)
-          .setTopic(
-            const DialogTopicDefinition(
-              id: 'dirty_fixture',
-              participantName: 'dirty_npc',
-              topicClass: '/Script/Angelscript.DirtyFixture',
-              sentinelClass: '/Script/Angelscript.DirtySentinel',
-            ),
-          );
-      await tester.pump();
-
-      tester
-          .widget<PopupMenuButton<String>>(
-            find.byKey(const Key('project-menu')),
-          )
-          .onSelected!('openManagedRevision3');
-      await tester.pump();
-
-      expect(find.text('Discard unsaved changes?'), findsOneWidget);
-      expect(pickerCalls, 0);
-      expect(openerCalls, 0);
-      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(pickerCalls, 0);
-      expect(openerCalls, 0);
-      expect(coordinator.state, same(before));
-      expect(legacy.closeCalls, 0);
-      expect(find.byType(TabBar), findsOneWidget);
-    },
-  );
 
   testWidgets(
     'verification failure requires reopen and blocks menu and shortcut retries',
@@ -10852,9 +10692,12 @@ void main() {
     'successful managed transition surfaces cleanup warning without details',
     (tester) async {
       await _setDesktopTestSurface(tester);
-      const privatePath = r'C:\private\retired-project.goremod';
-      final legacy = _FakeLegacyLease(
-        path: privatePath,
+      const privatePath = r'C:\private\retired-project.lock';
+      final previous = _FakeManagedLease(
+        root: Directory(r'C:\mods\retired-project'),
+        projectId: 'bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd',
+        projectRevision: 2,
+        head: _head(2),
         closeError: StateError('cleanup failed at $privatePath'),
       );
       final managed = _FakeManagedLease(
@@ -10864,9 +10707,10 @@ void main() {
         head: _head(25),
       );
       final coordinator = CurrentProjectCoordinator(
-        initialLegacy: legacy,
-        openManagedRevision3: (_) async => managed,
+        openManagedRevision3: (root) async =>
+            root.path == previous.root.path ? previous : managed,
       );
+      await coordinator.openManagedRevision3(previous.root);
       final container = _container(
         coordinator: coordinator,
         pickManaged: (_) async => managed.root.path,
@@ -10893,7 +10737,7 @@ void main() {
       );
       expect(find.textContaining(privatePath), findsNothing);
       expect(find.textContaining('cleanup failed at'), findsNothing);
-      expect(find.text('Mod Studio project opened.'), findsNothing);
+      expect(find.text('Mod project opened.'), findsNothing);
     },
   );
 }
@@ -10921,7 +10765,6 @@ ProviderContainer _container({
     coreServiceProvider.overrideWithValue(
       FakeGoreCoreFfiService(
         responses: const {
-          'loc_status': {'ok': true, 'present': true},
           'find_game': {'ok': true, 'found': false},
         },
       ),
@@ -11080,7 +10923,6 @@ void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
   );
   expect(find.textContaining('Character draft saved'), findsOneWidget);
   expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
-  expect(find.text('Build / Deploy'), findsNothing);
   for (final technicalIdentity in const <String>[
     'g1r:npc:om_grd_asghan_263',
     _homeCreatedNpcId,
@@ -11505,39 +11347,6 @@ Future<void> _sendControlS(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
   await tester.pump(const Duration(milliseconds: 300));
-}
-
-final class _FakeLegacyLease implements LegacyCurrentProjectLease {
-  _FakeLegacyLease({this.path, this.closeError});
-
-  String? path;
-  final Object? closeError;
-  int closeCalls = 0;
-
-  @override
-  String? get currentPath => path;
-
-  @override
-  bool get hasUnsavedChanges => false;
-
-  @override
-  Future<void> close() async {
-    closeCalls++;
-    final error = closeError;
-    if (error != null) throw error;
-  }
-
-  @override
-  Future<void> newProject() async => path = null;
-
-  @override
-  Future<void> openFromPath(String path) async => this.path = path;
-
-  @override
-  Future<void> saveCurrent() async {}
-
-  @override
-  Future<void> saveToPath(String path) async => this.path = path;
 }
 
 typedef _DialogLocalizationReadCallback =
