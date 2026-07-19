@@ -818,8 +818,10 @@ pub enum ProjectRevision3ValidationError {
     InvalidNpcScriptReference { npc: EntityId },
     #[error("revision-3 NPC {npc} ScriptModule target is missing or has the wrong kind")]
     MissingNpcScriptModule { npc: EntityId },
-    #[error("revision-3 NPC-generated ScriptModule {module} has no exact owning NPC closure")]
-    OrphanNpcScriptModule { module: EntityId },
+    #[error(
+        "revision-3 ScriptModule {module} is not the exact generated backing of one NPC or Quest owner"
+    )]
+    InvalidScriptModuleOwnerClosure { module: EntityId },
     #[error("revision-3 Voice graph at entity {entity} is invalid: {reason}")]
     InvalidVoiceGraph { entity: EntityId, reason: String },
     #[error("revision-3 VoiceTake {take} is invalid: {reason}")]

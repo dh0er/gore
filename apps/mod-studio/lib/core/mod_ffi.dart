@@ -26,6 +26,7 @@ part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_dialog_voice_slot_creation.dart';
 part '../project/revision3_dialog_voice_slot_removal.dart';
 part '../project/revision3_managed_compiler_check.dart';
+part '../project/revision3_project_build_plan.dart';
 part '../project/revision3_project_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_greeting.dart';
@@ -1980,6 +1981,38 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceBuildPlanResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedProjectJson: currentProjectJson,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Classify the exact current managed revision-3 project without creating
+  /// output or granting build, deployment, runtime, or publication authority.
+  Future<AuthoringRevision3ProjectBuildPlanResult>
+  authoringStorePlanRevision3ProjectBuildV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_plan_revision3_project_build_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRequireCanonicalRevision3ProjectJson(currentProjectJson);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3ProjectBuildPlanResult.fromJson(
         response,
         expectedHead: expectedHead,
         expectedProjectJson: currentProjectJson,

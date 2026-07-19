@@ -517,7 +517,7 @@ fn missing_or_mismatched_raw_artifact_asset_is_rejected() {
 }
 
 #[test]
-fn recursive_and_residual_quest_basis_are_never_extended() {
+fn recursive_quest_basis_is_rejected_and_residual_basis_is_invalid() {
     let basis = empty_basis();
     let first = applied(evaluate(&basis, &request(&basis), collision_input(&basis)));
     let recursive = first.project;
@@ -538,19 +538,13 @@ fn recursive_and_residual_quest_basis_are_never_extended() {
 
     let mut residual = recursive;
     residual.entities.remove(&entity_id(0x51));
-    let residual_request = Revision3QuestDraftInsertRequestV2 {
-        expected_revision: residual.revision,
-        quest_id: entity_id(0x63),
-        script_module_id: entity_id(0x64),
-        ..request(&residual)
-    };
     assert!(matches!(
-        rejected(evaluate(
-            &residual,
-            &residual_request,
-            collision_input(&residual)
-        )),
-        Revision3QuestDraftInsertConflictV2::ResidualQuestBasis { .. }
+        residual.to_canonical_json().unwrap_err(),
+        gore_authoring::ProjectRevision3JsonError::InvalidModel(
+            gore_authoring::ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+                module,
+            }
+        ) if module == entity_id(0x52)
     ));
 }
 

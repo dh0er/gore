@@ -792,7 +792,7 @@ fn valid_existing_revision3_quest_is_preserved_while_npc_pair_is_inserted() {
 }
 
 #[test]
-fn revision_overflow_invalid_intent_and_residual_quest_state_return_no_candidate() {
+fn revision_overflow_and_invalid_intent_reject_while_residual_quest_state_is_invalid() {
     let mut overflow = project();
     overflow.revision = u64::MAX;
     let basis_head = head(0x71);
@@ -856,14 +856,12 @@ fn revision_overflow_invalid_intent_and_residual_quest_state_return_no_candidate
         },
     );
     assert!(matches!(
-        rejected(evaluate(
-            &residual,
-            &basis_head,
-            &request(&residual, &basis_head),
-            selection(&residual),
-            inventory(&residual),
-        )),
-        Revision3NpcDraftInsertConflictV1::InvalidBasisStoryState { .. }
+        residual.to_canonical_json().unwrap_err(),
+        gore_authoring::ProjectRevision3JsonError::InvalidModel(
+            gore_authoring::ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+                module,
+            }
+        ) if module == id(0x41)
     ));
 }
 
@@ -899,7 +897,9 @@ fn closed_model_rejects_generated_npc_source_drift_and_orphans() {
     orphan.entities.remove(&request.npc_id);
     assert!(matches!(
         orphan.validate_closed_model(),
-        Err(gore_authoring::ProjectRevision3ValidationError::OrphanNpcScriptModule { .. })
+        Err(
+            gore_authoring::ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure { .. }
+        )
     ));
 }
 

@@ -14,6 +14,7 @@ pub mod model_revision3;
 mod npc;
 mod quest;
 mod revision3_content_index;
+mod revision3_project_build;
 mod revision3_quest;
 mod revision3_quest_source_v2;
 mod revision3_story_generation;
@@ -138,6 +139,17 @@ pub use revision3_content_index::{
     Revision3ContentReferenceV1, Revision3VoiceTargetResolutionV1,
     MAX_REVISION3_CONTENT_INDEX_JSON_BYTES_V1, MAX_REVISION3_CONTENT_REFERENCES_V1,
     REVISION3_CONTENT_INDEX_SCHEMA_V1,
+};
+pub use revision3_project_build::{
+    plan_revision3_project_build_v1, Revision3ProjectBuildArtifactStatusV1,
+    Revision3ProjectBuildAuthorityV1, Revision3ProjectBuildBlockReasonV1,
+    Revision3ProjectBuildBlockerCategoryV1, Revision3ProjectBuildBlockerV1,
+    Revision3ProjectBuildDeploymentStatusV1, Revision3ProjectBuildDomainStatusV1,
+    Revision3ProjectBuildDomainSummaryV1, Revision3ProjectBuildDomainV1,
+    Revision3ProjectBuildOutcomeV1, Revision3ProjectBuildPlanErrorV1,
+    Revision3ProjectBuildPlanScopeV1, Revision3ProjectBuildPlanV1,
+    Revision3ProjectBuildPublicationStatusV1, Revision3ProjectBuildRuntimeStatusV1,
+    MAX_REVISION3_PROJECT_BUILD_BLOCKER_GROUPS_V1, REVISION3_PROJECT_BUILD_PLAN_SCHEMA_V1,
 };
 pub use revision3_quest::{
     regenerate_revision3_quest_module, revision3_quest_input_fingerprint,
@@ -378,6 +390,8 @@ pub use story_transaction_revision3_voice_target::{
     MAX_REVISION3_VOICE_TARGET_MEMBER_UNCOMPRESSED_BYTES_V1,
     MAX_REVISION3_VOICE_TARGET_REQUEST_JSON_BYTES_V1,
 };
+#[cfg(target_os = "linux")]
+pub use working_store::WorkingStoreLinuxMountId;
 pub use working_store::{
     import_revision3_exact_snapshot_v2, import_revision3_exact_snapshot_v2_with_limits,
     inspect_revision3_exact_snapshot_v2, inspect_revision3_exact_snapshot_v2_with_limits,

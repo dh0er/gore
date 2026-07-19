@@ -576,7 +576,7 @@
   "managedHomeProblemsDescription": "Review exact project issues and verification without claiming a runtime test.",
   "managedHomeContentTitle": "Browse content",
   "managedHomeContentDescription": "Find project, base-game, installed, and verified DataAsset content.",
-  "managedHomeBuildTitle": "Create output",
+  "managedHomeBuildTitle": "Check build readiness",
   "managedHomeBuildDescription": "Open the honest build view. Voice bundles are available; a complete playable mod is still blocked.",
   "managedContentOpenInStory": "Open in Story",
   "managedContentOpenInStoryDescription": "Continue this Quest or NPC in the complete Story workspace.",

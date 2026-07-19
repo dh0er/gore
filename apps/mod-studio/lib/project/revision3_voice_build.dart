@@ -665,6 +665,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
     required Map<String, _AuthoringRevision3VoiceBuildSlotFacts> factsBySlot,
     required this.readySlots,
     required List<AuthoringRevision3VoiceBuildBlocker> blockers,
+    required this.hasUnsupportedLineLabel,
   }) : factsBySlot = Map.unmodifiable(factsBySlot),
        blockers = List.unmodifiable(blockers);
 
@@ -674,13 +675,15 @@ final class _AuthoringRevision3VoiceBuildExpectation {
   final Map<String, _AuthoringRevision3VoiceBuildSlotFacts> factsBySlot;
   final int readySlots;
   final List<AuthoringRevision3VoiceBuildBlocker> blockers;
+  final bool hasUnsupportedLineLabel;
 
   bool get isReady =>
       totalSlots > 0 && blockers.isEmpty && readySlots == totalSlots;
 
   factory _AuthoringRevision3VoiceBuildExpectation.fromCanonicalProjectJson(
-    String projectJson,
-  ) {
+    String projectJson, {
+    bool allowUnsupportedLineLabel = false,
+  }) {
     if (utf8.encode(projectJson).length > _maxAuthoringProjectJsonBytes) {
       throw const FormatException(
         'revision-3 Voice build project exceeds the bounded JSON limit',
@@ -758,10 +761,12 @@ final class _AuthoringRevision3VoiceBuildExpectation {
             AuthoringRevision3VoiceBuildBlockReason.voiceSlotLimitExceeded,
           ),
         ],
+        hasUnsupportedLineLabel: false,
       );
     }
 
     final factsBySlot = <String, _AuthoringRevision3VoiceBuildSlotFacts>{};
+    var hasUnsupportedLineLabel = false;
     for (final lineId in dialogLineIds) {
       final line = _authoringRevision3VoiceEntity(
         entities,
@@ -784,12 +789,15 @@ final class _AuthoringRevision3VoiceBuildExpectation {
       final lineLabel = _authoringRequiredString(
         line.entity,
         'display_name',
-        maxBytes: _maxAuthoringRevision3VoiceBuildLineLabelBytes,
+        maxBytes: _maxAuthoringProjectJsonBytes,
       );
       if (!_authoringRevision3VoiceBuildLineLabelIsSafe(lineLabel)) {
-        throw const FormatException(
-          'revision-3 Voice build project has an invalid line label',
-        );
+        if (!allowUnsupportedLineLabel) {
+          throw const FormatException(
+            'revision-3 Voice build project has an invalid line label',
+          );
+        }
+        hasUnsupportedLineLabel = true;
       }
       final localizationRef = _authoringRevision3VoiceTypedRef(
         line.data['localization'],
@@ -993,6 +1001,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
                   .voicePayloadBudgetExceeded,
             ),
           ],
+          hasUnsupportedLineLabel: hasUnsupportedLineLabel,
         );
       }
       selectedPayloadBytes = nextPayloadBytes;
@@ -1013,6 +1022,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
       factsBySlot: factsBySlot,
       readySlots: readySlots,
       blockers: blockers,
+      hasUnsupportedLineLabel: hasUnsupportedLineLabel,
     );
   }
 }

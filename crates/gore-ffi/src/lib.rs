@@ -117,6 +117,10 @@
 //! - `authoring_store_plan_revision3_voice_v1` fully reopens one exact current revision-3 project
 //!   around the pure Voice planner and returns only bounded readiness evidence. It accepts no game
 //!   installation or output path, creates no artifact, and grants no build or deployment authority.
+//! - `authoring_store_plan_revision3_project_build_v1` binds the native whole-project planner to
+//!   one fully verified exact-current Store checkpoint and DataAsset-stage registry before and
+//!   after planning. It retains the Store root identity, returns only bounded read-only evidence,
+//!   and grants no build, artifact, deployment, runtime, publication, game, or save authority.
 //! - `authoring_store_register_revision3_voice_take_preview_v1`,
 //!   `authoring_store_materialize_revision3_voice_take_preview_v1`, and
 //!   `authoring_store_release_revision3_voice_take_preview_v1` create, use, and release one
@@ -203,11 +207,13 @@ mod authoring_dialog_voice_slot_remove_revision3;
 mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
+mod authoring_project_build_plan_revision3;
 mod authoring_project_compiler_revision3;
 mod authoring_project_export_revision3;
 mod authoring_project_import_revision3;
 mod authoring_source_io;
 mod authoring_store;
+mod authoring_store_root_guard;
 mod authoring_story_catalog;
 mod authoring_story_compiler_revision3;
 mod authoring_story_draft_remove_revision3;
@@ -284,6 +290,7 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_voice_preview_revision3::COMMAND,
     "authoring_store_open_revision3",
     "authoring_store_open_revision3_head_bytes",
+    authoring_project_build_plan_revision3::COMMAND,
     authoring_voice_batch_revision3::PLAN_COMMAND,
     authoring_voice_plan_revision3::COMMAND,
     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
@@ -580,6 +587,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         authoring_voice_plan_revision3::COMMAND => {
             Some(authoring_voice_plan_revision3::plan_revision3_voice_v1_raw)
         }
+        authoring_project_build_plan_revision3::COMMAND => Some(
+            authoring_project_build_plan_revision3::plan_revision3_project_build_v1_raw,
+        ),
         authoring_voice_preview_revision3::REGISTER_COMMAND => Some(
             authoring_voice_preview_revision3::register_revision3_voice_take_preview_v1_raw,
         ),
@@ -1828,6 +1838,7 @@ mod tests {
                     "authoring_store_materialize_revision3_voice_take_preview_v1",
                     "authoring_store_open_revision3",
                     "authoring_store_open_revision3_head_bytes",
+                    "authoring_store_plan_revision3_project_build_v1",
                     "authoring_store_plan_revision3_voice_batch_v1",
                     "authoring_store_plan_revision3_voice_v1",
                     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
@@ -2004,6 +2015,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_plan_revision3_voice_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_plan_revision3_project_build_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_content_index_v1"));

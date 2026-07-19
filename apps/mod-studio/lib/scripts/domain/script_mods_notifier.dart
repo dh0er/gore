@@ -5,14 +5,12 @@ import 'package:flutter_riverpod/legacy.dart';
 /// Whether a staged script mod adds a brand-new module or edits an existing one.
 enum ScriptOp { add, edit }
 
-ScriptOp scriptOpFromString(String s) =>
-    s == 'edit' ? ScriptOp.edit : ScriptOp.add;
 String scriptOpToString(ScriptOp o) => o == ScriptOp.edit ? 'edit' : 'add';
 
 /// Dependency-free stable hash (FNV-1a 64-bit) of [bytes] as zero-padded hex. Used to fingerprint
 /// the .as content at compile time so an edited source can be detected without relying on mtime
-/// (a loaded .goremod re-extracts the source to a new temp path with a fresh mtime, but identical
-/// bytes — so a content hash still matches after re-extraction).
+/// (the same source may be copied to a fresh temporary path with a new mtime but identical bytes,
+/// so a content hash still matches independently of its staging path).
 String fnv1aHex(List<int> bytes) {
   var h = BigInt.parse('cbf29ce484222325', radix: 16);
   final mask = (BigInt.one << 64) - BigInt.one;
@@ -40,7 +38,7 @@ class ScriptMod {
   final ScriptOp op;
   final String moduleName; // Modules TMap key
   final String relPath; // ScriptRelativeFilename, e.g. AI/Foo.as
-  final String asPath; // .as source on disk (embedded in the .goremod)
+  final String asPath; // Selected .as source on disk for standalone staging.
   /// Explicit remapper opt-in. New modules default to true; existing-module edits stay strict
   /// unless the author enables this because their edit introduces a class/function/global.
   final bool allowNewSymbols;
@@ -54,53 +52,6 @@ class ScriptMod {
   /// [moduleName] may change when the regen resolves the real name), so it's also a stable map key.
   String get key => relPath;
   bool get compiled => miniPath.isNotEmpty;
-
-  Map<String, Object?> toJson() => {
-    'op': scriptOpToString(op),
-    'module': moduleName,
-    'rel_path': relPath,
-    'as_path': asPath,
-    'allow_new_symbols': allowNewSymbols,
-    'mini_path': miniPath,
-    'compiled_hash': compiledHash,
-  };
-
-  factory ScriptMod.fromJson(Map<String, Object?> j) {
-    final op = scriptOpFromString((j['op'] as String?) ?? 'add');
-    return ScriptMod(
-      op: op,
-      moduleName: j['module'] as String,
-      relPath: (j['rel_path'] as String?) ?? '',
-      asPath: j['as_path'] as String,
-      allowNewSymbols:
-          (j['allow_new_symbols'] as bool?) ?? (op == ScriptOp.add),
-      miniPath: (j['mini_path'] as String?) ?? '',
-      compiledHash: (j['compiled_hash'] as String?) ?? '',
-    );
-  }
-
-  /// Path-only rewrite of the .as location (used by project_io when re-extracting the bundle).
-  /// Preserves the compile (miniPath + compiledHash) — the bytes are unchanged, only the path is.
-  ScriptMod withAsPath(String path) => ScriptMod(
-    op: op,
-    moduleName: moduleName,
-    relPath: relPath,
-    asPath: path,
-    allowNewSymbols: allowNewSymbols,
-    miniPath: miniPath,
-    compiledHash: compiledHash,
-  );
-
-  /// Path-only rewrite of the mini-cache location (used by project_io). Preserves compiledHash.
-  ScriptMod withMiniPath(String path) => ScriptMod(
-    op: op,
-    moduleName: moduleName,
-    relPath: relPath,
-    asPath: asPath,
-    allowNewSymbols: allowNewSymbols,
-    miniPath: path,
-    compiledHash: compiledHash,
-  );
 
   /// Records a fresh compile: sets the mini-cache and the hash of the .as content it was built from.
   ScriptMod withCompiled(String miniPath, String compiledHash) => ScriptMod(
@@ -156,7 +107,7 @@ class ScriptModsState {
   int get count => items.length;
   // Insertion order (Dart Map is insertion-ordered) — this is the STAGING order, which must flow
   // through gather/build/deploy so deploy applies splices in the order the user staged them (not
-  // alphabetically by moduleName). loadAll rebuilds the map in list order, so this round-trips.
+  // alphabetically by moduleName).
   List<ScriptMod> get entries => items.values.toList();
   ScriptModsState copyWith({Map<String, ScriptMod>? items}) =>
       ScriptModsState(items: items ?? this.items);
@@ -179,10 +130,6 @@ class ScriptModsNotifier extends StateNotifier<ScriptModsState> {
   void clearAll() {
     if (state.items.isEmpty) return;
     state = const ScriptModsState();
-  }
-
-  void loadAll(List<ScriptMod> list) {
-    state = ScriptModsState(items: {for (final m in list) m.key: m});
   }
 }
 

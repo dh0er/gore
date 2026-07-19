@@ -2776,6 +2776,80 @@ void main() {
   );
 
   testWidgets(
+    'Home readiness check opens exact preview without enabling release authority',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory(r'C:\mods\project-build-preview-home'),
+        projectId: '46464646464646464646464646464646',
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onProjectBuildPlan: (lease) => _emptyProjectBuildPlanResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expect(find.text('Check build readiness'), findsOneWidget);
+      expect(find.text('Create output'), findsNothing);
+      await _tapManagedHomeTask(tester, const Key('managed-home-build'));
+      await tester.pumpAndSettle();
+
+      expect(managed.projectBuildPlanCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-test-release-build-preview-slot')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-build-plan-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('No production content yet'), findsOneWidget);
+      expect(find.text('Project build preview').hitTestable(), findsOneWidget);
+      expect(find.text('Preview only'), findsOneWidget);
+      expect(find.textContaining('No files were created'), findsOneWidget);
+
+      final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.playableBuild.evidence, isNull);
+      expect(workspace.playableBuild.onPressed, isNull);
+      expect(workspace.deployment.evidence, isNull);
+      expect(workspace.deployment.onPressed, isNull);
+
+      final playable = find.byKey(
+        const Key('revision3-test-release-playable-build-action'),
+      );
+      await tester.ensureVisible(playable);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(playable).onPressed, isNull);
+      final deployment = find.byKey(
+        const Key('revision3-test-release-deployment-action'),
+      );
+      await tester.ensureVisible(deployment);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(deployment).onPressed, isNull);
+      expect(managed.projectBuildPlanCalls, 1);
+    },
+  );
+
+  testWidgets(
     'secondary Settings dialog hosts a lazy read-only DataAsset Lab',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -11797,6 +11871,10 @@ typedef _DialogVoiceSlotCreationCallback =
       _FakeDialogVoiceSlotCreationManagedLease lease,
       Revision3DialogVoiceSlotCreationTechnicalPlan plan,
     );
+typedef _ProjectBuildPlanCallback =
+    FutureOr<AuthoringRevision3ProjectBuildPlanResult> Function(
+      _FakeProjectBuildPlanManagedLease lease,
+    );
 
 class _FakeManagedLease
     implements
@@ -12479,6 +12557,27 @@ class _FakeManagedLease
       requiresReopenValue = true;
       throw error;
     }
+  }
+}
+
+final class _FakeProjectBuildPlanManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectBuildPlanLease {
+  _FakeProjectBuildPlanManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required super.contentIndexBuilder,
+    required this.onProjectBuildPlan,
+  });
+
+  final _ProjectBuildPlanCallback onProjectBuildPlan;
+  int projectBuildPlanCalls = 0;
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1() async {
+    projectBuildPlanCalls++;
+    return onProjectBuildPlan(this);
   }
 }
 
@@ -15272,6 +15371,107 @@ Revision3BaseGameContentCatalog _baseGameCatalog() =>
       npcs: _npcCatalog(),
       quests: _questCatalog(),
     );
+
+AuthoringRevision3ProjectBuildPlanResult _emptyProjectBuildPlanResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final projectJson = jsonEncode(<String, Object?>{
+    'format': 2,
+    'schema_revision': 3,
+    'project_id': projectId,
+    'revision': projectRevision,
+    'meta': <String, Object?>{
+      'name': 'Home build preview fixture',
+      'version': '1.0.0',
+      'author': 'tests',
+    },
+    'target': <String, Object?>{
+      'executable': <String, Object?>{'byte_len': 123, 'sha256': '4' * 64},
+    },
+    'authoring_locales': <Object?>[],
+    'entities': <String, Object?>{},
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  });
+  Map<String, Object?> seal(List<int> bytes) => <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+
+  final projectSeal = seal(utf8.encode(projectJson));
+  final inputSeal = seal(
+    utf8.encode(
+      jsonEncode(<String, Object?>{
+        'format': 'gore.authoring.revision3-project-build-input.v1',
+        'project': projectSeal,
+        'dataasset_stage_manifests': <Object?>[],
+      }),
+    ),
+  );
+  final domains = <Object?>[
+    for (final domain in const <String>[
+      'localization',
+      'dialog',
+      'voice',
+      'npc',
+      'quest',
+      'scripts',
+      'items',
+      'data_assets',
+    ])
+      <String, Object?>{
+        'domain': domain,
+        'status': 'not_present',
+        'content_count': 0,
+        'ready_count': 0,
+        'blocked_count': 0,
+      },
+  ];
+  final planProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-plan.v1',
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'outcome': 'empty',
+    'production_content_count': 0,
+    'input_seal': inputSeal,
+    'domains': domains,
+    'blockers': <Object?>[],
+    'scope': 'project_build_readiness_only',
+    'build_authority': 'not_granted',
+    'artifact_status': 'not_created',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
+  final planSeal = seal(utf8.encode(jsonEncode(planProjection)));
+  return AuthoringRevision3ProjectBuildPlanResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'basis_head_json': head.canonicalJson,
+      'plan': <String, Object?>{
+        'schema_revision': 1,
+        'project_id': projectId,
+        'project_revision': projectRevision,
+        'outcome': 'empty',
+        'production_content_count': 0,
+        'input_seal': inputSeal,
+        'plan_seal': planSeal,
+        'domains': domains,
+        'blockers': <Object?>[],
+        'scope': 'project_build_readiness_only',
+        'build_authority': 'not_granted',
+        'artifact_status': 'not_created',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+    },
+    expectedHead: head,
+    expectedProjectJson: projectJson,
+  );
+}
 
 AuthoringRevision3VoiceBuildPlanResult _readyVoicePlan(
   _FakeManagedLease lease,

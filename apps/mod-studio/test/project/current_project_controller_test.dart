@@ -5945,6 +5945,183 @@ void main() {
   });
 
   test(
+    'project build preview is exact, read-only, and preserves the checkpoint',
+    () async {
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory('managed-project-build-preview'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onProjectBuildPlan: (lease) => _emptyProjectBuildPlanResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final result = await coordinator.planCurrentRevision3ProjectBuild(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+      );
+
+      expect(result.basisHead.canonicalJson, _head(7).canonicalJson);
+      expect(result.plan.isEmpty, isTrue);
+      expect(result.plan.productionContentCount, 0);
+      expect(
+        result.plan.buildAuthority,
+        AuthoringRevision3ProjectBuildAuthority.notGranted,
+      );
+      expect(
+        result.plan.artifactStatus,
+        AuthoringRevision3ProjectBuildArtifactStatus.notCreated,
+      );
+      expect(
+        result.plan.deploymentStatus,
+        AuthoringRevision3ProjectBuildDeploymentStatus.notPerformed,
+      );
+      expect(managed.projectBuildPlanCalls, 1);
+      expect(managed.projectRevision, 7);
+      expect(managed.head.canonicalJson, _head(7).canonicalJson);
+      final after = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(after.projectRevision, 7);
+      expect(after.head.canonicalJson, _head(7).canonicalJson);
+      expect(after.requiresReopen, isFalse);
+    },
+  );
+
+  test('project build preview rejects a stale requested checkpoint', () async {
+    final managed = _FakeProjectBuildPlanManagedLease(
+      root: Directory('managed-stale-project-build-preview'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      onProjectBuildPlan: (lease) => _emptyProjectBuildPlanResult(
+        head: lease.head,
+        projectId: lease.projectId,
+        projectRevision: lease.projectRevision,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.planCurrentRevision3ProjectBuild(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 6,
+        expectedHead: _head(6),
+      ),
+      throwsA(isA<Revision3ProjectBuildPlanStaleCheckpointException>()),
+    );
+
+    expect(managed.projectBuildPlanCalls, 0);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
+    'poisoned project build preview requires reopen and locks retry',
+    () async {
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory('managed-poisoned-project-build-preview'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onProjectBuildPlan: (lease) {
+          lease.requiresReopenValue = true;
+          return _emptyProjectBuildPlanResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> plan() async {
+        await coordinator.planCurrentRevision3ProjectBuild(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+        );
+      }
+
+      await expectLater(
+        plan(),
+        throwsA(isA<Revision3ProjectBuildPlanRequiresReopenException>()),
+      );
+      expect(managed.projectBuildPlanCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        plan(),
+        throwsA(isA<Revision3ProjectBuildPlanRequiresReopenException>()),
+      );
+      expect(managed.projectBuildPlanCalls, 1);
+    },
+  );
+
+  test('project build preview fails closed without lease capability', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('managed-no-project-build-preview'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.planCurrentRevision3ProjectBuild(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+      ),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
     'exact project export is tuple-bound, game-independent, and leaves the current checkpoint unchanged',
     () async {
       const output = r'C:\Exports\project-copy-r7.goremod';
@@ -8382,6 +8559,10 @@ typedef _VoicePlanHook =
     FutureOr<AuthoringRevision3VoiceBuildPlanResult> Function(
       _FakeManagedLease lease,
     );
+typedef _ProjectBuildPlanHook =
+    FutureOr<AuthoringRevision3ProjectBuildPlanResult> Function(
+      _FakeProjectBuildPlanManagedLease lease,
+    );
 typedef _ReviewedDataAssetBuildHook =
     FutureOr<AuthoringRevision3ReviewedDataAssetBuildResult> Function(
       _FakeManagedLease lease,
@@ -9190,6 +9371,26 @@ final class _FakeNpcProfileManagedLease extends _FakeManagedLease
   }
 }
 
+final class _FakeProjectBuildPlanManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectBuildPlanLease {
+  _FakeProjectBuildPlanManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required this.onProjectBuildPlan,
+  });
+
+  final _ProjectBuildPlanHook onProjectBuildPlan;
+  int projectBuildPlanCalls = 0;
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1() async {
+    projectBuildPlanCalls++;
+    return onProjectBuildPlan(this);
+  }
+}
+
 final class _FakeRestorableExportManagedLease extends _FakeManagedLease
     implements ManagedRevision3RestorableProjectExportLease {
   _FakeRestorableExportManagedLease({
@@ -9847,6 +10048,107 @@ AuthoringRevision3VoiceBuildPlanResult _voicePlanResult({
     projectRevision: projectRevision,
   ),
 );
+
+AuthoringRevision3ProjectBuildPlanResult _emptyProjectBuildPlanResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final projectJson = jsonEncode(<String, Object?>{
+    'format': 2,
+    'schema_revision': 3,
+    'project_id': projectId,
+    'revision': projectRevision,
+    'meta': <String, Object?>{
+      'name': 'Project build preview fixture',
+      'version': '1.0.0',
+      'author': 'tests',
+    },
+    'target': <String, Object?>{
+      'executable': <String, Object?>{'byte_len': 123, 'sha256': '4' * 64},
+    },
+    'authoring_locales': <Object?>[],
+    'entities': <String, Object?>{},
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  });
+  Map<String, Object?> seal(List<int> bytes) => <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+
+  final projectSeal = seal(utf8.encode(projectJson));
+  final inputSeal = seal(
+    utf8.encode(
+      jsonEncode(<String, Object?>{
+        'format': 'gore.authoring.revision3-project-build-input.v1',
+        'project': projectSeal,
+        'dataasset_stage_manifests': <Object?>[],
+      }),
+    ),
+  );
+  final domains = <Object?>[
+    for (final domain in const <String>[
+      'localization',
+      'dialog',
+      'voice',
+      'npc',
+      'quest',
+      'scripts',
+      'items',
+      'data_assets',
+    ])
+      <String, Object?>{
+        'domain': domain,
+        'status': 'not_present',
+        'content_count': 0,
+        'ready_count': 0,
+        'blocked_count': 0,
+      },
+  ];
+  final planProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-plan.v1',
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'outcome': 'empty',
+    'production_content_count': 0,
+    'input_seal': inputSeal,
+    'domains': domains,
+    'blockers': <Object?>[],
+    'scope': 'project_build_readiness_only',
+    'build_authority': 'not_granted',
+    'artifact_status': 'not_created',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
+  final planSeal = seal(utf8.encode(jsonEncode(planProjection)));
+  return AuthoringRevision3ProjectBuildPlanResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'basis_head_json': head.canonicalJson,
+      'plan': <String, Object?>{
+        'schema_revision': 1,
+        'project_id': projectId,
+        'project_revision': projectRevision,
+        'outcome': 'empty',
+        'production_content_count': 0,
+        'input_seal': inputSeal,
+        'plan_seal': planSeal,
+        'domains': domains,
+        'blockers': <Object?>[],
+        'scope': 'project_build_readiness_only',
+        'build_authority': 'not_granted',
+        'artifact_status': 'not_created',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+    },
+    expectedHead: head,
+    expectedProjectJson: projectJson,
+  );
+}
 
 AuthoringRevision3VoiceBuildResult _voiceBuildResult({
   required AuthoringWorkingHead head,

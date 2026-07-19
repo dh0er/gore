@@ -555,7 +555,8 @@ Every subcommand of the `gore` binary:
 > use the [`gore` CLI](#modding-with-the-gore-cli).
 
 A no-code Windows app over the same bundle engine as the CLI — point-and-click
-modding with live previews and `.goremod` project files. Auto-updates on launch
+modding with live previews. Its project workspace uses managed revision 3 only;
+Snapshot V2 is the separate backup/restore format. Auto-updates on launch
 (WinSparkle). The install bundles the [`gore` CLI](#modding-with-the-gore-cli)
 (`gore.exe`) alongside, for the power tools the GUI does not surface (AngelScript
 `disasm`/`decompile`, `catalog`/`dump`/`stubs`, multi-mod `mgr`).
@@ -571,6 +572,10 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
   Selected managed Quests and NPCs expose **Source/Profile & checks**, including
   an evidence-only game-compiler check with structured diagnostics, exact
   restoration/recovery handling, and no retained compiler artifact.
+- Preview the exact current managed project's build coverage across
+  localization, dialog, Voice, NPCs, Quests, scripts, items, and verified
+  DataAsset stages. This readiness inventory creates no files and does not
+  unlock build, install, deployment, or runtime authority.
 - Edit **item/stat values** by browsing the categorized item catalog and editing
   fields (the override domain).
 - Edit **localized text and dialog-line IDs**, and stage selectable runtime
@@ -581,9 +586,10 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 - Replace **textures** — pick an asset, preview, drop in a PNG.
 - Edit **AngelScript** — stage a module, compile, and splice it into the game's
   script cache (experimental).
-- **Build a bundle** and **deploy/undeploy** it to your game install
+- Use the standalone tools to **build a bundle** and **deploy/undeploy** it to your game install
   (overrides + loc + audio + textures + scripts + dialog topics, with backups), or **export a
-  standalone Lua override mod** to share.
+  standalone Lua override mod** to share. These tools are not a second managed
+  project/session path.
 
 **It can not:**
 - Build, deploy, spawn, or runtime-qualify managed revision-3 NPC/Quest Drafts;

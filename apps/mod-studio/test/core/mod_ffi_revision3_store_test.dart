@@ -276,6 +276,7 @@ void main() {
         'authoring_store_materialize_revision3_voice_take_preview_v1',
         'authoring_store_open_revision3',
         'authoring_store_open_revision3_head_bytes',
+        'authoring_store_plan_revision3_project_build_v1',
         'authoring_store_plan_revision3_voice_batch_v1',
         'authoring_store_plan_revision3_voice_v1',
         'authoring_store_prepare_remove_revision3_dataasset_stage_v1',

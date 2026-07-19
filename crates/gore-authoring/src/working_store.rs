@@ -440,6 +440,27 @@ pub enum WorkingStoreError {
     Io(#[from] io::Error),
 }
 
+const READ_MOUNT_CHANGED_REASON_PREFIX: &str = "read-only Store mount binding changed";
+
+impl WorkingStoreError {
+    /// Whether a Linux read-only Store mount binding rejected an ambient root or object handle.
+    pub fn is_read_mount_changed(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsafePath { reason, .. }
+                if reason.starts_with(READ_MOUNT_CHANGED_REASON_PREFIX)
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn read_mount_changed(path: &Path, detail: &'static str) -> WorkingStoreError {
+    WorkingStoreError::UnsafePath {
+        path: path.to_path_buf(),
+        reason: format!("{READ_MOUNT_CHANGED_REASON_PREFIX}: {detail}"),
+    }
+}
+
 /// Closed immutable snapshot manifest for schema revision 3.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -529,10 +550,80 @@ fn encode_revision3_snapshot(
 }
 
 /// Rooted immutable working-object store for format-2 authoring projects.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkingStoreLinuxMountId(u64);
+
+#[cfg(target_os = "linux")]
+impl WorkingStoreLinuxMountId {
+    /// Capture the Linux mount identity of one already-open file or directory without resolving
+    /// its ambient pathname again.
+    pub fn from_open_file(file: &File) -> io::Result<Self> {
+        linux_mount_id_from_open_file(file).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct WorkingStoreReadMountBinding {
+    #[cfg(target_os = "linux")]
+    expected: Option<WorkingStoreLinuxMountId>,
+}
+
+impl WorkingStoreReadMountBinding {
+    #[cfg(target_os = "linux")]
+    const fn linux(expected: WorkingStoreLinuxMountId) -> Self {
+        Self {
+            expected: Some(expected),
+        }
+    }
+
+    fn verify_open_file(self, file: &File, path: &Path) -> Result<(), WorkingStoreError> {
+        #[cfg(target_os = "linux")]
+        if let Some(expected) = self.expected {
+            let actual = WorkingStoreLinuxMountId::from_open_file(file)
+                .map_err(|_| read_mount_changed(path, "open file mount identity is unavailable"))?;
+            if actual != expected {
+                return Err(read_mount_changed(
+                    path,
+                    "open file belongs to another Linux mount",
+                ));
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (file, path);
+        }
+        Ok(())
+    }
+
+    fn verify_root_path(self, path: &Path) -> Result<(), WorkingStoreError> {
+        #[cfg(target_os = "linux")]
+        if self.expected.is_some() {
+            let root = open_directory_read_no_follow(path)?;
+            return self.verify_open_file(&root, path);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = path;
+        Ok(())
+    }
+
+    const fn is_bound(self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.expected.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkingProjectStore {
     root: PathBuf,
     limits: WorkingStoreLimits,
+    read_mount_binding: WorkingStoreReadMountBinding,
 }
 
 impl WorkingProjectStore {
@@ -545,7 +636,11 @@ impl WorkingProjectStore {
         let root = absolute_path(root.as_ref())?;
         create_directory_chain(&root)?;
         ensure_safe_directory_chain(&root)?;
-        Ok(Self { root, limits })
+        Ok(Self {
+            root,
+            limits,
+            read_mount_binding: WorkingStoreReadMountBinding::default(),
+        })
     }
 
     /// Open an existing store root without creating the root or any missing parent directory.
@@ -564,7 +659,28 @@ impl WorkingProjectStore {
             }
             Err(error) => return Err(error.into()),
         }
-        Ok(Self { root, limits })
+        Ok(Self {
+            root,
+            limits,
+            read_mount_binding: WorkingStoreReadMountBinding::default(),
+        })
+    }
+
+    /// Open an existing Store for Linux read-only inspection and bind every subsequent ambient
+    /// Store open to the mount identity captured from an independently retained root handle.
+    ///
+    /// Ordinary constructors deliberately keep no mount binding. This narrow constructor is for
+    /// read-only FFI inspection routes that already retain and revalidate the complete root path.
+    #[cfg(target_os = "linux")]
+    pub fn open_existing_read_only_on_mount(
+        root: impl AsRef<Path>,
+        limits: WorkingStoreLimits,
+        expected_mount: WorkingStoreLinuxMountId,
+    ) -> Result<Self, WorkingStoreError> {
+        let mut store = Self::open_existing(root, limits)?;
+        store.read_mount_binding = WorkingStoreReadMountBinding::linux(expected_mount);
+        store.ensure_root_safe()?;
+        Ok(store)
     }
 
     pub fn root(&self) -> &Path {
@@ -579,8 +695,12 @@ impl WorkingProjectStore {
     pub fn current_head(&self) -> Result<Option<WorkingHead>, WorkingStoreError> {
         self.ensure_root_safe()?;
         let path = self.head_path();
-        let Some(bytes) =
-            read_optional_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?
+        let Some(bytes) = read_optional_regular_bounded(
+            &path,
+            self.limits.max_head_bytes,
+            "head bytes",
+            self.read_mount_binding,
+        )?
         else {
             return Ok(None);
         };
@@ -700,7 +820,12 @@ impl WorkingProjectStore {
     ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
         self.ensure_root_safe()?;
         let path = self.head_path();
-        let bytes = read_required_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?;
+        let bytes = read_required_regular_bounded(
+            &path,
+            self.limits.max_head_bytes,
+            "head bytes",
+            self.read_mount_binding,
+        )?;
         self.open_revision3_head_bytes(&bytes, verification)
     }
 
@@ -1597,7 +1722,8 @@ impl WorkingProjectStore {
     }
 
     fn ensure_root_safe(&self) -> Result<(), WorkingStoreError> {
-        ensure_safe_directory_chain(&self.root)
+        ensure_safe_directory_chain(&self.root)?;
+        self.read_mount_binding.verify_root_path(&self.root)
     }
 
     fn check_expected_head(&self, expected: Option<&WorkingHead>) -> Result<(), WorkingStoreError> {
@@ -1940,7 +2066,7 @@ impl WorkingProjectStore {
                 limit: max_bytes as u64,
             });
         }
-        let bytes = read_required_regular_bounded(path, max_bytes, kind)?;
+        let bytes = read_required_regular_bounded(path, max_bytes, kind, self.read_mount_binding)?;
         if bytes.len() as u64 != seal.byte_len {
             return Err(WorkingStoreError::SealMismatch {
                 path: path.to_path_buf(),
@@ -1964,6 +2090,29 @@ impl WorkingProjectStore {
         collision: bool,
     ) -> Result<(), WorkingStoreError> {
         ensure_safe_existing_chain(path)?;
+        if verification == AssetVerification::Full && self.read_mount_binding.is_bound() {
+            let actual = match hash_file(path, seal.byte_len, self.read_mount_binding) {
+                Err(WorkingStoreError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                    return Err(WorkingStoreError::MissingObject(path.to_path_buf()));
+                }
+                result => result?,
+            };
+            if actual != seal.sha256 {
+                let reason = format!("expected SHA-256 {}, found {actual}", seal.sha256);
+                return if collision {
+                    Err(WorkingStoreError::Collision {
+                        path: path.to_path_buf(),
+                        reason,
+                    })
+                } else {
+                    Err(WorkingStoreError::SealMismatch {
+                        path: path.to_path_buf(),
+                        reason,
+                    })
+                };
+            }
+            return Ok(());
+        }
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -1988,7 +2137,7 @@ impl WorkingProjectStore {
             };
         }
         if verification == AssetVerification::Full {
-            let actual = hash_file(path, seal.byte_len)?;
+            let actual = hash_file(path, seal.byte_len, self.read_mount_binding)?;
             if actual != seal.sha256 {
                 let reason = format!("expected SHA-256 {}, found {actual}", seal.sha256);
                 return if collision {
@@ -2422,7 +2571,20 @@ fn read_optional_regular_bounded(
     path: &Path,
     max: usize,
     kind: &'static str,
+    mount_binding: WorkingStoreReadMountBinding,
 ) -> Result<Option<Vec<u8>>, WorkingStoreError> {
+    if mount_binding.is_bound() {
+        ensure_safe_existing_chain(path)?;
+        let file = match open_regular_read_no_follow_unchecked(path) {
+            Ok(file) => file,
+            Err(WorkingStoreError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        mount_binding.verify_open_file(&file, path)?;
+        return read_open_regular_bounded(file, path, max, kind).map(Some);
+    }
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
             ensure_safe_existing_chain(path)?;
@@ -2434,48 +2596,68 @@ fn read_optional_regular_bounded(
                     limit: max as u64,
                 });
             }
-            let mut file = open_regular_read_no_follow(path)?;
-            let opened_metadata = file.metadata()?;
-            ensure_regular_no_link(path, &opened_metadata)?;
-            ensure_single_link(path, &opened_metadata)?;
-            if opened_metadata.len() > max as u64 {
-                return Err(WorkingStoreError::LimitExceeded {
-                    kind,
-                    actual: opened_metadata.len(),
-                    limit: max as u64,
-                });
-            }
-            let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
-            Read::by_ref(&mut file)
-                .take(max as u64 + 1)
-                .read_to_end(&mut bytes)?;
-            enforce_limit(kind, bytes.len(), max)?;
-            if bytes.len() as u64 != opened_metadata.len() {
-                return Err(WorkingStoreError::Invariant(format!(
-                    "{kind} length changed while reading {}: expected {}, read {}",
-                    path.display(),
-                    opened_metadata.len(),
-                    bytes.len()
-                )));
-            }
-            Ok(Some(bytes))
+            let file = open_regular_read_no_follow(path)?;
+            mount_binding.verify_open_file(&file, path)?;
+            read_open_regular_bounded(file, path, max, kind).map(Some)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
-fn read_required_regular_bounded(
+fn read_open_regular_bounded(
+    mut file: File,
     path: &Path,
     max: usize,
     kind: &'static str,
 ) -> Result<Vec<u8>, WorkingStoreError> {
-    read_optional_regular_bounded(path, max, kind)?
+    let opened_metadata = file.metadata()?;
+    ensure_regular_no_link(path, &opened_metadata)?;
+    ensure_single_link(path, &opened_metadata)?;
+    if opened_metadata.len() > max as u64 {
+        return Err(WorkingStoreError::LimitExceeded {
+            kind,
+            actual: opened_metadata.len(),
+            limit: max as u64,
+        });
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    Read::by_ref(&mut file)
+        .take(max as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    enforce_limit(kind, bytes.len(), max)?;
+    if bytes.len() as u64 != opened_metadata.len() {
+        return Err(WorkingStoreError::Invariant(format!(
+            "{kind} length changed while reading {}: expected {}, read {}",
+            path.display(),
+            opened_metadata.len(),
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn read_required_regular_bounded(
+    path: &Path,
+    max: usize,
+    kind: &'static str,
+    mount_binding: WorkingStoreReadMountBinding,
+) -> Result<Vec<u8>, WorkingStoreError> {
+    read_optional_regular_bounded(path, max, kind, mount_binding)?
         .ok_or_else(|| WorkingStoreError::MissingObject(path.to_path_buf()))
 }
 
-fn hash_file(path: &Path, expected_len: u64) -> Result<Sha256Digest, WorkingStoreError> {
-    let mut file = open_regular_read_no_follow(path)?;
+fn hash_file(
+    path: &Path,
+    expected_len: u64,
+    mount_binding: WorkingStoreReadMountBinding,
+) -> Result<Sha256Digest, WorkingStoreError> {
+    let mut file = if mount_binding.is_bound() {
+        open_regular_read_no_follow_unchecked(path)?
+    } else {
+        open_regular_read_no_follow(path)?
+    };
+    mount_binding.verify_open_file(&file, path)?;
     let metadata = file.metadata()?;
     ensure_regular_no_link(path, &metadata)?;
     ensure_single_link(path, &metadata)?;
@@ -2508,6 +2690,12 @@ fn hash_file(path: &Path, expected_len: u64) -> Result<Sha256Digest, WorkingStor
 }
 
 fn open_regular_read_no_follow(path: &Path) -> Result<File, WorkingStoreError> {
+    let file = open_regular_read_no_follow_unchecked(path)?;
+    ensure_regular_no_link(path, &file.metadata()?)?;
+    Ok(file)
+}
+
+fn open_regular_read_no_follow_unchecked(path: &Path) -> Result<File, WorkingStoreError> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
@@ -2522,9 +2710,52 @@ fn open_regular_read_no_follow(path: &Path) -> Result<File, WorkingStoreError> {
         // Linux O_NOFOLLOW. Other Unix targets retain prefix and post-open handle checks.
         options.custom_flags(0x0002_0000);
     }
-    let file = options.open(path)?;
-    ensure_regular_no_link(path, &file.metadata()?)?;
-    Ok(file)
+    options.open(path).map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+fn open_directory_read_no_follow(path: &Path) -> Result<File, WorkingStoreError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options.open(path).map_err(Into::into)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_mount_id_from_open_file(file: &File) -> io::Result<u64> {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd as _;
+
+    let mut status = MaybeUninit::<libc::statx>::zeroed();
+    let empty_path = [0 as libc::c_char];
+    // SAFETY: `file` owns a live descriptor, `empty_path` is NUL terminated, and `status` points
+    // to writable storage for the exact libc ABI type. AT_EMPTY_PATH binds the query to the
+    // already-open object instead of resolving an ambient path.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_statx,
+            file.as_raw_fd(),
+            empty_path.as_ptr(),
+            libc::AT_EMPTY_PATH | libc::AT_NO_AUTOMOUNT,
+            libc::STATX_MNT_ID,
+            status.as_mut_ptr(),
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful statx initializes the structure.
+    let status = unsafe { status.assume_init() };
+    if status.stx_mask & libc::STATX_MNT_ID == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "statx did not return a Linux mount id",
+        ));
+    }
+    Ok(status.stx_mnt_id)
 }
 
 fn absolute_path(path: &Path) -> Result<PathBuf, WorkingStoreError> {
@@ -2713,6 +2944,82 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_read_mount_binding_checks_root_bounded_reads_and_hashes() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-read-mount-binding-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        let member = root.join("member.bin");
+        fs::write(&member, b"bound bytes").unwrap();
+
+        let root_handle = open_directory_read_no_follow(&root).unwrap();
+        let expected = WorkingStoreLinuxMountId::from_open_file(&root_handle).unwrap();
+        let member_handle = open_regular_read_no_follow(&member).unwrap();
+        assert_eq!(
+            WorkingStoreLinuxMountId::from_open_file(&member_handle).unwrap(),
+            expected
+        );
+
+        let unbound =
+            WorkingProjectStore::open_existing(&root, WorkingStoreLimits::default()).unwrap();
+        assert_eq!(unbound.read_mount_binding.expected, None);
+        let bound = WorkingProjectStore::open_existing_read_only_on_mount(
+            &root,
+            WorkingStoreLimits::default(),
+            expected,
+        )
+        .unwrap();
+        assert_eq!(bound.read_mount_binding.expected, Some(expected));
+
+        let forged = WorkingStoreLinuxMountId(expected.0 ^ 1);
+        let forged_binding = WorkingStoreReadMountBinding::linux(forged);
+        let root_failure = WorkingProjectStore::open_existing_read_only_on_mount(
+            &root,
+            WorkingStoreLimits::default(),
+            forged,
+        )
+        .unwrap_err();
+        assert!(root_failure.is_read_mount_changed());
+
+        for failure in [
+            read_optional_regular_bounded(&member, 64, "forged optional read", forged_binding)
+                .unwrap_err(),
+            read_required_regular_bounded(&member, 64, "forged required read", forged_binding)
+                .unwrap_err(),
+            hash_file(&member, 11, forged_binding).unwrap_err(),
+        ] {
+            assert!(failure.is_read_mount_changed(), "{failure:?}");
+        }
+
+        let foreign_file = Path::new("/proc/uptime");
+        if foreign_file.exists() {
+            let failure = read_required_regular_bounded(
+                foreign_file,
+                64 * 1024,
+                "foreign mount read",
+                WorkingStoreReadMountBinding::linux(expected),
+            )
+            .unwrap_err();
+            assert!(failure.is_read_mount_changed(), "{failure:?}");
+        }
+
+        let accepted = WorkingStoreReadMountBinding::linux(expected);
+        assert_eq!(
+            read_required_regular_bounded(&member, 64, "bound read", accepted).unwrap(),
+            b"bound bytes"
+        );
+        assert_eq!(
+            hash_file(&member, 11, accepted).unwrap(),
+            seal_bytes(b"bound bytes").sha256
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn published_revision3_basis(
         store: &WorkingProjectStore,

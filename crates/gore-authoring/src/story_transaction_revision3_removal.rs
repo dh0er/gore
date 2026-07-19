@@ -156,7 +156,9 @@ pub enum Revision3StoryDraftRemovalConflictV1 {
         module: EntityId,
         reason: String,
     },
-    #[error("Story Draft {draft} and ScriptModule {module} do not have the exact three-edge ownership closure: {reason}")]
+    #[error(
+        "Story Draft {draft} and ScriptModule {module} do not have the exact three-edge ownership closure: {reason}"
+    )]
     OwnershipConflict {
         draft: EntityId,
         module: EntityId,
@@ -1404,18 +1406,13 @@ mod tests {
                 }),
             },
         );
-        let Revision3StoryDraftRemovalEvaluationV1::Rejected(rejection) =
-            evaluate(&fixture, &second_owner, &request(&fixture)).unwrap()
-        else {
-            panic!("second owned generated object was accepted");
-        };
         assert!(matches!(
-            rejection.conflict,
-            Revision3StoryDraftRemovalConflictV1::DraftReferenced {
-                source_entity,
-                role: Revision3ContentReferenceRoleV1::OriginOwner,
-                ..
-            } if source_entity == extra_id
+            second_owner.to_canonical_json().unwrap_err(),
+            crate::ProjectRevision3JsonError::InvalidModel(
+                crate::ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+                    module,
+                }
+            ) if module == extra_id
         ));
 
         let mut foreign = fixture.project.clone();

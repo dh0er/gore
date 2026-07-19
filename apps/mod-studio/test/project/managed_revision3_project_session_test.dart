@@ -739,6 +739,175 @@ void main() {
   );
 
   test(
+    'project build planning is an exact evidence-only read and leaves the checkpoint unchanged',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'project_build_plan');
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(revision: 4, name: 'Build preview');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      final result = await session.planProjectBuildV1();
+
+      expect(result.plan.isEmpty, isTrue);
+      expect(result.plan.productionContentCount, 0);
+      expect(result.plan.domains, hasLength(8));
+      expect(
+        result.plan.domains,
+        everyElement(
+          isA<AuthoringRevision3ProjectBuildDomainSummary>().having(
+            (domain) => domain.status,
+            'status',
+            AuthoringRevision3ProjectBuildDomainStatus.notPresent,
+          ),
+        ),
+      );
+      expect(
+        result.plan.buildAuthority,
+        AuthoringRevision3ProjectBuildAuthority.notGranted,
+      );
+      expect(store.projectBuildPlanCalls, 1);
+      expect(store.projectBuildPlanCurrentProjects, <String>[projectJson]);
+      expect(store.projectBuildPlanExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 4);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'project build-plan errors keep bounded author state retryable and poison integrity failures',
+    () async {
+      const retryableCodes = <String>{
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_INPUT_LIMIT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_PROJECT_INVALID',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STAGE_LIMIT',
+      };
+      for (final code in retryableCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_build_plan_retry_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 2, name: 'Retry preview'),
+        );
+        store.nextProjectBuildPlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_project_build_v1',
+          code: code,
+          message: 'injected bounded project build-plan failure',
+        );
+
+        await expectLater(
+          session.planProjectBuildV1(),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect((await session.planProjectBuildV1()).plan.isEmpty, isTrue);
+        expect(store.projectBuildPlanCalls, 2, reason: code);
+        await session.close();
+      }
+
+      for (final code in const <String>{
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_INVARIANT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STORE_ROOT_CHANGED',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STAGE_INVALID',
+      }) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_build_plan_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 2, name: 'Poison preview'),
+        );
+        store.nextProjectBuildPlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_project_build_v1',
+          code: code,
+          message: 'injected project build-plan integrity failure',
+        );
+
+        await expectLater(
+          session.planProjectBuildV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(store.projectBuildPlanCalls, 1, reason: code);
+        await session.close();
+      }
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'project_build_plan_head_conflict',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: _projectJson(revision: 2, name: 'Conflict preview'),
+          );
+      conflictStore.nextProjectBuildPlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_project_build_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_HEAD_CONFLICT',
+        message: 'injected project build-plan head conflict',
+      );
+      await expectLater(
+        conflictSession.planProjectBuildV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      await conflictSession.close();
+    },
+  );
+
+  test(
+    'project build plan uses readExact and rejects late head drift',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_build_plan_drift',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 5, name: 'Drift preview'),
+      );
+      store.afterProjectBuildPlan = (root, _) async {
+        final later = store.register(
+          _projectJson(revision: 6, name: 'Later preview'),
+        );
+        await File(
+          p.join(root, 'gore-project.json'),
+        ).writeAsString(later.canonicalJson, flush: true);
+      };
+
+      await expectLater(
+        session.planProjectBuildV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(store.projectBuildPlanCalls, 1);
+      await session.close();
+    },
+  );
+
+  test(
     'Voice planning is an exact no-output read and leaves the checkpoint unchanged',
     () async {
       final root = await _projectRoot(fixture, suffix: 'voice_plan');
@@ -8463,6 +8632,12 @@ typedef _AfterVoicePlan =
       AuthoringRevision3VoiceBuildPlanResult result,
     );
 
+typedef _AfterProjectBuildPlan =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3ProjectBuildPlanResult result,
+    );
+
 typedef _AfterExactSnapshotExportV2 =
     FutureOr<void> Function(
       String root,
@@ -8767,6 +8942,7 @@ Map<String, Object?> _npcProfilePreparedResponse({
 class _FakeRevision3Store
     implements
         ManagedRevision3AuthoringStore,
+        ManagedRevision3ProjectBuildPlanStore,
         ManagedRevision3VoiceTakeMediaQaStore,
         ManagedRevision3VoiceTakePreviewStore,
         ManagedRevision3NpcProfileEditStore {
@@ -8797,6 +8973,7 @@ class _FakeRevision3Store
   int voiceTakeStatusPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
   int voicePlanCalls = 0;
+  int projectBuildPlanCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
   int dialogLocalizationReadCalls = 0;
@@ -8830,6 +9007,7 @@ class _FakeRevision3Store
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
   _AfterVoicePlan? afterVoicePlan;
+  _AfterProjectBuildPlan? afterProjectBuildPlan;
   _AfterVoiceBuild? afterVoiceBuild;
   final List<String> questGameRoots = <String>[];
   final List<String> questCurrentProjects = <String>[];
@@ -8866,6 +9044,8 @@ class _FakeRevision3Store
       <AuthoringRevision3VoiceTargetRequestV1>[];
   final List<String> voicePlanCurrentProjects = <String>[];
   final List<String> voicePlanExpectedHeads = <String>[];
+  final List<String> projectBuildPlanCurrentProjects = <String>[];
+  final List<String> projectBuildPlanExpectedHeads = <String>[];
   final List<String> voiceBuildOutputs = <String>[];
   final List<String> voiceBuildGameRoots = <String>[];
   String? nextQuestResponseMismatch;
@@ -8886,6 +9066,7 @@ class _FakeRevision3Store
   Object? nextVoiceTakeStatusError;
   Object? nextVoiceTargetError;
   Object? nextVoicePlanError;
+  Object? nextProjectBuildPlanError;
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
@@ -9981,6 +10162,36 @@ class _FakeRevision3Store
       currentProjectJson: currentProjectJson,
       request: request,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    projectBuildPlanCalls++;
+    projectBuildPlanCurrentProjects.add(currentProjectJson);
+    projectBuildPlanExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextProjectBuildPlanError;
+    nextProjectBuildPlanError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_plan_revision3_project_build_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_HEAD_CONFLICT',
+        message: 'fake native project build-plan basis CAS rejected',
+      );
+    }
+    final result = AuthoringRevision3ProjectBuildPlanResult.fromJson(
+      _emptyProjectBuildPlanResponse(currentProjectJson, expectedHead),
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+    );
+    await afterProjectBuildPlan?.call(root, result);
+    return result;
   }
 
   @override
@@ -11967,6 +12178,83 @@ AuthoringRevision3ProjectCompilerCheckResult _projectCompilerCheckResult({
     byteLength: manifestBytes.length,
     sha256: crypto.sha256.convert(manifestBytes).toString(),
   );
+}
+
+Map<String, Object?> _emptyProjectBuildPlanResponse(
+  String projectJson,
+  AuthoringWorkingHead head,
+) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  Map<String, Object?> seal(List<int> bytes) => <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+
+  final projectSeal = seal(utf8.encode(projectJson));
+  final inputProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-input.v1',
+    'project': projectSeal,
+    'dataasset_stage_manifests': <Object?>[],
+  };
+  final inputSeal = seal(utf8.encode(jsonEncode(inputProjection)));
+  final domains = <Object?>[
+    for (final domain in const <String>[
+      'localization',
+      'dialog',
+      'voice',
+      'npc',
+      'quest',
+      'scripts',
+      'items',
+      'data_assets',
+    ])
+      <String, Object?>{
+        'domain': domain,
+        'status': 'not_present',
+        'content_count': 0,
+        'ready_count': 0,
+        'blocked_count': 0,
+      },
+  ];
+  final planProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-plan.v1',
+    'schema_revision': 1,
+    'project_id': project['project_id'],
+    'project_revision': project['revision'],
+    'outcome': 'empty',
+    'production_content_count': 0,
+    'input_seal': inputSeal,
+    'domains': domains,
+    'blockers': <Object?>[],
+    'scope': 'project_build_readiness_only',
+    'build_authority': 'not_granted',
+    'artifact_status': 'not_created',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
+  final planSeal = seal(utf8.encode(jsonEncode(planProjection)));
+  return <String, Object?>{
+    'ok': true,
+    'basis_head_json': head.canonicalJson,
+    'plan': <String, Object?>{
+      'schema_revision': 1,
+      'project_id': project['project_id'],
+      'project_revision': project['revision'],
+      'outcome': 'empty',
+      'production_content_count': 0,
+      'input_seal': inputSeal,
+      'plan_seal': planSeal,
+      'domains': domains,
+      'blockers': <Object?>[],
+      'scope': 'project_build_readiness_only',
+      'build_authority': 'not_granted',
+      'artifact_status': 'not_created',
+      'deployment_status': 'not_performed',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+  };
 }
 
 String _projectJson({

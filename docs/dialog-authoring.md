@@ -288,9 +288,10 @@ Production authoring can use either integration path:
 2. Declare a generated `dialog_topics` adapter with explicit participant,
    authored-class, and sentinel-class identities, managed by the bundle engine.
 
-Mod Studio's Dialogs tab stages the second form through explicit fields and
-persists it in `.goremod` projects; the JSON build spec remains available for
-terminal and CI workflows. Neither surface infers an NPC or sentinel from a
+Mod Studio's standalone Dialogs tab stages the second form through explicit
+in-memory fields and feeds it into the JSON build spec, which also remains
+available for terminal and CI workflows. This standalone surface owns no
+managed project/session state. Neither surface infers an NPC or sentinel from a
 class name.
 
 Do not replace this with a global object scan, delayed injection, console

@@ -579,6 +579,7 @@ impl WorkingProjectStore {
             &self.head_path(),
             self.limits.max_head_bytes,
             "managed export head bytes",
+            self.read_mount_binding,
         )?;
         let disk_head: WorkingHead = parse_canonical_json(&head_bytes, "managed export head")?;
         if &disk_head != expected_head {

@@ -1248,7 +1248,7 @@ class AppLocalizationsDe extends AppLocalizations {
       'Finde Projekt-, Basisspiel-, installierte und verifizierte DataAsset-Inhalte.';
 
   @override
-  String get managedHomeBuildTitle => 'Ausgabe erstellen';
+  String get managedHomeBuildTitle => 'Baubereitschaft prüfen';
 
   @override
   String get managedHomeBuildDescription =>

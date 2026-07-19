@@ -69,6 +69,7 @@ import 'project/revision3_project_import.dart';
 import 'project/revision3_project_import_dialog.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
+import 'project/revision3_project_build_plan_panel.dart';
 import 'project/revision3_project_compiler_check_panel.dart';
 import 'project/revision3_project_command_bar.dart';
 import 'project/revision3_project_workspace.dart';
@@ -1442,6 +1443,14 @@ class _HomePageState extends ConsumerState<HomePage> {
                 expectedProjectRevision: currentProject.projectRevision,
                 expectedHead: currentProject.head,
               ),
+          planProjectBuild: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .planCurrentRevision3ProjectBuild(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+              ),
           buildVoiceBundle: (output) {
             final configuredGameRoot = gameRoot;
             if (configuredGameRoot == null) {
@@ -1916,6 +1925,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishDialogVoiceSlotCreation,
     required this.publishVoiceTarget,
     required this.planVoiceBuild,
+    required this.planProjectBuild,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
     required this.buildReviewedDataAsset,
@@ -2003,6 +2013,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   publishDialogVoiceSlotCreation;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceBuildPlanLoader planVoiceBuild;
+  final Revision3ProjectBuildPlanLoader planProjectBuild;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
   final Revision3ReviewedDataAssetStageBuilder buildReviewedDataAsset;
@@ -2129,6 +2140,8 @@ class _ManagedRevision3ProjectViewState
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
   Revision3VoiceBuildPlanLoader get planVoiceBuild => widget.planVoiceBuild;
+  Revision3ProjectBuildPlanLoader get planProjectBuild =>
+      widget.planProjectBuild;
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
   Revision3VoiceBuildParentDirectoryPicker get pickVoiceBuildParent =>
       widget.pickVoiceBuildParent;
@@ -4157,6 +4170,7 @@ class _ManagedRevision3ProjectViewState
         focus: switch (location.secondary) {
           'checks' => Revision3TestReleaseFocus.checks,
           'release' => Revision3TestReleaseFocus.release,
+          'build-preview' => Revision3TestReleaseFocus.buildPreview,
           'problems' => Revision3TestReleaseFocus.problems,
           'voice' => Revision3TestReleaseFocus.voice,
           _ => Revision3TestReleaseFocus.overview,
@@ -4223,6 +4237,17 @@ class _ManagedRevision3ProjectViewState
             Revision3ProjectWorkspaceSection.content,
             secondary: Revision3ContentWorkspaceView.dataAssets.secondaryRoute,
           ),
+        ),
+        buildPreviewBuilder: (_) => Revision3ProjectBuildPlanPanel(
+          checkpoint: Revision3ProjectBuildPlanCheckpoint(
+            projectId: checkpoint.projectId,
+            projectRevision: checkpoint.projectRevision,
+            checkpointIdentity: checkpoint.checkpointIdentity,
+          ),
+          load: planProjectBuild,
+          copy: l10n.localeName.startsWith('de')
+              ? const Revision3ProjectBuildPlanCopy.german()
+              : const Revision3ProjectBuildPlanCopy.english(),
         ),
         playableBuild: Revision3TestReleaseCapability(
           title: l10n.managedTestReleasePlayableBuildTitle,
@@ -4425,7 +4450,7 @@ class _ManagedRevision3ProjectViewState
           description: l10n.managedHomeBuildDescription,
           onPressed: () => navigate(
             Revision3ProjectWorkspaceSection.testRelease,
-            secondary: 'release',
+            secondary: 'build-preview',
           ),
         ),
       ],

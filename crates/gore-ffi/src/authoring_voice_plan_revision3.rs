@@ -4,19 +4,17 @@
 //! It accepts neither a game installation nor an output path, creates no artifact, and grants no
 //! build, deployment, publication, runtime, game-write, or save-write authority.
 
-use std::fs::{self, File, OpenOptions};
-use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use gore_authoring::{
     plan_revision3_voice_build_v1, AssetVerification, Revision3VoiceBuildPlanEvaluationV1,
-    WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
-    MAX_PROJECT_JSON_BYTES,
+    WorkingHead, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::authoring_store_root_guard::{RetainedStoreRoot, RetainedStoreRootError};
 use crate::err;
 
 pub(super) const COMMAND: &str = "authoring_store_plan_revision3_voice_v1";
@@ -49,18 +47,6 @@ struct Failure {
     message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirectoryIdentity {
-    device: u64,
-    inode: u64,
-}
-
-#[derive(Debug)]
-struct HeldDirectoryIdentity {
-    _file: File,
-    identity: DirectoryIdentity,
-}
-
 impl Failure {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -84,9 +70,21 @@ fn plan_revision3_voice_v1_inner(input: &str) -> Result<Value, Failure> {
 
 fn plan_revision3_voice_v1_inner_with_guard<F>(
     input: &str,
+    after_plan_guard: F,
+) -> Result<Value, Failure>
+where
+    F: FnMut(&Path),
+{
+    plan_revision3_voice_v1_inner_with_guards(input, |_| {}, after_plan_guard)
+}
+
+fn plan_revision3_voice_v1_inner_with_guards<C, F>(
+    input: &str,
+    mut after_capture_guard: C,
     mut after_plan_guard: F,
 ) -> Result<Value, Failure>
 where
+    C: FnMut(&Path),
     F: FnMut(&Path),
 {
     let payload: PlanVoiceWirePayload = parse_exact_wire(input)?;
@@ -101,105 +99,90 @@ where
     }
     let expected_head = parse_canonical_head(&payload.expected_head_json)?;
     let requested_root = Path::new(&payload.root);
-    let canonical_root = canonical_existing_directory_no_reparse(requested_root)?;
-    let held_root = hold_directory_identity(&canonical_root).map_err(|_| {
-        Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-            "managed Store root identity could not be captured safely",
-        )
-    })?;
+    let retained_root =
+        RetainedStoreRoot::capture(requested_root).map_err(map_initial_root_error)?;
+    after_capture_guard(retained_root.canonical());
 
-    let store = WorkingProjectStore::open_existing(&canonical_root, WorkingStoreLimits::default())
-        .map_err(map_store_error)?;
-    let basis = store
-        .open_current_revision3(AssetVerification::Full)
-        .map_err(map_store_error)?;
-    if basis.head != expected_head {
-        return Err(head_conflict());
-    }
-    let canonical_project = basis.project.to_canonical_json().map_err(|_| invariant())?;
-    if canonical_project != payload.current_project_json {
-        return Err(Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_PROJECT_CONFLICT",
-            "current_project_json differs from the exact published revision-3 project",
-        ));
-    }
-    // Planner and bounded-wire failures are evidence about this exact basis, not permission to
-    // skip the closing Store/root audit. Hold either failure until both mutable windows have been
-    // closed; an intervening Store/root change must still win over stale project diagnostics.
-    let evaluation = validate_signed_wire_values(&basis.project).and_then(|()| {
-        plan_revision3_voice_build_v1(&basis.project).map_err(|error| {
-            Failure::new(
-                "AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID",
-                error.to_string(),
-            )
-        })
-    });
-    after_plan_guard(&canonical_root);
-
-    // Close both mutable windows before returning readiness evidence: all Store assets are fully
-    // reopened and the caller's root spelling must still identify the same safe real directory.
-    let after = store
-        .open_current_revision3(AssetVerification::Full)
-        .map_err(map_store_error)?;
-    if after.head != expected_head || after.project != basis.project {
-        return Err(head_conflict());
-    }
-    let revalidated_root =
-        canonical_existing_directory_no_reparse(requested_root).map_err(|_| {
-            Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED",
-            "the managed Store root became unavailable or changed identity during Voice planning",
-        )
-        })?;
-    let revalidated_identity = hold_directory_identity(&revalidated_root).map_err(|_| {
-        Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED",
-            "the managed Store root identity became unavailable during Voice planning",
-        )
-    })?;
-    if revalidated_root != canonical_root || revalidated_identity.identity != held_root.identity {
-        return Err(Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED",
-            "the managed Store root changed identity during Voice planning",
-        ));
-    }
-    let evaluation = evaluation?;
-
-    let basis_head_json = canonical_head_json(&basis.head)?;
-    let common = |outcome: &'static str, total_slots: u64, ready_slots: u64, blockers: Value| {
-        json!({
-            "ok": true,
-            "outcome": outcome,
-            "basis_head_json": basis_head_json,
-            "project_id": basis.project.project_id.to_string(),
-            "project_revision": basis.project.revision,
-            "total_slots": total_slots,
-            "ready_slots": ready_slots,
-            "blockers": blockers,
-            "plan_authority": "read_only_voice_build_plan_v1",
-            "build_authority": "not_granted",
-            "deployment_status": "not_performed",
-        })
-    };
-    let response = match evaluation {
-        Revision3VoiceBuildPlanEvaluationV1::Ready { plan } => {
-            let ready_slots = u64::try_from(plan.edits.len()).map_err(|_| {
-                Failure::new(
-                    "AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT",
-                    "ready Voice slot count is outside the bounded wire range",
-                )
-            })?;
-            common("ready", ready_slots, ready_slots, json!([]))
+    // Defer every post-capture result until the retained root has passed its closing audit. This
+    // includes initial-open/head/project failures as well as planner, closing-open, serialization,
+    // and response-budget failures, so root replacement always has the dominant classification.
+    let operation = (|| {
+        let canonical_root = retained_root.canonical();
+        let store = retained_root
+            .open_existing_store(WorkingStoreLimits::default())
+            .map_err(map_store_error)?;
+        let basis = store
+            .open_current_revision3(AssetVerification::Full)
+            .map_err(map_store_error)?;
+        if basis.head != expected_head {
+            return Err(head_conflict());
         }
-        Revision3VoiceBuildPlanEvaluationV1::Blocked { report } => common(
-            "blocked",
-            report.total_slots,
-            report.ready_slots,
-            serde_json::to_value(report.blockers).map_err(|_| invariant())?,
-        ),
-    };
-    enforce_response_budget(response)
+        let canonical_project = basis.project.to_canonical_json().map_err(|_| invariant())?;
+        if canonical_project != payload.current_project_json {
+            return Err(Failure::new(
+                "AUTHORING_REVISION3_VOICE_PLAN_PROJECT_CONFLICT",
+                "current_project_json differs from the exact published revision-3 project",
+            ));
+        }
+        // Planner and bounded-wire failures are evidence about this exact basis, not permission
+        // to skip the closing Store/root audit.
+        let evaluation = validate_signed_wire_values(&basis.project).and_then(|()| {
+            plan_revision3_voice_build_v1(&basis.project).map_err(|error| {
+                Failure::new(
+                    "AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID",
+                    error.to_string(),
+                )
+            })
+        });
+        after_plan_guard(canonical_root);
+
+        let after = store
+            .open_current_revision3(AssetVerification::Full)
+            .map_err(map_store_error)?;
+        if after.head != expected_head || after.project != basis.project {
+            return Err(head_conflict());
+        }
+        let evaluation = evaluation?;
+
+        let basis_head_json = canonical_head_json(&basis.head)?;
+        let common =
+            |outcome: &'static str, total_slots: u64, ready_slots: u64, blockers: Value| {
+                json!({
+                    "ok": true,
+                    "outcome": outcome,
+                    "basis_head_json": basis_head_json,
+                    "project_id": basis.project.project_id.to_string(),
+                    "project_revision": basis.project.revision,
+                    "total_slots": total_slots,
+                    "ready_slots": ready_slots,
+                    "blockers": blockers,
+                    "plan_authority": "read_only_voice_build_plan_v1",
+                    "build_authority": "not_granted",
+                    "deployment_status": "not_performed",
+                })
+            };
+        let response = match evaluation {
+            Revision3VoiceBuildPlanEvaluationV1::Ready { plan } => {
+                let ready_slots = u64::try_from(plan.edits.len()).map_err(|_| {
+                    Failure::new(
+                        "AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT",
+                        "ready Voice slot count is outside the bounded wire range",
+                    )
+                })?;
+                common("ready", ready_slots, ready_slots, json!([]))
+            }
+            Revision3VoiceBuildPlanEvaluationV1::Blocked { report } => common(
+                "blocked",
+                report.total_slots,
+                report.ready_slots,
+                serde_json::to_value(report.blockers).map_err(|_| invariant())?,
+            ),
+        };
+        enforce_response_budget(response)
+    })();
+
+    retained_root.revalidate().map_err(map_closing_root_error)?;
+    operation
 }
 
 fn parse_exact_wire<P>(input: &str) -> Result<P, Failure>
@@ -231,147 +214,18 @@ fn validate_path(path: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-fn canonical_existing_directory_no_reparse(path: &Path) -> Result<PathBuf, Failure> {
-    if path
-        .components()
-        .any(|component| component == Component::ParentDir)
-    {
-        return Err(Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-            "managed Store root must not contain '..' traversal",
-        ));
-    }
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|_| {
-                Failure::new(
-                    "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-                    "managed Store root could not be resolved",
-                )
-            })?
-            .join(path)
-    };
-    for ancestor in absolute.ancestors() {
-        let metadata = fs::symlink_metadata(ancestor).map_err(|_| {
-            Failure::new(
-                "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-                "managed Store root has an unavailable path component",
-            )
-        })?;
-        if metadata_is_reparse(&metadata) || !metadata.is_dir() {
-            return Err(Failure::new(
-                "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-                "managed Store root crosses a symbolic link, reparse point, or non-directory",
-            ));
-        }
-    }
-    fs::canonicalize(&absolute).map_err(|_| {
-        Failure::new(
-            "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
-            "managed Store root could not be canonicalized",
-        )
-    })
+fn map_initial_root_error(_error: RetainedStoreRootError) -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_VOICE_PLAN_STORE_UNAVAILABLE",
+        "managed Store root identity could not be captured safely",
+    )
 }
 
-fn metadata_is_reparse(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
-fn hold_directory_identity(path: &Path) -> io::Result<HeldDirectoryIdentity> {
-    let file = open_directory_no_follow(path)?;
-    let identity = directory_identity(&file)?;
-    Ok(HeldDirectoryIdentity {
-        _file: file,
-        identity,
-    })
-}
-
-#[cfg(windows)]
-fn open_directory_no_follow(path: &Path) -> io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    };
-
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
-    options.open(path)
-}
-
-#[cfg(unix)]
-fn open_directory_no_follow(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    options.open(path)
-}
-
-#[cfg(windows)]
-fn directory_identity(file: &File) -> io::Result<DirectoryIdentity> {
-    use std::mem::MaybeUninit;
-    use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
-        FILE_ATTRIBUTE_REPARSE_POINT,
-    };
-
-    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-    // SAFETY: `file` owns a live directory handle and `info` is writable for the exact ABI type.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, info.as_mut_ptr()) } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: a successful call initializes the entire structure.
-    let info = unsafe { info.assume_init() };
-    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
-        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "managed Store root handle is not one real directory",
-        ));
-    }
-    Ok(DirectoryIdentity {
-        device: u64::from(info.dwVolumeSerialNumber),
-        inode: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-    })
-}
-
-#[cfg(unix)]
-fn directory_identity(file: &File) -> io::Result<DirectoryIdentity> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = file.metadata()?;
-    if !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "managed Store root handle is not a directory",
-        ));
-    }
-    Ok(DirectoryIdentity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
+fn map_closing_root_error(_error: RetainedStoreRootError) -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED",
+        "the managed Store root changed identity during Voice planning",
+    )
 }
 
 fn parse_canonical_head(input: &str) -> Result<WorkingHead, Failure> {
@@ -424,6 +278,9 @@ fn enforce_response_budget(response: Value) -> Result<Value, Failure> {
 }
 
 fn map_store_error(error: WorkingStoreError) -> Failure {
+    if error.is_read_mount_changed() {
+        return map_closing_root_error(RetainedStoreRootError::Changed);
+    }
     use WorkingStoreError::*;
     let code = match error {
         HeadConflict { .. } => "AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT",
@@ -488,7 +345,8 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::{
-        plan_revision3_voice_v1_inner_with_guard, ExactWireRequest, PlanVoiceWirePayload, COMMAND,
+        plan_revision3_voice_v1_inner_with_guard, plan_revision3_voice_v1_inner_with_guards,
+        ExactWireRequest, PlanVoiceWirePayload, COMMAND,
     };
 
     fn entity_id(value: u8) -> EntityId {
@@ -917,6 +775,88 @@ mod tests {
         std::fs::remove_file(alias).unwrap();
         #[cfg(windows)]
         std::fs::remove_dir(alias).unwrap();
+    }
+
+    #[test]
+    fn root_replacement_before_initial_store_open_dominates_the_early_store_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store_root, project, head) = publish_fixture(temp.path(), resolved_target(), true);
+        let input = request(&store_root, &project, &head);
+        let displaced = temp.path().join("displaced-before-open-store");
+        let swapped = Cell::new(false);
+
+        let outcome = plan_revision3_voice_v1_inner_with_guards(
+            &input,
+            |root| {
+                // A Windows handle chain blocks this rename. Unix permits it, so replace the
+                // Store with an empty directory that forces an initial-open diagnostic.
+                if std::fs::rename(root, &displaced).is_err() {
+                    return;
+                }
+                std::fs::create_dir(root).unwrap();
+                swapped.set(true);
+            },
+            |_| {},
+        );
+        if !swapped.get() {
+            return;
+        }
+
+        assert_eq!(
+            outcome.unwrap_err().code,
+            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transient_root_swap_and_restore_is_latched_as_root_changed() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store_root, project, head) = publish_fixture(temp.path(), resolved_target(), true);
+        let input = request(&store_root, &project, &head);
+        let displaced = temp.path().join("displaced-transient-store");
+        let replacement = temp.path().join("replacement-transient-store");
+        std::fs::create_dir(&replacement).unwrap();
+
+        let outcome = plan_revision3_voice_v1_inner_with_guard(&input, |root| {
+            std::fs::rename(root, &displaced).unwrap();
+            std::os::unix::fs::symlink(&replacement, root).unwrap();
+            std::fs::remove_file(root).unwrap();
+            std::fs::rename(&displaced, root).unwrap();
+        });
+
+        assert_eq!(
+            outcome.unwrap_err().code,
+            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn mount_binding_failure_maps_to_store_root_changed() {
+        use gore_authoring::WorkingStoreLinuxMountId;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("store");
+        std::fs::create_dir(&root).unwrap();
+        let root_mount =
+            WorkingStoreLinuxMountId::from_open_file(&std::fs::File::open(&root).unwrap()).unwrap();
+        let foreign_mount =
+            WorkingStoreLinuxMountId::from_open_file(&std::fs::File::open("/proc").unwrap())
+                .unwrap();
+        if root_mount == foreign_mount {
+            return;
+        }
+        let error = WorkingProjectStore::open_existing_read_only_on_mount(
+            &root,
+            WorkingStoreLimits::default(),
+            foreign_mount,
+        )
+        .unwrap_err();
+        assert_eq!(
+            super::map_store_error(error).code,
+            "AUTHORING_REVISION3_VOICE_PLAN_STORE_ROOT_CHANGED"
+        );
     }
 
     #[test]

@@ -515,6 +515,16 @@ final class Revision3ProjectCompilerCheckStaleCheckpointException
   const Revision3ProjectCompilerCheckStaleCheckpointException();
 }
 
+final class Revision3ProjectBuildPlanRequiresReopenException
+    implements Exception {
+  const Revision3ProjectBuildPlanRequiresReopenException();
+}
+
+final class Revision3ProjectBuildPlanStaleCheckpointException
+    implements Exception {
+  const Revision3ProjectBuildPlanStaleCheckpointException();
+}
+
 final class Revision3DataAssetPackageIndexRequiresReopenException
     implements Exception {
   const Revision3DataAssetPackageIndexRequiresReopenException();
@@ -692,6 +702,11 @@ abstract interface class ManagedRevision3DialogLocalizationReadLease {
     required int expectedLocalizationRevision,
     required String expectedLocId,
   });
+}
+
+/// Optional exact-current, evidence-only whole-project build planning.
+abstract interface class ManagedRevision3ProjectBuildPlanLease {
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1();
 }
 
 /// Optional exact-current capability for full authored-text editing. Keeping
@@ -998,7 +1013,8 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
         ManagedRevision3RestorableProjectExportLease,
-        ManagedRevision3StoryDraftRemovalLease {
+        ManagedRevision3StoryDraftRemovalLease,
+        ManagedRevision3ProjectBuildPlanLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -1783,6 +1799,10 @@ final class _ManagedRevision3SessionLease
   @override
   Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1() =>
       _session.planVoiceV1();
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1() =>
+      _session.planProjectBuildV1();
 
   @override
   Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
@@ -5251,6 +5271,68 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTargetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Derive aggregate all-domain build readiness from the exact current
+  /// checkpoint. This evidence-only read accepts no game or output path and
+  /// grants no build, deployment, publication, save, or game authority.
+  Future<AuthoringRevision3ProjectBuildPlanResult>
+  planCurrentRevision3ProjectBuild({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'project build planning is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectBuildPlanRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ProjectBuildPlanStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ProjectBuildPlanLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 project cannot plan build readiness',
+      );
+    }
+    final planner = lease as ManagedRevision3ProjectBuildPlanLease;
+    try {
+      final result = await planner.planProjectBuildV1();
+      if (lease.requiresReopen) {
+        throw const Revision3ProjectBuildPlanRequiresReopenException();
+      }
+      if (result.plan.projectId != expectedProjectId ||
+          result.plan.projectId != lease.projectId ||
+          result.plan.projectRevision != expectedProjectRevision ||
+          result.plan.projectRevision != lease.projectRevision ||
+          result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        throw const CurrentProjectCoordinatorException(
+          'project build plan disagrees with the current managed checkpoint',
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ProjectBuildPlanRequiresReopenException(),
           stackTrace,
         );
       }

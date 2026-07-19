@@ -1232,7 +1232,7 @@ class AppLocalizationsRu extends AppLocalizations {
       'Find project, base-game, installed, and verified DataAsset content.';
 
   @override
-  String get managedHomeBuildTitle => 'Create output';
+  String get managedHomeBuildTitle => 'Check build readiness';
 
   @override
   String get managedHomeBuildDescription =>

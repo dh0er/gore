@@ -8,7 +8,7 @@ const _checkpointIdentity = '{"revision":7,"head":"current"}';
 
 void main() {
   testWidgets(
-    'shows all six boundaries and callbacks alone authorize nothing',
+    'shows compact checks and calm future steps while callbacks authorize nothing',
     (tester) async {
       final semantics = tester.ensureSemantics();
       var buildCalls = 0;
@@ -49,10 +49,29 @@ void main() {
         );
       }
       expect(find.text('Nicht geprüft'), findsNWidgets(4));
-      expect(find.text('Blockiert'), findsNWidgets(2));
+      expect(find.text('Nicht verfügbar'), findsNWidgets(2));
+      expect(find.text('Blockiert'), findsNothing);
       expect(find.text('Verfügbar'), findsNothing);
       expect(find.textContaining('Bereit'), findsNothing);
       expect(find.textContaining('Veralteter Build-Nachweis'), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-test-release-step-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-test-release-step-2')),
+        findsOneWidget,
+      );
+      final capabilitySurface = tester.widget<Material>(
+        find.byKey(const Key('revision3-test-release-capabilities')),
+      );
+      final scheme = Theme.of(
+        tester.element(
+          find.byKey(const Key('revision3-test-release-capabilities')),
+        ),
+      ).colorScheme;
+      expect(capabilitySurface.color, scheme.surfaceContainerLow);
+      expect(capabilitySurface.color, isNot(scheme.errorContainer));
 
       final buildAction = find.byKey(
         const Key('revision3-test-release-playable-build-action'),
@@ -69,8 +88,11 @@ void main() {
         find.byKey(const Key('revision3-test-release-playable-build-card')),
       );
       expect(buildSemantics.label, 'Spielbare Mod erstellen');
-      expect(buildSemantics.value, 'Blockiert');
-      expect(buildSemantics.hint, 'Kein passender Build-Nachweis vorhanden.');
+      expect(buildSemantics.value, 'Nicht verfügbar');
+      expect(
+        buildSemantics.hint,
+        'Dieses Ergebnis gehört zu einer anderen Projektversion. Bitte prüfe den Bereich erneut.',
+      );
       expect(tester.takeException(), isNull);
       semantics.dispose();
     },
@@ -192,12 +214,21 @@ void main() {
     );
 
     expect(find.text('Nicht geprüft'), findsNWidgets(4));
-    expect(find.text('Blockiert'), findsNWidgets(2));
+    expect(find.text('Nicht verfügbar'), findsNWidgets(2));
+    expect(find.text('Blockiert'), findsNothing);
     expect(
       find.text(
         'Dieses Ergebnis gehört zu einer anderen Projektversion. Bitte prüfe den Bereich erneut.',
       ),
-      findsNWidgets(2),
+      findsNothing,
+    );
+    expect(
+      find.text('Kein passender Build-Nachweis vorhanden.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Kein passender Installations-Nachweis vorhanden.'),
+      findsOneWidget,
     );
     expect(find.textContaining('Falscher Skript-Nachweis'), findsNothing);
     expect(find.textContaining('Falscher Struktur-Nachweis'), findsNothing);
@@ -300,6 +331,61 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('wide high-text-scale layout still stacks long actions', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(900, 500));
+    await _pumpWorkspace(
+      tester,
+      textScaler: const TextScaler.linear(2),
+      workspace: _workspace(),
+    );
+
+    final action = find.byKey(
+      const Key('revision3-test-release-playable-build-action'),
+    );
+    await tester.ensureVisible(action);
+    await tester.pump();
+    expect(tester.getTopLeft(action).dx, lessThan(200));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('build preview is a separate slot and authorizes no capability', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(320, 300));
+    await _pumpWorkspace(
+      tester,
+      textScaler: const TextScaler.linear(2),
+      workspace: _workspace(
+        focus: Revision3TestReleaseFocus.buildPreview,
+        buildPreviewBuilder: (_) => const Card(
+          child: Padding(
+            padding: EdgeInsets.all(12),
+            child: Text('Exact project build preview fixture'),
+          ),
+        ),
+      ),
+    );
+
+    final slot = find.byKey(
+      const Key('revision3-test-release-build-preview-slot'),
+    );
+    expect(slot, findsOneWidget);
+    expect(tester.getTopLeft(slot).dy, inInclusiveRange(0, 300));
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(
+              const Key('revision3-test-release-playable-build-action'),
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   test('evaluated checks require explicit evidence', () {
     expect(
       () => Revision3TestReleaseCheck(
@@ -327,6 +413,7 @@ Revision3TestReleaseWorkspace _workspace({
   Revision3TestReleaseCheck? dataAssets,
   Revision3TestReleaseCapability? playableBuild,
   Revision3TestReleaseCapability? deployment,
+  WidgetBuilder? buildPreviewBuilder,
   WidgetBuilder? problemsBuilder,
   WidgetBuilder? voiceContinuationBuilder,
   Revision3TestReleaseFocus focus = Revision3TestReleaseFocus.overview,
@@ -362,6 +449,7 @@ Revision3TestReleaseWorkspace _workspace({
   deployment: deployment ?? _capability(title: 'Im Spiel installieren'),
   copy: const Revision3TestReleaseCopy.german(),
   focus: focus,
+  buildPreviewBuilder: buildPreviewBuilder,
   problemsBuilder: problemsBuilder,
   voiceContinuationBuilder: voiceContinuationBuilder,
 );

@@ -2171,7 +2171,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedHomeBuildTitle.
   ///
   /// In en, this message translates to:
-  /// **'Create output'**
+  /// **'Check build readiness'**
   String get managedHomeBuildTitle;
 
   /// No description provided for @managedHomeBuildDescription.

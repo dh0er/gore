@@ -205,6 +205,59 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
 }
 
 #[test]
+fn every_script_module_requires_one_exact_npc_or_quest_reverse_owner() {
+    let valid = quest_project();
+    valid.validate_closed_model().unwrap();
+
+    let mut orphan_quest_module = valid.clone();
+    orphan_quest_module.entities.remove(&entity_id(10));
+    assert!(matches!(
+        orphan_quest_module.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+            module,
+        }) if module == entity_id(11)
+    ));
+
+    let mut wrong_owner_kind = empty_revision3();
+    let mut module_entity = valid.entities[&entity_id(11)].clone();
+    let wrong_owner = Revision3TypedRef::new(
+        wrong_owner_kind.project_id,
+        entity_id(90),
+        Revision3EntityKind::DialogLine,
+    );
+    let Revision3EntityPayload::ScriptModule(module) = &mut module_entity.payload else {
+        panic!("fixture module missing")
+    };
+    module.owner = wrong_owner.clone();
+    let Revision3OriginRef::Generated { owner, .. } = &mut module_entity.origin else {
+        panic!("fixture generated origin missing")
+    };
+    *owner = wrong_owner;
+    wrong_owner_kind
+        .entities
+        .insert(module_entity.id, module_entity);
+    assert!(matches!(
+        wrong_owner_kind.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+            module,
+        }) if module == entity_id(11)
+    ));
+
+    let mut duplicate_claim = valid;
+    let mut duplicate_module = duplicate_claim.entities[&entity_id(11)].clone();
+    duplicate_module.id = entity_id(12);
+    duplicate_claim
+        .entities
+        .insert(duplicate_module.id, duplicate_module);
+    assert!(matches!(
+        duplicate_claim.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+            module,
+        }) if module == entity_id(12)
+    ));
+}
+
+#[test]
 fn revision3_multi_objectives_round_trip_in_order_with_stable_slots() {
     let mut project = quest_project();
     let quest_id = entity_id(10);

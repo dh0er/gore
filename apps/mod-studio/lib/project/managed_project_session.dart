@@ -1302,6 +1302,17 @@ abstract interface class ManagedRevision3NpcProfileEditStore {
   });
 }
 
+/// Narrow, read-only capability for deriving aggregate build readiness from
+/// one exact managed revision-3 checkpoint. It creates no artifact and grants
+/// no build, deployment, publication, game, or save authority.
+abstract interface class ManagedRevision3ProjectBuildPlanStore {
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
@@ -1317,7 +1328,8 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3DialogVoiceSlotRemovalStore,
         ManagedRevision3DialogVoiceSlotCreationStore,
-        ManagedRevision3NpcProfileEditStore {
+        ManagedRevision3NpcProfileEditStore,
+        ManagedRevision3ProjectBuildPlanStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1782,6 +1794,17 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringWorkingHead expectedHead,
   }) => ffi.authoringStorePlanRevision3VoiceV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStorePlanRevision3ProjectBuildV1(
     root: root,
     currentProjectJson: currentProjectJson,
     expectedHead: expectedHead,
@@ -4409,6 +4432,41 @@ class ManagedRevision3AuthoringProjectSession {
     operation: 'planVoiceV1',
     handleReadError: _core._throwRevision3VoiceBuildPlanError,
   );
+
+  /// Derive aggregate all-domain build readiness from the exact current
+  /// checkpoint. The native result is evidence-only: it accepts no game or
+  /// output path, creates no files, and grants no build or deployment action.
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1() {
+    final planningStore = _store;
+    if (planningStore is! ManagedRevision3ProjectBuildPlanStore) {
+      return Future<AuthoringRevision3ProjectBuildPlanResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store cannot plan project build readiness',
+        ),
+      );
+    }
+    final projectBuildPlanStore =
+        planningStore as ManagedRevision3ProjectBuildPlanStore;
+    return _core.readExact<AuthoringRevision3ProjectBuildPlanResult>(
+      (basis) async {
+        final result = await projectBuildPlanStore.planProjectBuildV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          expectedHead: basis.head,
+        );
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.plan.projectId != basis.projectId ||
+            result.plan.projectRevision != basis.projectRevision) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 project build plan disagrees with its exact session basis',
+          );
+        }
+        return result;
+      },
+      operation: 'planProjectBuildV1',
+      handleReadError: _core._throwRevision3ProjectBuildPlanError,
+    );
+  }
 
   /// Build the exact current selected Voice graph into a new offline bundle.
   /// This is a serialized exact-head read and never publishes or deploys.
@@ -7409,6 +7467,40 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3ProjectBuildPlanError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ProjectBuildPlanErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 project build plan could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBuildError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT') {
@@ -8627,6 +8719,13 @@ bool _revision3VoiceBuildPlanErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_PLAN_INPUT_LIMIT',
   'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
   'AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT',
+}.contains(code);
+
+bool _revision3ProjectBuildPlanErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_INPUT_LIMIT',
+  'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_PROJECT_INVALID',
+  'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STAGE_LIMIT',
 }.contains(code);
 
 bool _revision3ExactSnapshotExportErrorIsRetryable(String code) => const {

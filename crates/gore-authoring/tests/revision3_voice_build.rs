@@ -619,8 +619,8 @@ fn blocker_line_label_contract_is_exact_canonical_and_utf8_bounded() {
         project.entities.get_mut(&id(2)).unwrap().display_name = invalid;
         assert!(matches!(
             plan_revision3_voice_build_v1(&project),
-            Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(message))
-                if message.contains("canonical build label")
+            Err(Revision3VoiceBuildPlanErrorV1::LineLabelUnsupported { line })
+                if line == id(2)
         ));
     }
 }
@@ -663,8 +663,7 @@ fn unsafe_bundle_metadata_is_rejected_before_ready() {
         project.meta.name = name.to_owned();
         assert!(matches!(
             plan_revision3_voice_build_v1(&project),
-            Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(message))
-                if message.contains("safe bundle name")
+            Err(Revision3VoiceBuildPlanErrorV1::ProjectNameUnsupported)
         ));
     }
 }

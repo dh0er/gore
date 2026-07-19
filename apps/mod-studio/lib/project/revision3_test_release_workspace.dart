@@ -209,15 +209,22 @@ final class Revision3TestReleaseCopy {
 }
 
 /// Initial/deep-link focus within [Revision3TestReleaseWorkspace].
-enum Revision3TestReleaseFocus { overview, checks, release, problems, voice }
+enum Revision3TestReleaseFocus {
+  overview,
+  checks,
+  release,
+  buildPreview,
+  problems,
+  voice,
+}
 
 /// Honest, presentation-only Test & Release surface for one exact managed
 /// revision-3 checkpoint.
 ///
-/// The six required cards are deliberately separate: project structure,
-/// scripts, Voice, DataAssets, playable build, and deployment. This widget
-/// never infers readiness from missing inputs and never combines unevaluated
-/// checks into an aggregate "Ready" result.
+/// The four checks and two sequential future capabilities remain deliberately
+/// separate: project structure, scripts, Voice, DataAssets, playable build,
+/// and deployment. This widget never infers readiness from missing inputs and
+/// never combines unevaluated checks into an aggregate "Ready" result.
 @immutable
 final class Revision3TestReleaseWorkspace extends StatefulWidget {
   Revision3TestReleaseWorkspace({
@@ -232,6 +239,7 @@ final class Revision3TestReleaseWorkspace extends StatefulWidget {
     required this.deployment,
     this.copy = const Revision3TestReleaseCopy.english(),
     this.focus = Revision3TestReleaseFocus.overview,
+    this.buildPreviewBuilder,
     this.problemsBuilder,
     this.voiceContinuationBuilder,
     super.key,
@@ -254,6 +262,10 @@ final class Revision3TestReleaseWorkspace extends StatefulWidget {
   final Revision3TestReleaseCopy copy;
   final Revision3TestReleaseFocus focus;
 
+  /// Optional aggregate exact-current build-readiness preview. Supplying this
+  /// builder grants no playable-build, deployment, or mutation authority.
+  final WidgetBuilder? buildPreviewBuilder;
+
   /// Optional current Problems surface. Supplying this builder grants no
   /// readiness or mutation authority.
   final WidgetBuilder? problemsBuilder;
@@ -272,6 +284,7 @@ class _Revision3TestReleaseWorkspaceState
   final GlobalKey _overviewTarget = GlobalKey();
   final GlobalKey _checksTarget = GlobalKey();
   final GlobalKey _releaseTarget = GlobalKey();
+  final GlobalKey _buildPreviewTarget = GlobalKey();
   final GlobalKey _problemsTarget = GlobalKey();
   final GlobalKey _voiceTarget = GlobalKey();
 
@@ -299,6 +312,8 @@ class _Revision3TestReleaseWorkspaceState
         Revision3TestReleaseFocus.overview => _overviewTarget.currentContext,
         Revision3TestReleaseFocus.checks => _checksTarget.currentContext,
         Revision3TestReleaseFocus.release => _releaseTarget.currentContext,
+        Revision3TestReleaseFocus.buildPreview =>
+          _buildPreviewTarget.currentContext,
         Revision3TestReleaseFocus.problems => _problemsTarget.currentContext,
         Revision3TestReleaseFocus.voice => _voiceTarget.currentContext,
       };
@@ -319,6 +334,7 @@ class _Revision3TestReleaseWorkspaceState
     final playableBuild = widget.playableBuild;
     final deployment = widget.deployment;
     final copy = widget.copy;
+    final buildPreviewBuilder = widget.buildPreviewBuilder;
     final problemsBuilder = widget.problemsBuilder;
     final voiceContinuationBuilder = widget.voiceContinuationBuilder;
 
@@ -332,13 +348,6 @@ class _Revision3TestReleaseWorkspaceState
           < 900 => 20.0,
           _ => 32.0,
         };
-        final innerWidth = (availableWidth - (horizontalPadding * 2))
-            .clamp(0.0, _maximumContentWidth)
-            .toDouble();
-        final cardWidth = innerWidth >= 760
-            ? (innerWidth - 16) / 2
-            : innerWidth;
-
         return SingleChildScrollView(
           key: const Key('revision3-test-release-scroll'),
           padding: EdgeInsets.symmetric(
@@ -368,14 +377,31 @@ class _Revision3TestReleaseWorkspaceState
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Wrap(
+                    if (buildPreviewBuilder != null) ...[
+                      KeyedSubtree(
+                        key: _buildPreviewTarget,
+                        child: KeyedSubtree(
+                          key: const Key(
+                            'revision3-test-release-build-preview-slot',
+                          ),
+                          child: buildPreviewBuilder(context),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Material(
                       key: const Key('revision3-test-release-checks'),
-                      spacing: 16,
-                      runSpacing: 16,
-                      children: [
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CheckCard(
+                      color: Theme.of(context).colorScheme.surfaceContainerLow,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: BorderSide(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        children: [
+                          _CheckRow(
                             id: 'project-structure',
                             icon: Icons.account_tree_outlined,
                             expectedScope: Revision3TestReleaseEvidenceScope
@@ -386,10 +412,8 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CheckCard(
+                          const Divider(height: 1),
+                          _CheckRow(
                             id: 'scripts',
                             icon: Icons.code_outlined,
                             expectedScope:
@@ -400,10 +424,8 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CheckCard(
+                          const Divider(height: 1),
+                          _CheckRow(
                             id: 'voice',
                             icon: Icons.record_voice_over_outlined,
                             expectedScope:
@@ -414,10 +436,8 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CheckCard(
+                          const Divider(height: 1),
+                          _CheckRow(
                             id: 'data-assets',
                             icon: Icons.data_object_outlined,
                             expectedScope:
@@ -428,8 +448,8 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 28),
                     KeyedSubtree(
@@ -442,14 +462,20 @@ class _Revision3TestReleaseWorkspaceState
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Wrap(
+                    Material(
                       key: const Key('revision3-test-release-capabilities'),
-                      spacing: 16,
-                      runSpacing: 16,
-                      children: [
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CapabilityCard(
+                      color: Theme.of(context).colorScheme.surfaceContainerLow,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        side: BorderSide(
+                          color: Theme.of(context).colorScheme.outlineVariant,
+                        ),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Column(
+                        children: [
+                          _CapabilityStep(
+                            step: 1,
                             id: 'playable-build',
                             icon: Icons.inventory_2_outlined,
                             expectedScope:
@@ -460,10 +486,9 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                        SizedBox(
-                          width: cardWidth,
-                          child: _CapabilityCard(
+                          const Divider(height: 1),
+                          _CapabilityStep(
+                            step: 2,
                             id: 'deployment',
                             icon: Icons.install_desktop_outlined,
                             expectedScope:
@@ -474,8 +499,8 @@ class _Revision3TestReleaseWorkspaceState
                             checkpointIdentity: checkpointIdentity,
                             copy: copy,
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                     if (problemsBuilder != null) ...[
                       const SizedBox(height: 28),
@@ -616,8 +641,8 @@ class _SectionHeading extends StatelessWidget {
   );
 }
 
-class _CheckCard extends StatelessWidget {
-  const _CheckCard({
+class _CheckRow extends StatelessWidget {
+  const _CheckRow({
     required this.id,
     required this.icon,
     required this.expectedScope,
@@ -648,8 +673,17 @@ class _CheckCard extends StatelessWidget {
         ) ??
         false;
     final evaluated = _isEvaluated(check.state);
-    final stale = evaluated && !hasCurrentEvidence;
-    final state = stale
+    final checkpointCurrent =
+        check.evidence != null &&
+        _evidenceBelongsToCheckpoint(
+          check.evidence!,
+          projectId: projectId,
+          projectRevision: projectRevision,
+          checkpointIdentity: checkpointIdentity,
+        );
+    final stale = evaluated && check.evidence != null && !checkpointCurrent;
+    final invalidScope = evaluated && checkpointCurrent && !hasCurrentEvidence;
+    final state = stale || invalidScope
         ? Revision3TestReleaseCheckState.notEvaluated
         : check.state;
     final visual = _CheckVisual.forState(context, copy, state);
@@ -658,56 +692,103 @@ class _CheckCard extends StatelessWidget {
         ? check.evidence?.summary
         : null;
 
-    return Material(
-      color: visual.background,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      clipBehavior: Clip.antiAlias,
-      child: Semantics(
-        key: Key('revision3-test-release-$id-card'),
-        container: true,
-        explicitChildNodes: true,
-        label: check.title,
-        value: visual.label,
-        hint: detail,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _CardTitle(
-                icon: icon,
-                title: check.title,
-                statusLabel: visual.label,
-                foreground: visual.foreground,
-              ),
-              const SizedBox(height: 12),
-              Text(detail),
-              if (evidence != null) ...[
-                const SizedBox(height: 12),
-                _EvidenceLine(copy: copy, summary: evidence),
+    final status = _StatusPill(
+      label: visual.label,
+      background: visual.background,
+      foreground: visual.foreground,
+    );
+    final actionLabel = check.actionLabel;
+    final action = actionLabel == null
+        ? null
+        : TextButton.icon(
+            key: Key('revision3-test-release-$id-action'),
+            onPressed: check.onPressed,
+            icon: const Icon(Icons.arrow_forward_outlined),
+            label: Text(actionLabel),
+          );
+
+    return Semantics(
+      key: Key('revision3-test-release-$id-card'),
+      container: true,
+      explicitChildNodes: true,
+      label: check.title,
+      value: visual.label,
+      hint: detail,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = _usesStackedRows(context, constraints);
+            final description = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  check.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(detail),
+                if (evidence != null) ...[
+                  const SizedBox(height: 8),
+                  _EvidenceLine(copy: copy, summary: evidence),
+                ],
               ],
-              if (check.actionLabel != null) ...[
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    key: Key('revision3-test-release-$id-action'),
-                    onPressed: check.onPressed,
-                    icon: const Icon(Icons.arrow_forward_outlined),
-                    label: Text(check.actionLabel!),
+            );
+
+            if (stacked) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Icon(icon, color: visual.foreground),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: description),
+                    ],
                   ),
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerLeft, child: status),
+                  if (action != null) ...[
+                    const SizedBox(height: 4),
+                    Align(alignment: Alignment.centerLeft, child: action),
+                  ],
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(icon, color: visual.foreground),
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: description),
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    status,
+                    if (action != null) ...[const SizedBox(height: 4), action],
+                  ],
                 ),
               ],
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _CapabilityCard extends StatelessWidget {
-  const _CapabilityCard({
+class _CapabilityStep extends StatelessWidget {
+  const _CapabilityStep({
+    required this.step,
     required this.id,
     required this.icon,
     required this.expectedScope,
@@ -718,6 +799,7 @@ class _CapabilityCard extends StatelessWidget {
     required this.copy,
   });
 
+  final int step;
   final String id;
   final IconData icon;
   final Revision3TestReleaseEvidenceScope expectedScope;
@@ -737,126 +819,188 @@ class _CapabilityCard extends StatelessWidget {
           scope: expectedScope,
         ) ??
         false;
+    final checkpointStale =
+        capability.evidence != null &&
+        !_evidenceBelongsToCheckpoint(
+          capability.evidence!,
+          projectId: projectId,
+          projectRevision: projectRevision,
+          checkpointIdentity: checkpointIdentity,
+        );
     final enabled = evidenceCurrent && capability.onPressed != null;
     final scheme = Theme.of(context).colorScheme;
-    final background = enabled
-        ? scheme.primaryContainer
-        : evidenceCurrent
-        ? scheme.surfaceContainerHighest
-        : scheme.errorContainer;
-    final foreground = enabled
-        ? scheme.onPrimaryContainer
-        : evidenceCurrent
-        ? scheme.onSurfaceVariant
-        : scheme.onErrorContainer;
-    final statusLabel = enabled
-        ? copy.availableLabel
-        : evidenceCurrent
-        ? copy.unavailableLabel
-        : copy.blockedLabel;
-    final detail = !evidenceCurrent
+    final foreground = enabled ? scheme.primary : scheme.onSurfaceVariant;
+    final statusLabel = enabled ? copy.availableLabel : copy.unavailableLabel;
+    final detail = checkpointStale
+        ? copy.staleEvidenceDescription
+        : !evidenceCurrent
         ? capability.blockedReason
         : capability.onPressed == null
         ? copy.actionNotConnectedDescription
         : capability.description;
+    final status = _StatusPill(
+      label: statusLabel,
+      background: enabled
+          ? scheme.primaryContainer
+          : scheme.surfaceContainerHighest,
+      foreground: enabled ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+    );
+    final action = enabled
+        ? FilledButton.icon(
+            key: Key('revision3-test-release-$id-action'),
+            onPressed: capability.onPressed,
+            icon: Icon(
+              id == 'deployment'
+                  ? Icons.install_desktop_outlined
+                  : Icons.build_outlined,
+            ),
+            label: Text(capability.actionLabel),
+          )
+        : FilledButton.tonalIcon(
+            key: Key('revision3-test-release-$id-action'),
+            onPressed: null,
+            icon: const Icon(Icons.lock_outline),
+            label: Text(capability.actionLabel),
+          );
 
-    return Material(
-      color: background,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      clipBehavior: Clip.antiAlias,
-      child: Semantics(
-        key: Key('revision3-test-release-$id-card'),
-        container: true,
-        explicitChildNodes: true,
-        label: capability.title,
-        value: statusLabel,
-        hint: detail,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _CardTitle(
-                icon: icon,
-                title: capability.title,
-                statusLabel: statusLabel,
-                foreground: foreground,
-              ),
-              const SizedBox(height: 12),
-              Text(detail),
-              if (evidenceCurrent) ...[
-                const SizedBox(height: 12),
-                _EvidenceLine(
-                  copy: copy,
-                  summary: capability.evidence!.summary,
+    return Semantics(
+      key: Key('revision3-test-release-$id-card'),
+      container: true,
+      explicitChildNodes: true,
+      label: capability.title,
+      value: statusLabel,
+      hint: detail,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = _usesStackedRows(context, constraints);
+            final description = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  capability.title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(detail),
+                if (evidenceCurrent) ...[
+                  const SizedBox(height: 8),
+                  _EvidenceLine(
+                    copy: copy,
+                    summary: capability.evidence!.summary,
+                  ),
+                ],
+              ],
+            );
+            final leading = Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _StepNumber(step: step, foreground: foreground),
+                const SizedBox(width: 10),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Icon(icon, color: foreground),
                 ),
               ],
-              const SizedBox(height: 16),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  key: Key('revision3-test-release-$id-action'),
-                  onPressed: enabled ? capability.onPressed : null,
-                  icon: Icon(
-                    id == 'deployment'
-                        ? Icons.install_desktop_outlined
-                        : Icons.build_outlined,
+            );
+
+            if (stacked) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      leading,
+                      const SizedBox(width: 12),
+                      Expanded(child: description),
+                    ],
                   ),
-                  label: Text(capability.actionLabel),
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerLeft, child: status),
+                  const SizedBox(height: 10),
+                  Align(alignment: Alignment.centerLeft, child: action),
+                ],
+              );
+            }
+
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                leading,
+                const SizedBox(width: 14),
+                Expanded(child: description),
+                const SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [status, const SizedBox(height: 8), action],
                 ),
-              ),
-            ],
-          ),
+              ],
+            );
+          },
         ),
       ),
     );
   }
 }
 
-class _CardTitle extends StatelessWidget {
-  const _CardTitle({
-    required this.icon,
-    required this.title,
-    required this.statusLabel,
-    required this.foreground,
-  });
+class _StepNumber extends StatelessWidget {
+  const _StepNumber({required this.step, required this.foreground});
 
-  final IconData icon;
-  final String title;
-  final String statusLabel;
+  final int step;
   final Color foreground;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: foreground),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-          ),
-        ],
+  Widget build(BuildContext context) => ExcludeSemantics(
+    child: DecoratedBox(
+      key: Key('revision3-test-release-step-$step'),
+      decoration: BoxDecoration(
+        color: foreground.withValues(alpha: 0.1),
+        shape: BoxShape.circle,
       ),
-      const SizedBox(height: 10),
-      DecoratedBox(
-        decoration: BoxDecoration(
-          color: foreground.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      child: SizedBox.square(
+        dimension: 32,
+        child: Center(
           child: Text(
-            statusLabel,
+            '$step',
             style: Theme.of(
               context,
-            ).textTheme.labelMedium?.copyWith(color: foreground),
+            ).textTheme.labelLarge?.copyWith(color: foreground),
           ),
         ),
       ),
-    ],
+    ),
+  );
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({
+    required this.label,
+    required this.background,
+    required this.foreground,
+  });
+
+  final String label;
+  final Color background;
+  final Color foreground;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: background,
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.labelMedium?.copyWith(color: foreground),
+      ),
+    ),
   );
 }
 
@@ -967,6 +1111,20 @@ bool _isEvaluated(Revision3TestReleaseCheckState state) => switch (state) {
   Revision3TestReleaseCheckState.blocked => true,
   _ => false,
 };
+
+bool _evidenceBelongsToCheckpoint(
+  Revision3TestReleaseEvidence evidence, {
+  required String projectId,
+  required int projectRevision,
+  required String checkpointIdentity,
+}) =>
+    evidence.projectId == projectId &&
+    evidence.projectRevision == projectRevision &&
+    evidence.checkpointIdentity == checkpointIdentity;
+
+bool _usesStackedRows(BuildContext context, BoxConstraints constraints) =>
+    constraints.maxWidth < 620 ||
+    MediaQuery.textScalerOf(context).scale(1) > 1.4;
 
 Revision3TestReleaseEvidence? _validateEvidenceForState(
   Revision3TestReleaseCheckState state,

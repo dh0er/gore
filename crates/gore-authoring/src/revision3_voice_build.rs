@@ -97,6 +97,10 @@ pub enum Revision3VoiceBuildPlanEvaluationV1 {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3VoiceBuildPlanErrorV1 {
+    #[error("project metadata name is not one safe bundle name")]
+    ProjectNameUnsupported,
+    #[error("DialogLine {line} display name is not one canonical bounded build label")]
+    LineLabelUnsupported { line: EntityId },
     #[error("invalid revision-3 project: {0}")]
     InvalidProject(String),
 }
@@ -113,9 +117,7 @@ pub fn plan_revision3_voice_build_v1(
         .validate_closed_model()
         .map_err(|error| Revision3VoiceBuildPlanErrorV1::InvalidProject(error.to_string()))?;
     if !valid_bundle_mod_name(&project.meta.name) {
-        return Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(
-            "project metadata name is not one safe bundle name".to_owned(),
-        ));
+        return Err(Revision3VoiceBuildPlanErrorV1::ProjectNameUnsupported);
     }
 
     let voice_slot_count = project
@@ -407,11 +409,7 @@ fn collect_slot_owner_facts(
             continue;
         }
         if !valid_voice_build_line_label(&line_entity.display_name) {
-            return Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(format!(
-                "DialogLine {line_id} display name is not one canonical build label ({} UTF-8 bytes; maximum {})",
-                line_entity.display_name.len(),
-                MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1
-            )));
+            return Err(Revision3VoiceBuildPlanErrorV1::LineLabelUnsupported { line: *line_id });
         }
         if line.localization.project_id != project.project_id
             || line.localization.expected_kind != EntityKind::LocalizationEntry

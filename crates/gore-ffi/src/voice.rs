@@ -118,6 +118,22 @@ pub(super) struct SecureDirectDirectory {
     _ancestor_handles: Vec<FsFile>,
 }
 
+/// Linux-only, nonblocking evidence that one retained absolute directory chain changed after it
+/// was accepted. Watches are installed through `/proc/self/fd/<fd>` so inotify binds to the exact
+/// already-open directory objects rather than resolving the caller's ambient path again.
+#[cfg(target_os = "linux")]
+pub(super) struct SecureRetainedPathMonitor {
+    inotify: FsFile,
+    watches: Vec<SecureRetainedPathWatch>,
+    changed: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(target_os = "linux")]
+struct SecureRetainedPathWatch {
+    descriptor: i32,
+    next_component: Option<std::ffi::OsString>,
+}
+
 impl SecureDirectDirectory {
     pub fn open(path: &Path) -> Result<Self, SecureSourceReadError> {
         open_secure_direct_directory(path).map_err(Into::into)
@@ -231,10 +247,27 @@ impl SecureDirectDirectory {
         // capability remains safe and usable, but callers must rebuild their folder plan.
         let reopened =
             open_secure_direct_directory(&self.path).map_err(|_| SecureSourceReadError::Changed)?;
-        if reopened.identity != self.identity {
+        if reopened.retained_path_len() != self.retained_path_len() {
             return Err(SecureSourceReadError::Changed);
         }
+        for index in 0..self.retained_path_len() {
+            if reopened.retained_path_identity(index)? != self.retained_path_identity(index)? {
+                return Err(SecureSourceReadError::Changed);
+            }
+        }
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn monitor_retained_path_changes(
+        &self,
+    ) -> Result<SecureRetainedPathMonitor, SecureSourceReadError> {
+        SecureRetainedPathMonitor::capture(self)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn retained_directory_handle(&self) -> &std::fs::File {
+        &self._directory_handle
     }
 
     /// Return whether either retained directory path is an ancestor of the other.
@@ -302,6 +335,168 @@ impl SecureDirectDirectory {
         // to a symlink or replacement during resolution.
         self.revalidate()?;
         Ok(canonical)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl SecureRetainedPathMonitor {
+    fn capture(directory: &SecureDirectDirectory) -> Result<Self, SecureSourceReadError> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+        let descriptor = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        if descriptor < 0 {
+            return Err(SecureSourceReadError::Unavailable);
+        }
+        // SAFETY: inotify_init1 returned one new owned descriptor.
+        let inotify = unsafe { FsFile::from_raw_fd(descriptor) };
+
+        let components = directory
+            .path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(name) => Some(name.to_os_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let handles = directory
+            ._ancestor_handles
+            .iter()
+            .chain(std::iter::once(&directory._directory_handle))
+            .collect::<Vec<_>>();
+        if handles.len() != components.len() + 1 {
+            return Err(SecureSourceReadError::Changed);
+        }
+
+        let mut watches = Vec::new();
+        watches
+            .try_reserve_exact(handles.len())
+            .map_err(|_| SecureSourceReadError::Limit)?;
+        let mask = libc::IN_ONLYDIR
+            | libc::IN_MOVE_SELF
+            | libc::IN_DELETE_SELF
+            | libc::IN_UNMOUNT
+            | libc::IN_MOVED_FROM
+            | libc::IN_MOVED_TO
+            | libc::IN_CREATE
+            | libc::IN_DELETE;
+        for (index, handle) in handles.into_iter().enumerate() {
+            let proc_path = std::ffi::CString::new(format!("/proc/self/fd/{}", handle.as_raw_fd()))
+                .map_err(|_| SecureSourceReadError::Unavailable)?;
+            let watch_descriptor =
+                unsafe { libc::inotify_add_watch(inotify.as_raw_fd(), proc_path.as_ptr(), mask) };
+            if watch_descriptor < 0 {
+                return Err(SecureSourceReadError::Unavailable);
+            }
+            watches.push(SecureRetainedPathWatch {
+                descriptor: watch_descriptor,
+                next_component: components.get(index).cloned(),
+            });
+        }
+
+        Ok(Self {
+            inotify,
+            watches,
+            changed: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    pub fn revalidate(&self) -> Result<(), SecureSourceReadError> {
+        use std::os::fd::AsRawFd as _;
+        use std::sync::atomic::Ordering;
+
+        if self.changed.load(Ordering::Acquire) {
+            return Err(SecureSourceReadError::Changed);
+        }
+
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            let read = unsafe {
+                libc::read(
+                    self.inotify.as_raw_fd(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                )
+            };
+            if read < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    break;
+                }
+                return Err(SecureSourceReadError::Unavailable);
+            }
+            if read == 0 {
+                break;
+            }
+            let read = usize::try_from(read).map_err(|_| SecureSourceReadError::Changed)?;
+            if self.events_changed(&buffer[..read])? {
+                self.changed.store(true, Ordering::Release);
+                return Err(SecureSourceReadError::Changed);
+            }
+        }
+        Ok(())
+    }
+
+    fn events_changed(&self, bytes: &[u8]) -> Result<bool, SecureSourceReadError> {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let header_len = std::mem::size_of::<libc::inotify_event>();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            if bytes.len() - offset < header_len {
+                return Err(SecureSourceReadError::Changed);
+            }
+            let event = unsafe {
+                std::ptr::read_unaligned(bytes.as_ptr().add(offset).cast::<libc::inotify_event>())
+            };
+            let name_len =
+                usize::try_from(event.len).map_err(|_| SecureSourceReadError::Changed)?;
+            let event_len = header_len
+                .checked_add(name_len)
+                .ok_or(SecureSourceReadError::Changed)?;
+            let end = offset
+                .checked_add(event_len)
+                .filter(|end| *end <= bytes.len())
+                .ok_or(SecureSourceReadError::Changed)?;
+            let name = &bytes[offset + header_len..end];
+            let name = &name[..name
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(name.len())];
+
+            if event.mask & libc::IN_Q_OVERFLOW != 0 {
+                return Ok(true);
+            }
+            let matching = self
+                .watches
+                .iter()
+                .filter(|watch| watch.descriptor == event.wd)
+                .collect::<Vec<_>>();
+            if matching.is_empty() {
+                return Ok(true);
+            }
+            let self_change =
+                libc::IN_MOVE_SELF | libc::IN_DELETE_SELF | libc::IN_UNMOUNT | libc::IN_IGNORED;
+            if event.mask & self_change != 0 {
+                return Ok(true);
+            }
+            let entry_change =
+                libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_CREATE | libc::IN_DELETE;
+            if event.mask & entry_change != 0
+                && matching.iter().any(|watch| {
+                    watch
+                        .next_component
+                        .as_deref()
+                        .is_some_and(|component| component.as_bytes() == name)
+                })
+            {
+                return Ok(true);
+            }
+            offset = end;
+        }
+        Ok(false)
     }
 }
 

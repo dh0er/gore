@@ -4,72 +4,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/scripts/domain/script_mods_notifier.dart';
 
 void main() {
-  test('ScriptMod json round-trips', () {
-    const m = ScriptMod(
+  test('new-symbol policy invalidates compile', () {
+    const compiled = ScriptMod(
       op: ScriptOp.edit,
-      moduleName: 'AI.AIItemScoring',
-      relPath: 'AI/AIItemScoring.as',
-      asPath: '/tmp/AIItemScoring.as',
-      allowNewSymbols: true,
-      miniPath: '/tmp/mini.cache',
-      compiledHash: 'deadbeefdeadbeef',
+      moduleName: 'Old',
+      relPath: 'Old.as',
+      asPath: 'Old.as',
+      miniPath: 'Old.cache',
+      compiledHash: 'hash',
     );
-    final j = m.toJson();
-    expect(j['compiled_hash'], 'deadbeefdeadbeef');
-    expect(j['allow_new_symbols'], isTrue);
-    final back = ScriptMod.fromJson(j);
-    expect(back.op, ScriptOp.edit);
-    expect(back.moduleName, 'AI.AIItemScoring');
-    expect(back.relPath, 'AI/AIItemScoring.as');
-    expect(back.asPath, '/tmp/AIItemScoring.as');
-    expect(back.miniPath, '/tmp/mini.cache');
-    expect(back.compiledHash, 'deadbeefdeadbeef');
-    expect(back.allowNewSymbols, isTrue);
-    expect(back.compiled, isTrue);
-  });
-
-  test(
-    'new-symbol policy has backward-compatible defaults and invalidates compile',
-    () {
-      final oldAdd = ScriptMod.fromJson({
-        'op': 'add',
-        'module': 'New',
-        'rel_path': 'New.as',
-        'as_path': 'New.as',
-      });
-      final oldEdit = ScriptMod.fromJson({
-        'op': 'edit',
-        'module': 'Old',
-        'rel_path': 'Old.as',
-        'as_path': 'Old.as',
-      });
-      expect(oldAdd.allowNewSymbols, isTrue);
-      expect(oldEdit.allowNewSymbols, isFalse);
-
-      const compiled = ScriptMod(
-        op: ScriptOp.edit,
-        moduleName: 'Old',
-        relPath: 'Old.as',
-        asPath: 'Old.as',
-        miniPath: 'Old.cache',
-        compiledHash: 'hash',
-      );
-      final changed = compiled.withAllowNewSymbols(true);
-      expect(changed.allowNewSymbols, isTrue);
-      expect(changed.miniPath, isEmpty);
-      expect(changed.compiledHash, isEmpty);
-    },
-  );
-
-  test('compiled_hash defaults to empty when absent from json', () {
-    final back = ScriptMod.fromJson({
-      'op': 'add',
-      'module': 'M',
-      'rel_path': 'M.as',
-      'as_path': '/tmp/M.as',
-      'mini_path': '/tmp/M.cache',
-    });
-    expect(back.compiledHash, '');
+    final changed = compiled.withAllowNewSymbols(true);
+    expect(changed.allowNewSymbols, isTrue);
+    expect(changed.miniPath, isEmpty);
+    expect(changed.compiledHash, isEmpty);
   });
 
   test('scriptCompileFresh tracks the compiled .as content', () {
@@ -117,7 +64,7 @@ void main() {
     expect(scriptCompileFresh(reSourced), isFalse);
   });
 
-  test('notifier set/remove/count/clear/load', () {
+  test('notifier set/remove/count/clear', () {
     final n = ScriptModsNotifier();
     expect(n.state.count, 0);
     n.setMod(
@@ -141,16 +88,6 @@ void main() {
     n.remove('M1.as');
     expect(n.state.count, 1);
     expect(n.state.entries.single.moduleName, 'M2');
-    n.loadAll([
-      const ScriptMod(
-        op: ScriptOp.edit,
-        moduleName: 'M3',
-        relPath: 'M3.as',
-        asPath: 'c',
-      ),
-    ]);
-    expect(n.state.count, 1);
-    expect(n.state.entries.single.op, ScriptOp.edit);
     n.clearAll();
     expect(n.state.count, 0);
   });

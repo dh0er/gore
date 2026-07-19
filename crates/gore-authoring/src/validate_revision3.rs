@@ -106,27 +106,21 @@ impl ProjectRevision3 {
                 _ => {}
             }
         }
-        // A generated NPC module must not survive without the exact reverse edge. Checking the
-        // module side separately closes orphan, wrong-owner-kind, and generator-label drift that
-        // cannot be discovered by walking only live NPC Draft references.
+        // Every ScriptModule is deterministic backing owned by exactly one NPC or Quest Draft.
+        // Checking the module side closes orphan, wrong-owner-kind, duplicate-owner, and
+        // generator-origin drift that cannot be discovered by walking only live Draft references.
         for (module_id, entity) in &self.entities {
             let EntityPayload::ScriptModule(module) = &entity.payload else {
                 continue;
             };
-            let npc_generated = module.owner.expected_kind == EntityKind::NpcDraft
-                || module.generator_id == LOGICAL_NPC_CLONE_GENERATOR_ID
-                || matches!(
-                    &entity.origin,
-                    OriginRef::Generated { generator_id, owner, .. }
-                        if generator_id == LOGICAL_NPC_CLONE_GENERATOR_ID
-                            || owner.expected_kind == EntityKind::NpcDraft
-                );
-            if !npc_generated || self.has_exact_npc_module_owner(*module_id, module) {
+            if self.has_exact_script_module_owner(*module_id, entity, module) {
                 continue;
             }
-            return Err(ProjectRevision3ValidationError::OrphanNpcScriptModule {
-                module: *module_id,
-            });
+            return Err(
+                ProjectRevision3ValidationError::InvalidScriptModuleOwnerClosure {
+                    module: *module_id,
+                },
+            );
         }
         Ok(())
     }
@@ -621,6 +615,51 @@ impl ProjectRevision3 {
         };
         npc.script_module
             == Revision3TypedRef::new(self.project_id, module_id, EntityKind::ScriptModule)
+    }
+
+    fn has_exact_quest_module_owner(
+        &self,
+        module_id: crate::EntityId,
+        module: &crate::model_revision3::ScriptModule,
+    ) -> bool {
+        if module.owner.project_id != self.project_id
+            || module.owner.expected_kind != EntityKind::QuestDraft
+        {
+            return false;
+        }
+        let Some(owner) = self.entities.get(&module.owner.id) else {
+            return false;
+        };
+        let EntityPayload::QuestDraft(quest) = &owner.payload else {
+            return false;
+        };
+        quest.script_module
+            == Revision3TypedRef::new(self.project_id, module_id, EntityKind::ScriptModule)
+    }
+
+    fn has_exact_script_module_owner(
+        &self,
+        module_id: crate::EntityId,
+        entity: &crate::model_revision3::Entity,
+        module: &crate::model_revision3::ScriptModule,
+    ) -> bool {
+        if !matches!(
+            &entity.origin,
+            OriginRef::Generated {
+                generator_id,
+                generator_version,
+                owner,
+            } if generator_id == &module.generator_id
+                && generator_version == &module.generator_version
+                && owner == &module.owner
+        ) {
+            return false;
+        }
+        match module.owner.expected_kind {
+            EntityKind::NpcDraft => self.has_exact_npc_module_owner(module_id, module),
+            EntityKind::QuestDraft => self.has_exact_quest_module_owner(module_id, module),
+            _ => false,
+        }
     }
 
     fn validate_quest(
