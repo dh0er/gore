@@ -31,6 +31,24 @@ on:
 permissions:
   contents: write
 
+# Code signing (Azure Trusted / Artifact Signing). Signing is opt-in in build.py
+# (off by default for local builds); GORE_SIGN=1 turns it on for CI releases and
+# makes a missing credential hard-fail rather than silently ship unsigned.
+# Configure these as repo secrets before the next release tag
+# (Settings -> Secrets and variables -> Actions):
+#   AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET  (signing service principal)
+#   TRUSTED_SIGNING_ENDPOINT  (Account URI, e.g. https://weu.codesigning.azure.net/)
+#   TRUSTED_SIGNING_ACCOUNT   (Artifact Signing account name)
+#   TRUSTED_SIGNING_PROFILE   (certificate profile name)
+env:
+  GORE_SIGN: "1"
+  TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+  TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+  TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
 jobs:
   gore-save:
     if: startsWith(github.ref_name, 'gore-save-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-save')

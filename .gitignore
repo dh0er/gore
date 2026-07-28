@@ -56,6 +56,10 @@ work/tex-fixtures/*.usmap
 # Distribution build output (per-project: build.py writes to <project>/dist/)
 dist/
 
+# Trusted Signing dlib payload (Microsoft.Trusted.Signing.Client, x64). Binary,
+# machine-local, fetched on demand -- see docs; never committed.
+tools/trusted-signing/
+
 # Local-only Oodle cross-check oracle: compiles a reference C++ Oodle decoder to verify
 # gore-oodle's pure-Rust encoder against genuine Oodle during development. Kept out of the
 # repo on purpose so the tracked crate ships zero C/C++. Run:

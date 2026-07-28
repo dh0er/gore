@@ -34,6 +34,14 @@ Examples:
     python build.py gore-save dist
     python build.py gore release 0.2.0 --all
     python build.py gore-mod release 0.1.0 --bump --build --installer  # local only
+
+Code signing (Azure Trusted / Artifact Signing):
+    Off by default -- local dist/installer builds ship unsigned. Signing is
+    opt-in via GORE_SIGN=1 (CI sets it), which also requires these env vars:
+        TRUSTED_SIGNING_ENDPOINT  TRUSTED_SIGNING_ACCOUNT  TRUSTED_SIGNING_PROFILE
+        AZURE_TENANT_ID  AZURE_CLIENT_ID  AZURE_CLIENT_SECRET   (service principal)
+    With GORE_SIGN=1 a missing var hard-fails rather than silently shipping
+    unsigned.
 """
 
 from __future__ import annotations
@@ -168,6 +176,145 @@ def run(label: str, cmd: list[object], cwd: Path = ROOT, dry: bool = False) -> N
     completed = subprocess.run([str(part) for part in cmd], cwd=cwd, env=env())
     if completed.returncode != 0:
         raise SystemExit(f"{label} failed (exit {completed.returncode})")
+
+
+# --------------------------------------------------------------------------- #
+# Code signing (Azure Trusted / Artifact Signing)                             #
+# --------------------------------------------------------------------------- #
+# Ship Authenticode-signed PE files so AV ML engines (SecureAge et al.) stop
+# false-flagging the unsigned Flutter runner — the flag NexusMods quarantines
+# our portable zip on.
+#
+# Signing is OPT-IN: off by default (local builds ship unsigned), on only when
+# GORE_SIGN=1 — CI sets it. When opted in, these env vars must all be present
+# (a missing one hard-fails rather than silently shipping unsigned):
+#
+#   TRUSTED_SIGNING_ENDPOINT   Account URI, e.g. https://weu.codesigning.azure.net/
+#   TRUSTED_SIGNING_ACCOUNT    Artifact Signing account name
+#   TRUSTED_SIGNING_PROFILE    certificate profile name
+#   AZURE_TENANT_ID            \
+#   AZURE_CLIENT_ID             > service-principal credential (the dlib reads
+#   AZURE_CLIENT_SECRET        /  these via Azure.Identity EnvironmentCredential)
+#
+# Nothing secret lives in the repo; CI injects the above from repo secrets.
+TS_DLIB_VERSION = "1.0.95"
+TS_DLIB_DIR = ROOT / "tools" / "trusted-signing"
+TS_TIMESTAMP = "http://timestamp.acs.microsoft.com"
+_TS_ENV_KEYS = (
+    "TRUSTED_SIGNING_ENDPOINT",
+    "TRUSTED_SIGNING_ACCOUNT",
+    "TRUSTED_SIGNING_PROFILE",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+)
+
+
+def _signing_config() -> dict[str, str] | None:
+    # Opt-in: signing is off unless GORE_SIGN=1 (CI sets it). When opted in every
+    # credential must be present — a missing one hard-fails rather than silently
+    # shipping an unsigned build.
+    if os.environ.get("GORE_SIGN") != "1":
+        return None
+    vals = {k: os.environ.get(k, "") for k in _TS_ENV_KEYS}
+    missing = [k for k, v in vals.items() if not v]
+    if missing:
+        raise SystemExit(f"GORE_SIGN=1 but missing signing env: {', '.join(missing)}")
+    return vals
+
+
+def _find_signtool() -> Path:
+    override = os.environ.get("SIGNTOOL")
+    if override:
+        return Path(override)
+    found = shutil.which("signtool") or shutil.which("signtool.exe")
+    if found:
+        return Path(found)
+    base = Path(r"C:\Program Files (x86)\Windows Kits\10\bin")
+    cands = sorted(base.glob("*/x64/signtool.exe"), reverse=True)
+    if cands:
+        return cands[0]
+    raise SystemExit("signtool.exe not found (install the Windows 10/11 SDK)")
+
+
+def _ensure_dlib() -> Path:
+    """Return the Trusted Signing dlib, fetching the official Microsoft NuGet
+    package on first use so neither local checkouts nor CI need a separate
+    install step (the payload is gitignored under tools/)."""
+    dlib = TS_DLIB_DIR / "Azure.CodeSigning.Dlib.dll"
+    if dlib.exists():
+        return dlib
+    import io
+    import urllib.request
+    import zipfile
+
+    ver = TS_DLIB_VERSION
+    url = (
+        "https://api.nuget.org/v3-flatcontainer/microsoft.trusted.signing.client/"
+        f"{ver}/microsoft.trusted.signing.client.{ver}.nupkg"
+    )
+    print(f"fetching Trusted Signing dlib {ver} from nuget.org ...")
+    TS_DLIB_DIR.mkdir(parents=True, exist_ok=True)
+    data = urllib.request.urlopen(url).read()  # official MS package, official registry
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for e in z.infolist():
+            if e.filename.startswith("bin/x64/") and not e.is_dir():
+                with z.open(e) as src, open(TS_DLIB_DIR / Path(e.filename).name, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    if not dlib.exists():
+        raise SystemExit("Trusted Signing dlib fetch failed")
+    return dlib
+
+
+def _write_metadata(cfg: dict[str, str]) -> Path:
+    import json
+    import tempfile
+
+    meta = {
+        "Endpoint": cfg["TRUSTED_SIGNING_ENDPOINT"],
+        "CodeSigningAccountName": cfg["TRUSTED_SIGNING_ACCOUNT"],
+        "CertificateProfileName": cfg["TRUSTED_SIGNING_PROFILE"],
+    }
+    fd, path = tempfile.mkstemp(prefix="ts-meta-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    return Path(path)
+
+
+def sign_paths(paths: list[Path], dry: bool) -> None:
+    """Authenticode-sign the given PE files (exe/dll) via Trusted Signing. No-op
+    when signing env is unset (see _signing_config) or no PE files are given."""
+    pe = [p for p in paths if p.suffix.lower() in (".exe", ".dll") and p.exists()]
+    cfg = _signing_config()
+    if cfg is None:
+        if pe:
+            print(f"signing: off (default) for {len(pe)} file(s) — set GORE_SIGN=1 to enable")
+        return
+    if not pe:
+        return
+    if dry:
+        print(f"[dry-run] would code-sign {len(pe)} file(s)")
+        return
+    dlib = _ensure_dlib()
+    signtool = _find_signtool()
+    meta = _write_metadata(cfg)
+    try:
+        run(
+            f"code-sign {len(pe)} file(s)",
+            [
+                signtool, "sign", "/v", "/fd", "SHA256",
+                "/tr", TS_TIMESTAMP, "/td", "SHA256",
+                "/dlib", dlib, "/dmdf", meta,
+                *pe,
+            ],
+        )
+    finally:
+        meta.unlink(missing_ok=True)
+
+
+def sign_dir(directory: Path, dry: bool) -> None:
+    """Sign every PE file directly under `directory` (recursively)."""
+    sign_paths(sorted(directory.rglob("*")), dry)
 
 
 def pdir(project: str) -> Path:
@@ -434,6 +581,9 @@ def dist_project(project: str, dry: bool) -> Path | None:
             if dll.exists():
                 dll.unlink()
                 print(f"dropped {dll_name} from portable zip")
+        # Sign the staged PE files before zipping so the portable archive ships
+        # signed binaries (this is the build NexusMods scans on upload).
+        sign_dir(staging, dry=dry)
         if base.with_suffix(".zip").exists():
             base.with_suffix(".zip").unlink()
         archive = shutil.make_archive(str(base), "zip", root_dir=staging)
@@ -463,6 +613,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
         if not src_dir.is_dir():
             raise SystemExit(f"missing bundle dir: {src_dir}")
         shutil.copytree(src_dir, staging / dest_name)
+    sign_dir(staging, dry=dry)
     if base.with_suffix(".zip").exists():
         base.with_suffix(".zip").unlink()
     archive = shutil.make_archive(str(base), "zip", root_dir=staging)
@@ -480,6 +631,9 @@ def installer_project(project: str, dry: bool) -> Path | None:
     rel = flutter_release_dir(project)
     dist = dist_dir(project)
     iss = pdir(project) / cfg["installer"]
+    # dist_project signed the staging copy for the zip; the installer packages
+    # from the Release dir, so sign those PE files too before Inno bundles them.
+    sign_dir(rel, dry=dry)
     run(
         f"installer {project}",
         [
@@ -493,6 +647,9 @@ def installer_project(project: str, dry: bool) -> Path | None:
         dry=dry,
     )
     out = dist / f"{cfg['installer_name']}-{version}.exe"
+    # Sign the installer itself. Must happen before the CI appcast step computes
+    # its DSA signature over the final shipped bytes.
+    sign_paths([out], dry=dry)
     print(f"installer: {out}")
     return out
 
