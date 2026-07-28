@@ -1631,7 +1631,7 @@ mod tests {
                 line_id,
                 Revision3EntityKind::DialogLine,
             ),
-            objective_slot: None,
+            objective_slot: 1,
         }];
         s3_quest_mut(project, quest_id).transcript = transcript.clone();
         project.validate_closed_model().unwrap();

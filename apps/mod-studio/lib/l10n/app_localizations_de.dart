@@ -955,7 +955,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedLocalizationUnsavedDescription =>
-      'Du hast diesen Projekttext geändert. Beim Wechseln gehen diese Änderungen verloren.';
+      'Dieses Projekt enthält ungespeicherte Änderungen. Beim Wechseln gehen sie verloren.';
 
   @override
   String get managedLocalizationVoiceUnsavedTitle =>
@@ -1633,6 +1633,127 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedItemsCategorySpecial => 'Spezial';
+
+  @override
+  String get managedItemsCategoryArmor => 'Rüstung';
+
+  @override
+  String get managedItemsExactSchemaBadge => 'Exaktes Projektschema';
+
+  @override
+  String get managedItemsEditableBadge => 'Verwaltete Änderung';
+
+  @override
+  String get managedItemsBuildPendingBadge => 'Build-Unterstützung ausstehend';
+
+  @override
+  String get managedItemsInvalidNumber => 'Gib eine gültige Zahl ein.';
+
+  @override
+  String managedItemsNumberOutsideNativeRange(String minimum, String maximum) {
+    return 'Gib einen Wert von $minimum bis $maximum ein.';
+  }
+
+  @override
+  String get managedItemsAuthoringBoundary =>
+      'Änderungen werden nur in diesem verwalteten Projekt gespeichert. Dieser Editor schreibt weder ins Spiel noch in einen Spielstand. Ein Item-Bundle kann noch nicht gebaut werden.';
+
+  @override
+  String managedItemsCurrentChanges(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count geänderte Felder',
+      one: '1 geändertes Feld',
+      zero: 'Keine Item-Änderungen',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedItemsChangeField => 'Dieses Feld ändern';
+
+  @override
+  String get managedItemsUseGameDefault => 'Spielstandard verwenden';
+
+  @override
+  String get managedItemsSaveChanges => 'Item-Änderungen speichern';
+
+  @override
+  String get managedItemsRevertItem => 'Item auf Spielstandard zurücksetzen';
+
+  @override
+  String get managedItemsClearChanges => 'Alle Item-Änderungen entfernen';
+
+  @override
+  String get managedItemsNoUnsavedChanges =>
+      'Keine ungespeicherten Änderungen.';
+
+  @override
+  String managedItemsSaved(int revision) {
+    return 'Item-Änderungen in Projektrevision $revision gespeichert.';
+  }
+
+  @override
+  String get managedItemsSaveStale =>
+      'Das Projekt oder der Item-Katalog hat sich geändert. Nichts wurde gespeichert. Lade die aktuellen Item-Daten neu, bevor du weiterarbeitest.';
+
+  @override
+  String get managedItemsSaveRequiresReopen =>
+      'Der Projektstand kann nicht mehr sicher bestätigt werden. Nichts wurde gespeichert. Nutze die Projektwiederherstellung oder schließe und öffne das Projekt erneut.';
+
+  @override
+  String get managedItemsSaveNoChanges =>
+      'Es gibt keine aktuelle Item-Änderung mehr zu speichern. Lade die Item-Daten neu, um fortzufahren.';
+
+  @override
+  String get managedItemsSaveUnsupported =>
+      'Diese Änderung passt nicht mehr zum aktuellen sicheren Item-Schema. Nichts wurde gespeichert. Lade die Item-Daten neu, bevor du fortfährst.';
+
+  @override
+  String get managedItemsSaveUnexpected =>
+      'Die Item-Änderungen konnten nicht sicher gespeichert werden. Nichts wurde verändert. Öffne das Projekt erneut und versuche es noch einmal.';
+
+  @override
+  String get managedItemsReloadDiscardDraft =>
+      'Item-Daten neu laden und diesen Entwurf verwerfen';
+
+  @override
+  String get managedItemsCatalogLoadTitle => 'Items sind nicht verfügbar';
+
+  @override
+  String get managedItemsCatalogStale =>
+      'Das Projekt oder der exakte Item-Katalog hat sich geändert, bevor die Item-Daten geladen werden konnten. Nichts wurde verändert.';
+
+  @override
+  String get managedItemsCatalogRequiresReopen =>
+      'Der exakte Projektstand kann nicht mehr sicher bestätigt werden. Stelle das Projekt wieder her oder schließe und öffne es erneut, bevor du Items bearbeitest.';
+
+  @override
+  String get managedItemsCatalogUnsupported =>
+      'Dieses Projekt enthält Item-Daten, die mit dem aktuellen exakten Spielschema nicht sicher bearbeitet werden können. Nichts wurde verändert.';
+
+  @override
+  String get managedItemsCatalogLoadUnexpected =>
+      'Die Item-Daten konnten nicht sicher geladen werden. Nichts wurde verändert. Versuche, sie erneut zu laden.';
+
+  @override
+  String get managedItemsCatalogReload => 'Item-Daten neu laden';
+
+  @override
+  String get managedItemsUnsupportedSchema =>
+      'Diese Item-Änderung passt nicht mehr sicher zum aktuellen Katalog oder Feldschema. Du kannst weiterhin das gesamte Item zurücksetzen.';
+
+  @override
+  String get managedItemsDefaultUnknown => 'Spielstandard nicht erfasst';
+
+  @override
+  String managedItemsGameDefault(String value) {
+    return 'Spielstandard: $value';
+  }
+
+  @override
+  String get managedItemsModValue => 'Mod-Wert';
 
   @override
   String get managedContentScopeBaseGameLabel => 'Basisspiel';

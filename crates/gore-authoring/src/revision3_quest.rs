@@ -22,6 +22,9 @@ use crate::{
 const REVISION3_QUEST_INPUT_FINGERPRINT_DOMAIN: &[u8] =
     b"gore-authoring.revision3-quest.input-fingerprint\0";
 
+/// Maximum UTF-8 byte length of a revision-3 Quest display name.
+pub const MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES: usize = 256;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3QuestGenerationError {
     #[error(

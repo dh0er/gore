@@ -8,11 +8,16 @@ A no-code Windows GUI under active development for *authoring* one Gothic 1
 Remake mod, over the same Rust mod engine as the
 [`gore` CLI](../../README.md#modding-with-the-gore-cli) (via a `dart:ffi`
 bridge, `gore_ffi.dll`). The current Managed-R3 surface covers NPC, Quest,
-Dialog/Voice, localization, and DataAsset workflows plus installed Item and
-Texture browsing. General Audio/Script authoring, vanilla localization and
-runtime-topic patches, Item/Texture mutation, and the complete Managed-R3
-build/deploy path are still being implemented and must not be treated as
-released capabilities. See the
+Dialog/Voice, localization, DataAsset, and existing-item scalar workflows plus
+installed Texture browsing. Existing-item fields use exact signed-32-bit
+integer, finite-32-bit-float, or boolean domains from a closed per-class
+schema on explicitly audited game generations; unknown targets fail closed and
+Studio does not guess gameplay-specific bounds. Existing patches with obsolete
+catalog provenance are invalid current input, not migration or compatibility
+cases. General Audio/Script authoring,
+vanilla localization and runtime-topic patches, new-item identity, Texture
+mutation, and the complete Managed-R3 build/deploy path are still being
+implemented and must not be treated as released capabilities. See the
 [repo README](../../README.md#gore-mod-studio) for the detailed development
 status.
 

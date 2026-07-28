@@ -119,7 +119,7 @@ final class Revision3QuestTranscriptRow {
   });
 
   final Revision3QuestTranscriptLineChoice line;
-  final int? objectiveSlot;
+  final int objectiveSlot;
 
   String get lineId => line.lineId;
   String get displayLabel => line.displayLabel;
@@ -175,9 +175,9 @@ final class Revision3QuestTranscriptDraftRow {
   });
 
   final Revision3QuestTranscriptLineChoice line;
-  final int? objectiveSlot;
+  final int objectiveSlot;
 
-  Revision3QuestTranscriptDraftRow withObjectiveSlot(int? value) =>
+  Revision3QuestTranscriptDraftRow withObjectiveSlot(int value) =>
       Revision3QuestTranscriptDraftRow(line: line, objectiveSlot: value);
 }
 
@@ -209,7 +209,7 @@ final class Revision3QuestTranscriptDraft {
 
   void attach(
     Revision3QuestTranscriptLineChoice choice, {
-    int? objectiveSlot,
+    required int objectiveSlot,
     int? index,
   }) {
     _requireChoice(choice);
@@ -252,7 +252,7 @@ final class Revision3QuestTranscriptDraft {
     return _rows.removeAt(index);
   }
 
-  void setObjectiveSlot({required int index, required int? objectiveSlot}) {
+  void setObjectiveSlot({required int index, required int objectiveSlot}) {
     if (index < 0 || index >= _rows.length) {
       throw RangeError('Transcript row index is out of range.');
     }
@@ -268,8 +268,8 @@ final class Revision3QuestTranscriptDraft {
     }
   }
 
-  void _requireObjectiveSlot(int? slot) {
-    if (slot != null && _projection.objectiveBySlot(slot) == null) {
+  void _requireObjectiveSlot(int slot) {
+    if (_projection.objectiveBySlot(slot) == null) {
       throw const FormatException('Choose an active Quest objective.');
     }
   }
@@ -333,7 +333,7 @@ final class Revision3QuestTranscriptCreateTechnicalPlan {
   final int expectedModuleRevision;
   final int expectedTranscriptCount;
   final int index;
-  final int? objectiveSlot;
+  final int objectiveSlot;
   final Revision3DialogLineEntryTechnicalPlan line;
 }
 
@@ -493,15 +493,14 @@ final class Revision3QuestTranscriptAuthoringService {
   Future<Revision3QuestTranscriptPublication> createAndInsert({
     required Revision3QuestTranscriptProjection projection,
     required int index,
-    required int? objectiveSlot,
+    required int objectiveSlot,
     required Revision3DialogLineEntryTechnicalPlan line,
   }) async {
     _requireBoundProjection(projection);
     if (index < 0 || index > projection.rows.length) {
       throw RangeError('Transcript insertion index is out of range.');
     }
-    if (objectiveSlot != null &&
-        projection.objectiveBySlot(objectiveSlot) == null) {
+    if (projection.objectiveBySlot(objectiveSlot) == null) {
       throw const FormatException('Choose an active Quest objective.');
     }
     final fresh = await load(
@@ -539,7 +538,7 @@ final class Revision3QuestTranscriptAuthoringService {
   Revision3DialogLineEntryTechnicalPublisher createAndInsertPublisher({
     required Revision3QuestTranscriptProjection projection,
     required int index,
-    required int? objectiveSlot,
+    required int objectiveSlot,
   }) =>
       ({
         required String expectedProjectId,
@@ -615,30 +614,29 @@ Revision3QuestTranscriptProjection _projectionFromIndex(
     );
   }
 
+  if (questFacts.objectiveSlots.isEmpty ||
+      questFacts.objectiveSlots.length != questFacts.objectiveTitles.length) {
+    throw const FormatException(
+      'The selected Quest objective projection is inconsistent.',
+    );
+  }
   final objectives = <Revision3QuestTranscriptObjective>[];
-  if (questFacts.objectiveSlots.isNotEmpty) {
-    if (questFacts.objectiveSlots.length != questFacts.objectiveTitles.length) {
-      throw const FormatException(
-        'The selected Quest objective projection is inconsistent.',
-      );
-    }
-    for (
-      var objectiveIndex = 0;
-      objectiveIndex < questFacts.objectiveSlots.length;
-      objectiveIndex++
-    ) {
-      objectives.add(
-        Revision3QuestTranscriptObjective(
-          slot: questFacts.objectiveSlots[objectiveIndex],
-          title:
-              _visibleTranscriptValue(
-                questFacts.objectiveTitles[objectiveIndex],
-                forbiddenValues: <String>{index.projectId, quest.id, module.id},
-              ) ??
-              'Objective ${objectiveIndex + 1}',
-        ),
-      );
-    }
+  for (
+    var objectiveIndex = 0;
+    objectiveIndex < questFacts.objectiveSlots.length;
+    objectiveIndex++
+  ) {
+    objectives.add(
+      Revision3QuestTranscriptObjective(
+        slot: questFacts.objectiveSlots[objectiveIndex],
+        title:
+            _visibleTranscriptValue(
+              questFacts.objectiveTitles[objectiveIndex],
+              forbiddenValues: <String>{index.projectId, quest.id, module.id},
+            ) ??
+            'Objective ${objectiveIndex + 1}',
+      ),
+    );
   }
 
   final candidates = <_QuestTranscriptProjectedLine>[];
@@ -788,9 +786,8 @@ Revision3QuestTranscriptProjection _projectionFromIndex(
         reference.target.expectedKind !=
             Revision3ContentEntityKind.dialogLine ||
         reference.resolution != Revision3ContentReferenceResolution.resolved ||
-        (reference.qualifier != null && objectiveSlot == null) ||
-        (objectiveSlot != null &&
-            !objectives.any((objective) => objective.slot == objectiveSlot))) {
+        objectiveSlot == null ||
+        !objectives.any((objective) => objective.slot == objectiveSlot)) {
       throw const FormatException(
         'The selected Quest transcript contains an unavailable dialog line.',
       );

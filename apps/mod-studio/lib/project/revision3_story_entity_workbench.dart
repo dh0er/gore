@@ -1329,4 +1329,5 @@ IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {
   Revision3ContentEntityKind.voiceSlot => Icons.mic_none,
   Revision3ContentEntityKind.voiceTake => Icons.graphic_eq,
   Revision3ContentEntityKind.scriptModule => Icons.code,
+  Revision3ContentEntityKind.itemPatch => Icons.inventory_2_outlined,
 };

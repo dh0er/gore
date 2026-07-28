@@ -22,6 +22,7 @@ part '../project/revision3_dataasset_build.dart';
 part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
 part '../project/revision3_dialog_localization_edit.dart';
+part '../project/revision3_item_patch.dart';
 part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_dialog_voice_slot_creation.dart';
 part '../project/revision3_dialog_voice_slot_removal.dart';
@@ -1727,6 +1728,70 @@ class ModFfi {
     }
   }
 
+  /// Read the native embedded Item schema as an exact-current, read-only
+  /// authoring catalog. The result grants no mutation, build, deployment, or
+  /// runtime authority.
+  Future<AuthoringRevision3ItemCatalogReadResult>
+  authoringStoreReadRevision3ItemCatalogV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_read_revision3_item_catalog_v1';
+    _authoringRevision3Path(root, 'root');
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3ItemCatalogReadResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one exact managed ItemPatch create, update, or removal without
+  /// publishing the fixed project head.
+  Future<AuthoringRevision3ItemPatchPreparation>
+  authoringStorePrepareRevision3ItemPatchV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3ItemPatchRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_item_patch_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3RequestString(
+      request.canonicalJson,
+      'itemPatchRequestJson',
+      _maxAuthoringRevision3ItemPatchRequestBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'item_patch_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3ItemPatchPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Change or clear the selected take of one exact-current revision-3 Voice
   /// slot and prepare an unpublished candidate.
   ///
@@ -3274,11 +3339,17 @@ Map<String, Object?> _authoringDecodeDuplicateSafeObject(
 
 void _authoringRequireSignedSafeUnsignedJsonNumbers(
   Object? root,
-  String context,
-) {
+  String context, {
+  Iterable<Object?> closedItemScalars = const <Object?>[],
+}) {
+  final itemScalars = Set<Object?>.identity()..addAll(closedItemScalars);
   final pending = <Object?>[root];
   while (pending.isNotEmpty) {
     final value = pending.removeLast();
+    if (itemScalars.contains(value)) {
+      _authoringRequireClosedItemScalarNumber(value, context);
+      continue;
+    }
     if (value == null || value is String || value is bool) continue;
     if (value is int) {
       if (value < 0 || value > _maxAuthoringSignedJsonInteger) {
@@ -3303,11 +3374,193 @@ void _authoringRequireSignedSafeUnsignedJsonNumbers(
       }
       continue;
     }
-    // JSON decimals/exponents decode as doubles. Revision-3's closed model has only unsigned
-    // integer numbers, so accepting one here would either lose precision or expand the schema.
+    // All numbers outside the explicitly located closed ItemPatch scalar
+    // envelopes remain unsigned integers.
     throw FormatException(
       'authoring $context contains a non-integer JSON number or unsupported value',
     );
+  }
+}
+
+/// Recreates serde_json's finite-f64 spelling only inside already-located,
+/// closed ItemPatch scalar envelopes.
+///
+/// Dart and serde_json both choose the shortest round-tripping decimal digits,
+/// but use different fixed/scientific notation thresholds. Managed revision-3
+/// project and content-index bytes originate in Rust, so exact byte checks must
+/// reproduce serde_json's `ryu` presentation for ItemPatch floats. Numbers
+/// everywhere else deliberately keep the ordinary [jsonEncode] contract.
+String _authoringEncodeCanonicalJsonWithItemFloats(
+  Object? root,
+  Iterable<Object?> closedItemScalars,
+) {
+  final itemScalars = Set<Object?>.identity()..addAll(closedItemScalars);
+
+  String encode(Object? value, {bool itemFloatData = false}) {
+    if (itemFloatData) {
+      if (value is! double || !value.isFinite) {
+        throw const FormatException(
+          'authoring ItemPatch float is not finite binary64',
+        );
+      }
+      return _authoringSerdeJsonFiniteDouble(value);
+    }
+    if (value is List) {
+      return '[${value.map(encode).join(',')}]';
+    }
+    if (value is Map) {
+      final isItemFloat =
+          itemScalars.contains(value) && value['type'] == 'float';
+      final fields = <String>[];
+      for (final entry in value.entries) {
+        final key = entry.key;
+        if (key is! String) {
+          throw const FormatException(
+            'authoring canonical JSON contains a non-string object key',
+          );
+        }
+        fields.add(
+          '${jsonEncode(key)}:${encode(entry.value, itemFloatData: isItemFloat && key == 'data')}',
+        );
+      }
+      return '{${fields.join(',')}}';
+    }
+    return jsonEncode(value);
+  }
+
+  return encode(root);
+}
+
+String _authoringSerdeJsonFiniteDouble(double value) {
+  if (!value.isFinite) {
+    throw const FormatException('authoring ItemPatch float is not finite');
+  }
+  // ItemFiniteFloatV1 normalizes either signed zero before serialization.
+  if (value == 0.0) return '0.0';
+
+  final scientific = value.toStringAsExponential();
+  final match = RegExp(
+    r'^(-?)([0-9])(?:\.([0-9]+))?e([+-])([0-9]+)$',
+  ).firstMatch(scientific);
+  if (match == null) {
+    throw const FormatException(
+      'authoring ItemPatch float has no canonical binary64 spelling',
+    );
+  }
+  final exponentMagnitude = int.parse(match.group(5)!);
+  final exponent = match.group(4) == '-'
+      ? -exponentMagnitude
+      : exponentMagnitude;
+
+  // ryu's f64 pretty printer uses fixed notation for decimal exponents
+  // -5..15 and scientific notation outside that interval.
+  if (exponent < -5 || exponent >= 16) return scientific;
+
+  final sign = match.group(1)!;
+  final digits = '${match.group(2)!}${match.group(3) ?? ''}';
+  if (exponent < 0) {
+    return '${sign}0.${'0' * (-exponent - 1)}$digits';
+  }
+  final point = exponent + 1;
+  if (point >= digits.length) {
+    return '$sign$digits${'0' * (point - digits.length)}.0';
+  }
+  return '$sign${digits.substring(0, point)}.${digits.substring(point)}';
+}
+
+void _authoringRequireClosedItemScalarNumber(Object? value, String context) {
+  final scalar = _authoringRequiredObject(value, '$context ItemPatch scalar');
+  _authoringExactFields(scalar, const {
+    'type',
+    'data',
+  }, '$context ItemPatch scalar');
+  switch (scalar['type']) {
+    case 'integer':
+      final data = scalar['data'];
+      if (data is! int ||
+          data < -0x7fffffffffffffff - 1 ||
+          data > _maxAuthoringSignedJsonInteger) {
+        throw FormatException(
+          'authoring $context contains an invalid ItemPatch integer',
+        );
+      }
+    case 'float':
+      final data = scalar['data'];
+      if (data is! double ||
+          !data.isFinite ||
+          (data == 0.0 && data.isNegative)) {
+        throw FormatException(
+          'authoring $context contains an invalid ItemPatch float',
+        );
+      }
+    case 'boolean':
+      if (scalar['data'] is! bool) {
+        throw FormatException(
+          'authoring $context contains an invalid ItemPatch boolean',
+        );
+      }
+    case 'string':
+      if (scalar['data'] is! String) {
+        throw FormatException(
+          'authoring $context contains an invalid ItemPatch string',
+        );
+      }
+    case 'enum':
+      final data = _authoringRequiredObject(
+        scalar['data'],
+        '$context ItemPatch enum',
+      );
+      _authoringExactFields(data, const {
+        'enum_type',
+        'backing',
+      }, '$context ItemPatch enum');
+      final backing = data['backing'];
+      if (data['enum_type'] is! String ||
+          backing is! int ||
+          backing < -0x7fffffffffffffff - 1 ||
+          backing > _maxAuthoringSignedJsonInteger) {
+        throw FormatException(
+          'authoring $context contains an invalid ItemPatch enum',
+        );
+      }
+    default:
+      throw FormatException(
+        'authoring $context contains an unknown ItemPatch scalar',
+      );
+  }
+}
+
+Iterable<Object?> _authoringRevision3ProjectItemScalars(
+  Map<String, Object?> project,
+) sync* {
+  final entities = project['entities'];
+  if (entities is! Map) return;
+  for (final rawEntity in entities.values) {
+    if (rawEntity is! Map) continue;
+    final payload = rawEntity['payload'];
+    if (payload is! Map || payload['kind'] != 'item_patch') continue;
+    final data = payload['data'];
+    if (data is! Map) continue;
+    final fields = data['fields'];
+    if (fields is! Map) continue;
+    yield* fields.values;
+  }
+}
+
+Iterable<Object?> _authoringRevision3ContentIndexItemScalars(
+  Map<String, Object?> index,
+) sync* {
+  final entities = index['entities'];
+  if (entities is! List) return;
+  for (final rawEntity in entities) {
+    if (rawEntity is! Map || rawEntity['kind'] != 'item_patch') continue;
+    final summary = rawEntity['summary'];
+    if (summary is! Map || summary['kind'] != 'item_patch') continue;
+    final data = summary['data'];
+    if (data is! Map) continue;
+    final fields = data['fields'];
+    if (fields is! Map) continue;
+    yield* fields.values;
   }
 }
 
@@ -3552,12 +3805,17 @@ _authoringRequireCanonicalRevision3ProjectJson(String projectJson) {
       'authoring revision-3 store project ID must not be zero',
     );
   }
+  final itemScalars = _authoringRevision3ProjectItemScalars(
+    project,
+  ).toList(growable: false);
   _authoringRequireSignedSafeUnsignedJsonNumbers(
     project,
     'revision-3 store project',
+    closedItemScalars: itemScalars,
   );
   final revision = _authoringRequiredInt(project, 'revision');
-  if (jsonEncode(project) != projectJson) {
+  if (_authoringEncodeCanonicalJsonWithItemFloats(project, itemScalars) !=
+      projectJson) {
     throw const FormatException(
       'authoring revision-3 store project JSON is not canonical',
     );
@@ -7006,11 +7264,16 @@ final class AuthoringRevision3ContentIndexResult {
       indexJson,
       'revision-3 content index',
     );
+    final itemScalars = _authoringRevision3ContentIndexItemScalars(
+      indexObject,
+    ).toList(growable: false);
     _authoringRequireSignedSafeUnsignedJsonNumbers(
       indexObject,
       'revision-3 content index',
+      closedItemScalars: itemScalars,
     );
-    if (jsonEncode(indexObject) != indexJson) {
+    if (_authoringEncodeCanonicalJsonWithItemFloats(indexObject, itemScalars) !=
+        indexJson) {
       throw const FormatException(
         'authoring revision-3 content index is not canonical',
       );

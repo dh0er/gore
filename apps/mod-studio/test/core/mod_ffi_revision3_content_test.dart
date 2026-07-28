@@ -39,6 +39,40 @@ Map<String, Object?> _index({
   'assets': <Object?>[],
 };
 
+Map<String, Object?> _indexWithItemFloat() {
+  final index = _index();
+  index['entity_counts'] = <String, Object?>{'item_patch': 1};
+  index['entities'] = <Object?>[
+    <String, Object?>{
+      'id': '44444444444444444444444444444444',
+      'kind': 'item_patch',
+      'display_name': 'Apple',
+      'revision': 2,
+      'origin': <String, Object?>{
+        'type': 'vanilla',
+        'generation': index['target'],
+        'catalog_layer': 'base-game.g1r.items.v1',
+        'canonical_selector': 'UItemDefinition_Apple',
+        'source_seal': <String, Object?>{'byte_len': 456, 'sha256': 'c' * 64},
+      },
+      'summary': <String, Object?>{
+        'kind': 'item_patch',
+        'data': <String, Object?>{
+          'vanilla_class': 'UItemDefinition_Apple',
+          'field_count': 1,
+          'field_types': <String, Object?>{'m_Weight': 'float'},
+          'fields': <String, Object?>{
+            'm_Weight': <String, Object?>{'type': 'float', 'data': 0.000001},
+          },
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ];
+  return index;
+}
+
 Map<String, Object?> _response({
   String? headJson,
   String projectId = _projectId,
@@ -151,6 +185,40 @@ void main() {
       );
     }
   });
+
+  test(
+    'content index canonical check uses serde spelling only for ItemPatch floats',
+    () {
+      final expectedHead = AuthoringWorkingHead.fromCanonicalJson(_headJson());
+      final dartSpelling = jsonEncode(_indexWithItemFloat());
+      final rustSpelling = dartSpelling.replaceFirst(
+        '"data":0.000001',
+        '"data":1e-6',
+      );
+      final result = AuthoringRevision3ContentIndexResult.fromJson(
+        _response(indexJson: rustSpelling),
+        expectedHead: expectedHead,
+      );
+      expect(
+        result
+            .index
+            .entities
+            .single
+            .summary
+            .itemPatch!
+            .fields['m_Weight']!
+            .floatValue,
+        1e-6,
+      );
+      expect(
+        () => AuthoringRevision3ContentIndexResult.fromJson(
+          _response(indexJson: dartSpelling),
+          expectedHead: expectedHead,
+        ),
+        throwsFormatException,
+      );
+    },
+  );
 
   test(
     'content-index wrapper rejects bad paths before native dispatch',

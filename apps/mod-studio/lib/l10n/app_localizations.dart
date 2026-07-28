@@ -1685,7 +1685,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedLocalizationUnsavedDescription.
   ///
   /// In en, this message translates to:
-  /// **'You changed this project text. Switching now would discard those edits.'**
+  /// **'This project has unsaved edits. Switching now would discard them.'**
   String get managedLocalizationUnsavedDescription;
 
   /// No description provided for @managedLocalizationVoiceUnsavedTitle.
@@ -2791,6 +2791,192 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Special'**
   String get managedItemsCategorySpecial;
+
+  /// No description provided for @managedItemsCategoryArmor.
+  ///
+  /// In en, this message translates to:
+  /// **'Armor'**
+  String get managedItemsCategoryArmor;
+
+  /// No description provided for @managedItemsExactSchemaBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project schema'**
+  String get managedItemsExactSchemaBadge;
+
+  /// No description provided for @managedItemsEditableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed edit'**
+  String get managedItemsEditableBadge;
+
+  /// No description provided for @managedItemsBuildPendingBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Build support pending'**
+  String get managedItemsBuildPendingBadge;
+
+  /// No description provided for @managedItemsInvalidNumber.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid number.'**
+  String get managedItemsInvalidNumber;
+
+  /// No description provided for @managedItemsNumberOutsideNativeRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a value from {minimum} to {maximum}.'**
+  String managedItemsNumberOutsideNativeRange(String minimum, String maximum);
+
+  /// No description provided for @managedItemsAuthoringBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes are saved only to this managed project. This editor does not write to the game or a save. Item bundle build is not available yet.'**
+  String get managedItemsAuthoringBoundary;
+
+  /// No description provided for @managedItemsCurrentChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No item changes} =1{1 changed field} other{{count} changed fields}}'**
+  String managedItemsCurrentChanges(int count);
+
+  /// No description provided for @managedItemsChangeField.
+  ///
+  /// In en, this message translates to:
+  /// **'Change this field'**
+  String get managedItemsChangeField;
+
+  /// No description provided for @managedItemsUseGameDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Use game default'**
+  String get managedItemsUseGameDefault;
+
+  /// No description provided for @managedItemsSaveChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Save item changes'**
+  String get managedItemsSaveChanges;
+
+  /// No description provided for @managedItemsRevertItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Revert item to game defaults'**
+  String get managedItemsRevertItem;
+
+  /// No description provided for @managedItemsClearChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear all item changes'**
+  String get managedItemsClearChanges;
+
+  /// No description provided for @managedItemsNoUnsavedChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'No unsaved changes.'**
+  String get managedItemsNoUnsavedChanges;
+
+  /// No description provided for @managedItemsSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Item changes saved in project revision {revision}.'**
+  String managedItemsSaved(int revision);
+
+  /// No description provided for @managedItemsSaveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or item catalog changed. Nothing was saved. Reload the current item data before editing again.'**
+  String get managedItemsSaveStale;
+
+  /// No description provided for @managedItemsSaveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The project checkpoint can no longer be verified safely. Nothing was saved. Use project recovery, or close and reopen the project.'**
+  String get managedItemsSaveRequiresReopen;
+
+  /// No description provided for @managedItemsSaveNoChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'There is no current item change to save. Reload the item data to continue.'**
+  String get managedItemsSaveNoChanges;
+
+  /// No description provided for @managedItemsSaveUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This change no longer fits the current safe item schema. Nothing was saved. Reload the item data before continuing.'**
+  String get managedItemsSaveUnsupported;
+
+  /// No description provided for @managedItemsSaveUnexpected.
+  ///
+  /// In en, this message translates to:
+  /// **'Item changes could not be saved safely. Nothing was changed. Reopen the project and try again.'**
+  String get managedItemsSaveUnexpected;
+
+  /// No description provided for @managedItemsReloadDiscardDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload item data and discard this draft'**
+  String get managedItemsReloadDiscardDraft;
+
+  /// No description provided for @managedItemsCatalogLoadTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Items are unavailable'**
+  String get managedItemsCatalogLoadTitle;
+
+  /// No description provided for @managedItemsCatalogStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or exact item catalog changed before the item data could be loaded. Nothing was changed.'**
+  String get managedItemsCatalogStale;
+
+  /// No description provided for @managedItemsCatalogRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project checkpoint can no longer be verified safely. Recover the project, or close and reopen it, before editing items.'**
+  String get managedItemsCatalogRequiresReopen;
+
+  /// No description provided for @managedItemsCatalogUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This project contains item data that the current exact game schema cannot edit safely. Nothing was changed.'**
+  String get managedItemsCatalogUnsupported;
+
+  /// No description provided for @managedItemsCatalogLoadUnexpected.
+  ///
+  /// In en, this message translates to:
+  /// **'The item data could not be loaded safely. Nothing was changed. Try loading it again.'**
+  String get managedItemsCatalogLoadUnexpected;
+
+  /// No description provided for @managedItemsCatalogReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload item data'**
+  String get managedItemsCatalogReload;
+
+  /// No description provided for @managedItemsUnsupportedSchema.
+  ///
+  /// In en, this message translates to:
+  /// **'This item change no longer matches the current safe catalog or field schema. You can still revert the whole item.'**
+  String get managedItemsUnsupportedSchema;
+
+  /// No description provided for @managedItemsDefaultUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Game default not recorded'**
+  String get managedItemsDefaultUnknown;
+
+  /// No description provided for @managedItemsGameDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Game default: {value}'**
+  String managedItemsGameDefault(String value);
+
+  /// No description provided for @managedItemsModValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod value'**
+  String get managedItemsModValue;
 
   /// No description provided for @managedContentScopeBaseGameLabel.
   ///

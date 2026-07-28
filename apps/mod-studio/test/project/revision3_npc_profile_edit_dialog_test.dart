@@ -629,6 +629,11 @@ final class _NpcProfileFixture {
               targetId: revision3NpcInspectionNpcId,
               expectedKind: 'npc_draft',
             ),
+            _reference(
+              role: 'script_owner',
+              targetId: revision3NpcInspectionNpcId,
+              expectedKind: 'npc_draft',
+            ),
           ],
           'asset_references': <Object?>[],
         },

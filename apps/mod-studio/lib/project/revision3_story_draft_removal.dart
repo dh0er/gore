@@ -201,6 +201,13 @@ final class AuthoringRevision3StoryDraftRemovalRequestV1 {
         'revision-3 Story Draft removal request disagrees with its exact project basis',
       );
     }
+    _requireExactStoryDraftRemovalBasisPair(
+      _authoringRequiredObject(
+        project.project['entities'],
+        'revision-3 Story Draft removal project entities',
+      ),
+      this,
+    );
   }
 }
 
@@ -554,6 +561,22 @@ void _requireExactStoryDraftRemovalBasisPair(
     'generator_version',
     max: _maxAuthoringSignedJsonInteger,
   );
+  final expectedGenerator = switch (request.draftKind) {
+    AuthoringStoryDraftKind.npcDraft => (
+      id: _authoringRevision3NpcGeneratorId,
+      version: _authoringRevision3NpcGeneratorVersion,
+    ),
+    AuthoringStoryDraftKind.questDraft => (
+      id: _authoringRevision3QuestGeneratorId,
+      version: _authoringRevision3QuestGeneratorVersion,
+    ),
+  };
+  if (draftGeneratorId != expectedGenerator.id ||
+      draftGeneratorVersion != expectedGenerator.version) {
+    throw const FormatException(
+      'revision-3 Story Draft removal basis uses an unsupported Draft generator',
+    );
+  }
   _authoringRequireTypedStoryRef(
     draftData['script_module'],
     projectId: request.expectedProjectId,
@@ -643,15 +666,52 @@ void _requireExactStoryDraftRemovalReferenceClosure(
   var draftModuleEdges = 0;
   var moduleOwnerEdges = 0;
 
-  void visit(Object? value, String sourceId, int depth) {
+  bool isExactOutgoingDialogBinding(
+    String sourceId,
+    String targetId,
+    String targetKind,
+    List<Object> path,
+  ) {
+    if (sourceId != request.draftId ||
+        targetId == request.draftId ||
+        targetId == request.scriptModuleId ||
+        targetKind != 'dialog_line') {
+      return false;
+    }
+    final bindingField = switch (request.draftKind) {
+      AuthoringStoryDraftKind.npcDraft => 'greetings',
+      AuthoringStoryDraftKind.questDraft => 'transcript',
+    };
+    if (path.length != 5 ||
+        path[0] != 'payload' ||
+        path[1] != 'data' ||
+        path[2] != bindingField ||
+        path[3] is! int ||
+        path[4] != 'line') {
+      return false;
+    }
+    final rawTarget = entities[targetId];
+    if (rawTarget is! Map) return false;
+    final target = _authoringRequiredObject(
+      rawTarget,
+      'revision-3 Story Draft removal outgoing DialogLine target',
+    );
+    final payload = _authoringRequiredObject(
+      target['payload'],
+      'revision-3 Story Draft removal outgoing DialogLine payload',
+    );
+    return target['id'] == targetId && payload['kind'] == 'dialog_line';
+  }
+
+  void visit(Object? value, String sourceId, List<Object> path, int depth) {
     if (depth > 128) {
       throw const FormatException(
         'revision-3 Story Draft removal reference closure is too deeply nested',
       );
     }
     if (value is List) {
-      for (final item in value) {
-        visit(item, sourceId, depth + 1);
+      for (var index = 0; index < value.length; index++) {
+        visit(value[index], sourceId, <Object>[...path, index], depth + 1);
       }
       return;
     }
@@ -694,17 +754,20 @@ void _requireExactStoryDraftRemovalReferenceClosure(
         moduleOwnerEdges++;
         return;
       }
+      if (isExactOutgoingDialogBinding(sourceId, targetId, targetKind, path)) {
+        return;
+      }
       throw const FormatException(
         'revision-3 Story Draft removal pair has an additional local reference',
       );
     }
-    for (final child in object.values) {
-      visit(child, sourceId, depth + 1);
+    for (final entry in object.entries) {
+      visit(entry.value, sourceId, <Object>[...path, entry.key], depth + 1);
     }
   }
 
   for (final entry in entities.entries) {
-    visit(entry.value, entry.key, 0);
+    visit(entry.value, entry.key, const <Object>[], 0);
   }
   if (draftModuleEdges != 1 || moduleOwnerEdges != 2) {
     throw const FormatException(

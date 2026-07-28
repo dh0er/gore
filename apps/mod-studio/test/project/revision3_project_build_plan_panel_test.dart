@@ -96,6 +96,175 @@ void main() {
     expect(find.textContaining('GRD_263_ASGHAN'), findsNothing);
   });
 
+  test('only exact per-line Voice reasons offer the drill-down', () {
+    const expected = <AuthoringRevision3ProjectBuildBlockReason>{
+      AuthoringRevision3ProjectBuildBlockReason.voiceTargetUnresolved,
+      AuthoringRevision3ProjectBuildBlockReason.voiceTargetAmbiguous,
+      AuthoringRevision3ProjectBuildBlockReason.voiceAddUnqualified,
+      AuthoringRevision3ProjectBuildBlockReason.voiceSelectedTakeMissing,
+      AuthoringRevision3ProjectBuildBlockReason.voiceSelectedTakeNotApproved,
+      AuthoringRevision3ProjectBuildBlockReason
+          .voiceSelectedTakeCodecUnqualified,
+    };
+
+    for (final reason in AuthoringRevision3ProjectBuildBlockReason.values) {
+      expect(
+        revision3ProjectBuildPlanHasExactVoiceDetails(reason),
+        expected.contains(reason),
+        reason: reason.name,
+      );
+    }
+  });
+
+  testWidgets('opens exact Voice details with local busy and failure states', (
+    tester,
+  ) async {
+    final fixture = _blockedFixture();
+    final completion = Completer<void>();
+    var calls = 0;
+    await _pumpPanel(
+      tester,
+      fixture: fixture,
+      load: () async => fixture.result,
+      openVoiceDetails: () {
+        calls++;
+        return completion.future;
+      },
+    );
+    await tester.pumpAndSettle();
+
+    final action = find.byKey(
+      const ValueKey(
+        'revision3-project-build-plan-voice-details-voiceTargetUnresolved',
+      ),
+    );
+    expect(action, findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-voice-details-localizationLoweringUnavailable',
+        ),
+      ),
+      findsNothing,
+    );
+
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pump();
+    expect(calls, 1);
+    expect(tester.widget<TextButton>(action).onPressed, isNull);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    completion.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Show exact Voice problems'), findsOneWidget);
+    expect(find.textContaining('Create playable'), findsNothing);
+    expect(find.textContaining('Install'), findsNothing);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Revision3ProjectBuildPlanPanel(
+              checkpoint: fixture.checkpoint,
+              load: () async => fixture.result,
+              openVoiceDetails: () => throw StateError(r'C:\private\voice'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-project-build-plan-action-error')),
+      findsOneWidget,
+    );
+    expect(find.textContaining(r'C:\private'), findsNothing);
+  });
+
+  testWidgets('offers exact Voice details for the qualified toolkit gap', (
+    tester,
+  ) async {
+    final fixture = _unqualifiedAddFixture();
+    await _pumpPanel(
+      tester,
+      fixture: fixture,
+      load: () async => fixture.result,
+      openVoiceDetails: () {},
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-build-plan-toolkit-blockers')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-voice-details-voiceAddUnqualified',
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('drops a pending Voice action after checkpoint replacement', (
+    tester,
+  ) async {
+    final first = _blockedFixture();
+    final second = _blockedFixture(
+      projectId: _otherProjectId,
+      projectRevision: 8,
+    );
+    final completion = Completer<void>();
+    var current = first;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              final rendered = current;
+              return SingleChildScrollView(
+                child: Revision3ProjectBuildPlanPanel(
+                  checkpoint: rendered.checkpoint,
+                  load: () async => rendered.result,
+                  openVoiceDetails: () => completion.future,
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final action = find.byKey(
+      const ValueKey(
+        'revision3-project-build-plan-voice-details-voiceTargetUnresolved',
+      ),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pump();
+
+    updateHost(() => current = second);
+    await tester.pumpAndSettle();
+    completion.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Exact project revision 8'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-project-build-plan-action-error')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('explains an unsupported Voice line label distinctly', (
     tester,
   ) async {
@@ -319,6 +488,7 @@ Future<void> _pumpPanel(
   WidgetTester tester, {
   required _BuildPlanFixture fixture,
   required Revision3ProjectBuildPlanLoader load,
+  Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -326,6 +496,7 @@ Future<void> _pumpPanel(
         child: Revision3ProjectBuildPlanPanel(
           checkpoint: fixture.checkpoint,
           load: load,
+          openVoiceDetails: openVoiceDetails,
         ),
       ),
     ),
@@ -381,9 +552,18 @@ _BuildPlanFixture _coverageFixture({
   );
 }
 
-_BuildPlanFixture _blockedFixture() {
+_BuildPlanFixture _blockedFixture({
+  String projectId = revision3VoiceFixtureProjectId,
+  int projectRevision = 7,
+}) {
   final project =
-      (jsonDecode(revision3VoiceFixtureBuildReadyProjectJson()) as Map)
+      (jsonDecode(
+                revision3VoiceFixtureBuildReadyProjectJson(
+                  projectId: projectId,
+                  projectRevision: projectRevision,
+                ),
+              )
+              as Map)
           .cast<String, Object?>();
   final entities = (project['entities']! as Map).cast<String, Object?>();
   final localization = (entities[revision3VoiceFixtureLocalizationId]! as Map)
@@ -453,6 +633,40 @@ _BuildPlanFixture _lineLabelFixture() {
         'category': 'author_project',
         'domain': 'voice',
         'reason': 'voice_line_label_unsupported',
+        'affected_count': 1,
+      },
+    ],
+  );
+}
+
+_BuildPlanFixture _unqualifiedAddFixture() {
+  final project =
+      (jsonDecode(revision3VoiceFixtureBuildReadyProjectJson()) as Map)
+          .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final slot = entities.values
+      .map((value) => (value! as Map).cast<String, Object?>())
+      .singleWhere(
+        (entity) =>
+            ((entity['payload']! as Map<String, Object?>)['kind']) ==
+            'voice_slot',
+      );
+  final payload = (slot['payload']! as Map).cast<String, Object?>();
+  final data = (payload['data']! as Map).cast<String, Object?>();
+  final resolution = (data['target_resolution']! as Map)
+      .cast<String, Object?>();
+  final target = (resolution['target']! as Map).cast<String, Object?>();
+  target['operation'] = 'add';
+  return _fixture(
+    projectJson: jsonEncode(project),
+    domainCounts: const <String, ({int ready, int blocked})>{
+      'voice': (ready: 0, blocked: 1),
+    },
+    blockers: const <Map<String, Object?>>[
+      <String, Object?>{
+        'category': 'toolkit_support',
+        'domain': 'voice',
+        'reason': 'voice_add_unqualified',
         'affected_count': 1,
       },
     ],

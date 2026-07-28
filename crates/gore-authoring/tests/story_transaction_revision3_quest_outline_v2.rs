@@ -329,7 +329,7 @@ fn rejected(
 
 fn attach_transcript(
     project: &mut ProjectRevision3,
-    objective_slot: Option<u16>,
+    objective_slot: u16,
 ) -> Vec<Revision3QuestTranscriptBindingV1> {
     let localization_id = id(0x70);
     let line_id = id(0x71);
@@ -385,7 +385,7 @@ fn attach_transcript(
 #[test]
 fn edit_reorders_stable_slots_and_changes_only_the_bounded_outline_and_three_revisions() {
     let (mut project, basis_head) = project_with_semantic_quest();
-    let transcript = attach_transcript(&mut project, Some(2));
+    let transcript = attach_transcript(&mut project, 2);
     let before = project.clone();
     let before_quest = quest(&before).clone();
     let before_plan = before_quest.input.transition_plan.as_ref().clone();

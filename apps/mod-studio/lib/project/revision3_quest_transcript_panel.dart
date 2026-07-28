@@ -10,7 +10,7 @@ typedef Revision3QuestTranscriptCreateLineAction =
     Future<bool> Function({
       required Revision3QuestTranscriptProjection projection,
       required int insertionIndex,
-      required int? objectiveSlot,
+      required int objectiveSlot,
       required Revision3DialogLineEntryTechnicalPublisher publishTechnicalPlan,
     });
 
@@ -37,7 +37,6 @@ final class Revision3QuestTranscriptPanelCopy {
     required this.editTranscript,
     required this.emptyTitle,
     required this.emptyDescription,
-    required this.ungrouped,
     required this.lineCountTemplate,
     required this.speakerTemplate,
     required this.noSpeaker,
@@ -92,7 +91,6 @@ final class Revision3QuestTranscriptPanelCopy {
     emptyTitle: 'No dialog lines yet',
     emptyDescription:
         'Create the first line or attach an existing unbound project line.',
-    ungrouped: 'General dialog',
     lineCountTemplate: '{count} lines',
     speakerTemplate: 'Speaker: {speaker}',
     noSpeaker: 'Speaker not set',
@@ -150,7 +148,6 @@ final class Revision3QuestTranscriptPanelCopy {
     emptyTitle: 'Noch keine Dialogzeilen',
     emptyDescription:
         'Erstelle die erste Zeile oder verkn\u00fcpfe eine vorhandene, noch ungebundene Projektzeile.',
-    ungrouped: 'Allgemeiner Dialog',
     lineCountTemplate: '{count} Zeilen',
     speakerTemplate: 'Sprecher: {speaker}',
     noSpeaker: 'Kein Sprecher festgelegt',
@@ -209,7 +206,6 @@ final class Revision3QuestTranscriptPanelCopy {
   final String editTranscript;
   final String emptyTitle;
   final String emptyDescription;
-  final String ungrouped;
   final String lineCountTemplate;
   final String speakerTemplate;
   final String noSpeaker;
@@ -551,7 +547,8 @@ class _Revision3QuestTranscriptPanelState
     final insertionIndex = selectedIndex < 0
         ? projection.rows.length
         : selectedIndex + 1;
-    final objectiveSlot = selected?.objectiveSlot;
+    final objectiveSlot =
+        selected?.objectiveSlot ?? projection.objectives.first.slot;
     final epoch = ++_actionEpoch;
     setState(() {
       _busy = true;
@@ -1097,9 +1094,7 @@ class _TranscriptLineList extends StatelessWidget {
         final beginsGroup =
             previousSlot is _NoPreviousObjective ||
             previousSlot != row.objectiveSlot;
-        final objective = row.objectiveSlot == null
-            ? null
-            : projection.objectiveBySlot(row.objectiveSlot!);
+        final objective = projection.objectiveBySlot(row.objectiveSlot)!;
         final locales = _rowLocales(row);
         final localeCount = locales.length;
         final authoredCount = row.localeCoverage
@@ -1112,7 +1107,7 @@ class _TranscriptLineList extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
                 child: Text(
-                  objective?.title ?? copy.ungrouped,
+                  objective.title,
                   key: Key('revision3-quest-transcript-group-$index'),
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
@@ -1342,7 +1337,10 @@ class _Revision3QuestTranscriptReviewDialogState
   void _attach(Revision3QuestTranscriptLineChoice? choice, String? block) {
     if (choice == null || block != null || _saving || _authorityLost) return;
     setState(() {
-      _draft.attach(choice);
+      _draft.attach(
+        choice,
+        objectiveSlot: widget.projection.objectives.first.slot,
+      );
       _error = null;
     });
   }
@@ -1366,10 +1364,7 @@ class _Revision3QuestTranscriptReviewDialogState
   void _setObjective(int index, int selection, String? block) {
     if (block != null || _saving || _authorityLost) return;
     setState(() {
-      _draft.setObjectiveSlot(
-        index: index,
-        objectiveSlot: selection == -1 ? null : selection,
-      );
+      _draft.setObjectiveSlot(index: index, objectiveSlot: selection);
       _error = null;
     });
   }
@@ -1555,7 +1550,7 @@ class _Revision3QuestTranscriptReviewDialogState
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final row = rows[index];
-        final selectedObjective = row.objectiveSlot ?? -1;
+        final selectedObjective = row.objectiveSlot;
         return Padding(
           key: Key('revision3-quest-transcript-review-row-$index'),
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1586,10 +1581,6 @@ class _Revision3QuestTranscriptReviewDialogState
                         isDense: true,
                       ),
                       items: [
-                        DropdownMenuItem(
-                          value: -1,
-                          child: Text(widget.copy.ungrouped),
-                        ),
                         for (final objective in widget.projection.objectives)
                           DropdownMenuItem(
                             value: objective.slot,

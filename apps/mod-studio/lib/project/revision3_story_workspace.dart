@@ -5,6 +5,11 @@ import 'package:flutter/material.dart';
 import 'revision3_content_index.dart';
 import 'revision3_story_entity_workbench.dart';
 
+const _npcDraftGeneratorId = 'gore-authoring.logical-npc-clone-draft';
+const _npcDraftGeneratorVersion = 1;
+const _questDraftGeneratorId = 'gore-authoring.draft-quest-skeleton';
+const _questDraftGeneratorVersion = 4;
+
 typedef Revision3StoryWorkspaceLoader =
     Future<Revision3ContentIndex> Function();
 typedef Revision3StoryWorkspaceCreateAction = Future<void> Function();
@@ -134,7 +139,23 @@ final class Revision3StoryDraftRemovalPreflight {
         .where((reference) => isExactOwnerReference(reference, 'script_owner'))
         .toList(growable: false);
     final generatedOwner = module.origin.generatedOwner;
+    final expectedGenerator = switch (draft.kind) {
+      Revision3ContentEntityKind.npcDraft => (
+        id: _npcDraftGeneratorId,
+        version: _npcDraftGeneratorVersion,
+      ),
+      Revision3ContentEntityKind.questDraft => (
+        id: _questDraftGeneratorId,
+        version: _questDraftGeneratorVersion,
+      ),
+      _ => throw StateError('Story Draft kind was already validated.'),
+    };
+    final moduleSummary = module.summary.scriptModule;
     if (module.origin.type != 'generated' ||
+        module.origin.label != expectedGenerator.id ||
+        module.origin.generatorVersion != expectedGenerator.version ||
+        moduleSummary?.generatorId != expectedGenerator.id ||
+        moduleSummary?.generatorVersion != expectedGenerator.version ||
         generatedOwner == null ||
         generatedOwner.projectId != index.projectId ||
         generatedOwner.entityId != draft.id ||
@@ -159,10 +180,12 @@ final class Revision3StoryDraftRemovalPreflight {
       for (final reference in source.references) {
         final sourceIsRemoved = pairIds.contains(source.id);
         final targetIsRemoved = pairIds.contains(reference.target.entityId);
-        final ownedTranscriptLineDisappearsWithQuest =
-            draft.kind == Revision3ContentEntityKind.questDraft &&
+        final outgoingDialogBindingDisappearsWithDraft =
             source.id == draft.id &&
-            reference.role == 'quest_transcript_line' &&
+            ((draft.kind == Revision3ContentEntityKind.questDraft &&
+                    reference.role == 'quest_transcript_line') ||
+                (draft.kind == Revision3ContentEntityKind.npcDraft &&
+                    reference.role == 'npc_greeting_line')) &&
             reference.target.projectId == index.projectId &&
             reference.target.expectedKind ==
                 Revision3ContentEntityKind.dialogLine &&
@@ -172,7 +195,7 @@ final class Revision3StoryDraftRemovalPreflight {
                 Revision3ContentEntityKind.dialogLine;
         if (reference.target.projectId != index.projectId ||
             (!sourceIsRemoved && !targetIsRemoved) ||
-            ownedTranscriptLineDisappearsWithQuest ||
+            outgoingDialogBindingDisappearsWithDraft ||
             allowedEdges.contains(reference)) {
           continue;
         }

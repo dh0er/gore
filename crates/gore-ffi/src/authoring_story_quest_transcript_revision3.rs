@@ -973,7 +973,7 @@ mod tests {
                         entity_id(LINE_ID),
                         Revision3EntityKind::DialogLine,
                     ),
-                    objective_slot: None,
+                    objective_slot: 1,
                 }],
             },
         )
@@ -984,7 +984,7 @@ mod tests {
             store,
             Revision3QuestTranscriptIntentV1::CreateAndInsert {
                 index: 0,
-                objective_slot: None,
+                objective_slot: 1,
                 line: Revision3DialogLineInsertRequestV1 {
                     expected_head: store.head.clone(),
                     expected_project_id: store.project.project_id,
@@ -1088,6 +1088,37 @@ mod tests {
                 .code,
             "AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_INVALID"
         );
+    }
+
+    #[test]
+    fn nested_contract_rejects_null_or_missing_objective_slots_before_store_work() {
+        let store = published_store();
+        let replace = replace_request(&store).to_canonical_json().unwrap();
+        let create = create_request(&store).to_canonical_json().unwrap();
+        let invalid_requests = [
+            replace.replacen("\"objective_slot\":1", "\"objective_slot\":null", 1),
+            replace.replacen(",\"objective_slot\":1", "", 1),
+            create.replacen("\"objective_slot\":1", "\"objective_slot\":null", 1),
+            create.replacen(",\"objective_slot\":1", "", 1),
+        ];
+        for quest_transcript_request_json in invalid_requests {
+            let input = serde_json::to_string(&ExactWireRequest {
+                command: COMMAND.to_owned(),
+                payload: PrepareQuestTranscriptWirePayload {
+                    current_project_json: store.project_json.clone(),
+                    quest_transcript_request_json,
+                    root: "C:/definitely/missing/quest-transcript-store".to_owned(),
+                },
+            })
+            .unwrap();
+            assert_eq!(
+                prepare_revision3_quest_transcript_v1_inner(&input)
+                    .unwrap_err()
+                    .code,
+                "AUTHORING_REVISION3_QUEST_TRANSCRIPT_REQUEST_INVALID"
+            );
+        }
+        assert_eq!(fixed_head(&store), store.fixed_head_bytes);
     }
 
     #[test]

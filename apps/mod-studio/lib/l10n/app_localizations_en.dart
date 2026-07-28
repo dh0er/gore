@@ -937,7 +937,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedLocalizationUnsavedDescription =>
-      'You changed this project text. Switching now would discard those edits.';
+      'This project has unsaved edits. Switching now would discard them.';
 
   @override
   String get managedLocalizationVoiceUnsavedTitle =>
@@ -1608,6 +1608,126 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedItemsCategorySpecial => 'Special';
+
+  @override
+  String get managedItemsCategoryArmor => 'Armor';
+
+  @override
+  String get managedItemsExactSchemaBadge => 'Exact project schema';
+
+  @override
+  String get managedItemsEditableBadge => 'Managed edit';
+
+  @override
+  String get managedItemsBuildPendingBadge => 'Build support pending';
+
+  @override
+  String get managedItemsInvalidNumber => 'Enter a valid number.';
+
+  @override
+  String managedItemsNumberOutsideNativeRange(String minimum, String maximum) {
+    return 'Enter a value from $minimum to $maximum.';
+  }
+
+  @override
+  String get managedItemsAuthoringBoundary =>
+      'Changes are saved only to this managed project. This editor does not write to the game or a save. Item bundle build is not available yet.';
+
+  @override
+  String managedItemsCurrentChanges(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count changed fields',
+      one: '1 changed field',
+      zero: 'No item changes',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedItemsChangeField => 'Change this field';
+
+  @override
+  String get managedItemsUseGameDefault => 'Use game default';
+
+  @override
+  String get managedItemsSaveChanges => 'Save item changes';
+
+  @override
+  String get managedItemsRevertItem => 'Revert item to game defaults';
+
+  @override
+  String get managedItemsClearChanges => 'Clear all item changes';
+
+  @override
+  String get managedItemsNoUnsavedChanges => 'No unsaved changes.';
+
+  @override
+  String managedItemsSaved(int revision) {
+    return 'Item changes saved in project revision $revision.';
+  }
+
+  @override
+  String get managedItemsSaveStale =>
+      'The project or item catalog changed. Nothing was saved. Reload the current item data before editing again.';
+
+  @override
+  String get managedItemsSaveRequiresReopen =>
+      'The project checkpoint can no longer be verified safely. Nothing was saved. Use project recovery, or close and reopen the project.';
+
+  @override
+  String get managedItemsSaveNoChanges =>
+      'There is no current item change to save. Reload the item data to continue.';
+
+  @override
+  String get managedItemsSaveUnsupported =>
+      'This change no longer fits the current safe item schema. Nothing was saved. Reload the item data before continuing.';
+
+  @override
+  String get managedItemsSaveUnexpected =>
+      'Item changes could not be saved safely. Nothing was changed. Reopen the project and try again.';
+
+  @override
+  String get managedItemsReloadDiscardDraft =>
+      'Reload item data and discard this draft';
+
+  @override
+  String get managedItemsCatalogLoadTitle => 'Items are unavailable';
+
+  @override
+  String get managedItemsCatalogStale =>
+      'The project or exact item catalog changed before the item data could be loaded. Nothing was changed.';
+
+  @override
+  String get managedItemsCatalogRequiresReopen =>
+      'The exact project checkpoint can no longer be verified safely. Recover the project, or close and reopen it, before editing items.';
+
+  @override
+  String get managedItemsCatalogUnsupported =>
+      'This project contains item data that the current exact game schema cannot edit safely. Nothing was changed.';
+
+  @override
+  String get managedItemsCatalogLoadUnexpected =>
+      'The item data could not be loaded safely. Nothing was changed. Try loading it again.';
+
+  @override
+  String get managedItemsCatalogReload => 'Reload item data';
+
+  @override
+  String get managedItemsUnsupportedSchema =>
+      'This item change no longer matches the current safe catalog or field schema. You can still revert the whole item.';
+
+  @override
+  String get managedItemsDefaultUnknown => 'Game default not recorded';
+
+  @override
+  String managedItemsGameDefault(String value) {
+    return 'Game default: $value';
+  }
+
+  @override
+  String get managedItemsModValue => 'Mod value';
 
   @override
   String get managedContentScopeBaseGameLabel => 'Base game';

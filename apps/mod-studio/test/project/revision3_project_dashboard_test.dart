@@ -11,11 +11,13 @@ import '../support/revision3_voice_content_fixture.dart';
 const _npcId = '77777777777777777777777777777777';
 const _npcModuleId = '7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f';
 const _questId = '88888888888888888888888888888888';
-const _missingModuleId = '99999999999999999999999999999999';
+const _questModuleId = '99999999999999999999999999999999';
 const _assetSha =
     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 const _otherAssetSha =
     'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+const _questCollisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 
 const _copy = Revision3ProjectDashboardCopy(
   untitledProjectLabel: 'Untitled fixture project',
@@ -67,7 +69,7 @@ void main() {
     _expectCount(tester, 'dialog-lines', 1);
     _expectCount(tester, 'voice-takes', 2);
     _expectCount(tester, 'assets', 2);
-    _expectCount(tester, 'unresolved-references', 1);
+    _expectCount(tester, 'unresolved-references', 0);
     expect(
       find.byKey(
         const Key('revision3-project-dashboard-reference-status-count'),
@@ -248,100 +250,96 @@ void main() {
     },
   );
 
-  testWidgets(
-    'exact-index builders switch empty Story and problem copy after reload',
-    (tester) async {
-      await _setSurfaceSize(tester, const Size(900, 760));
-      var revision = 7;
-      var includeStoryDrafts = false;
-      late StateSetter rebuild;
-      final story = Revision3ProjectDashboardAction(
-        id: 'story',
-        icon: Icons.menu_book_outlined,
-        title: 'Story fallback',
-        description: 'Story fallback description.',
-        titleBuilder: (index) {
-          final count = _storyDraftCount(index);
-          return count == 0 ? 'Start Story' : 'Continue $count Story drafts';
-        },
-        descriptionBuilder: (index) => _storyDraftCount(index) == 0
-            ? 'Create your first character or quest.'
-            : 'Return to the exact current Story workspace.',
-        onPressed: () {},
-      );
-      final problems = Revision3ProjectDashboardAction(
-        id: 'problems',
-        icon: Icons.rule_folder_outlined,
-        title: 'Problems fallback',
-        description: 'Problems fallback description.',
-        titleBuilder: (index) => index.problemCount == 0
-            ? 'No reference problems'
-            : 'Review ${index.problemCount} reference problem',
-        descriptionBuilder: (index) => index.problemCount == 0
-            ? 'This exact project index has no unresolved references.'
-            : 'Open the exact blockers for this checkpoint.',
-        onPressed: () {},
-      );
+  testWidgets('exact-index builders switch empty Story copy after reload', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(900, 760));
+    var revision = 7;
+    var includeStoryDrafts = false;
+    late StateSetter rebuild;
+    final story = Revision3ProjectDashboardAction(
+      id: 'story',
+      icon: Icons.menu_book_outlined,
+      title: 'Story fallback',
+      description: 'Story fallback description.',
+      titleBuilder: (index) {
+        final count = _storyDraftCount(index);
+        return count == 0 ? 'Start Story' : 'Continue $count Story drafts';
+      },
+      descriptionBuilder: (index) => _storyDraftCount(index) == 0
+          ? 'Create your first character or quest.'
+          : 'Return to the exact current Story workspace.',
+      onPressed: () {},
+    );
+    final problems = Revision3ProjectDashboardAction(
+      id: 'problems',
+      icon: Icons.rule_folder_outlined,
+      title: 'Problems fallback',
+      description: 'Problems fallback description.',
+      titleBuilder: (index) => index.problemCount == 0
+          ? 'No reference problems'
+          : 'Review ${index.problemCount} reference problem',
+      descriptionBuilder: (index) => index.problemCount == 0
+          ? 'This exact project index has no unresolved references.'
+          : 'Open the exact blockers for this checkpoint.',
+      onPressed: () {},
+    );
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: StatefulBuilder(
-            builder: (context, setState) {
-              rebuild = setState;
-              final requestedRevision = revision;
-              final requestedStory = includeStoryDrafts;
-              return Scaffold(
-                body: Revision3ProjectDashboard(
-                  projectId: revision3VoiceContentProjectId,
-                  projectRevision: requestedRevision,
-                  load: () async => _fixture(
-                    revision: requestedRevision,
-                    includeStoryDrafts: requestedStory,
-                  ),
-                  gameConfigured: true,
-                  copy: _copy,
-                  tasks: [story, problems],
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            final requestedRevision = revision;
+            final requestedStory = includeStoryDrafts;
+            return Scaffold(
+              body: Revision3ProjectDashboard(
+                projectId: revision3VoiceContentProjectId,
+                projectRevision: requestedRevision,
+                load: () async => _fixture(
+                  revision: requestedRevision,
+                  includeStoryDrafts: requestedStory,
                 ),
-              );
-            },
-          ),
+                gameConfigured: true,
+                copy: _copy,
+                tasks: [story, problems],
+              ),
+            );
+          },
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('Start Story'), findsOneWidget);
-      expect(
-        find.text('Create your first character or quest.'),
-        findsOneWidget,
-      );
-      expect(find.text('No reference problems'), findsOneWidget);
-      expect(
-        find.text('This exact project index has no unresolved references.'),
-        findsOneWidget,
-      );
-      expect(find.text('Story fallback'), findsNothing);
-      expect(find.text('Problems fallback'), findsNothing);
+    expect(find.text('Start Story'), findsOneWidget);
+    expect(find.text('Create your first character or quest.'), findsOneWidget);
+    expect(find.text('No reference problems'), findsOneWidget);
+    expect(
+      find.text('This exact project index has no unresolved references.'),
+      findsOneWidget,
+    );
+    expect(find.text('Story fallback'), findsNothing);
+    expect(find.text('Problems fallback'), findsNothing);
 
-      rebuild(() {
-        revision = 8;
-        includeStoryDrafts = true;
-      });
-      await tester.pumpAndSettle();
+    rebuild(() {
+      revision = 8;
+      includeStoryDrafts = true;
+    });
+    await tester.pumpAndSettle();
 
-      expect(find.text('Start Story'), findsNothing);
-      expect(find.text('Continue 2 Story drafts'), findsOneWidget);
-      expect(
-        find.text('Return to the exact current Story workspace.'),
-        findsOneWidget,
-      );
-      expect(find.text('Review 1 reference problem'), findsOneWidget);
-      expect(
-        find.text('Open the exact blockers for this checkpoint.'),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+    expect(find.text('Start Story'), findsNothing);
+    expect(find.text('Continue 2 Story drafts'), findsOneWidget);
+    expect(
+      find.text('Return to the exact current Story workspace.'),
+      findsOneWidget,
+    );
+    expect(find.text('No reference problems'), findsOneWidget);
+    expect(
+      find.text('This exact project index has no unresolved references.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('sanitizes a mismatched index and retries exact content', (
     tester,
@@ -554,6 +552,21 @@ int _storyDraftCount(Revision3ContentIndex index) =>
     _entityCountForTest(index, Revision3ContentEntityKind.npcDraft) +
     _entityCountForTest(index, Revision3ContentEntityKind.questDraft);
 
+Map<String, Object?> _ownerReference({
+  required String role,
+  required String ownerId,
+  required String ownerKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': null,
+  'target': <String, Object?>{
+    'project_id': revision3VoiceContentProjectId,
+    'entity_id': ownerId,
+    'expected_kind': ownerKind,
+  },
+  'resolution': 'resolved',
+};
+
 Revision3ContentIndex _fixture({
   int revision = 7,
   String projectName = 'Dashboard fixture',
@@ -571,7 +584,7 @@ Revision3ContentIndex _fixture({
   if (includeStoryDrafts) {
     counts['npc_draft'] = 1;
     counts['quest_draft'] = 1;
-    counts['script_module'] = 1;
+    counts['script_module'] = 2;
   } else {
     counts.remove('npc_draft');
     counts.remove('quest_draft');
@@ -621,13 +634,19 @@ Revision3ContentIndex _fixture({
         'display_name': 'Fixture guard source',
         'revision': 0,
         'origin': <String, Object?>{
-          'type': 'new',
-          'authored_runtime_id': 'FIXTURE_GUARD_SOURCE',
+          'type': 'generated',
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': <String, Object?>{
+            'project_id': revision3VoiceContentProjectId,
+            'entity_id': _npcId,
+            'expected_kind': 'npc_draft',
+          },
         },
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'dashboard.fixture.npc',
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
             'generator_version': 1,
             'module_namespace': 'PROJECT.NPCS.FIXTURE_GUARD',
             'module_relative_path': 'Project/Npcs/FixtureGuard.as',
@@ -637,7 +656,18 @@ Revision3ContentIndex _fixture({
             },
           },
         },
-        'references': <Object?>[],
+        'references': <Object?>[
+          _ownerReference(
+            role: 'origin_owner',
+            ownerId: _npcId,
+            ownerKind: 'npc_draft',
+          ),
+          _ownerReference(
+            role: 'script_owner',
+            ownerId: _npcId,
+            ownerKind: 'npc_draft',
+          ),
+        ],
         'asset_references': <Object?>[],
       },
       <String, Object?>{
@@ -656,6 +686,8 @@ Revision3ContentIndex _fixture({
             'title': 'Fixture quest',
             'objective_title': 'Inspect the fixture',
             'additional_objective_titles': <String>['Report the fixture'],
+            'objective_slots': <Object?>[1, 2],
+            'transcript_count': 0,
             'module_namespace': 'PROJECT.QUESTS.FIXTURE_QUEST',
             'parent_runtime_class': 'B_Quest_FindHomer_C',
             'giver_runtime_unique_name': 'ASGHAN',
@@ -667,11 +699,62 @@ Revision3ContentIndex _fixture({
             'qualifier': null,
             'target': <String, Object?>{
               'project_id': revision3VoiceContentProjectId,
-              'entity_id': _missingModuleId,
+              'entity_id': _questModuleId,
               'expected_kind': 'script_module',
             },
-            'resolution': 'missing_entity',
+            'resolution': 'resolved',
           },
+        ],
+        'asset_references': <Object?>[
+          <String, Object?>{
+            'role': 'quest_collision_artifact',
+            'sha256': _otherAssetSha,
+            'byte_len': 200,
+            'logical_name': null,
+            'expected_media_type': _questCollisionMediaType,
+            'resolution': 'resolved',
+          },
+        ],
+      },
+      <String, Object?>{
+        'id': _questModuleId,
+        'kind': 'script_module',
+        'display_name': 'Fixture quest source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
+          'owner': <String, Object?>{
+            'project_id': revision3VoiceContentProjectId,
+            'entity_id': _questId,
+            'expected_kind': 'quest_draft',
+          },
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'gore-authoring.draft-quest-skeleton',
+            'generator_version': 4,
+            'module_namespace': 'PROJECT.QUESTS.FIXTURE_QUEST',
+            'module_relative_path': 'Project/Quests/FixtureQuest.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[
+          _ownerReference(
+            role: 'origin_owner',
+            ownerId: _questId,
+            ownerKind: 'quest_draft',
+          ),
+          _ownerReference(
+            role: 'script_owner',
+            ownerId: _questId,
+            ownerKind: 'quest_draft',
+          ),
         ],
         'asset_references': <Object?>[],
       },
@@ -692,8 +775,8 @@ Revision3ContentIndex _fixture({
     <String, Object?>{
       'sha256': _otherAssetSha,
       'byte_len': 200,
-      'media_type': 'application/octet-stream',
-      'class': 'other',
+      'media_type': _questCollisionMediaType,
+      'class': 'quest_collision_artifact',
     },
   ];
   return Revision3ContentIndex.fromJsonObject(json);

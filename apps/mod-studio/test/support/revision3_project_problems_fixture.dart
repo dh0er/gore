@@ -67,9 +67,8 @@ Revision3ProjectProblemsFixture revision3ProjectProblemsCleanFixture({
 ///
 /// It contains:
 ///
-/// * an NPC draft with one exact missing ScriptModule reference;
+/// * a VoiceSlot with one exact missing VoiceTake candidate;
 /// * one missing Voice audio asset reference;
-/// * a VoiceSlot with an unresolved target and no selected take; and
 /// * one parsed blocked DataAsset stage at the same project revision.
 Revision3ProjectProblemsFixture revision3ProjectProblemsFilterFixture({
   int projectRevision = 7,
@@ -91,9 +90,12 @@ Revision3ProjectProblemsFixture revision3ProjectProblemsFixture({
   bool includeVoiceProblems = true,
   bool includeDataAssetStage = true,
 }) {
-  if (!includeDialogGraph && (includeAssetProblem || includeVoiceProblems)) {
+  if (!includeDialogGraph &&
+      (includeReferenceProblem ||
+          includeAssetProblem ||
+          includeVoiceProblems)) {
     throw ArgumentError(
-      'Voice and Voice-asset problems require the dialog graph fixture.',
+      'Voice reference and asset problems require the dialog graph fixture.',
     );
   }
   return _fixture(
@@ -152,8 +154,10 @@ Revision3ContentIndex _contentIndex({
           revision: projectRevision,
           existingDeSlot: true,
           existingSlotCandidateCount: 1,
-          existingSlotHasSelectedTake: !includeVoiceProblems,
-          existingSlotTargetResolution: includeVoiceProblems
+          existingSlotHasSelectedTake:
+              !includeVoiceProblems && !includeReferenceProblem,
+          existingSlotTargetResolution:
+              includeVoiceProblems || includeReferenceProblem
               ? 'unresolved'
               : 'resolved',
           lineDisplayName: 'Mine entrance question',
@@ -162,11 +166,9 @@ Revision3ContentIndex _contentIndex({
       : _emptyContentJson(projectRevision);
 
   final entities = (json['entities']! as List).cast<Map<String, Object?>>();
-  final counts = (json['entity_counts']! as Map).cast<String, Object?>();
 
   if (includeReferenceProblem) {
-    entities.add(_npcWithMissingModuleReference());
-    counts['npc_draft'] = 1;
+    _addVoiceCandidateReferenceProblem(entities);
   }
 
   if (includeAssetProblem) {
@@ -213,40 +215,26 @@ Map<String, Object?> _emptyContentJson(
   'assets': <Object?>[],
 };
 
-Map<String, Object?> _npcWithMissingModuleReference() => <String, Object?>{
-  'id': revision3ProjectProblemsNpcId,
-  'kind': 'npc_draft',
-  'display_name': 'Gate Guard',
-  'revision': 0,
-  'origin': <String, Object?>{
-    'type': 'new',
-    'authored_runtime_id': 'GORE_GATE_GUARD',
-  },
-  'summary': <String, Object?>{
-    'kind': 'npc_draft',
-    'data': <String, Object?>{
-      'unique_name': 'GORE_GATE_GUARD',
-      'module_namespace': 'PROJECT.NPCS.GATEGUARD',
-      'parent_character_definition': 'UCharacterDefinition_Asghan',
-      'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
-      'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
-      'greeting_count': 0,
-    },
-  },
-  'references': <Object?>[
-    <String, Object?>{
-      'role': 'draft_script_module',
-      'qualifier': null,
-      'target': <String, Object?>{
-        'project_id': revision3VoiceContentProjectId,
-        'entity_id': revision3ProjectProblemsMissingModuleId,
-        'expected_kind': 'script_module',
-      },
-      'resolution': 'missing_entity',
-    },
-  ],
-  'asset_references': <Object?>[],
-};
+void _addVoiceCandidateReferenceProblem(List<Map<String, Object?>> entities) {
+  final line = entities.singleWhere(
+    (entity) => entity['kind'] == 'dialog_line',
+  );
+  final slotReference = (line['references']! as List)
+      .cast<Map<String, Object?>>()
+      .singleWhere((reference) => reference['role'] == 'dialog_voice_slot');
+  (slotReference['target']! as Map<String, Object?>)['entity_id'] =
+      revision3ProjectProblemsNpcId;
+
+  final slot = entities.singleWhere((entity) => entity['kind'] == 'voice_slot');
+  slot['id'] = revision3ProjectProblemsNpcId;
+  slot['display_name'] = 'Gate Guard';
+  final candidate = (slot['references']! as List)
+      .cast<Map<String, Object?>>()
+      .singleWhere((reference) => reference['role'] == 'voice_candidate');
+  (candidate['target']! as Map<String, Object?>)['entity_id'] =
+      revision3ProjectProblemsMissingModuleId;
+  candidate['resolution'] = 'missing_entity';
+}
 
 List<AuthoringRevision3DataAssetStage> _matchingDataAssetStages(
   Revision3ContentIndex contentIndex,

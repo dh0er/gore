@@ -15,9 +15,8 @@ final class AuthoringRevision3QuestTranscriptBindingV1 {
     required this.objectiveSlot,
   }) : projectId = _dialogEntityId(projectId, 'transcript project ID'),
        lineId = _dialogEntityId(lineId, 'transcript DialogLine ID') {
-    final slot = objectiveSlot;
-    if (slot != null &&
-        (slot < 1 || slot > _maxAuthoringRevision3QuestObjectiveSlot)) {
+    if (objectiveSlot < 1 ||
+        objectiveSlot > _maxAuthoringRevision3QuestObjectiveSlot) {
       throw const FormatException(
         'revision-3 Quest transcript objective slot is outside the unsigned wire domain',
       );
@@ -26,7 +25,7 @@ final class AuthoringRevision3QuestTranscriptBindingV1 {
 
   final String projectId;
   final String lineId;
-  final int? objectiveSlot;
+  final int objectiveSlot;
 
   Map<String, Object?> _toJson() => <String, Object?>{
     'line': <String, Object?>{
@@ -88,9 +87,8 @@ final class AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
         'revision-3 Quest transcript insertion index is outside the unsigned wire domain',
       );
     }
-    final slot = objectiveSlot;
-    if (slot != null &&
-        (slot < 1 || slot > _maxAuthoringRevision3QuestObjectiveSlot)) {
+    if (objectiveSlot < 1 ||
+        objectiveSlot > _maxAuthoringRevision3QuestObjectiveSlot) {
       throw const FormatException(
         'revision-3 Quest transcript objective slot is outside the unsigned wire domain',
       );
@@ -102,7 +100,7 @@ final class AuthoringRevision3QuestTranscriptCreateAndInsertIntentV1
       AuthoringRevision3QuestTranscriptMode.createAndInsert;
 
   final int index;
-  final int? objectiveSlot;
+  final int objectiveSlot;
   final AuthoringRevision3DialogLineEntryRequestV1 line;
 
   @override
@@ -642,7 +640,7 @@ AuthoringRevision3QuestTranscriptIntentV1 _questTranscriptIntent(
           'index',
           max: _maxAuthoringRevision3QuestTranscriptBindings,
         ),
-        objectiveSlot: _questTranscriptNullableSlot(
+        objectiveSlot: _questTranscriptRequiredSlot(
           json['objective_slot'],
           'Quest transcript insertion objective slot',
         ),
@@ -688,15 +686,14 @@ AuthoringRevision3QuestTranscriptBindingV1 _questTranscriptBinding(
   return AuthoringRevision3QuestTranscriptBindingV1(
     projectId: _authoringRequiredString(line, 'project_id', maxBytes: 32),
     lineId: _authoringRequiredString(line, 'id', maxBytes: 32),
-    objectiveSlot: _questTranscriptNullableSlot(
+    objectiveSlot: _questTranscriptRequiredSlot(
       json['objective_slot'],
       'Quest transcript objective slot',
     ),
   );
 }
 
-int? _questTranscriptNullableSlot(Object? value, String context) {
-  if (value == null) return null;
+int _questTranscriptRequiredSlot(Object? value, String context) {
   if (value is! int ||
       value < 1 ||
       value > _maxAuthoringRevision3QuestObjectiveSlot) {
@@ -752,7 +749,7 @@ _questTranscriptRequireBasis(
       'revision-3 Quest transcript uses an unsupported Quest generator',
     );
   }
-  final generatorVersion = _authoringRequiredInt(
+  _authoringRequiredInt(
     data,
     'generator_version',
     min: _authoringRevision3QuestGeneratorVersion,
@@ -782,19 +779,16 @@ _questTranscriptRequireBasis(
     data['input'],
     'revision-3 Quest transcript Quest input',
   );
-  final objectiveSlots = <int>{};
-  if (generatorVersion == _authoringRevision3QuestGeneratorVersion) {
-    if (!input.containsKey('transition_plan')) {
-      throw const FormatException(
-        'revision-3 semantic Quest transcript has no transition plan',
-      );
-    }
-    objectiveSlots.addAll(
-      AuthoringRevision3QuestTransitionPlanV1.fromJson(
-        input['transition_plan'],
-      ).objectiveSlots,
+  if (!input.containsKey('transition_plan')) {
+    throw const FormatException(
+      'revision-3 semantic Quest transcript has no transition plan',
     );
   }
+  final objectiveSlots = <int>{
+    ...AuthoringRevision3QuestTransitionPlanV1.fromJson(
+      input['transition_plan'],
+    ).objectiveSlots,
+  };
   final rawTranscript = data['transcript'];
   final transcript = <AuthoringRevision3QuestTranscriptBindingV1>[];
   if (rawTranscript != null) {
@@ -862,9 +856,9 @@ void _questTranscriptRequireBindings(
 }
 
 bool _questTranscriptObjectiveSlotIsAllowed(
-  int? slot,
+  int slot,
   Set<int> activeObjectiveSlots,
-) => slot == null || activeObjectiveSlots.contains(slot);
+) => activeObjectiveSlots.contains(slot);
 
 bool _questTranscriptSameBindings(
   List<AuthoringRevision3QuestTranscriptBindingV1> left,

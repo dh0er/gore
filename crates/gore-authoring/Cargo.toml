@@ -9,7 +9,7 @@ gore-asset = { path = "../gore-asset" }
 gore-tex = { path = "../gore-tex" }
 gore-vo = { path = "../gore-vo" }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 thiserror = "2"
 zip = { version = "2", default-features = false }

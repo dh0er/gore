@@ -147,6 +147,12 @@
 //! - `authoring_store_read_revision3_content_index_v1` fully reopens one exact current revision-3
 //!   project and returns a bounded semantic entity/reference/asset projection without generated
 //!   source or blob bytes. It is read-only and grants no build, runtime, or publication authority.
+//! - `authoring_store_read_revision3_item_catalog_v1` binds the native embedded item schema and
+//!   per-class provenance seals to one exact-current managed project. Its paired
+//!   `authoring_store_prepare_revision3_item_patch_v1` route independently resolves class,
+//!   provenance, field names, and scalar types before fully reopening an immutable unpublished
+//!   candidate. Neither route accepts game/save/build/deployment or fixed-head publication
+//!   authority.
 //! - `authoring_store_read_revision3_dialog_localization_v1` fully reopens one exact current
 //!   revision-3 LocalizationEntry twice and returns only bounded, sorted per-locale text previews.
 //!   It accepts no game, save, or caller-supplied project authority and never mutates the Store.
@@ -206,6 +212,7 @@ mod authoring_dialog_voice_slot_create_revision3;
 mod authoring_dialog_voice_slot_remove_revision3;
 mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
+mod authoring_item_patch_revision3;
 mod authoring_npc_catalog;
 mod authoring_project_build_plan_revision3;
 mod authoring_project_compiler_revision3;
@@ -304,6 +311,7 @@ const CORE_COMMANDS: &[&str] = &[
     authoring_dialog_voice_slot_remove_revision3::COMMAND,
     authoring_history_revision3::RESTORE_COMMAND,
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
+    authoring_item_patch_revision3::PREPARE_COMMAND,
     "authoring_store_prepare_revision3_npc_draft_v1",
     authoring_story_npc_greeting_revision3::COMMAND,
     authoring_story_npc_profile_revision3::COMMAND,
@@ -323,6 +331,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_read_revision3_dataasset_package_index_v1",
     "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
     "authoring_store_read_revision3_dialog_localization_v1",
+    authoring_item_patch_revision3::CATALOG_COMMAND,
     authoring_voice_preview_revision3::REGISTER_COMMAND,
     authoring_voice_preview_revision3::RELEASE_COMMAND,
     "authoring_store_verify_asset",
@@ -666,6 +675,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_installed_dataasset_edit_v1_raw,
         ),
+        authoring_item_patch_revision3::PREPARE_COMMAND => Some(
+            authoring_item_patch_revision3::prepare_revision3_item_patch_v1_raw,
+        ),
         "authoring_store_prepare_revision3_npc_draft_v1" => {
             Some(authoring_story_npc_revision3::prepare_revision3_npc_draft_v1_raw)
         }
@@ -728,6 +740,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_read_revision3_dialog_localization_v1" => Some(
             authoring_dialog_localization_revision3::read_revision3_dialog_localization_v1_raw,
+        ),
+        authoring_item_patch_revision3::CATALOG_COMMAND => Some(
+            authoring_item_patch_revision3::read_revision3_item_catalog_v1_raw,
         ),
         "script_compile_install_state_v1" => {
             Some(script_compile_report::install_state_v1_raw)
@@ -1852,6 +1867,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dialog_voice_slot_removal_v1",
                     "authoring_store_prepare_revision3_history_restore_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
+                    "authoring_store_prepare_revision3_item_patch_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_npc_greeting_v1",
                     "authoring_store_prepare_revision3_npc_profile_edit_v1",
@@ -1871,6 +1887,7 @@ mod tests {
                     "authoring_store_read_revision3_dataasset_package_index_v1",
                     "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
                     "authoring_store_read_revision3_dialog_localization_v1",
+                    "authoring_store_read_revision3_item_catalog_v1",
                     "authoring_store_register_revision3_voice_take_preview_v1",
                     "authoring_store_release_revision3_voice_take_preview_v1",
                     "authoring_store_verify_asset",
@@ -1996,6 +2013,9 @@ mod tests {
             == "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1"));
         assert!(commands
             .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_item_patch_v1"));
+        assert!(commands
+            .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_selection_v1"));
         assert!(commands
             .iter()
@@ -2031,6 +2051,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_dialog_localization_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_read_revision3_item_catalog_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));

@@ -77,6 +77,7 @@ import 'project/revision3_test_release_workspace.dart';
 import 'project/revision3_scoped_content_browser.dart';
 import 'project/revision3_settings_expert_page.dart';
 import 'project/revision3_installed_content_browser.dart';
+import 'project/revision3_item_patch_authoring.dart';
 import 'project/revision3_items_view.dart';
 import 'project/revision3_texture_catalog.dart';
 import 'project/revision3_texture_catalog_native.dart';
@@ -287,15 +288,57 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
+typedef _ManagedProjectMutationGate = ({
+  bool projectActionBusy,
+  bool itemSaveBusy,
+  bool dialogLocalizationDirty,
+  bool itemAuthoringDirty,
+});
+
+enum _ManagedProjectDraftOwner { dialogLocalization, item }
+
 class _HomePageState extends ConsumerState<HomePage> {
   bool _projectActionBusy = false;
-  bool _managedWorkspaceDirty = false;
+  bool _managedDialogLocalizationDirty = false;
+  bool _managedItemAuthoringDirty = false;
+  bool _managedItemAuthoringSaving = false;
   bool _managedDirtyRebuildScheduled = false;
-  late final ValueChanged<bool> _managedWorkspaceDirtyListener;
+  late final ValueChanged<bool> _managedDialogLocalizationDirtyListener;
+  late final ValueChanged<bool> _managedItemAuthoringDirtyListener;
+  late final ValueChanged<bool> _managedItemAuthoringSavingListener;
 
-  void _onManagedWorkspaceDirtyChanged(bool dirty) {
-    if (_managedWorkspaceDirty == dirty) return;
-    _managedWorkspaceDirty = dirty;
+  bool get _managedWorkspaceDirty =>
+      _managedDialogLocalizationDirty || _managedItemAuthoringDirty;
+  bool get _managedProjectActionBusy =>
+      _projectActionBusy || _managedItemAuthoringSaving;
+
+  void _onManagedDialogLocalizationDirtyChanged(bool dirty) {
+    if (_managedDialogLocalizationDirty == dirty) return;
+    final wasDirty = _managedWorkspaceDirty;
+    _managedDialogLocalizationDirty = dirty;
+    _scheduleManagedDirtyRebuildIfChanged(wasDirty);
+  }
+
+  void _onManagedItemAuthoringDirtyChanged(bool dirty) {
+    if (_managedItemAuthoringDirty == dirty) return;
+    final wasDirty = _managedWorkspaceDirty;
+    _managedItemAuthoringDirty = dirty;
+    _scheduleManagedDirtyRebuildIfChanged(wasDirty);
+  }
+
+  void _onManagedItemAuthoringSavingChanged(bool saving) {
+    if (_managedItemAuthoringSaving == saving) return;
+    _managedItemAuthoringSaving = saving;
+    if (!mounted || _managedDirtyRebuildScheduled) return;
+    _managedDirtyRebuildScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _managedDirtyRebuildScheduled = false;
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _scheduleManagedDirtyRebuildIfChanged(bool wasDirty) {
+    if (wasDirty == _managedWorkspaceDirty) return;
     if (!mounted || _managedDirtyRebuildScheduled) return;
     _managedDirtyRebuildScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -307,7 +350,10 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void initState() {
     super.initState();
-    _managedWorkspaceDirtyListener = _onManagedWorkspaceDirtyChanged;
+    _managedDialogLocalizationDirtyListener =
+        _onManagedDialogLocalizationDirtyChanged;
+    _managedItemAuthoringDirtyListener = _onManagedItemAuthoringDirtyChanged;
+    _managedItemAuthoringSavingListener = _onManagedItemAuthoringSavingChanged;
     WidgetsBinding.instance.addPostFrameCallback(
       (_) => _maybeAutoDetectGamePath(),
     );
@@ -335,7 +381,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   }
 
   Future<void> _runProjectAction(Future<void> Function() action) async {
-    if (_projectActionBusy) return;
+    if (_projectActionBusy || _managedItemAuthoringSaving) return;
     setState(() => _projectActionBusy = true);
     try {
       await action();
@@ -368,7 +414,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   Future<ManagedRevision3RecoveryCheckpoint> _recoverManagedRevision3Project(
     ManagedRevision3CurrentProjectState expected,
   ) async {
-    if (_projectActionBusy) {
+    if (_projectActionBusy || _managedWorkspaceDirty) {
       throw const CurrentProjectCoordinatorException(
         'another project action is already in progress',
       );
@@ -848,19 +894,19 @@ class _HomePageState extends ConsumerState<HomePage> {
               PopupMenuItem(
                 key: const Key('project-new-managed-revision3'),
                 value: 'newManagedRevision3',
-                enabled: !_projectActionBusy,
+                enabled: !_managedProjectActionBusy,
                 child: Text(l10n.projectNewManagedRevision3),
               ),
               PopupMenuItem(
                 key: const Key('project-open-managed-revision3'),
                 value: 'openManagedRevision3',
-                enabled: !_projectActionBusy,
+                enabled: !_managedProjectActionBusy,
                 child: Text(l10n.projectOpenManagedRevision3),
               ),
               PopupMenuItem(
                 key: const Key('project-restore-managed-revision3'),
                 value: 'restoreManagedRevision3',
-                enabled: !_projectActionBusy,
+                enabled: !_managedProjectActionBusy,
                 child: Text(l10n.projectRestoreActionTitle),
               ),
               const PopupMenuDivider(),
@@ -868,7 +914,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 key: const Key('project-save'),
                 value: 'save',
                 enabled:
-                    !_projectActionBusy &&
+                    !_managedProjectActionBusy &&
                     currentProject is! NoCurrentProjectState &&
                     !managedVerificationBlocked,
                 child: Text(l10n.projectVerifyCurrentHead),
@@ -878,7 +924,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   key: const Key('project-export-managed-revision3'),
                   value: 'exportManagedRevision3',
                   enabled:
-                      !_projectActionBusy &&
+                      !_managedProjectActionBusy &&
                       !managedVerificationBlocked &&
                       !_managedWorkspaceDirty,
                   child: Text(l10n.projectExportActionTitle),
@@ -887,7 +933,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 key: const Key('project-close'),
                 value: 'close',
                 enabled:
-                    !_projectActionBusy &&
+                    !_managedProjectActionBusy &&
                     currentProject is! NoCurrentProjectState,
                 child: Text(l10n.projectClose),
               ),
@@ -915,14 +961,42 @@ class _HomePageState extends ConsumerState<HomePage> {
                 : null;
           },
           gameRoot: gameRoot,
-          recoveryBusy: _projectActionBusy,
+          recoveryBusy: _managedProjectActionBusy,
           managedWorkspaceDirty: _managedWorkspaceDirty,
+          dialogLocalizationDirty: _managedDialogLocalizationDirty,
+          itemAuthoringDirty: _managedItemAuthoringDirty,
+          readMutationGate: () => (
+            projectActionBusy: _projectActionBusy,
+            itemSaveBusy: _managedItemAuthoringSaving,
+            dialogLocalizationDirty: _managedDialogLocalizationDirty,
+            itemAuthoringDirty: _managedItemAuthoringDirty,
+          ),
           recoverProject: () => _recoverManagedRevision3Project(currentProject),
-          onDialogLocalizationDirtyChanged: _managedWorkspaceDirtyListener,
+          onDialogLocalizationDirtyChanged:
+              _managedDialogLocalizationDirtyListener,
+          onItemAuthoringDirtyChanged: _managedItemAuthoringDirtyListener,
+          onItemAuthoringSavingChanged: _managedItemAuthoringSavingListener,
           verifyCurrentHead: _saveProject,
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          loadItemCatalog: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .readCurrentRevision3ItemCatalogV1(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+              ),
+          publishItemPatch: (plan) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .prepareAndPublishCurrentRevision3ItemPatchV1(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                plan: plan,
+              ),
           loadProjectHistory: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ProjectHistory(
@@ -938,15 +1012,18 @@ class _HomePageState extends ConsumerState<HomePage> {
                 target,
               ),
           canRestoreProjectHistory:
-              !_projectActionBusy &&
+              !_managedProjectActionBusy &&
               !currentProject.requiresReopen &&
               !_managedWorkspaceDirty,
           historyRestoreDisabledReason: _managedWorkspaceDirty
               ? l10n.managedProjectHistoryDirtyBlocked
-              : _projectActionBusy
+              : _managedProjectActionBusy
               ? l10n.managedProjectHistoryBusy
               : null,
-          removeStoryDraft: _projectActionBusy || currentProject.requiresReopen
+          removeStoryDraft:
+              _managedProjectActionBusy ||
+                  _managedWorkspaceDirty ||
+                  currentProject.requiresReopen
               ? null
               : ({
                   required index,
@@ -956,7 +1033,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                   final liveProject = ref.read(
                     currentProjectCoordinatorProvider,
                   );
-                  if (_projectActionBusy ||
+                  if (_managedProjectActionBusy ||
                       _managedWorkspaceDirty ||
                       liveProject is! ManagedRevision3CurrentProjectState ||
                       liveProject.requiresReopen ||
@@ -1014,7 +1091,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                 },
           removeStoryDraftDisabledReason: currentProject.requiresReopen
               ? l10n.managedStoryWorkspaceRemoveRequiresReopen
-              : _projectActionBusy
+              : _managedWorkspaceDirty
+              ? l10n.managedStoryWorkspaceMutationDirtyBlocked
+              : _managedProjectActionBusy
               ? l10n.managedStoryWorkspaceRemoveBusy
               : null,
           loadBaseGameCatalog: ref.read(
@@ -1888,10 +1967,17 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.gameRoot,
     required this.recoveryBusy,
     required this.managedWorkspaceDirty,
+    required this.dialogLocalizationDirty,
+    required this.itemAuthoringDirty,
+    required this.readMutationGate,
     required this.recoverProject,
     required this.onDialogLocalizationDirtyChanged,
+    required this.onItemAuthoringDirtyChanged,
+    required this.onItemAuthoringSavingChanged,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
+    required this.loadItemCatalog,
+    required this.publishItemPatch,
     required this.loadProjectHistory,
     required this.restoreProjectHistory,
     required this.canRestoreProjectHistory,
@@ -1968,10 +2054,17 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final String? gameRoot;
   final bool recoveryBusy;
   final bool managedWorkspaceDirty;
+  final bool dialogLocalizationDirty;
+  final bool itemAuthoringDirty;
+  final _ManagedProjectMutationGate Function() readMutationGate;
   final ManagedRevision3RecoveryAction recoverProject;
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
+  final ValueChanged<bool> onItemAuthoringDirtyChanged;
+  final ValueChanged<bool> onItemAuthoringSavingChanged;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3ItemPatchNativeCatalogLoader loadItemCatalog;
+  final Revision3ItemPatchTechnicalPublisher publishItemPatch;
   final Revision3ProjectHistoryLoader loadProjectHistory;
   final Revision3ProjectHistoryRestorer restoreProjectHistory;
   final bool canRestoreProjectHistory;
@@ -2084,6 +2177,42 @@ class _ManagedRevision3ProjectViewState
   ManagedRevision3CurrentProjectState? get currentManagedProject =>
       widget.readCurrentManagedProject();
   String? get gameRoot => widget.gameRoot;
+  bool _managedProjectMutationAllowed({_ManagedProjectDraftOwner? draftOwner}) {
+    final gate = widget.readMutationGate();
+    final foreignDraftDirty = switch (draftOwner) {
+      _ManagedProjectDraftOwner.dialogLocalization => gate.itemAuthoringDirty,
+      _ManagedProjectDraftOwner.item => gate.dialogLocalizationDirty,
+      null => gate.dialogLocalizationDirty || gate.itemAuthoringDirty,
+    };
+    final saveBusy =
+        gate.itemSaveBusy && draftOwner != _ManagedProjectDraftOwner.item;
+    final current = currentManagedProject;
+    return !gate.projectActionBusy &&
+        !saveBusy &&
+        !foreignDraftDirty &&
+        !project.requiresReopen &&
+        current != null &&
+        !current.requiresReopen &&
+        current.root.path == project.root.path &&
+        current.projectId == project.projectId &&
+        current.projectRevision == project.projectRevision &&
+        current.head.canonicalJson == project.head.canonicalJson;
+  }
+
+  Future<T> _runManagedProjectMutation<T>(
+    Future<T> Function() mutation, {
+    _ManagedProjectDraftOwner? draftOwner,
+  }) {
+    if (!_managedProjectMutationAllowed(draftOwner: draftOwner)) {
+      return Future<T>.error(
+        StateError(
+          'managed project mutation is unavailable while another project action or unsaved draft owns the exact checkpoint',
+        ),
+      );
+    }
+    return Future<T>.sync(mutation);
+  }
+
   Revision3ProjectCompilerCheckpoint get _projectCompilerCheckpoint =>
       Revision3ProjectCompilerCheckpoint(
         projectId: project.projectId,
@@ -2093,8 +2222,15 @@ class _ManagedRevision3ProjectViewState
   Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
   Revision3ContentIndexLoader get loadContentIndex =>
       _loadContentIndexAndRememberProjectName;
-  Revision3StoryWorkspaceRemoveDraftAction? get removeStoryDraft =>
-      widget.removeStoryDraft;
+  Revision3StoryWorkspaceRemoveDraftAction? get removeStoryDraft {
+    final remove = widget.removeStoryDraft;
+    if (remove == null) return null;
+    return ({required index, required draft, required scriptModule}) =>
+        _runManagedProjectMutation(
+          () => remove(index: index, draft: draft, scriptModule: scriptModule),
+        );
+  }
+
   String? get removeStoryDraftDisabledReason =>
       widget.removeStoryDraftDisabledReason;
   Revision3BaseGameContentCatalogLoader get loadBaseGameCatalog =>
@@ -2104,23 +2240,105 @@ class _ManagedRevision3ProjectViewState
   Revision3DialogLocalizationEditSeedLoader
   get loadDialogLocalizationEditSeed => widget.loadDialogLocalizationEditSeed;
   Revision3DialogLocalizationEditTechnicalPublisher
-  get publishDialogLocalizationEdit => widget.publishDialogLocalizationEdit;
+  get publishDialogLocalizationEdit =>
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishDialogLocalizationEdit(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+        draftOwner: _ManagedProjectDraftOwner.dialogLocalization,
+      );
   Revision3DialogLineEntryTechnicalPublisher get publishDialogLine =>
-      widget.publishDialogLine;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishDialogLine(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3QuestTranscriptReplacePublisher get publishQuestTranscriptReplace =>
-      widget.publishQuestTranscriptReplace;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required expectedHead,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishQuestTranscriptReplace(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedHead: expectedHead,
+          plan: plan,
+        ),
+      );
   Revision3QuestTranscriptCreatePublisher get publishQuestTranscriptCreate =>
-      widget.publishQuestTranscriptCreate;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required expectedHead,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishQuestTranscriptCreate(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedHead: expectedHead,
+          plan: plan,
+        ),
+      );
   Revision3NpcGreetingReplacePublisher get publishNpcGreetingReplace =>
-      widget.publishNpcGreetingReplace;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required expectedHead,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishNpcGreetingReplace(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedHead: expectedHead,
+          plan: plan,
+        ),
+      );
   Revision3NpcGreetingCreatePublisher get publishNpcGreetingCreate =>
-      widget.publishNpcGreetingCreate;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required expectedHead,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishNpcGreetingCreate(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedHead: expectedHead,
+          plan: plan,
+        ),
+      );
   Revision3VoiceTechnicalPublisher get publishVoiceTake =>
-      widget.publishVoiceTake;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishVoiceTake(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3VoiceFolderNativePlanner get planVoiceFolder =>
       widget.planVoiceFolder;
   Revision3VoiceFolderNativePublisher get publishVoiceFolder =>
-      widget.publishVoiceFolder;
+      ({required sourceFolder, required plan}) => _runManagedProjectMutation(
+        () => widget.publishVoiceFolder(sourceFolder: sourceFolder, plan: plan),
+      );
   Revision3VoiceFolderDirectoryPicker get pickVoiceFolder =>
       widget.pickVoiceFolder;
   Revision3VoiceTakePreviewTechnicalMaterializer
@@ -2128,21 +2346,85 @@ class _ManagedRevision3ProjectViewState
   Revision3VoiceTakeMediaQaTechnicalInspector get inspectVoiceTakeMediaQa =>
       widget.inspectVoiceTakeMediaQa;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
-      widget.publishVoiceTakeSelection;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishVoiceTakeSelection(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
-      widget.publishVoiceTakeStatus;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishVoiceTakeStatus(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3VoiceTakeRemovalTechnicalPublisher get publishVoiceTakeRemoval =>
-      widget.publishVoiceTakeRemoval;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishVoiceTakeRemoval(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3DialogVoiceSlotRemovalTechnicalPublisher
-  get publishDialogVoiceSlotRemoval => widget.publishDialogVoiceSlotRemoval;
+  get publishDialogVoiceSlotRemoval =>
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishDialogVoiceSlotRemoval(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3DialogVoiceSlotCreationTechnicalPublisher
-  get publishDialogVoiceSlotCreation => widget.publishDialogVoiceSlotCreation;
+  get publishDialogVoiceSlotCreation =>
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishDialogVoiceSlotCreation(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
-      widget.publishVoiceTarget;
+      ({
+        required expectedProjectId,
+        required expectedProjectRevision,
+        required plan,
+      }) => _runManagedProjectMutation(
+        () => widget.publishVoiceTarget(
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          plan: plan,
+        ),
+      );
   Revision3VoiceBuildPlanLoader get planVoiceBuild => widget.planVoiceBuild;
   Revision3ProjectBuildPlanLoader get planProjectBuild =>
       widget.planProjectBuild;
-  Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
+  Revision3VoiceExactBuild get buildVoiceBundle =>
+      (output) =>
+          _runManagedProjectMutation(() => widget.buildVoiceBundle(output));
   Revision3VoiceBuildParentDirectoryPicker get pickVoiceBuildParent =>
       widget.pickVoiceBuildParent;
   Revision3ReviewedDataAssetStageBuilder get buildReviewedDataAsset =>
@@ -2157,16 +2439,26 @@ class _ManagedRevision3ProjectViewState
       widget.inspectInstalledDataAsset;
   InstalledDataAssetSemanticStagePublisher
   get publishInstalledDataAssetSemanticEdit =>
-      widget.publishInstalledDataAssetSemanticEdit;
+      (intent) => _runManagedProjectMutation(
+        () => widget.publishInstalledDataAssetSemanticEdit(intent),
+      );
   ReviewedInstalledDataAssetStagePublisher
   get publishReviewedInstalledDataAssetEdit =>
-      widget.publishReviewedInstalledDataAssetEdit;
+      (intent) => _runManagedProjectMutation(
+        () => widget.publishReviewedInstalledDataAssetEdit(intent),
+      );
   Revision3DataAssetStagePublisher get publishDataAssetStage =>
-      widget.publishDataAssetStage;
+      ({required patchReceiptPath}) => _runManagedProjectMutation(
+        () => widget.publishDataAssetStage(patchReceiptPath: patchReceiptPath),
+      );
   DataAssetSemanticStagePublisher get publishDataAssetSemanticEdit =>
-      widget.publishDataAssetSemanticEdit;
+      (intent) => _runManagedProjectMutation(
+        () => widget.publishDataAssetSemanticEdit(intent),
+      );
   Revision3DataAssetStageRemover get removeDataAssetStage =>
-      widget.removeDataAssetStage;
+      ({required targetPath}) => _runManagedProjectMutation(
+        () => widget.removeDataAssetStage(targetPath: targetPath),
+      );
   Revision3DataAssetPatchReceiptPicker? get pickDataAssetPatchReceipt =>
       widget.pickDataAssetPatchReceipt;
   DataAssetInspector? get inspectDataAssetSemanticEdit =>
@@ -2182,30 +2474,59 @@ class _ManagedRevision3ProjectViewState
   Revision3NpcCatalogLoader get loadNpcCatalog => widget.loadNpcCatalog;
   Revision3NpcArchetypeChooser? get chooseNpcArchetype =>
       widget.chooseNpcArchetype;
-  Revision3NpcDraftPublisher get publishNpcDraft => widget.publishNpcDraft;
+  Revision3NpcDraftPublisher get publishNpcDraft =>
+      ({required gameRoot, required input}) => _runManagedProjectMutation(
+        () => widget.publishNpcDraft(gameRoot: gameRoot, input: input),
+      );
   Revision3NpcProfileEditSeedLoader get loadNpcProfileEditSeed =>
       widget.loadNpcProfileEditSeed;
   Revision3NpcProfileEditTechnicalPublisher get publishNpcProfileEdit =>
-      widget.publishNpcProfileEdit;
+      ({required gameRoot, required plan}) => _runManagedProjectMutation(
+        () => widget.publishNpcProfileEdit(gameRoot: gameRoot, plan: plan),
+      );
   Revision3QuestCatalogLoader get loadQuestCatalog => widget.loadQuestCatalog;
   Revision3QuestDraftPublisher get publishQuestDraft =>
-      widget.publishQuestDraft;
+      ({required gameRoot, required input}) => _runManagedProjectMutation(
+        () => widget.publishQuestDraft(gameRoot: gameRoot, input: input),
+      );
   Revision3QuestOutlineEditPublisher get editQuestOutline =>
-      widget.editQuestOutline;
+      ({required input}) => _runManagedProjectMutation(
+        () => widget.editQuestOutline(input: input),
+      );
   Revision3QuestTransitionsSeedLoader get loadQuestTransitionsSeed =>
       widget.loadQuestTransitionsSeed;
   Revision3QuestTransitionsTechnicalPublisher get editQuestTransitions =>
-      widget.editQuestTransitions;
+      ({required plan}) => _runManagedProjectMutation(
+        () => widget.editQuestTransitions(plan: plan),
+      );
   Revision3QuestContextSeedLoader get loadQuestContextSeed =>
       widget.loadQuestContextSeed;
   Revision3QuestContextTechnicalPublisher get editQuestContext =>
-      widget.editQuestContext;
+      ({required gameRoot, required plan}) => _runManagedProjectMutation(
+        () => widget.editQuestContext(gameRoot: gameRoot, plan: plan),
+      );
   Revision3QuestSourceInspectionLoader get inspectQuestSource =>
       widget.inspectQuestSource;
   Revision3NpcSourceInspectionLoader get inspectNpcSource =>
       widget.inspectNpcSource;
   Revision3ManagedCompilerPublisher get checkManagedCompiler =>
-      widget.checkManagedCompiler;
+      ({
+        required entityKind,
+        required entityId,
+        required expectedEntityRevision,
+        required expectedModuleId,
+        required expectedModuleRevision,
+        required gameRoot,
+      }) => _runManagedProjectMutation(
+        () => widget.checkManagedCompiler(
+          entityKind: entityKind,
+          entityId: entityId,
+          expectedEntityRevision: expectedEntityRevision,
+          expectedModuleId: expectedModuleId,
+          expectedModuleRevision: expectedModuleRevision,
+          gameRoot: gameRoot,
+        ),
+      );
 
   Future<Revision3ContentIndex>
   _loadContentIndexAndRememberProjectName() async {
@@ -2435,6 +2756,7 @@ class _ManagedRevision3ProjectViewState
   Future<void> _tryRecovery() async {
     if (_recoveryStarting ||
         widget.recoveryBusy ||
+        widget.managedWorkspaceDirty ||
         _recoveryTerminal ||
         !project.requiresReopen) {
       return;
@@ -2630,6 +2952,7 @@ class _ManagedRevision3ProjectViewState
                                   onPressed:
                                       _recoveryStarting ||
                                           widget.recoveryBusy ||
+                                          widget.managedWorkspaceDirty ||
                                           _recoveryTerminal
                                       ? null
                                       : () => unawaited(_tryRecovery()),
@@ -3535,7 +3858,36 @@ class _ManagedRevision3ProjectViewState
             ),
           ),
     ),
-    items: const Revision3ItemsView(),
+    items: Revision3ItemsView(
+      authoringRequiresReopen: project.requiresReopen,
+      onRecoverAuthoring:
+          project.requiresReopen &&
+              !widget.recoveryBusy &&
+              !widget.managedWorkspaceDirty &&
+              !_recoveryStarting &&
+              !_recoveryTerminal
+          ? () => unawaited(_tryRecovery())
+          : null,
+      onDirtyChanged: widget.onItemAuthoringDirtyChanged,
+      onSavingChanged: widget.onItemAuthoringSavingChanged,
+      mutationsEnabled: _managedProjectMutationAllowed(
+        draftOwner: _ManagedProjectDraftOwner.item,
+      ),
+      authoring: project.requiresReopen
+          ? null
+          : Revision3ItemPatchAuthoringService(
+              projectScopeIdentity: project.root.path,
+              projectId: project.projectId,
+              projectRevision: project.projectRevision,
+              expectedHead: project.head,
+              loadContentIndex: loadContentIndex,
+              loadNativeCatalog: widget.loadItemCatalog,
+              publishTechnicalPlan: (plan) => _runManagedProjectMutation(
+                () => widget.publishItemPatch(plan),
+                draftOwner: _ManagedProjectDraftOwner.item,
+              ),
+            ),
+    ),
     textures: Revision3TextureCatalogView(
       gameRoot: gameRoot,
       sourceSelectionIdentity: gameRoot,
@@ -3551,6 +3903,8 @@ class _ManagedRevision3ProjectViewState
       projectRevision: project.projectRevision,
       projectHead: project.head,
       requiresReopen: project.requiresReopen,
+      mutationsEnabled: _storyMutationsEnabled,
+      mutationDisabledReason: _storyMutationDisabledReason(l10n),
       load: loadDataAssetStages,
       publish: publishDataAssetStage,
       publishSemanticEdit: publishDataAssetSemanticEdit,
@@ -3561,14 +3915,18 @@ class _ManagedRevision3ProjectViewState
       semanticUsmapPicker: pickDataAssetSemanticUsmap,
       semanticExtractReceiptPicker: pickDataAssetExtractReceipt,
       semanticExtractReceiptInspector: inspectDataAssetExtractReceipt,
-      buildReviewedStage: gameRoot == null || project.requiresReopen
+      buildReviewedStage: gameRoot == null || !_storyMutationsEnabled
           ? null
           : buildReviewedDataAsset,
-      pickBuildParentDirectory: gameRoot == null || project.requiresReopen
+      pickBuildParentDirectory: gameRoot == null || !_storyMutationsEnabled
           ? null
           : pickDataAssetBuildParent,
       buildUnavailableReason: project.requiresReopen
           ? 'Reopen this managed project before building files.'
+          : widget.managedWorkspaceDirty
+          ? _storyMutationDisabledReason(l10n)
+          : widget.recoveryBusy
+          ? _storyMutationDisabledReason(l10n)
           : gameRoot == null
           ? 'Choose the Gothic 1 Remake installation in Settings before building files.'
           : null,
@@ -4028,6 +4386,14 @@ class _ManagedRevision3ProjectViewState
     AppLocalizations l10n,
   ) {
     final gameConfigured = gameRoot != null;
+    final localizationEditingEnabled = _managedProjectMutationAllowed(
+      draftOwner: _ManagedProjectDraftOwner.dialogLocalization,
+    );
+    // Every action exposed by this workspace is routed through its dirty-draft
+    // coordinator. A localization-owned draft can therefore save or discard
+    // before continuing, while a foreign draft still disables the workspace.
+    final workspaceActionsEnabled = localizationEditingEnabled;
+    final mutationDisabledReason = _storyMutationDisabledReason(l10n);
     return _ManagedRevision3VoiceCatalogGate(
       projectId: project.projectId,
       projectRevision: project.projectRevision,
@@ -4057,7 +4423,10 @@ class _ManagedRevision3ProjectViewState
               : const Revision3VoiceProductionQueueCopy(),
           copy: _localizationVoiceWorkspaceCopy(l10n),
           onDirtyChanged: widget.onDialogLocalizationDirtyChanged,
-          notice: !gameConfigured
+          mutationsEnabled: localizationEditingEnabled,
+          notice: !workspaceActionsEnabled
+              ? mutationDisabledReason
+              : !gameConfigured
               ? l10n.managedDashboardMissingGameDescription
               : availability.status == _ManagedVoiceCatalogGateStatus.loaded &&
                     !intactVoiceLine
@@ -4066,25 +4435,25 @@ class _ManagedRevision3ProjectViewState
                     _ManagedVoiceCatalogGateStatus.unavailable
               ? l10n.managedDashboardLoadErrorDescription
               : null,
-          onCreateDialogLine: project.requiresReopen
+          onCreateDialogLine: !workspaceActionsEnabled
               ? null
               : () => _openDialogLineEntry(context),
           onAddVoiceTake:
-              gameConfigured && intactVoiceLine && !project.requiresReopen
+              gameConfigured && intactVoiceLine && workspaceActionsEnabled
               ? () => _openVoiceWizard(context)
               : null,
-          onImportVoiceFolder: gameConfigured && !project.requiresReopen
+          onImportVoiceFolder: gameConfigured && workspaceActionsEnabled
               ? () => _openVoiceFolderImport(context)
               : null,
-          onManageVoiceTakes: intactVoiceLine && !project.requiresReopen
+          onManageVoiceTakes: intactVoiceLine && workspaceActionsEnabled
               ? () => _openVoiceTakeSelection(context)
               : null,
           onResolveVoiceTarget:
-              gameConfigured && intactVoiceLine && !project.requiresReopen
+              gameConfigured && intactVoiceLine && workspaceActionsEnabled
               ? () => _openVoiceTargetResolver(context)
               : null,
           onAddVoiceTakeFor:
-              gameConfigured && intactVoiceLine && !project.requiresReopen
+              gameConfigured && intactVoiceLine && workspaceActionsEnabled
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceWizard(
                       context,
@@ -4093,7 +4462,7 @@ class _ManagedRevision3ProjectViewState
                       fixedContext: true,
                     )
               : null,
-          onPlanRecordingFor: intactVoiceLine && !project.requiresReopen
+          onPlanRecordingFor: intactVoiceLine && workspaceActionsEnabled
               ? ({required initialLineId, required initialLocale}) =>
                     _planVoiceRecording(
                       context,
@@ -4101,7 +4470,7 @@ class _ManagedRevision3ProjectViewState
                       locale: initialLocale,
                     )
               : null,
-          onManageVoiceTakesFor: intactVoiceLine && !project.requiresReopen
+          onManageVoiceTakesFor: intactVoiceLine && workspaceActionsEnabled
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceTakeSelection(
                       context,
@@ -4111,7 +4480,7 @@ class _ManagedRevision3ProjectViewState
                     )
               : null,
           onResolveVoiceTargetFor:
-              gameConfigured && intactVoiceLine && !project.requiresReopen
+              gameConfigured && intactVoiceLine && workspaceActionsEnabled
               ? ({required initialLineId, required initialLocale}) =>
                     _openVoiceTargetResolver(
                       context,
@@ -4130,15 +4499,21 @@ class _ManagedRevision3ProjectViewState
                       ),
                     )
               : null,
-          addVoiceDisabledReason: !gameConfigured
+          addVoiceDisabledReason: !workspaceActionsEnabled
+              ? mutationDisabledReason
+              : !gameConfigured
               ? l10n.managedDashboardMissingGameDescription
               : !intactVoiceLine
               ? l10n.managedActionAddVoiceTakeRequiresDialogLine
               : null,
-          manageVoiceDisabledReason: !intactVoiceLine
+          manageVoiceDisabledReason: !workspaceActionsEnabled
+              ? mutationDisabledReason
+              : !intactVoiceLine
               ? l10n.managedActionAddVoiceTakeRequiresDialogLine
               : null,
-          resolveVoiceDisabledReason: !gameConfigured
+          resolveVoiceDisabledReason: !workspaceActionsEnabled
+              ? mutationDisabledReason
+              : !gameConfigured
               ? l10n.managedDashboardMissingGameDescription
               : !intactVoiceLine
               ? l10n.managedActionAddVoiceTakeRequiresDialogLine
@@ -4161,6 +4536,11 @@ class _ManagedRevision3ProjectViewState
       Revision3ProjectWorkspaceLocation(section, secondary: secondary),
     );
     final checkpoint = _projectCompilerCheckpoint;
+    final buildPreviewProjectRoot = project.root.path;
+    final buildPreviewProjectId = checkpoint.projectId;
+    final buildPreviewProjectRevision = checkpoint.projectRevision;
+    final buildPreviewHead = checkpoint.checkpointIdentity;
+    final externalChecksEnabled = _managedProjectMutationAllowed();
     return AnimatedBuilder(
       animation: _projectCompilerController,
       builder: (context, _) => Revision3TestReleaseWorkspace(
@@ -4208,15 +4588,24 @@ class _ManagedRevision3ProjectViewState
         ),
         scripts: _projectCompilerController.snapshot.toTestReleaseCheck(
           l10n: l10n,
-          onPressed: () => unawaited(
-            showRevision3ProjectCompilerCheckDialog(
-              context,
-              controller: _projectCompilerController,
-              checkpoint: checkpoint,
-              gameRoot: gameRoot,
-              check: widget.checkProjectCompiler,
-            ),
-          ),
+          onPressed: !externalChecksEnabled
+              ? null
+              : () {
+                  if (!_managedProjectMutationAllowed()) return;
+                  unawaited(
+                    showRevision3ProjectCompilerCheckDialog(
+                      context,
+                      controller: _projectCompilerController,
+                      checkpoint: checkpoint,
+                      gameRoot: gameRoot,
+                      check: ({required gameRoot}) =>
+                          _runManagedProjectMutation(
+                            () =>
+                                widget.checkProjectCompiler(gameRoot: gameRoot),
+                          ),
+                    ),
+                  );
+                },
         ),
         voice: Revision3TestReleaseCheck(
           state: Revision3TestReleaseCheckState.notEvaluated,
@@ -4245,6 +4634,24 @@ class _ManagedRevision3ProjectViewState
             checkpointIdentity: checkpoint.checkpointIdentity,
           ),
           load: planProjectBuild,
+          openVoiceDetails: () {
+            final current = currentManagedProject;
+            if (!context.mounted ||
+                current == null ||
+                current.requiresReopen ||
+                current.root.path != buildPreviewProjectRoot ||
+                current.projectId != buildPreviewProjectId ||
+                current.projectRevision != buildPreviewProjectRevision ||
+                current.head.canonicalJson != buildPreviewHead) {
+              throw StateError(
+                'The exact Voice problems are no longer available.',
+              );
+            }
+            navigate(
+              Revision3ProjectWorkspaceSection.testRelease,
+              secondary: 'voice',
+            );
+          },
           copy: l10n.localeName.startsWith('de')
               ? const Revision3ProjectBuildPlanCopy.german()
               : const Revision3ProjectBuildPlanCopy.english(),
@@ -4271,13 +4678,15 @@ class _ManagedRevision3ProjectViewState
 
   Widget _buildVoiceReadiness(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
+    final externalActionsEnabled = _managedProjectMutationAllowed();
     return Revision3VoiceBuildReadinessPanel(
       projectId: project.projectId,
       projectRevision: project.projectRevision,
+      checkpointIdentity: project.head.canonicalJson,
       plan: planVoiceBuild,
       copy: _voiceBuildReadinessCopy(l10n),
       gameConfigured: gameConfigured,
-      onResolveVoiceTarget: gameConfigured && !project.requiresReopen
+      onResolveVoiceTarget: gameConfigured && externalActionsEnabled
           ? ({required initialLineId, required initialLocale}) =>
                 _openVoiceTargetResolver(
                   context,
@@ -4286,7 +4695,7 @@ class _ManagedRevision3ProjectViewState
                   fixedContext: true,
                 )
           : null,
-      onManageVoiceTakes: !project.requiresReopen
+      onManageVoiceTakes: externalActionsEnabled
           ? ({required initialLineId, required initialLocale}) =>
                 _openVoiceTakeSelection(
                   context,
@@ -4295,7 +4704,7 @@ class _ManagedRevision3ProjectViewState
                   fixedContext: true,
                 )
           : null,
-      onBuild: gameConfigured && !project.requiresReopen
+      onBuild: gameConfigured && externalActionsEnabled
           ? () => _openVoiceBuild(context)
           : null,
     );
@@ -4477,9 +4886,7 @@ class _ManagedRevision3ProjectViewState
     required Revision3QuestTranscriptProjection projection,
     required Revision3DialogLineEntryTechnicalPublisher publishTechnicalPlan,
   }) async {
-    if (project.requiresReopen ||
-        widget.managedWorkspaceDirty ||
-        widget.recoveryBusy ||
+    if (!_managedProjectMutationAllowed() ||
         !_isCurrentQuestTranscriptProjection(projection)) {
       return false;
     }
@@ -4585,9 +4992,7 @@ class _ManagedRevision3ProjectViewState
     required Revision3NpcGreetingProjection projection,
     required Revision3DialogLineEntryTechnicalPublisher publishTechnicalPlan,
   }) async {
-    if (project.requiresReopen ||
-        widget.managedWorkspaceDirty ||
-        widget.recoveryBusy ||
+    if (!_managedProjectMutationAllowed() ||
         !_isCurrentNpcGreetingProjection(projection)) {
       return false;
     }
@@ -4681,7 +5086,7 @@ class _ManagedRevision3ProjectViewState
   }
 
   Future<void> _openDialogLineEntry(BuildContext context) async {
-    if (project.requiresReopen) return;
+    if (!_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final result = await showDialog<Revision3DialogLineEntryDialogResult>(
       context: context,
@@ -4731,7 +5136,7 @@ class _ManagedRevision3ProjectViewState
     String? initialLocale,
     bool fixedContext = false,
   }) async {
-    if (gameRoot == null || project.requiresReopen) return;
+    if (gameRoot == null || !_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final german = l10n.localeName.startsWith('de');
     final publication = await showDialog<Revision3VoiceTakePublication>(
@@ -4762,7 +5167,7 @@ class _ManagedRevision3ProjectViewState
     required String lineId,
     required String locale,
   }) async {
-    if (project.requiresReopen) return;
+    if (!_managedProjectMutationAllowed()) return;
     final service = Revision3DialogVoiceSlotCreationAuthoringService(
       loadContentIndex: loadContentIndex,
       publishTechnicalPlan: publishDialogVoiceSlotCreation,
@@ -4786,7 +5191,7 @@ class _ManagedRevision3ProjectViewState
   }
 
   Future<void> _openVoiceFolderImport(BuildContext context) async {
-    if (gameRoot == null || project.requiresReopen) return;
+    if (gameRoot == null || !_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final adapter = Revision3VoiceFolderManagedAdapter(
       expectedProjectId: project.projectId,
@@ -4836,7 +5241,7 @@ class _ManagedRevision3ProjectViewState
     String? initialLocale,
     bool fixedContext = false,
   }) async {
-    if (project.requiresReopen) return;
+    if (!_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final german = l10n.localeName.startsWith('de');
@@ -4938,7 +5343,7 @@ class _ManagedRevision3ProjectViewState
     String? initialLocale,
     bool fixedContext = false,
   }) async {
-    if (gameRoot == null || project.requiresReopen) return;
+    if (gameRoot == null || !_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final german = l10n.localeName.startsWith('de');
     final publication = await showDialog<Revision3VoiceTargetPublication>(
@@ -4974,7 +5379,7 @@ class _ManagedRevision3ProjectViewState
   }
 
   Future<void> _openVoiceBuild(BuildContext context) async {
-    if (gameRoot == null || project.requiresReopen) return;
+    if (gameRoot == null || !_managedProjectMutationAllowed()) return;
     final l10n = AppLocalizations.of(context);
     final copy = _voiceBuildDialogCopy(l10n);
     final messenger = ScaffoldMessenger.of(context);
@@ -5579,6 +5984,9 @@ class _ManagedRevision3ProjectViewState
       questId: quest.id,
       expectedQuestRevision: quest.revision,
     );
+    if (projection.objectives.isEmpty) {
+      throw const Revision3QuestTranscriptRequiresReopenException();
+    }
     if (!mounted || !context.mounted) return null;
     messenger.removeCurrentSnackBar();
     final result = await showDialog<Revision3DialogLineEntryDialogResult>(
@@ -5605,7 +6013,7 @@ class _ManagedRevision3ProjectViewState
           publishTechnicalPlan: transcriptService.createAndInsertPublisher(
             projection: projection,
             index: 0,
-            objectiveSlot: null,
+            objectiveSlot: projection.objectives.first.slot,
           ),
         ),
         copy: _dialogLineEntryCopy(l10n).copyWith(
@@ -5933,7 +6341,8 @@ class _ManagedRevision3ProjectViewState
         questId: quest.id,
         gameRoot: configuredGameRoot,
         inspect: inspectQuestSource,
-        checkCompiler: compilerSelection == null
+        checkCompiler:
+            compilerSelection == null || !_managedProjectMutationAllowed()
             ? null
             : () => checkManagedCompiler(
                 entityKind:
@@ -5972,7 +6381,10 @@ class _ManagedRevision3ProjectViewState
         npcId: npc.id,
         inspect: inspectNpcSource,
         gameRoot: configuredGameRoot,
-        checkCompiler: compilerSelection == null || configuredGameRoot == null
+        checkCompiler:
+            compilerSelection == null ||
+                configuredGameRoot == null ||
+                !_managedProjectMutationAllowed()
             ? null
             : () => checkManagedCompiler(
                 entityKind:
@@ -6028,18 +6440,25 @@ class _ManagedRevision3ProjectViewState
     String configuredGameRoot, {
     String initialQuery = '',
     String? initialTargetPath,
-  }) => showDialog<DataAssetSemanticStagePublication>(
-    context: context,
-    builder: (context) => InstalledPackageBrowserDialog(
-      gameRoot: configuredGameRoot,
-      load: loadInstalledPackageIndex,
-      inspect: inspectInstalledDataAsset,
-      publish: publishInstalledDataAssetSemanticEdit,
-      publishReviewed: publishReviewedInstalledDataAssetEdit,
-      initialQuery: initialQuery,
-      initialTargetPath: initialTargetPath,
-    ),
-  );
+  }) {
+    final mutationsEnabled = _managedProjectMutationAllowed();
+    return showDialog<DataAssetSemanticStagePublication>(
+      context: context,
+      builder: (context) => InstalledPackageBrowserDialog(
+        gameRoot: configuredGameRoot,
+        load: loadInstalledPackageIndex,
+        inspect: inspectInstalledDataAsset,
+        publish: mutationsEnabled
+            ? publishInstalledDataAssetSemanticEdit
+            : null,
+        publishReviewed: mutationsEnabled
+            ? publishReviewedInstalledDataAssetEdit
+            : null,
+        initialQuery: initialQuery,
+        initialTargetPath: initialTargetPath,
+      ),
+    );
+  }
 
   Future<void> _openNpcWizard(
     BuildContext context, {

@@ -22,7 +22,6 @@ mod revision3_voice_build;
 mod revision3_voice_preview;
 mod story_collision;
 mod story_model;
-mod story_transaction_revision3;
 mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
 mod story_transaction_revision3_dialog_voice_slot_creation;
@@ -154,7 +153,7 @@ pub use revision3_project_build::{
 pub use revision3_quest::{
     regenerate_revision3_quest_module, revision3_quest_input_fingerprint,
     validate_revision3_quest_free_basis, Revision3QuestFreeBasisError,
-    Revision3QuestGenerationError,
+    Revision3QuestGenerationError, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
 };
 pub use revision3_quest_source_v2::{
     PreparedRevision3QuestCollisionInspectionSourceV2, PreparedRevision3QuestCollisionSourceV2,
@@ -188,16 +187,6 @@ pub use story_model::{
     QuestCollisionCatalogInput, QuestGiverInput, QuestParentInput, ScriptAuthoringStatus,
     ScriptModuleStatus, ScriptRuntimeStatus, VoiceMemberProof, VoiceOperation, VoiceTake,
     VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
-};
-pub use story_transaction_revision3::{
-    apply_revision3_quest_draft_transaction_v2, Revision3QuestArtifactAuthorityV2,
-    Revision3QuestDraftBuildStatusV2, Revision3QuestDraftInsertConflictV2,
-    Revision3QuestDraftInsertErrorV2, Revision3QuestDraftInsertEvaluationV2,
-    Revision3QuestDraftInsertOutcomeV2, Revision3QuestDraftInsertRejectionV2,
-    Revision3QuestDraftInsertRequestJsonErrorV2, Revision3QuestDraftInsertRequestV2,
-    Revision3QuestDraftIntentV2, Revision3QuestDraftRuntimeStatusV2, Revision3QuestEntityRoleV2,
-    Revision3QuestSourceInspectionStatusV2, Revision3StoryIdentityKindV2,
-    MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_QUEST_DRAFT_REQUEST_JSON_BYTES,
 };
 pub use story_transaction_revision3_dialog::{
     apply_revision3_dialog_line_insert_transaction_v1, Revision3DialogBuildStatusV1,

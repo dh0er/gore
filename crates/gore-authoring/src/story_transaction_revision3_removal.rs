@@ -1175,7 +1175,7 @@ mod tests {
         };
         quest.transcript.push(QuestTranscriptBindingV1 {
             line: TypedRef::new(fixture.project.project_id, line_id, EntityKind::DialogLine),
-            objective_slot: None,
+            objective_slot: 1,
         });
         fixture.project.validate_closed_model().unwrap();
         let basis = fixture.project.clone();

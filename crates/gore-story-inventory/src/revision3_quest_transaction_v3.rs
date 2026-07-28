@@ -50,8 +50,7 @@ pub struct Revision3QuestDraftIntentV3 {
     pub title: String,
     pub description: String,
     pub objective_title: String,
-    /// Ordered objectives after objective 1. Empty is omitted to retain the exact canonical v3
-    /// request spelling accepted by existing clients.
+    /// Ordered objectives after objective 1. The canonical request-v3 schema omits an empty list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_objective_titles: Vec<String>,
 }

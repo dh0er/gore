@@ -1232,27 +1232,60 @@ mod tests {
     }
 
     #[test]
-    fn validates_item_definition_fields_against_real_binds_cache() {
+    fn validates_item_authoring_field_types_against_real_binds_cache() {
         let path = Path::new(REAL_BINDS);
         if !path.exists() {
             eprintln!("skipping: {REAL_BINDS} not present");
             return;
         }
         let api = NativeApi::load(path).expect("load Binds.Cache");
+        let expected = [
+            ("UItemDefinition", "m_Value", "int"),
+            ("UItemDefinition", "m_MaxStack", "int"),
+            ("UItemDefinition", "m_Weight", "float32"),
+            ("UItemDefinition", "m_Mass", "float32"),
+            ("UItemDefinition", "m_Buoyancy", "float32"),
+            ("UItemDefinition", "m_AutoTarget", "bool"),
+            ("UProjectileDefinition", "m_ArcParam", "float32"),
+            ("UProjectileDefinition", "m_Radius", "float32"),
+            (
+                "UWeaponArcheryDefinition",
+                "m_ArrowGravityModifier",
+                "float32",
+            ),
+            (
+                "UWeaponRangedDefinition",
+                "m_ArrowGravityModifier",
+                "float32",
+            ),
+            ("UWeaponArcheryDefinition", "m_MaxRange", "float32"),
+            (
+                "UWeaponMeleeDefinition",
+                "m_BlockSuperArmorMultiplier",
+                "float32",
+            ),
+            ("UWeaponMeleeDefinition", "m_DamageReduction", "float32"),
+            ("UWeaponMeleeDefinition", "m_HpRegenerateTick", "float32"),
+            ("UWeaponMeleeDefinition", "m_StartRegenerateSc", "float32"),
+            ("UWeaponDefinition", "m_CriticalMultiplier", "float32"),
+            ("UWeaponDefinition", "m_SuperArmorDamageBase", "float32"),
+            ("URuneSpellContainer", "m_CanEquipAfterUse", "bool"),
+            (
+                "URuneSpellContainer",
+                "m_IsTargetingIndicatorEnabled",
+                "bool",
+            ),
+            ("URuneSpellContainer", "RequiredMagicCircleLevel", "int"),
+        ];
         for guid in [
             VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
             VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
         ] {
-            for (field, value_type) in [
-                ("m_Value", "int"),
-                ("m_MaxStack", "int"),
-                ("m_Weight", "float32"),
-                ("m_Mass", "float32"),
-            ] {
+            for (owner, field, value_type) in expected {
                 assert_eq!(
-                    api.verified_default_field_type(&guid, "UItemDefinition", field),
+                    api.verified_default_field_type(&guid, owner, field),
                     Some(value_type),
-                    "sealed item field {field} for GUID {guid:02x?}"
+                    "sealed item field {owner}.{field} for GUID {guid:02x?}"
                 );
             }
         }

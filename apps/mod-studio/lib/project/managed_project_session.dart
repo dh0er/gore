@@ -12,6 +12,7 @@ import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
+import 'revision3_item_patch_authoring.dart';
 import 'revision3_npc_greeting_authoring.dart';
 import 'revision3_project_history.dart';
 import 'revision3_quest_transcript_authoring.dart';
@@ -1175,9 +1176,9 @@ abstract interface class ManagedRevision3ProjectHistoryStore {
 }
 
 /// Optional native authority for one read-only Voice folder plan and one
-/// all-or-nothing unpublished batch candidate. Older stores and unrelated
-/// fakes must opt in explicitly before they can inspect folders or mutate a
-/// project through this path.
+/// all-or-nothing unpublished batch candidate. Stores without this optional
+/// authority and unrelated fakes must opt in explicitly before they can inspect
+/// folders or mutate a project through this path.
 abstract interface class ManagedRevision3VoiceBatchStore {
   Future<AuthoringRevision3VoiceBatchPlanResult> planVoiceBatchV1({
     required String root,
@@ -1313,6 +1314,23 @@ abstract interface class ManagedRevision3ProjectBuildPlanStore {
   });
 }
 
+/// Narrow exact-current authority for the native embedded Item schema and one
+/// prepare-only ItemPatch transaction. Keeping this separate prevents
+/// checkpoint-only alternate stores and test doubles from accidentally
+/// claiming Item authoring authority.
+abstract interface class ManagedRevision3ItemPatchStore {
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  });
+
+  Future<AuthoringRevision3ItemPatchPreparation> prepareItemPatchV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3ItemPatchRequestV1 request,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
@@ -1329,10 +1347,31 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3DialogVoiceSlotRemovalStore,
         ManagedRevision3DialogVoiceSlotCreationStore,
         ManagedRevision3NpcProfileEditStore,
-        ManagedRevision3ProjectBuildPlanStore {
+        ManagedRevision3ProjectBuildPlanStore,
+        ManagedRevision3ItemPatchStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
+
+  @override
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreReadRevision3ItemCatalogV1(
+    root: root,
+    expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3ItemPatchPreparation> prepareItemPatchV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3ItemPatchRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3ItemPatchV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
 
   @override
   Future<AuthoringRevision3StoreOpenedResult> open({
@@ -2141,6 +2180,7 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3NpcProfileEditStore;
   bool get supportsProjectHistory =>
       _store is ManagedRevision3ProjectHistoryStore;
+  bool get supportsItemPatch => _store is ManagedRevision3ItemPatchStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -5228,6 +5268,217 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3InstalledDataAssetInspectionError,
   );
 
+  /// Read the native embedded Item schema for this exact managed checkpoint.
+  /// The result is chooser evidence only: it grants no project mutation,
+  /// build, deployment, game, save, runtime, or publication authority.
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1() {
+    final store = _store;
+    if (store is! ManagedRevision3ItemPatchStore) {
+      return Future<AuthoringRevision3ItemCatalogReadResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Item authoring capability',
+        ),
+      );
+    }
+    final itemStore = store as ManagedRevision3ItemPatchStore;
+    return _core.readExact<AuthoringRevision3ItemCatalogReadResult>(
+      (basis) async {
+        final targetExecutable = _revision3ItemTargetExecutableSeal(
+          basis.projectJson,
+        );
+        final result = await itemStore.readItemCatalogV1(
+          root: root.path,
+          expectedHead: basis.head,
+        );
+        if (result.head.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != basis.projectId ||
+            result.projectRevision != basis.projectRevision ||
+            !_sameDraftContentSeal(
+              result.catalog.targetExecutable,
+              targetExecutable,
+            ) ||
+            result.catalogAuthority !=
+                AuthoringRevision3ItemCatalogAuthority
+                    .nativeEmbeddedSchemaExactCurrentProject ||
+            result.buildStatus !=
+                AuthoringRevision3ItemCatalogBuildStatus.notEvaluated ||
+            result.runtimeStatus !=
+                AuthoringRevision3ItemRuntimeStatus.runtimeUnqualified ||
+            result.publicationStatus !=
+                AuthoringRevision3ItemCatalogPublicationStatus.notApplicable) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Item catalog disagrees with its exact session basis',
+          );
+        }
+        return result;
+      },
+      operation: 'readItemCatalogV1',
+      handleReadError: _core._throwRevision3ItemCatalogReadError,
+    );
+  }
+
+  /// Re-read the native Item schema and publish one exact ItemPatch delta.
+  ///
+  /// The reviewed plan is rebound only inside the serialized managed lane.
+  /// Native prepares an unpublished candidate; the shared session core then
+  /// fully reopens it, publishes by fixed-head CAS, and fully reopens the
+  /// published generation before this method returns.
+  Future<Revision3ItemPatchPublication> prepareAndPublishItemPatchV1({
+    required Revision3ItemPatchTechnicalPlan plan,
+  }) {
+    final store = _store;
+    if (store is! ManagedRevision3ItemPatchStore) {
+      return Future<Revision3ItemPatchPublication>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Item authoring capability',
+        ),
+      );
+    }
+    final itemStore = store as ManagedRevision3ItemPatchStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      Revision3ItemPatchPublication
+    >(
+      operation: 'prepareAndPublishItemPatchV1',
+      handlePrepareError: _core._throwRevision3ItemPatchPrepareError,
+      prepare: (basis) async {
+        if (plan.expectedProjectId != basis.projectId ||
+            plan.expectedProjectRevision != basis.projectRevision ||
+            plan.expectedHead.canonicalJson != basis.head.canonicalJson) {
+          throw const Revision3ItemPatchStaleCheckpointException();
+        }
+        final targetExecutable = _revision3ItemTargetExecutableSeal(
+          basis.projectJson,
+        );
+
+        final catalogRead = await itemStore.readItemCatalogV1(
+          root: root.path,
+          expectedHead: basis.head,
+        );
+        if (catalogRead.head.canonicalJson != basis.head.canonicalJson ||
+            catalogRead.projectId != basis.projectId ||
+            catalogRead.projectRevision != basis.projectRevision ||
+            !_sameDraftContentSeal(
+              catalogRead.catalog.targetExecutable,
+              targetExecutable,
+            ) ||
+            catalogRead.catalogAuthority !=
+                AuthoringRevision3ItemCatalogAuthority
+                    .nativeEmbeddedSchemaExactCurrentProject ||
+            catalogRead.buildStatus !=
+                AuthoringRevision3ItemCatalogBuildStatus.notEvaluated ||
+            catalogRead.runtimeStatus !=
+                AuthoringRevision3ItemRuntimeStatus.runtimeUnqualified ||
+            catalogRead.publicationStatus !=
+                AuthoringRevision3ItemCatalogPublicationStatus.notApplicable) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Item catalog refresh disagrees with its exact session basis',
+          );
+        }
+        final catalogEntry = catalogRead.catalog.entry(plan.vanillaClass);
+        if (!_sameDraftContentSeal(
+              catalogRead.catalog.catalogSeal,
+              plan.expectedCatalogSeal,
+            ) ||
+            catalogEntry == null) {
+          throw const Revision3ItemPatchStaleCheckpointException();
+        }
+        if (catalogRead.catalog.catalogLayer != plan.expectedCatalogLayer ||
+            !_sameDraftContentSeal(
+              catalogEntry.sourceSeal,
+              plan.expectedSourceSeal,
+            )) {
+          throw const Revision3ItemPatchStaleCheckpointException();
+        }
+
+        final request = switch (plan.action) {
+          AuthoringRevision3ItemPatchAction.upsert =>
+            AuthoringRevision3ItemPatchRequestV1.upsertForProject(
+              expectedHead: basis.head,
+              currentProjectJson: basis.projectJson,
+              catalogRead: catalogRead,
+              catalogEntry: catalogEntry,
+              entityId: plan.entityId,
+              expectedEntityRevision: plan.expectedEntityRevision,
+              displayName:
+                  plan.displayName ??
+                  (throw const Revision3ItemPatchStaleCheckpointException()),
+              fields: plan.fields,
+            ),
+          AuthoringRevision3ItemPatchAction.remove =>
+            AuthoringRevision3ItemPatchRequestV1.removeForProject(
+              expectedHead: basis.head,
+              currentProjectJson: basis.projectJson,
+              catalogRead: catalogRead,
+              currentCatalogEntry: catalogEntry,
+              entityId: plan.entityId,
+              expectedEntityRevision:
+                  plan.expectedEntityRevision ??
+                  (throw const Revision3ItemPatchStaleCheckpointException()),
+            ),
+        };
+        final prepared = await itemStore.prepareItemPatchV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        final expectedChange = switch ((
+          plan.action,
+          plan.expectedEntityRevision,
+        )) {
+          (AuthoringRevision3ItemPatchAction.remove, _) =>
+            AuthoringRevision3ItemPatchChange.removed,
+          (AuthoringRevision3ItemPatchAction.upsert, null) =>
+            AuthoringRevision3ItemPatchChange.created,
+          _ => AuthoringRevision3ItemPatchChange.updated,
+        };
+        final expectedEntityRevision = switch (expectedChange) {
+          AuthoringRevision3ItemPatchChange.created => 0,
+          AuthoringRevision3ItemPatchChange.updated =>
+            plan.expectedEntityRevision! + 1,
+          AuthoringRevision3ItemPatchChange.removed => null,
+        };
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != basis.projectId ||
+            prepared.revision != basis.projectRevision + 1 ||
+            prepared.entityId != plan.entityId ||
+            prepared.entityRevision != expectedEntityRevision ||
+            prepared.change != expectedChange ||
+            prepared.catalogLayer != plan.expectedCatalogLayer ||
+            prepared.vanillaClass != plan.vanillaClass ||
+            !_sameDraftContentSeal(
+              prepared.sourceSeal,
+              plan.expectedSourceSeal,
+            ) ||
+            !_sameDraftContentSeal(
+              prepared.catalogSeal,
+              plan.expectedCatalogSeal,
+            ) ||
+            prepared.buildStatus !=
+                AuthoringRevision3ItemPatchBuildStatus.blocked ||
+            prepared.runtimeStatus !=
+                AuthoringRevision3ItemRuntimeStatus.runtimeUnqualified ||
+            prepared.publicationStatus !=
+                AuthoringRevision3ItemPatchPublicationStatus.notSupported) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 ItemPatch preparation disagrees with its exact session basis or plan',
+          );
+        }
+        return _ManagedPreparedCheckpoint<Revision3ItemPatchPublication>(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: Revision3ItemPatchPublication(
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            entityId: prepared.entityId,
+            entityRevision: prepared.entityRevision,
+            change: prepared.change,
+            vanillaClass: prepared.vanillaClass,
+          ),
+        );
+      },
+    );
+  }
+
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
   /// The operation shares the session's serialized lane, verifies the fixed head before and after
@@ -7755,6 +8006,94 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3ItemCatalogReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_ITEM_PATCH_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemCatalogErrorIsUnsupported(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchUnsupportedSchemaException(),
+          stackTrace,
+        );
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Item catalog could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3ItemPatchPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_ITEM_PATCH_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemPatchPrepareErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error.code == 'AUTHORING_REVISION3_ITEM_PATCH_NO_CHANGES') {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchNoChangesException(),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemPatchPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is UnsupportedError ||
+        error is Revision3ItemPatchStaleCheckpointException ||
+        error is Revision3ItemPatchNoChangesException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 ItemPatch preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3ContentReadError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_CONTENT_HEAD_CONFLICT') {
@@ -8097,6 +8436,21 @@ bool _sameDraftContentSeal(
   AuthoringDraftContentSeal left,
   AuthoringDraftContentSeal right,
 ) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
+
+AuthoringDraftContentSeal _revision3ItemTargetExecutableSeal(
+  String projectJson,
+) {
+  try {
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final target = (project['target'] as Map).cast<String, Object?>();
+    final executable = (target['executable'] as Map).cast<String, Object?>();
+    return AuthoringDraftContentSeal.fromJson(executable);
+  } catch (_) {
+    throw const ManagedProjectVerificationException(
+      'canonical revision-3 Item project target is invalid',
+    );
+  }
+}
 
 Map<String, String> _revision3DialogLocalizationTexts(
   String projectJson, {
@@ -8812,6 +9166,32 @@ bool _revision3StoryDraftRemovalErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+}.contains(code);
+
+bool _revision3ItemPatchPrepareErrorIsStale(String code) => const {
+  'AUTHORING_REVISION3_ITEM_PATCH_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_ENTITY_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_FIELD_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROVENANCE_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3ItemCatalogErrorIsUnsupported(String code) => const {
+  'AUTHORING_REVISION3_ITEM_PATCH_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_FIELD_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROVENANCE_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_TARGET_UNSUPPORTED',
+}.contains(code);
+
+bool _revision3ItemPatchPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_ITEM_PATCH_INPUT_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_INVALID',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_REVISION_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_SIGNED_WIRE_LIMIT',
 }.contains(code);
 
 bool _revision3DataAssetErrorIsRetryable(String code) => const {

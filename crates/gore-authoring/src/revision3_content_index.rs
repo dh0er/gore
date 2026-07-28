@@ -140,7 +140,6 @@ pub enum Revision3ContentEntitySummaryV1 {
         objective_title: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         additional_objective_titles: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         objective_slots: Vec<u16>,
         transcript_count: u64,
         module_namespace: String,
@@ -443,7 +442,7 @@ pub fn build_revision3_content_index_v1(
                         &mut references,
                         &mut reference_count,
                         Revision3ContentReferenceRoleV1::QuestTranscriptLine,
-                        binding.objective_slot.map(|slot| slot.to_string()),
+                        Some(binding.objective_slot.to_string()),
                         &binding.line,
                     )?;
                 }
@@ -1095,7 +1094,26 @@ mod tests {
         let json = index.to_canonical_json().unwrap();
         assert!(!json.contains(source));
         assert!(!json.contains("Do the thing"));
+        assert!(json.contains("\"objective_slots\":[1,2,3]"));
         assert!(json.contains(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2));
+    }
+
+    #[test]
+    fn quest_summary_always_spells_mandatory_objective_slots() {
+        let summary = Revision3ContentEntitySummaryV1::QuestDraft {
+            technical_id: "GORE_EMPTY_SLOTS".to_owned(),
+            title: "Invalid fixture".to_owned(),
+            objective_title: "Missing objective slot".to_owned(),
+            additional_objective_titles: Vec::new(),
+            objective_slots: Vec::new(),
+            transcript_count: 0,
+            module_namespace: "PROJECT.QUESTS.EMPTY_SLOTS".to_owned(),
+            parent_runtime_class: "UQuest".to_owned(),
+            giver_runtime_unique_name: "ASGHAN".to_owned(),
+        };
+
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("\"objective_slots\":[]"));
     }
 
     #[test]

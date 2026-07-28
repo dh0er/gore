@@ -429,9 +429,6 @@ enum _EntityToolAction {
   npcProfileInspection,
 }
 
-const _stableSlotQuestGeneratorVersion = 4;
-const _stableSlotQuestGeneratorId = 'gore-authoring.draft-quest-skeleton';
-
 /// First real managed-R3 content surface.
 ///
 /// The native index proves exact-current project content and reference shape.
@@ -1918,7 +1915,6 @@ class _EntityDetails extends StatelessWidget {
   Widget build(BuildContext context) {
     final backlinks = index.backlinksToEntity(entity.id);
     final editQuestOutline = onEditQuestOutline;
-    final outlineUsesStableSlots = _questOutlineUsesStableSlots(index, entity);
     return KeyedSubtree(
       key: ValueKey('revision3-content-entity-details-${entity.id}'),
       child: ListView(
@@ -1976,10 +1972,8 @@ class _EntityDetails extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.format_list_bulleted_outlined),
                       title: const Text('Name & objectives'),
-                      subtitle: Text(
-                        outlineUsesStableSlots
-                            ? 'Keeps objective IDs and behavior connections intact'
-                            : 'Keeps objective count and Quest relationships intact',
+                      subtitle: const Text(
+                        'Keeps objective IDs and behavior connections intact',
                       ),
                     ),
                   ),
@@ -2436,32 +2430,6 @@ class _ContentLoadError extends StatelessWidget {
   }
 }
 
-bool _questOutlineUsesStableSlots(
-  Revision3ContentIndex index,
-  Revision3ContentEntity quest,
-) {
-  for (final reference in quest.references) {
-    if (reference.role != 'draft_script_module' ||
-        reference.qualifier != null ||
-        reference.resolution != Revision3ContentReferenceResolution.resolved ||
-        reference.target.projectId != index.projectId ||
-        reference.target.expectedKind !=
-            Revision3ContentEntityKind.scriptModule) {
-      continue;
-    }
-    final module = index.entityById(reference.target.entityId);
-    final owner = module?.origin.generatedOwner;
-    return module?.kind == Revision3ContentEntityKind.scriptModule &&
-        module?.origin.type == 'generated' &&
-        module?.origin.label == _stableSlotQuestGeneratorId &&
-        module?.origin.generatorVersion == _stableSlotQuestGeneratorVersion &&
-        owner?.projectId == index.projectId &&
-        owner?.entityId == quest.id &&
-        owner?.expectedKind == Revision3ContentEntityKind.questDraft;
-  }
-  return false;
-}
-
 IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {
   Revision3ContentEntityKind.localizationEntry => Icons.translate,
   Revision3ContentEntityKind.dialogLine => Icons.chat_bubble_outline,
@@ -2470,6 +2438,7 @@ IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {
   Revision3ContentEntityKind.npcDraft => Icons.person_outline,
   Revision3ContentEntityKind.questDraft => Icons.assignment_outlined,
   Revision3ContentEntityKind.scriptModule => Icons.code,
+  Revision3ContentEntityKind.itemPatch => Icons.inventory_2_outlined,
 };
 
 String _entityTitle(Revision3ContentEntity entity) => entity.displayName.isEmpty

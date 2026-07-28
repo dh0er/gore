@@ -576,8 +576,16 @@ Snapshot V2 is the separate backup/restore format. Auto-updates on launch
   localization, dialog, Voice, NPCs, Quests, scripts, items, and verified
   DataAsset stages. This readiness inventory creates no files and does not
   unlock build, install, deployment, or runtime authority.
-- Edit **item/stat values** by browsing the categorized item catalog and editing
-  fields (the override domain).
+- Edit supported **existing item/stat scalar values** inside the exact current
+  managed R3 project. The categorized editor publishes typed `ItemPatch`
+  entities and can fully revert an item to game defaults. Its closed schemas
+  use exact signed-32-bit integer and finite-32-bit-float domains plus boolean
+  values for explicitly audited game generations. Existing patches must still
+  match that exact current catalog layer, class source seal, field set, and
+  types; unknown, obsolete, or unsupported provenance fails closed instead of
+  entering a compatibility/revert path. Studio does not invent
+  gameplay-specific limits. It does not create a new item identity and has no
+  item build/deploy/runtime authority yet.
 - Edit **localized text and dialog-line IDs**, and stage selectable runtime
   topics with explicit participant, authored AngelScript class, and vanilla
   sentinel identities. The GUI preserves their insertion order and emits the

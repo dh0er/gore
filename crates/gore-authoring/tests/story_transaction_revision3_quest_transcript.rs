@@ -241,11 +241,7 @@ fn project() -> (ProjectRevision3, WorkingHead) {
     (project, head(0x18))
 }
 
-fn binding(
-    project: &ProjectRevision3,
-    line: u8,
-    slot: Option<u16>,
-) -> Revision3QuestTranscriptBindingV1 {
+fn binding(project: &ProjectRevision3, line: u8, slot: u16) -> Revision3QuestTranscriptBindingV1 {
     Revision3QuestTranscriptBindingV1 {
         line: Revision3TypedRef::new(
             project.project_id,
@@ -313,7 +309,7 @@ fn quest(project: &ProjectRevision3) -> &Revision3QuestDraft {
 }
 
 #[test]
-fn empty_transcript_preserves_pre_feature_canonical_bytes() {
+fn empty_transcript_uses_compact_canonical_spelling() {
     let (project, _) = project();
     let json = project.to_canonical_json().unwrap();
     assert!(!json.contains("\"transcript\""));
@@ -322,19 +318,19 @@ fn empty_transcript_preserves_pre_feature_canonical_bytes() {
 }
 
 #[test]
-fn request_wire_is_exact_closed_duplicate_free_bounded_and_spells_null_slots() {
+fn request_wire_is_exact_closed_duplicate_free_bounded_and_requires_slots() {
     let (project, basis_head) = project();
     let request = request(
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![binding(&project, LINE_A, None)],
+            bindings: vec![binding(&project, LINE_A, 1)],
         },
     );
     let canonical = request.to_canonical_json().unwrap();
     assert!(canonical.starts_with("{\"expected_head\":"));
     assert!(canonical.contains("\"intent\":{\"mode\":\"replace\",\"bindings\":["));
-    assert!(canonical.contains("\"objective_slot\":null"));
+    assert!(canonical.contains("\"objective_slot\":1"));
     assert_eq!(
         Revision3QuestTranscriptEditRequestV1::from_json(&canonical).unwrap(),
         request
@@ -362,10 +358,19 @@ fn request_wire_is_exact_closed_duplicate_free_bounded_and_spells_null_slots() {
             _
         ))
     ));
-    let missing_null = canonical.replacen(",\"objective_slot\":null", "", 1);
+    let missing_slot = canonical.replacen(",\"objective_slot\":1", "", 1);
     assert!(matches!(
-        Revision3QuestTranscriptEditRequestV1::from_json(&missing_null),
-        Err(Revision3QuestTranscriptEditRequestJsonErrorV1::NonCanonicalJson)
+        Revision3QuestTranscriptEditRequestV1::from_json(&missing_slot),
+        Err(Revision3QuestTranscriptEditRequestJsonErrorV1::InvalidJson(
+            _
+        ))
+    ));
+    let null_slot = canonical.replacen("\"objective_slot\":1", "\"objective_slot\":null", 1);
+    assert!(matches!(
+        Revision3QuestTranscriptEditRequestV1::from_json(&null_slot),
+        Err(Revision3QuestTranscriptEditRequestJsonErrorV1::InvalidJson(
+            _
+        ))
     ));
     assert!(matches!(
         Revision3QuestTranscriptEditRequestV1::from_json(
@@ -382,10 +387,7 @@ fn replace_reorders_detaches_and_projects_ordered_index_without_touching_generat
     let basis_input = quest(&project).input.clone();
     let basis_assets = project.asset_store.clone();
     let basis_unrelated = project.entities[&id(UNRELATED)].clone();
-    let bindings = vec![
-        binding(&project, LINE_B, Some(2)),
-        binding(&project, LINE_A, None),
-    ];
+    let bindings = vec![binding(&project, LINE_B, 2), binding(&project, LINE_A, 1)];
     let edit = request(
         &project,
         &basis_head,
@@ -424,7 +426,7 @@ fn replace_reorders_detaches_and_projects_ordered_index_without_touching_generat
     assert_eq!(indexed_quest.references[1].target.entity_id, id(LINE_B));
     assert_eq!(indexed_quest.references[1].qualifier.as_deref(), Some("2"));
     assert_eq!(indexed_quest.references[2].target.entity_id, id(LINE_A));
-    assert_eq!(indexed_quest.references[2].qualifier, None);
+    assert_eq!(indexed_quest.references[2].qualifier.as_deref(), Some("1"));
     let Revision3ContentEntitySummaryV1::QuestDraft {
         objective_slots,
         transcript_count,
@@ -463,7 +465,7 @@ fn replace_reorders_detaches_and_projects_ordered_index_without_touching_generat
 #[test]
 fn create_and_insert_is_one_atomic_project_and_quest_revision() {
     let (mut project, basis_head) = project();
-    let existing = binding(&project, LINE_A, None);
+    let existing = binding(&project, LINE_A, 1);
     let Revision3EntityPayload::QuestDraft(quest_payload) =
         &mut project.entities.get_mut(&id(QUEST)).unwrap().payload
     else {
@@ -498,7 +500,7 @@ fn create_and_insert_is_one_atomic_project_and_quest_revision() {
         &basis_head,
         Revision3QuestTranscriptIntentV1::CreateAndInsert {
             index: 1,
-            objective_slot: Some(1),
+            objective_slot: 1,
             line: dialog,
         },
     );
@@ -536,7 +538,7 @@ fn create_and_insert_is_one_atomic_project_and_quest_revision() {
                     id(0x51),
                     Revision3EntityKind::DialogLine,
                 ),
-                objective_slot: Some(1),
+                objective_slot: 1,
             },
         ]
     );
@@ -561,10 +563,7 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![
-                binding(&project, LINE_A, None),
-                binding(&project, LINE_A, Some(1)),
-            ],
+            bindings: vec![binding(&project, LINE_A, 1), binding(&project, LINE_A, 1)],
         },
     );
     assert!(matches!(
@@ -576,7 +575,7 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![binding(&project, LINE_A, Some(99))],
+            bindings: vec![binding(&project, LINE_A, 99)],
         },
     );
     assert!(matches!(
@@ -584,7 +583,7 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
         Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { slot: 99, .. }
     ));
 
-    let mut foreign = binding(&project, LINE_A, None);
+    let mut foreign = binding(&project, LINE_A, 1);
     foreign.line.project_id = project_id(0xfe);
     let foreign = request(
         &project,
@@ -603,7 +602,7 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
             bindings: vec![
-                binding(&project, LINE_A, None);
+                binding(&project, LINE_A, 1);
                 MAX_REVISION3_QUEST_TRANSCRIPT_BINDINGS_V1 + 1
             ],
         },
@@ -635,7 +634,7 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
         &basis_head,
         Revision3QuestTranscriptIntentV1::CreateAndInsert {
             index: 0,
-            objective_slot: None,
+            objective_slot: 1,
             line: embedded_duplicate,
         },
     );
@@ -648,13 +647,13 @@ fn conflicts_cover_binding_closure_slots_caps_and_embedded_dialog_rejection() {
 }
 
 #[test]
-fn inactive_objective_slots_are_rejected_but_unassigned_transcript_is_allowed() {
+fn only_active_objective_slots_are_accepted() {
     let (project, basis_head) = project();
     let slotted = request(
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![binding(&project, LINE_A, Some(99))],
+            bindings: vec![binding(&project, LINE_A, 99)],
         },
     );
     assert!(matches!(
@@ -662,15 +661,15 @@ fn inactive_objective_slots_are_rejected_but_unassigned_transcript_is_allowed() 
         Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { slot: 99, .. }
     ));
 
-    let unassigned = request(
+    let active = request(
         &project,
         &basis_head,
         Revision3QuestTranscriptIntentV1::Replace {
-            bindings: vec![binding(&project, LINE_A, None)],
+            bindings: vec![binding(&project, LINE_A, 1)],
         },
     );
     assert_eq!(
-        applied(evaluate(&project, &basis_head, &unassigned)).transcript_count,
+        applied(evaluate(&project, &basis_head, &active)).transcript_count,
         1
     );
 }

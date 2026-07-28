@@ -359,6 +359,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
     this.onPublished,
     this.onDirtyChanged,
     this.notice,
+    this.mutationsEnabled = true,
     super.key,
   });
 
@@ -394,6 +395,7 @@ class Revision3LocalizationVoiceWorkspace extends StatefulWidget {
   final Revision3LocalizationPublished? onPublished;
   final ValueChanged<bool>? onDirtyChanged;
   final String? notice;
+  final bool mutationsEnabled;
 
   @override
   State<Revision3LocalizationVoiceWorkspace> createState() =>
@@ -644,10 +646,13 @@ class _Revision3LocalizationVoiceWorkspaceState
   bool get _runningExternalAction => _runningExternalActionOwner != null;
 
   bool get _contextMutationBlocked =>
-      _saving || _loadingCatalog || _runningExternalAction;
+      !widget.mutationsEnabled ||
+      _saving ||
+      _loadingCatalog ||
+      _runningExternalAction;
 
   int? _beginExternalAction() {
-    if (_runningExternalAction) return null;
+    if (_contextMutationBlocked) return null;
     final owner = ++_externalActionEpoch;
     setState(() => _runningExternalActionOwner = owner);
     return owner;
@@ -1019,6 +1024,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     final seed = _seed;
     if (seed == null ||
         !_dirty ||
+        !widget.mutationsEnabled ||
         _saving ||
         _loadingCatalog ||
         _checkpointChangedWhileDirty) {
@@ -1272,6 +1278,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     String? locale,
   }) async {
     if (_saving ||
+        !widget.mutationsEnabled ||
         _loadingCatalog ||
         _runningExternalAction ||
         resolveAction() == null ||
@@ -1433,6 +1440,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         widget.projectId == projectId &&
         widget.projectRevision == projectRevision &&
         widget.projectCheckpointIdentity == projectCheckpointIdentity &&
+        widget.mutationsEnabled &&
         !_saving &&
         !_loadingCatalog &&
         !_runningExternalAction &&
@@ -1496,6 +1504,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           widget.projectId != projectId ||
           widget.projectRevision != projectRevision ||
           widget.projectCheckpointIdentity != projectCheckpointIdentity ||
+          !widget.mutationsEnabled ||
           _saving ||
           _loadingCatalog ||
           _loadingVoiceCatalog ||
@@ -1561,6 +1570,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         widget.projectId == projectId &&
         widget.projectRevision == projectRevision &&
         widget.projectCheckpointIdentity == projectCheckpointIdentity &&
+        widget.mutationsEnabled &&
         !_saving &&
         !_loadingCatalog &&
         !_loadingVoiceCatalog &&
@@ -1740,17 +1750,11 @@ class _Revision3LocalizationVoiceWorkspaceState
                 copy: widget.copy,
                 notice: widget.notice,
                 onCreateDialogLine:
-                    widget.onCreateDialogLine == null ||
-                        _loadingCatalog ||
-                        _saving ||
-                        _runningExternalAction
+                    widget.onCreateDialogLine == null || _contextMutationBlocked
                     ? null
                     : () => _runExternalAction(() => widget.onCreateDialogLine),
                 onAddVoiceTake:
-                    widget.onAddVoiceTake == null ||
-                        _loadingCatalog ||
-                        _saving ||
-                        _runningExternalAction
+                    widget.onAddVoiceTake == null || _contextMutationBlocked
                     ? null
                     : () => _runExternalAction(
                         () => widget.onAddVoiceTake,
@@ -1758,19 +1762,14 @@ class _Revision3LocalizationVoiceWorkspaceState
                       ),
                 onImportVoiceFolder:
                     widget.onImportVoiceFolder == null ||
-                        _loadingCatalog ||
-                        _saving ||
-                        _runningExternalAction
+                        _contextMutationBlocked
                     ? null
                     : () => _runExternalAction(
                         () => widget.onImportVoiceFolder,
                         requiresVoiceAuthority: true,
                       ),
                 onManageVoiceTakes:
-                    widget.onManageVoiceTakes == null ||
-                        _loadingCatalog ||
-                        _saving ||
-                        _runningExternalAction
+                    widget.onManageVoiceTakes == null || _contextMutationBlocked
                     ? null
                     : () => _runExternalAction(
                         () => widget.onManageVoiceTakes,
@@ -1778,9 +1777,7 @@ class _Revision3LocalizationVoiceWorkspaceState
                       ),
                 onResolveVoiceTarget:
                     widget.onResolveVoiceTarget == null ||
-                        _loadingCatalog ||
-                        _saving ||
-                        _runningExternalAction
+                        _contextMutationBlocked
                     ? null
                     : () => _runExternalAction(
                         () => widget.onResolveVoiceTarget,
@@ -1939,6 +1936,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     }
 
     final busy =
+        !widget.mutationsEnabled ||
         _saving ||
         _loadingCatalog ||
         _loadingSeed ||
@@ -2397,9 +2395,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           ),
           OutlinedButton.icon(
             key: const Key('revision3-localization-add-language'),
-            onPressed: _saving || _loadingCatalog || _runningExternalAction
-                ? null
-                : _addLocale,
+            onPressed: _contextMutationBlocked ? null : _addLocale,
             icon: const Icon(Icons.add),
             label: Text(widget.copy.addLanguageLabel),
           ),
@@ -2411,7 +2407,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           copy: widget.copy,
           locale: locale,
           controller: _texts[locale.locale]!,
-          saving: _saving || _loadingCatalog || _runningExternalAction,
+          saving: _contextMutationBlocked,
           canRemove: locale.canRemove && _texts.length > 1,
           onRemove: () => _removeLocale(locale),
         ),
@@ -2479,6 +2475,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         ? null
         : exactLine?.slotSummaryForLocale(locale);
     final busy =
+        !widget.mutationsEnabled ||
         _saving ||
         _loadingCatalog ||
         _loadingVoiceCatalog ||
@@ -2633,6 +2630,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       key: const Key('revision3-localization-save'),
       onPressed:
           _dirty &&
+              widget.mutationsEnabled &&
               !_saving &&
               !_loadingCatalog &&
               !_runningExternalAction &&

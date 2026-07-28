@@ -5,9 +5,23 @@ const _maxEntities = 100000;
 const _maxAssets = 100000;
 const _maxReferences = 1000000;
 const _signedWireMax = 0x7fffffffffffffff;
+const _signedWireMin = -0x7fffffffffffffff - 1;
+const _maxItemPatchFields = 256;
+const _maxItemFieldNameBytes = 128;
+const _maxItemClassBytes = 256;
+const _maxItemEnumTypeBytes = 256;
+const _maxItemStringBytes = 16 * 1024;
+const _maxItemStringTotalBytes = 64 * 1024;
+const _npcGeneratorId = 'gore-authoring.logical-npc-clone-draft';
+const _npcGeneratorVersion = 1;
+const _questGeneratorId = 'gore-authoring.draft-quest-skeleton';
+const _questGeneratorVersion = 4;
+const _questCollisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 
 final _idPattern = RegExp(r'^[0-9a-f]{32}$');
 final _shaPattern = RegExp(r'^[0-9a-f]{64}$');
+final _itemIdentifierPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
 
 /// The managed content projection lost exact-current authority and must be
 /// reopened before another catalog read or publication attempt.
@@ -22,7 +36,8 @@ enum Revision3ContentEntityKind {
   voiceTake('voice_take', 'Voice take'),
   npcDraft('npc_draft', 'NPC Draft'),
   questDraft('quest_draft', 'Quest Draft'),
-  scriptModule('script_module', 'Generated script');
+  scriptModule('script_module', 'Generated script'),
+  itemPatch('item_patch', 'Item edit');
 
   const Revision3ContentEntityKind(this.wireName, this.displayName);
 
@@ -310,6 +325,7 @@ final class Revision3ContentIndex {
 
     final byEntityId = {for (final entity in entities) entity.id: entity};
     final byAssetHash = {for (final asset in assets) asset.sha256: asset};
+    final itemPatchTargets = <String>{};
     var referenceCount = 0;
     for (final entity in entities) {
       referenceCount += entity.references.length;
@@ -344,8 +360,34 @@ final class Revision3ContentIndex {
       }
       _validateDialogLineProjectionFacts(entity);
       _validateVoiceSlotProjectionFacts(entity);
-      _validateNpcProjectionFacts(entity);
-      _validateQuestProjectionFacts(entity);
+      _validateScriptModuleProjectionFacts(
+        entity,
+        projectId: projectId,
+        entitiesById: byEntityId,
+      );
+      _validateNpcProjectionFacts(
+        entity,
+        projectId: projectId,
+        entitiesById: byEntityId,
+      );
+      _validateQuestProjectionFacts(
+        entity,
+        projectId: projectId,
+        entitiesById: byEntityId,
+      );
+      _validateItemPatchProjectionFacts(
+        entity,
+        targetExecutable: Revision3ContentSeal(
+          sha256: executable.sha256,
+          byteLength: executable.byteLength,
+        ),
+      );
+      if (entity.kind == Revision3ContentEntityKind.itemPatch &&
+          !itemPatchTargets.add(entity.summary.itemPatch!.vanillaClass)) {
+        throw FormatException(
+          'content ItemPatch ${entity.id} duplicates a vanilla target',
+        );
+      }
     }
 
     return Revision3ContentIndex._(
@@ -512,18 +554,31 @@ final class Revision3ContentEntity {
   }
 }
 
+final class Revision3ContentSeal {
+  const Revision3ContentSeal({required this.sha256, required this.byteLength});
+
+  final String sha256;
+  final int byteLength;
+}
+
 final class Revision3ContentOrigin {
   const Revision3ContentOrigin._({
     required this.type,
     required this.label,
     this.generatedOwner,
     this.generatorVersion,
+    this.generationExecutable,
+    this.catalogLayer,
+    this.sourceSeal,
   });
 
   final String type;
   final String label;
   final Revision3ContentReferenceTarget? generatedOwner;
   final int? generatorVersion;
+  final Revision3ContentSeal? generationExecutable;
+  final String? catalogLayer;
+  final Revision3ContentSeal? sourceSeal;
 
   factory Revision3ContentOrigin._fromJson(
     Map<String, Object?> json,
@@ -549,15 +604,24 @@ final class Revision3ContentOrigin {
           'canonical_selector',
           'source_seal',
         ], context);
-        _generation(json['generation'], '$context generation');
-        _seal(json['source_seal'], '$context source_seal');
-        _string(json['catalog_layer'], '$context catalog_layer');
+        final generation = _generation(
+          json['generation'],
+          '$context generation',
+        );
+        final sourceSeal = _seal(json['source_seal'], '$context source_seal');
+        final catalogLayer = _string(
+          json['catalog_layer'],
+          '$context catalog_layer',
+        );
         return Revision3ContentOrigin._(
           type: type,
           label: _string(
             json['canonical_selector'],
             '$context canonical_selector',
           ),
+          generationExecutable: generation,
+          catalogLayer: catalogLayer,
+          sourceSeal: sourceSeal,
         );
       case 'imported':
         _requireKeys(json, const [
@@ -566,7 +630,7 @@ final class Revision3ContentOrigin {
           'source_seal',
           'external_identity',
         ], context);
-        _seal(json['source_seal'], '$context source_seal');
+        final sourceSeal = _seal(json['source_seal'], '$context source_seal');
         final importer = _string(json['importer'], '$context importer');
         final external = _nullableString(
           json['external_identity'],
@@ -575,6 +639,7 @@ final class Revision3ContentOrigin {
         return Revision3ContentOrigin._(
           type: type,
           label: external ?? importer,
+          sourceSeal: sourceSeal,
         );
       case 'generated':
         _requireKeys(json, const [
@@ -748,6 +813,124 @@ final class Revision3ContentNpcDraftSummary {
   final int greetingCount;
 }
 
+enum Revision3ContentItemScalarType {
+  integer('integer'),
+  float_('float'),
+  boolean('boolean'),
+  string('string'),
+  enum_('enum');
+
+  const Revision3ContentItemScalarType(this.wireName);
+
+  final String wireName;
+
+  static Revision3ContentItemScalarType parse(Object? value, String context) =>
+      values.firstWhere(
+        (type) => type.wireName == value,
+        orElse: () =>
+            throw FormatException('$context has an invalid scalar type'),
+      );
+}
+
+final class Revision3ContentItemEnumValue {
+  const Revision3ContentItemEnumValue({
+    required this.enumType,
+    required this.backing,
+  });
+
+  final String enumType;
+  final int backing;
+}
+
+/// One closed, independently validated scalar from a managed ItemPatch.
+final class Revision3ContentItemScalarValue {
+  const Revision3ContentItemScalarValue._({
+    required this.type,
+    this.integerValue,
+    this.floatValue,
+    this.booleanValue,
+    this.stringValue,
+    this.enumValue,
+  });
+
+  final Revision3ContentItemScalarType type;
+  final int? integerValue;
+  final double? floatValue;
+  final bool? booleanValue;
+  final String? stringValue;
+  final Revision3ContentItemEnumValue? enumValue;
+
+  Object get value => switch (type) {
+    Revision3ContentItemScalarType.integer => integerValue!,
+    Revision3ContentItemScalarType.float_ => floatValue!,
+    Revision3ContentItemScalarType.boolean => booleanValue!,
+    Revision3ContentItemScalarType.string => stringValue!,
+    Revision3ContentItemScalarType.enum_ => enumValue!,
+  };
+
+  factory Revision3ContentItemScalarValue._fromJson(
+    Map<String, Object?> json,
+    String context,
+  ) {
+    _requireKeys(json, const ['type', 'data'], context);
+    final type = Revision3ContentItemScalarType.parse(
+      json['type'],
+      '$context type',
+    );
+    final data = json['data'];
+    return switch (type) {
+      Revision3ContentItemScalarType.integer =>
+        Revision3ContentItemScalarValue._(
+          type: type,
+          integerValue: _signedInteger(data, '$context data'),
+        ),
+      Revision3ContentItemScalarType.float_ =>
+        Revision3ContentItemScalarValue._(
+          type: type,
+          floatValue: _finiteCanonicalFloat(data, '$context data'),
+        ),
+      Revision3ContentItemScalarType.boolean =>
+        Revision3ContentItemScalarValue._(
+          type: type,
+          booleanValue: _boolean(data, '$context data'),
+        ),
+      Revision3ContentItemScalarType.string =>
+        Revision3ContentItemScalarValue._(
+          type: type,
+          stringValue: _itemString(data, '$context data'),
+        ),
+      Revision3ContentItemScalarType.enum_ => Revision3ContentItemScalarValue._(
+        type: type,
+        enumValue: _itemEnumValue(data, '$context data'),
+      ),
+    };
+  }
+}
+
+/// Structured ItemPatch facts retained from the native exact-current index.
+final class Revision3ContentItemPatchSummary {
+  Revision3ContentItemPatchSummary({
+    required this.vanillaClass,
+    required Map<String, Revision3ContentItemScalarValue> fields,
+  }) : fields = Map<String, Revision3ContentItemScalarValue>.unmodifiable(
+         fields,
+       );
+
+  final String vanillaClass;
+  final Map<String, Revision3ContentItemScalarValue> fields;
+}
+
+/// Closed generator identity retained for generated script ownership checks.
+final class Revision3ContentScriptModuleSummary {
+  const Revision3ContentScriptModuleSummary({
+    required this.generatorId,
+    required this.generatorVersion,
+  });
+
+  final String generatorId;
+  final int generatorVersion;
+}
+
 final class Revision3ContentSummary {
   const Revision3ContentSummary._({
     required this.primaryIdentity,
@@ -759,6 +942,8 @@ final class Revision3ContentSummary {
     required this.voiceTake,
     required this.npcDraft,
     required this.questDraft,
+    required this.scriptModule,
+    required this.itemPatch,
   });
 
   final String primaryIdentity;
@@ -770,6 +955,8 @@ final class Revision3ContentSummary {
   final Revision3ContentVoiceTakeSummary? voiceTake;
   final Revision3ContentNpcDraftSummary? npcDraft;
   final Revision3ContentQuestDraftSummary? questDraft;
+  final Revision3ContentScriptModuleSummary? scriptModule;
+  final Revision3ContentItemPatchSummary? itemPatch;
 
   factory Revision3ContentSummary._fromJson(
     Map<String, Object?> json,
@@ -791,6 +978,8 @@ final class Revision3ContentSummary {
     Revision3ContentVoiceTakeSummary? voiceTake;
     Revision3ContentNpcDraftSummary? npcDraft;
     Revision3ContentQuestDraftSummary? questDraft;
+    Revision3ContentScriptModuleSummary? scriptModule;
+    Revision3ContentItemPatchSummary? itemPatch;
     switch (entityKind) {
       case Revision3ContentEntityKind.localizationEntry:
         _requireKeys(data, const ['loc_id', 'locales'], '$context data');
@@ -960,15 +1149,13 @@ final class Revision3ContentSummary {
         final hasAdditionalObjectives = data.containsKey(
           'additional_objective_titles',
         );
-        final hasObjectiveSlots = data.containsKey('objective_slots');
-        final hasTranscriptCount = data.containsKey('transcript_count');
         _requireKeys(data, <String>[
           'technical_id',
           'title',
           'objective_title',
           if (hasAdditionalObjectives) 'additional_objective_titles',
-          if (hasObjectiveSlots) 'objective_slots',
-          if (hasTranscriptCount) 'transcript_count',
+          'objective_slots',
+          'transcript_count',
           'module_namespace',
           'parent_runtime_class',
           'giver_runtime_unique_name',
@@ -1007,26 +1194,24 @@ final class Revision3ContentSummary {
             );
           }
         }
-        final objectiveSlots = hasObjectiveSlots
-            ? _integerList(
-                data['objective_slots'],
-                '$context objective_slots',
-                maxItems: 8,
-                min: 1,
-                max: 0xffff,
-              )
-            : const <int>[];
-        if (hasObjectiveSlots &&
-            (objectiveSlots.isEmpty ||
-                objectiveSlots.length != 1 + additionalObjectives.length ||
-                objectiveSlots.toSet().length != objectiveSlots.length)) {
+        final objectiveSlots = _integerList(
+          data['objective_slots'],
+          '$context objective_slots',
+          maxItems: 8,
+          min: 1,
+          max: 0xffff,
+        );
+        if (objectiveSlots.isEmpty ||
+            objectiveSlots.length != 1 + additionalObjectives.length ||
+            objectiveSlots.toSet().length != objectiveSlots.length) {
           throw FormatException(
             '$context has invalid semantic objective slots',
           );
         }
-        final transcriptCount = hasTranscriptCount
-            ? _integer(data['transcript_count'], '$context transcript_count')
-            : 0;
+        final transcriptCount = _integer(
+          data['transcript_count'],
+          '$context transcript_count',
+        );
         if (transcriptCount > 256) {
           throw FormatException('$context transcript exceeds 256 lines');
         }
@@ -1073,7 +1258,14 @@ final class Revision3ContentSummary {
           data['generator_id'],
           '$context generator_id',
         );
-        _integer(data['generator_version'], '$context generator_version');
+        final generatorVersion = _integer(
+          data['generator_version'],
+          '$context generator_version',
+        );
+        scriptModule = Revision3ContentScriptModuleSummary(
+          generatorId: generator,
+          generatorVersion: generatorVersion,
+        );
         primary = _string(
           data['module_namespace'],
           '$context module_namespace',
@@ -1089,6 +1281,18 @@ final class Revision3ContentSummary {
           throw FormatException('$context has an unsupported script status');
         }
         terms.add(generator);
+      case Revision3ContentEntityKind.itemPatch:
+        itemPatch = _parseItemPatchSummary(data, '$context data');
+        primary = itemPatch.vanillaClass;
+        final fieldCount = itemPatch.fields.length;
+        secondary = '$fieldCount edited field${fieldCount == 1 ? '' : 's'}';
+        terms.addAll(itemPatch.fields.keys);
+        for (final value in itemPatch.fields.values) {
+          final enumValue = value.enumValue;
+          if (enumValue != null) terms.add(enumValue.enumType);
+          final stringValue = value.stringValue;
+          if (stringValue != null) terms.add(stringValue);
+        }
     }
     return Revision3ContentSummary._(
       primaryIdentity: primary,
@@ -1100,31 +1304,279 @@ final class Revision3ContentSummary {
       voiceTake: voiceTake,
       npcDraft: npcDraft,
       questDraft: questDraft,
+      scriptModule: scriptModule,
+      itemPatch: itemPatch,
     );
   }
 }
 
-void _validateNpcProjectionFacts(Revision3ContentEntity entity) {
+Revision3ContentItemPatchSummary _parseItemPatchSummary(
+  Map<String, Object?> data,
+  String context,
+) {
+  _requireKeys(data, const [
+    'vanilla_class',
+    'field_count',
+    'field_types',
+    'fields',
+  ], context);
+  final vanillaClass = _itemIdentifier(
+    data['vanilla_class'],
+    '$context vanilla_class',
+    maxBytes: _maxItemClassBytes,
+  );
+  final fieldCount = _integer(data['field_count'], '$context field_count');
+  if (fieldCount < 1 || fieldCount > _maxItemPatchFields) {
+    throw FormatException('$context field_count is outside its domain');
+  }
+
+  final rawTypes = _object(data['field_types'], '$context field_types');
+  final rawFields = _object(data['fields'], '$context fields');
+  if (rawTypes.length != fieldCount || rawFields.length != fieldCount) {
+    throw FormatException('$context field maps disagree with field_count');
+  }
+  _requireSortedUnique(rawTypes.keys.toList(), '$context field_types');
+  _requireSortedUnique(rawFields.keys.toList(), '$context fields');
+  if (!_equalStringLists(rawTypes.keys.toList(), rawFields.keys.toList())) {
+    throw FormatException('$context field maps have different keys');
+  }
+
+  final fields = <String, Revision3ContentItemScalarValue>{};
+  var totalStringBytes = 0;
+  for (final entry in rawFields.entries) {
+    final name = _itemIdentifier(
+      entry.key,
+      '$context field name',
+      maxBytes: _maxItemFieldNameBytes,
+    );
+    final declaredType = Revision3ContentItemScalarType.parse(
+      rawTypes[name],
+      '$context field_types $name',
+    );
+    final value = Revision3ContentItemScalarValue._fromJson(
+      _object(entry.value, '$context field $name'),
+      '$context field $name',
+    );
+    if (value.type != declaredType) {
+      throw FormatException('$context field $name has a false declared type');
+    }
+    final stringValue = value.stringValue;
+    if (stringValue != null) {
+      totalStringBytes += utf8.encode(stringValue).length;
+      if (totalStringBytes > _maxItemStringTotalBytes) {
+        throw FormatException('$context string fields exceed their budget');
+      }
+    }
+    fields[name] = value;
+  }
+  return Revision3ContentItemPatchSummary(
+    vanillaClass: vanillaClass,
+    fields: fields,
+  );
+}
+
+void _validateItemPatchProjectionFacts(
+  Revision3ContentEntity entity, {
+  required Revision3ContentSeal targetExecutable,
+}) {
+  if (entity.kind != Revision3ContentEntityKind.itemPatch) return;
+  final facts = entity.summary.itemPatch;
+  final generation = entity.origin.generationExecutable;
+  final sourceSeal = entity.origin.sourceSeal;
+  final catalogLayer = entity.origin.catalogLayer;
+  final displayName = entity.displayName;
+  if (facts == null ||
+      entity.origin.type != 'vanilla' ||
+      entity.origin.label != facts.vanillaClass ||
+      generation == null ||
+      generation.sha256 != targetExecutable.sha256 ||
+      generation.byteLength != targetExecutable.byteLength ||
+      catalogLayer == null ||
+      catalogLayer.isEmpty ||
+      catalogLayer.trim() != catalogLayer ||
+      utf8.encode(catalogLayer).length > 128 ||
+      _containsControlCharacter(catalogLayer) ||
+      sourceSeal == null ||
+      sourceSeal.byteLength == 0 ||
+      displayName.trim().isEmpty ||
+      utf8.encode(displayName).length > _maxItemClassBytes ||
+      _containsControlCharacter(displayName) ||
+      entity.references.isNotEmpty ||
+      entity.assetReferences.isNotEmpty) {
+    throw FormatException(
+      'content ItemPatch ${entity.id} has malformed exact vanilla facts',
+    );
+  }
+}
+
+bool _containsControlCharacter(String value) =>
+    value.runes.any((rune) => rune <= 0x1f || (rune >= 0x7f && rune <= 0x9f));
+
+void _validateScriptModuleProjectionFacts(
+  Revision3ContentEntity entity, {
+  required String projectId,
+  required Map<String, Revision3ContentEntity> entitiesById,
+}) {
+  if (entity.kind != Revision3ContentEntityKind.scriptModule) return;
+  final facts = entity.summary.scriptModule;
+  final owner = entity.origin.generatedOwner;
+  final generator = owner == null
+      ? null
+      : _storyGeneratorForOwnerKind(owner.expectedKind);
+  if (facts == null ||
+      generator == null ||
+      entity.origin.type != 'generated' ||
+      entity.origin.label != generator.id ||
+      entity.origin.generatorVersion != generator.version ||
+      facts.generatorId != generator.id ||
+      facts.generatorVersion != generator.version ||
+      owner!.projectId != projectId ||
+      entity.assetReferences.isNotEmpty) {
+    throw FormatException(
+      'content ScriptModule ${entity.id} is not a current native Story module',
+    );
+  }
+
+  final ownerEntity = entitiesById[owner.entityId];
+  if (ownerEntity == null || ownerEntity.kind != owner.expectedKind) {
+    throw FormatException(
+      'content ScriptModule ${entity.id} has no exact local Story owner',
+    );
+  }
+
+  final originOwners = entity.references
+      .where((reference) => reference.role == 'origin_owner')
+      .toList(growable: false);
+  final scriptOwners = entity.references
+      .where((reference) => reference.role == 'script_owner')
+      .toList(growable: false);
+  if (entity.references.length != 2 ||
+      originOwners.length != 1 ||
+      scriptOwners.length != 1 ||
+      !_isExactResolvedOwnerReference(originOwners.single, owner) ||
+      !_isExactResolvedOwnerReference(scriptOwners.single, owner)) {
+    throw FormatException(
+      'content ScriptModule ${entity.id} has malformed owner facts',
+    );
+  }
+
+  final moduleEdges = ownerEntity.references
+      .where((reference) => reference.role == 'draft_script_module')
+      .toList(growable: false);
+  if (moduleEdges.length != 1 ||
+      !_isExactResolvedModuleReference(
+        moduleEdges.single,
+        projectId: projectId,
+        moduleId: entity.id,
+      )) {
+    throw FormatException(
+      'content ScriptModule ${entity.id} is not the exact backing of its owner',
+    );
+  }
+
+  final ownerNamespace = switch (ownerEntity.kind) {
+    Revision3ContentEntityKind.npcDraft =>
+      ownerEntity.summary.npcDraft?.moduleNamespace,
+    Revision3ContentEntityKind.questDraft =>
+      ownerEntity.summary.questDraft?.moduleNamespace,
+    _ => null,
+  };
+  if (ownerNamespace == null ||
+      entity.summary.primaryIdentity != ownerNamespace) {
+    throw FormatException(
+      'content ScriptModule ${entity.id} namespace disagrees with its owner',
+    );
+  }
+}
+
+({String id, int version})? _storyGeneratorForOwnerKind(
+  Revision3ContentEntityKind kind,
+) => switch (kind) {
+  Revision3ContentEntityKind.npcDraft => (
+    id: _npcGeneratorId,
+    version: _npcGeneratorVersion,
+  ),
+  Revision3ContentEntityKind.questDraft => (
+    id: _questGeneratorId,
+    version: _questGeneratorVersion,
+  ),
+  _ => null,
+};
+
+bool _isExactResolvedOwnerReference(
+  Revision3ContentReference reference,
+  Revision3ContentReferenceTarget owner,
+) =>
+    reference.qualifier == null &&
+    reference.target == owner &&
+    reference.resolution == Revision3ContentReferenceResolution.resolved;
+
+bool _isExactResolvedModuleReference(
+  Revision3ContentReference reference, {
+  required String projectId,
+  required String moduleId,
+}) =>
+    reference.qualifier == null &&
+    reference.target.projectId == projectId &&
+    reference.target.entityId == moduleId &&
+    reference.target.expectedKind == Revision3ContentEntityKind.scriptModule &&
+    reference.resolution == Revision3ContentReferenceResolution.resolved;
+
+Revision3ContentEntity _requireCurrentStoryModule(
+  Revision3ContentEntity draft,
+  Revision3ContentReference reference, {
+  required String projectId,
+  required Map<String, Revision3ContentEntity> entitiesById,
+}) {
+  if (!_isExactResolvedModuleReference(
+    reference,
+    projectId: projectId,
+    moduleId: reference.target.entityId,
+  )) {
+    throw FormatException(
+      'content ${draft.kind.displayName} ${draft.id} has a malformed generated module reference',
+    );
+  }
+  final module = entitiesById[reference.target.entityId];
+  final generator = _storyGeneratorForOwnerKind(draft.kind);
+  final owner = module?.origin.generatedOwner;
+  final moduleFacts = module?.summary.scriptModule;
+  if (module == null ||
+      module.kind != Revision3ContentEntityKind.scriptModule ||
+      generator == null ||
+      module.origin.type != 'generated' ||
+      module.origin.label != generator.id ||
+      module.origin.generatorVersion != generator.version ||
+      owner?.projectId != projectId ||
+      owner?.entityId != draft.id ||
+      owner?.expectedKind != draft.kind ||
+      moduleFacts?.generatorId != generator.id ||
+      moduleFacts?.generatorVersion != generator.version) {
+    throw FormatException(
+      'content ${draft.kind.displayName} ${draft.id} is not owned by its current native generator',
+    );
+  }
+  return module;
+}
+
+void _validateNpcProjectionFacts(
+  Revision3ContentEntity entity, {
+  required String projectId,
+  required Map<String, Revision3ContentEntity> entitiesById,
+}) {
   if (entity.kind != Revision3ContentEntityKind.npcDraft) return;
   final facts = entity.summary.npcDraft;
-  if (facts == null) {
+  if (facts == null ||
+      entity.origin.type != 'new' ||
+      entity.origin.label != facts.uniqueName ||
+      entity.origin.generatedOwner != null ||
+      entity.assetReferences.isNotEmpty) {
     throw FormatException('content NPC ${entity.id} has no structured summary');
   }
   final modules = <Revision3ContentReference>[];
   final greetings = <Revision3ContentReference>[];
-  final owner = entity.origin.generatedOwner;
-  var ownerReferences = 0;
   for (final reference in entity.references) {
     switch (reference.role) {
-      case 'origin_owner':
-        ownerReferences++;
-        if (owner == null ||
-            reference.qualifier != null ||
-            reference.target != owner) {
-          throw FormatException(
-            'content NPC ${entity.id} has a malformed origin owner',
-          );
-        }
       case 'draft_script_module':
         modules.add(reference);
       case 'npc_greeting_line':
@@ -1135,16 +1587,20 @@ void _validateNpcProjectionFacts(Revision3ContentEntity entity) {
         );
     }
   }
-  if (ownerReferences != (owner == null ? 0 : 1) || modules.length != 1) {
+  if (modules.length != 1) {
     throw FormatException(
-      'content NPC ${entity.id} has an invalid owner or module count',
+      'content NPC ${entity.id} has an invalid module count',
     );
   }
-  final module = modules.single;
-  if (module.qualifier != null ||
-      module.target.expectedKind != Revision3ContentEntityKind.scriptModule) {
+  final module = _requireCurrentStoryModule(
+    entity,
+    modules.single,
+    projectId: projectId,
+    entitiesById: entitiesById,
+  );
+  if (module.summary.primaryIdentity != facts.moduleNamespace) {
     throw FormatException(
-      'content NPC ${entity.id} has a malformed generated module reference',
+      'content NPC ${entity.id} module namespace disagrees with its generator',
     );
   }
   if (greetings.length != facts.greetingCount) {
@@ -1155,8 +1611,10 @@ void _validateNpcProjectionFacts(Revision3ContentEntity entity) {
   final lineTargets = <String>{};
   for (final reference in greetings) {
     if (reference.qualifier != null ||
+        reference.target.projectId != projectId ||
         reference.target.expectedKind !=
             Revision3ContentEntityKind.dialogLine ||
+        reference.resolution != Revision3ContentReferenceResolution.resolved ||
         !lineTargets.add(
           '${reference.target.projectId}\u0000${reference.target.entityId}',
         )) {
@@ -1323,29 +1781,27 @@ void _validateVoiceSlotProjectionFacts(Revision3ContentEntity entity) {
   }
 }
 
-void _validateQuestProjectionFacts(Revision3ContentEntity entity) {
+void _validateQuestProjectionFacts(
+  Revision3ContentEntity entity, {
+  required String projectId,
+  required Map<String, Revision3ContentEntity> entitiesById,
+}) {
   if (entity.kind != Revision3ContentEntityKind.questDraft) return;
   final facts = entity.summary.questDraft;
-  if (facts == null) {
+  if (facts == null ||
+      facts.objectiveSlots.isEmpty ||
+      facts.objectiveSlots.length != facts.objectiveTitles.length ||
+      entity.origin.type != 'new' ||
+      entity.origin.label != facts.technicalId ||
+      entity.origin.generatedOwner != null) {
     throw FormatException(
       'content Quest ${entity.id} has no structured summary',
     );
   }
   final modules = <Revision3ContentReference>[];
   final transcript = <Revision3ContentReference>[];
-  final owner = entity.origin.generatedOwner;
-  var ownerReferences = 0;
   for (final reference in entity.references) {
     switch (reference.role) {
-      case 'origin_owner':
-        ownerReferences++;
-        if (owner == null ||
-            reference.qualifier != null ||
-            reference.target != owner) {
-          throw FormatException(
-            'content Quest ${entity.id} has a malformed origin owner',
-          );
-        }
       case 'draft_script_module':
         modules.add(reference);
       case 'quest_transcript_line':
@@ -1356,16 +1812,36 @@ void _validateQuestProjectionFacts(Revision3ContentEntity entity) {
         );
     }
   }
-  if (ownerReferences != (owner == null ? 0 : 1) || modules.length != 1) {
+  if (modules.length != 1) {
     throw FormatException(
-      'content Quest ${entity.id} has an invalid owner or module count',
+      'content Quest ${entity.id} has an invalid module count',
     );
   }
-  final module = modules.single;
-  if (module.qualifier != null ||
-      module.target.expectedKind != Revision3ContentEntityKind.scriptModule) {
+  final module = _requireCurrentStoryModule(
+    entity,
+    modules.single,
+    projectId: projectId,
+    entitiesById: entitiesById,
+  );
+  if (module.summary.primaryIdentity != facts.moduleNamespace) {
     throw FormatException(
-      'content Quest ${entity.id} has a malformed generated module reference',
+      'content Quest ${entity.id} module namespace disagrees with its generator',
+    );
+  }
+
+  if (entity.assetReferences.length != 1) {
+    throw FormatException(
+      'content Quest ${entity.id} has no exact current collision artifact',
+    );
+  }
+  final collision = entity.assetReferences.single;
+  if (collision.role != 'quest_collision_artifact' ||
+      collision.logicalName != null ||
+      collision.expectedMediaType != _questCollisionMediaType ||
+      collision.resolution !=
+          Revision3ContentAssetReferenceResolution.resolved) {
+    throw FormatException(
+      'content Quest ${entity.id} has a non-current collision artifact',
     );
   }
   if (transcript.length != facts.transcriptCount) {
@@ -1381,10 +1857,14 @@ void _validateQuestProjectionFacts(Revision3ContentEntity entity) {
     final slot = qualifier == null || !canonicalSlot.hasMatch(qualifier)
         ? null
         : int.tryParse(qualifier);
-    if ((qualifier != null &&
-            (slot == null || slot > 0xffff || !activeSlots.contains(slot))) ||
+    if (qualifier == null ||
+        slot == null ||
+        slot > 0xffff ||
+        !activeSlots.contains(slot) ||
+        reference.target.projectId != projectId ||
         reference.target.expectedKind !=
             Revision3ContentEntityKind.dialogLine ||
+        reference.resolution != Revision3ContentReferenceResolution.resolved ||
         !lineTargets.add(
           '${reference.target.projectId}\u0000${reference.target.entityId}',
         )) {
@@ -1615,8 +2095,7 @@ Revision3ContentAssetReferenceResolution _resolveAssetReference(
 Revision3ContentAssetClass _classifyAsset(String mediaType) =>
     switch (mediaType) {
       'audio/ogg' => Revision3ContentAssetClass.voiceAudio,
-      'application/vnd.gore.quest-collision-capability+json;version=1' ||
-      'application/vnd.gore.quest-collision-capability+json;version=2' =>
+      _questCollisionMediaType =>
         Revision3ContentAssetClass.questCollisionArtifact,
       'application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1' =>
         Revision3ContentAssetClass.dataAssetStageManifest,
@@ -1636,22 +2115,23 @@ bool _equalCounts(
   return true;
 }
 
-({String sha256, int byteLength}) _seal(Object? value, String context) {
+Revision3ContentSeal _seal(Object? value, String context) {
   final object = _object(value, context);
   _requireKeys(object, const ['byte_len', 'sha256'], context);
-  return (
+  return Revision3ContentSeal(
     sha256: _sha(object['sha256'], '$context sha256'),
     byteLength: _integer(object['byte_len'], '$context byte_len'),
   );
 }
 
-void _generation(Object? value, String context) {
+Revision3ContentSeal _generation(Object? value, String context) {
   final object = _object(value, context);
   _requireKeys(object, const ['executable'], context);
   final executable = _seal(object['executable'], '$context executable');
   if (executable.byteLength == 0) {
     throw FormatException('$context executable is empty');
   }
+  return executable;
 }
 
 Map<String, Object?> _object(Object? value, String context) {
@@ -1758,6 +2238,62 @@ int _integer(Object? value, String context) {
     throw FormatException('$context is not a signed-wire-safe integer');
   }
   return value;
+}
+
+int _signedInteger(Object? value, String context) {
+  if (value is! int || value < _signedWireMin || value > _signedWireMax) {
+    throw FormatException('$context is not a signed 64-bit integer');
+  }
+  return value;
+}
+
+double _finiteCanonicalFloat(Object? value, String context) {
+  if (value is! double ||
+      !value.isFinite ||
+      (value == 0.0 && value.isNegative)) {
+    throw FormatException('$context is not a canonical finite float');
+  }
+  return value;
+}
+
+String _itemString(Object? value, String context) {
+  final result = _string(
+    value,
+    context,
+    allowEmpty: true,
+    maxBytes: _maxItemStringBytes,
+  );
+  if (result.contains('\u0000')) {
+    throw FormatException('$context contains a null character');
+  }
+  return result;
+}
+
+String _itemIdentifier(Object? value, String context, {required int maxBytes}) {
+  final result = _string(value, context, maxBytes: maxBytes);
+  if (!_itemIdentifierPattern.hasMatch(result)) {
+    throw FormatException('$context is not a canonical item identifier');
+  }
+  return result;
+}
+
+Revision3ContentItemEnumValue _itemEnumValue(Object? value, String context) {
+  final object = _object(value, context);
+  _requireKeys(object, const ['enum_type', 'backing'], context);
+  final enumType = _string(
+    object['enum_type'],
+    '$context enum_type',
+    maxBytes: _maxItemEnumTypeBytes,
+  );
+  if (enumType
+      .split('::')
+      .any((segment) => !_itemIdentifierPattern.hasMatch(segment))) {
+    throw FormatException('$context enum_type is not canonical');
+  }
+  return Revision3ContentItemEnumValue(
+    enumType: enumType,
+    backing: _signedInteger(object['backing'], '$context backing'),
+  );
 }
 
 bool _boolean(Object? value, String context) {

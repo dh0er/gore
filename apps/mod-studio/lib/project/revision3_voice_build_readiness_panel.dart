@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
@@ -111,6 +112,7 @@ class Revision3VoiceBuildReadinessPanel extends StatefulWidget {
   const Revision3VoiceBuildReadinessPanel({
     required this.projectId,
     required this.projectRevision,
+    required this.checkpointIdentity,
     required this.plan,
     this.onResolveVoiceTarget,
     this.onManageVoiceTakes,
@@ -119,10 +121,12 @@ class Revision3VoiceBuildReadinessPanel extends StatefulWidget {
     this.copy = const Revision3VoiceBuildReadinessCopy.english(),
     super.key,
   }) : assert(projectId != ''),
-       assert(projectRevision >= 0);
+       assert(projectRevision >= 0),
+       assert(checkpointIdentity != '');
 
   final String projectId;
   final int projectRevision;
+  final String checkpointIdentity;
   final Revision3VoiceBuildPlanLoader plan;
   final Revision3VoiceBuildLineLocaleAction? onResolveVoiceTarget;
   final Revision3VoiceBuildLineLocaleAction? onManageVoiceTakes;
@@ -152,7 +156,8 @@ class _Revision3VoiceBuildReadinessPanelState
   void didUpdateWidget(covariant Revision3VoiceBuildReadinessPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.projectId != widget.projectId ||
-        oldWidget.projectRevision != widget.projectRevision) {
+        oldWidget.projectRevision != widget.projectRevision ||
+        oldWidget.checkpointIdentity != widget.checkpointIdentity) {
       unawaited(_load(clearCurrent: true));
     }
   }
@@ -167,6 +172,7 @@ class _Revision3VoiceBuildReadinessPanelState
     final epoch = ++_loadEpoch;
     final expectedProjectId = widget.projectId;
     final expectedProjectRevision = widget.projectRevision;
+    final expectedCheckpointIdentity = widget.checkpointIdentity;
     setState(() {
       _loading = true;
       _error = null;
@@ -176,7 +182,8 @@ class _Revision3VoiceBuildReadinessPanelState
       final result = await widget.plan();
       if (!mounted || epoch != _loadEpoch) return;
       if (result.projectId != expectedProjectId ||
-          result.projectRevision != expectedProjectRevision) {
+          result.projectRevision != expectedProjectRevision ||
+          result.basisHead.canonicalJson != expectedCheckpointIdentity) {
         throw const FormatException(
           'Voice readiness does not match the current project checkpoint.',
         );
@@ -246,15 +253,23 @@ class _Revision3VoiceBuildReadinessPanelState
             ] else if (result != null) ...[
               const SizedBox(height: 8),
               Revision3VoiceBuildReadinessReport(
+                key: ValueKey(
+                  'revision3-voice-readiness-${result.basisHead.canonicalJson}',
+                ),
                 projectRevision: result.projectRevision,
                 totalSlots: result.totalSlots,
                 readySlots: result.readySlots,
                 blockers: result.blockers,
                 isReady: result.isReady,
-                onResolveVoiceTarget: widget.onResolveVoiceTarget,
-                onManageVoiceTakes: widget.onManageVoiceTakes,
-                onActionCompleted: _load,
-                onBuild: widget.onBuild,
+                onResolveVoiceTarget: _guardLineLocaleAction(
+                  widget.onResolveVoiceTarget,
+                  result,
+                ),
+                onManageVoiceTakes: _guardLineLocaleAction(
+                  widget.onManageVoiceTakes,
+                  result,
+                ),
+                onBuild: _guardAction(widget.onBuild, result),
                 gameConfigured: widget.gameConfigured,
                 compactBlockers: true,
                 showReadyBuildGuidance: true,
@@ -265,6 +280,41 @@ class _Revision3VoiceBuildReadinessPanelState
         ),
       ),
     );
+  }
+
+  bool _isCurrentResult(AuthoringRevision3VoiceBuildPlanResult result) =>
+      mounted &&
+      identical(_result, result) &&
+      result.projectId == widget.projectId &&
+      result.projectRevision == widget.projectRevision &&
+      result.basisHead.canonicalJson == widget.checkpointIdentity;
+
+  Revision3VoiceBuildLineLocaleAction? _guardLineLocaleAction(
+    Revision3VoiceBuildLineLocaleAction? action,
+    AuthoringRevision3VoiceBuildPlanResult result,
+  ) {
+    if (action == null) return null;
+    return ({required initialLineId, required initialLocale}) async {
+      if (!_isCurrentResult(result)) return;
+      await Future<void>.sync(
+        () =>
+            action(initialLineId: initialLineId, initialLocale: initialLocale),
+      );
+      if (_isCurrentResult(result)) {
+        await _load(clearCurrent: true);
+      }
+    };
+  }
+
+  Revision3VoiceBuildReadinessAction? _guardAction(
+    Revision3VoiceBuildReadinessAction? action,
+    AuthoringRevision3VoiceBuildPlanResult result,
+  ) {
+    if (action == null) return null;
+    return () async {
+      if (!_isCurrentResult(result)) return;
+      await Future<void>.sync(action);
+    };
   }
 }
 
@@ -321,6 +371,7 @@ class _Revision3VoiceBuildReadinessReportState
   bool _building = false;
   late bool _blockersExpanded;
   String? _actionError;
+  int _actionEpoch = 0;
 
   @override
   void initState() {
@@ -332,13 +383,20 @@ class _Revision3VoiceBuildReadinessReportState
   void didUpdateWidget(covariant Revision3VoiceBuildReadinessReport oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.projectRevision != widget.projectRevision ||
-        oldWidget.blockers != widget.blockers ||
+        !listEquals(oldWidget.blockers, widget.blockers) ||
         oldWidget.isReady != widget.isReady) {
+      _actionEpoch++;
       _busyBlocker = null;
       _building = false;
       _blockersExpanded = !widget.compactBlockers;
       _actionError = null;
     }
+  }
+
+  @override
+  void dispose() {
+    _actionEpoch++;
+    super.dispose();
   }
 
   Future<void> _runBlockerAction(
@@ -348,9 +406,14 @@ class _Revision3VoiceBuildReadinessReportState
   ) async {
     final lineId = blocker.lineId;
     final locale = blocker.locale;
-    if (_busyBlocker != null || _building || lineId == null || locale == null) {
+    if (!mounted ||
+        _busyBlocker != null ||
+        _building ||
+        lineId == null ||
+        locale == null) {
       return;
     }
+    final actionEpoch = ++_actionEpoch;
     setState(() {
       _busyBlocker = index;
       _actionError = null;
@@ -359,27 +422,32 @@ class _Revision3VoiceBuildReadinessReportState
       await Future<void>.sync(
         () => action(initialLineId: lineId, initialLocale: locale),
       );
+      if (!mounted || actionEpoch != _actionEpoch) return;
       await Future<void>.sync(() => widget.onActionCompleted?.call());
     } catch (_) {
-      if (mounted) {
+      if (mounted && actionEpoch == _actionEpoch) {
         setState(() {
           _actionError = widget.copy.workflowOpenFailed;
         });
       }
     } finally {
-      if (mounted) setState(() => _busyBlocker = null);
+      if (mounted && actionEpoch == _actionEpoch) {
+        setState(() => _busyBlocker = null);
+      }
     }
   }
 
   Future<void> _runBuild() async {
     final action = widget.onBuild;
-    if (_busyBlocker != null ||
+    if (!mounted ||
+        _busyBlocker != null ||
         _building ||
         !widget.isReady ||
         !widget.gameConfigured ||
         action == null) {
       return;
     }
+    final actionEpoch = ++_actionEpoch;
     setState(() {
       _building = true;
       _actionError = null;
@@ -387,13 +455,15 @@ class _Revision3VoiceBuildReadinessReportState
     try {
       await Future<void>.sync(action);
     } catch (_) {
-      if (mounted) {
+      if (mounted && actionEpoch == _actionEpoch) {
         setState(() {
           _actionError = widget.copy.buildWorkflowOpenFailed;
         });
       }
     } finally {
-      if (mounted) setState(() => _building = false);
+      if (mounted && actionEpoch == _actionEpoch) {
+        setState(() => _building = false);
+      }
     }
   }
 

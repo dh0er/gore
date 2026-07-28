@@ -371,8 +371,8 @@ pub struct QuestDraftInput {
 
 /// One ordered, authoring-only dialog-line placement in a Quest transcript.
 ///
-/// `objective_slot` is a stable semantic-objective ordinal. It is absent for the Quest
-/// root/unassigned transcript. This
+/// `objective_slot` is the stable semantic-objective ordinal that owns this line. Every transcript
+/// line belongs to one active objective; there is no root/unassigned transcript variant. This
 /// relationship is project metadata only: it grants no topic, selection-effect, build, or runtime
 /// authority and deliberately remains outside [`QuestDraftInput`] so Quest source and its input
 /// fingerprint are unchanged.
@@ -380,7 +380,7 @@ pub struct QuestDraftInput {
 #[serde(deny_unknown_fields)]
 pub struct QuestTranscriptBindingV1 {
     pub line: TypedRef,
-    pub objective_slot: Option<u16>,
+    pub objective_slot: u16,
 }
 
 /// One ordered, authoring-only dialog-line greeting attached to an NPC draft.

@@ -328,98 +328,122 @@ final class _ForbiddenCalls {
   }
 }
 
-Revision3ContentIndex _v4Index({int projectRevision = 7}) =>
-    Revision3ContentIndex.fromJsonObject(<String, Object?>{
-      'schema_revision': 1,
-      'project_id': revision3QuestOutlineProjectId,
-      'project_revision': projectRevision,
-      'project_name': 'Quest journey service fixture',
-      'project_version': '1.0.0',
-      'project_author': 'tests',
-      'target': <String, Object?>{
-        'executable': <String, Object?>{
-          'byte_len': 171698176,
-          'sha256': revision3QuestOutlineTargetSha,
+Revision3ContentIndex _v4Index({
+  int projectRevision = 7,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': revision3QuestOutlineProjectId,
+  'project_revision': projectRevision,
+  'project_name': 'Quest journey service fixture',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256': revision3QuestOutlineTargetSha,
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{'quest_draft': 1, 'script_module': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': revision3QuestOutlineQuestId,
+      'kind': 'quest_draft',
+      'display_name': 'Find Homer',
+      'revision': 4,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_FIND_HOMER',
+      },
+      'summary': <String, Object?>{
+        'kind': 'quest_draft',
+        'data': <String, Object?>{
+          'technical_id': 'GORE_FIND_HOMER',
+          'title': 'Find Homer',
+          'objective_title': 'Ask Asghan about Homer',
+          'additional_objective_titles': <Object?>[
+            'Inspect the old gate',
+            'Report the secured gate',
+          ],
+          'objective_slots': <Object?>[1, 2, 3],
+          'transcript_count': 0,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
+          'giver_runtime_unique_name': 'OM_GRD_Asghan_263',
         },
       },
-      'authoring_locales': <Object?>[],
-      'entity_counts': <String, Object?>{'quest_draft': 1, 'script_module': 1},
-      'entities': <Object?>[
+      'references': <Object?>[
+        _reference(
+          role: 'draft_script_module',
+          targetId: revision3QuestOutlineModuleId,
+          expectedKind: 'script_module',
+        ),
+      ],
+      'asset_references': <Object?>[
         <String, Object?>{
-          'id': revision3QuestOutlineQuestId,
-          'kind': 'quest_draft',
-          'display_name': 'Find Homer',
-          'revision': 4,
-          'origin': <String, Object?>{
-            'type': 'new',
-            'authored_runtime_id': 'GORE_FIND_HOMER',
-          },
-          'summary': <String, Object?>{
-            'kind': 'quest_draft',
-            'data': <String, Object?>{
-              'technical_id': 'GORE_FIND_HOMER',
-              'title': 'Find Homer',
-              'objective_title': 'Ask Asghan about Homer',
-              'additional_objective_titles': <Object?>[
-                'Inspect the old gate',
-                'Report the secured gate',
-              ],
-              'objective_slots': <Object?>[1, 2, 3],
-              'transcript_count': 0,
-              'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
-              'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
-              'giver_runtime_unique_name': 'OM_GRD_Asghan_263',
-            },
-          },
-          'references': <Object?>[
-            _reference(
-              role: 'draft_script_module',
-              targetId: revision3QuestOutlineModuleId,
-              expectedKind: 'script_module',
-            ),
-          ],
-          'asset_references': <Object?>[],
-        },
-        <String, Object?>{
-          'id': revision3QuestOutlineModuleId,
-          'kind': 'script_module',
-          'display_name': 'Find Homer Script',
-          'revision': 5,
-          'origin': <String, Object?>{
-            'type': 'generated',
-            'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 4,
-            'owner': <String, Object?>{
-              'project_id': revision3QuestOutlineProjectId,
-              'entity_id': revision3QuestOutlineQuestId,
-              'expected_kind': 'quest_draft',
-            },
-          },
-          'summary': <String, Object?>{
-            'kind': 'script_module',
-            'data': <String, Object?>{
-              'generator_id': 'gore-authoring.draft-quest-skeleton',
-              'generator_version': 4,
-              'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
-              'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
-              'status': <String, Object?>{
-                'authoring': 'offline_draft',
-                'runtime': 'runtime_unqualified',
-              },
-            },
-          },
-          'references': <Object?>[
-            _reference(
-              role: 'origin_owner',
-              targetId: revision3QuestOutlineQuestId,
-              expectedKind: 'quest_draft',
-            ),
-          ],
-          'asset_references': <Object?>[],
+          'role': 'quest_collision_artifact',
+          'sha256': revision3QuestOutlineArtifactSha,
+          'byte_len': 123,
+          'logical_name': null,
+          'expected_media_type':
+              'application/vnd.gore.quest-collision-capability+json;version=2',
+          'resolution': 'resolved',
         },
       ],
-      'assets': <Object?>[],
-    });
+    },
+    <String, Object?>{
+      'id': revision3QuestOutlineModuleId,
+      'kind': 'script_module',
+      'display_name': 'Find Homer Script',
+      'revision': 5,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': <String, Object?>{
+          'project_id': revision3QuestOutlineProjectId,
+          'entity_id': revision3QuestOutlineQuestId,
+          'expected_kind': 'quest_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        _reference(
+          role: 'origin_owner',
+          targetId: revision3QuestOutlineQuestId,
+          expectedKind: 'quest_draft',
+        ),
+        _reference(
+          role: 'script_owner',
+          targetId: revision3QuestOutlineQuestId,
+          expectedKind: 'quest_draft',
+        ),
+      ],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': revision3QuestOutlineArtifactSha,
+      'byte_len': 123,
+      'media_type':
+          'application/vnd.gore.quest-collision-capability+json;version=2',
+      'class': 'quest_collision_artifact',
+    },
+  ],
+});
 
 Map<String, Object?> _reference({
   required String role,

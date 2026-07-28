@@ -68,8 +68,6 @@ final class Revision3QuestJourneyPanelCopy {
     required this.followUps,
     required this.objectiveDialogTitle,
     required this.objectiveDialogEmpty,
-    required this.generalDialogTitle,
-    required this.generalDialogEmpty,
     required this.showDialogLines,
     required this.hideDialogLines,
     required this.textLanguageCount,
@@ -138,8 +136,6 @@ final class Revision3QuestJourneyPanelCopy {
       followUps = _englishFollowUps,
       objectiveDialogTitle = 'Linked dialog',
       objectiveDialogEmpty = 'No dialog is linked to this objective.',
-      generalDialogTitle = 'General dialog',
-      generalDialogEmpty = 'No general dialog is linked to this Quest.',
       showDialogLines = _englishShowDialogLines,
       hideDialogLines = 'Hide dialog lines',
       textLanguageCount = _englishTextLanguageCount,
@@ -210,9 +206,6 @@ final class Revision3QuestJourneyPanelCopy {
       objectiveDialogTitle = 'Verknüpfte Dialogzeilen',
       objectiveDialogEmpty =
           'Mit diesem Ziel sind keine Dialogzeilen verknüpft.',
-      generalDialogTitle = 'Allgemeiner Dialog',
-      generalDialogEmpty =
-          'Mit dieser Quest sind keine allgemeinen Dialogzeilen verknüpft.',
       showDialogLines = _germanShowDialogLines,
       hideDialogLines = 'Dialogzeilen ausblenden',
       textLanguageCount = _germanTextLanguageCount,
@@ -272,8 +265,6 @@ final class Revision3QuestJourneyPanelCopy {
   final Revision3QuestJourneyFollowUpCopy followUps;
   final String objectiveDialogTitle;
   final String objectiveDialogEmpty;
-  final String generalDialogTitle;
-  final String generalDialogEmpty;
   final Revision3QuestJourneyCountCopy showDialogLines;
   final String hideDialogLines;
   final Revision3QuestJourneyCountCopy textLanguageCount;
@@ -601,49 +592,13 @@ final class _Revision3QuestJourneyPanelState
                     copy: widget.copy,
                   ),
                   const SizedBox(height: 20),
-                  if (wide)
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Expanded(
-                          child: _ObjectivesColumn(
-                            projection: projection,
-                            copy: widget.copy,
-                            busyAction: _busyAction,
-                            canOpenDialog: widget.onOpenDialogLine != null,
-                            onOpenDialog: _openDialogLine,
-                          ),
-                        ),
-                        const SizedBox(width: 20),
-                        SizedBox(
-                          width: 340,
-                          child: _GeneralDialogCard(
-                            projection: projection,
-                            copy: widget.copy,
-                            busyAction: _busyAction,
-                            canOpenDialog: widget.onOpenDialogLine != null,
-                            onOpenDialog: _openDialogLine,
-                          ),
-                        ),
-                      ],
-                    )
-                  else ...<Widget>[
-                    _ObjectivesColumn(
-                      projection: projection,
-                      copy: widget.copy,
-                      busyAction: _busyAction,
-                      canOpenDialog: widget.onOpenDialogLine != null,
-                      onOpenDialog: _openDialogLine,
-                    ),
-                    const SizedBox(height: 16),
-                    _GeneralDialogCard(
-                      projection: projection,
-                      copy: widget.copy,
-                      busyAction: _busyAction,
-                      canOpenDialog: widget.onOpenDialogLine != null,
-                      onOpenDialog: _openDialogLine,
-                    ),
-                  ],
+                  _ObjectivesColumn(
+                    projection: projection,
+                    copy: widget.copy,
+                    busyAction: _busyAction,
+                    canOpenDialog: widget.onOpenDialogLine != null,
+                    onOpenDialog: _openDialogLine,
+                  ),
                 ],
               ),
             ),
@@ -1667,53 +1622,6 @@ final class _BehaviorCell extends StatelessWidget {
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
-      ),
-    );
-  }
-}
-
-final class _GeneralDialogCard extends StatelessWidget {
-  const _GeneralDialogCard({
-    required this.projection,
-    required this.copy,
-    required this.busyAction,
-    required this.canOpenDialog,
-    required this.onOpenDialog,
-  });
-
-  final Revision3QuestJourneyProjection projection;
-  final Revision3QuestJourneyPanelCopy copy;
-  final String? busyAction;
-  final bool canOpenDialog;
-  final ValueChanged<Revision3QuestJourneyDialogLine> onOpenDialog;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      key: const Key('revision3-quest-journey-general-dialog'),
-      color: scheme.surfaceContainerLow,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: scheme.outlineVariant),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            _DialogGroup(
-              title: copy.generalDialogTitle,
-              emptyMessage: copy.generalDialogEmpty,
-              lines: projection.generalDialogLines,
-              copy: copy,
-              busyAction: busyAction,
-              canOpenDialog: canOpenDialog,
-              onOpenDialog: onOpenDialog,
-            ),
-          ],
-        ),
       ),
     );
   }

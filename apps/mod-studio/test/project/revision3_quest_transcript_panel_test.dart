@@ -16,6 +16,10 @@ const _slotId = '33333333333333333333333333333333';
 const _takeId = '44444444444444444444444444444444';
 const _questId = '55555555555555555555555555555555';
 const _moduleId = '66666666666666666666666666666666';
+const _collisionSha =
+    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const _collisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 const _secondLocalizationId = '12121212121212121212121212121212';
 const _secondLineId = '23232323232323232323232323232323';
 const _targetSha =
@@ -315,7 +319,7 @@ void main() {
           ({
             required projection,
             required int insertionIndex,
-            required int? objectiveSlot,
+            required int objectiveSlot,
             required publishTechnicalPlan,
           }) {
             calls++;
@@ -774,6 +778,10 @@ Map<String, Object?> _contentIndexJson({
       kind: 'quest_draft',
       displayName: 'Secure the gate',
       revision: 4,
+      origin: <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_SECURE_GATE',
+      },
       summaryData: <String, Object?>{
         'technical_id': 'GORE_SECURE_GATE',
         'title': 'Secure the gate',
@@ -800,10 +808,12 @@ Map<String, Object?> _contentIndexJson({
         if (bindSecondLine)
           _reference(
             role: 'quest_transcript_line',
+            qualifier: '1',
             targetId: _secondLineId,
             expectedKind: 'dialog_line',
           ),
       ],
+      assetReferences: _questCollisionAssetReferences,
     ),
     _entity(
       id: _moduleId,
@@ -814,6 +824,7 @@ Map<String, Object?> _contentIndexJson({
         ownerId: _questId,
         ownerKind: 'quest_draft',
         generatorId: 'gore-authoring.draft-quest-skeleton',
+        generatorVersion: 4,
       ),
       summaryData: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
@@ -831,10 +842,22 @@ Map<String, Object?> _contentIndexJson({
           targetId: _questId,
           expectedKind: 'quest_draft',
         ),
+        _reference(
+          role: 'script_owner',
+          targetId: _questId,
+          expectedKind: 'quest_draft',
+        ),
       ],
     ),
   ],
-  'assets': <Object?>[],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': _collisionSha,
+      'byte_len': 123,
+      'media_type': _collisionMediaType,
+      'class': 'quest_collision_artifact',
+    },
+  ],
 };
 
 Map<String, Object?> _entity({
@@ -845,6 +868,7 @@ Map<String, Object?> _entity({
   required Map<String, Object?> summaryData,
   Map<String, Object?>? origin,
   List<Object?> references = const <Object?>[],
+  List<Object?> assetReferences = const <Object?>[],
 }) => <String, Object?>{
   'id': id,
   'kind': kind,
@@ -855,17 +879,29 @@ Map<String, Object?> _entity({
       <String, Object?>{'type': 'new', 'authored_runtime_id': 'AUTHORED_$kind'},
   'summary': <String, Object?>{'kind': kind, 'data': summaryData},
   'references': references,
-  'asset_references': <Object?>[],
+  'asset_references': assetReferences,
 };
+
+const _questCollisionAssetReferences = <Object?>[
+  <String, Object?>{
+    'role': 'quest_collision_artifact',
+    'sha256': _collisionSha,
+    'byte_len': 123,
+    'logical_name': null,
+    'expected_media_type': _collisionMediaType,
+    'resolution': 'resolved',
+  },
+];
 
 Map<String, Object?> _generatedOrigin({
   required String ownerId,
   required String ownerKind,
   required String generatorId,
+  int generatorVersion = 1,
 }) => <String, Object?>{
   'type': 'generated',
   'generator_id': generatorId,
-  'generator_version': 1,
+  'generator_version': generatorVersion,
   'owner': <String, Object?>{
     'project_id': _projectId,
     'entity_id': ownerId,

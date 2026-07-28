@@ -1,61 +1,149 @@
 import 'package:flutter/material.dart';
 
 import '../catalog/domain/field_schema.dart';
+import '../core/mod_ffi.dart';
 import '../l10n/app_localizations.dart';
 import 'revision3_item_catalog.dart';
+import 'revision3_item_patch_authoring.dart';
 
-/// Managed, read-only browser for the bundled base-game item reference.
+/// Familiar item browser with an exact managed-R3 authoring mode.
 ///
-/// This view deliberately exposes no edit, create, save, build, or deploy
-/// action. A later semantic R3 transaction can build on the catalog without
-/// turning this presentation model into project state.
+/// Without [authoring] it remains a bundled, read-only reference. With an
+/// exact-current authoring service it can publish semantic ItemPatch project
+/// changes, but it never gains build, deploy, game, or save authority.
 class Revision3ItemsView extends StatefulWidget {
   const Revision3ItemsView({
     this.load = loadRevision3BundledItemCatalog,
+    this.authoring,
+    this.authoringRequiresReopen = false,
+    this.onRecoverAuthoring,
+    this.onDirtyChanged,
+    this.onSavingChanged,
+    this.mutationsEnabled = true,
     super.key,
   });
 
   final Revision3ItemCatalogLoader load;
+  final Revision3ItemPatchAuthoringService? authoring;
+  final bool authoringRequiresReopen;
+  final VoidCallback? onRecoverAuthoring;
+  final ValueChanged<bool>? onDirtyChanged;
+  final ValueChanged<bool>? onSavingChanged;
+  final bool mutationsEnabled;
 
   @override
   State<Revision3ItemsView> createState() => _Revision3ItemsViewState();
 }
 
 class _Revision3ItemsViewState extends State<Revision3ItemsView> {
-  late Future<Revision3ItemCatalog> _catalog;
+  Future<Revision3ItemCatalog>? _catalog;
+  Future<Revision3ItemPatchCatalog>? _authoringCatalog;
   final TextEditingController _search = TextEditingController();
   String _query = '';
   Revision3ItemCategory? _category;
   String? _selectedId;
   bool _compactDetailVisible = false;
+  final Map<String, Map<String, AuthoringRevision3ItemScalarValue>>
+  _authoringDrafts = {};
+  bool _lastReportedDirty = false;
+  bool _saveInFlight = false;
+  Object? _activeSaveOwner;
+  int _authoringScopeEpoch = 0;
 
   @override
   void initState() {
     super.initState();
-    _catalog = widget.load();
+    _loadCurrentMode();
   }
 
   @override
   void didUpdateWidget(covariant Revision3ItemsView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.load != widget.load) {
+    final oldAuthoring = oldWidget.authoring;
+    final newAuthoring = widget.authoring;
+    final authoringModeChanged =
+        (oldAuthoring == null) != (newAuthoring == null);
+    final authoringProjectScopeChanged =
+        oldAuthoring != null &&
+        newAuthoring != null &&
+        (oldAuthoring.projectScopeIdentity !=
+                newAuthoring.projectScopeIdentity ||
+            oldAuthoring.projectId != newAuthoring.projectId);
+    final authoringCheckpointChanged =
+        oldAuthoring != null &&
+        newAuthoring != null &&
+        !authoringProjectScopeChanged &&
+        (oldAuthoring.projectRevision != newAuthoring.projectRevision ||
+            oldAuthoring.expectedHead.canonicalJson !=
+                newAuthoring.expectedHead.canonicalJson);
+    final bundledLoaderChanged =
+        oldAuthoring == null &&
+        newAuthoring == null &&
+        oldWidget.load != widget.load;
+    if (authoringModeChanged ||
+        authoringProjectScopeChanged ||
+        bundledLoaderChanged ||
+        oldWidget.authoringRequiresReopen != widget.authoringRequiresReopen) {
       _resetAndReload();
+    } else if (authoringCheckpointChanged) {
+      _reloadAuthoringCheckpoint();
+    }
+    if (!identical(oldWidget.onDirtyChanged, widget.onDirtyChanged)) {
+      oldWidget.onDirtyChanged?.call(false);
+      _reportDirty(force: true);
+    }
+    if (!identical(oldWidget.onSavingChanged, widget.onSavingChanged)) {
+      oldWidget.onSavingChanged?.call(false);
+      widget.onSavingChanged?.call(_saveInFlight);
     }
   }
 
   @override
   void dispose() {
     _search.dispose();
+    _lastReportedDirty = false;
+    widget.onDirtyChanged?.call(false);
+    widget.onSavingChanged?.call(false);
     super.dispose();
   }
 
   void _resetAndReload() {
+    _authoringScopeEpoch++;
     _search.clear();
     _query = '';
     _category = null;
     _selectedId = null;
     _compactDetailVisible = false;
-    _catalog = widget.load();
+    _authoringDrafts.clear();
+    final wasSaving = _saveInFlight;
+    _activeSaveOwner = null;
+    _saveInFlight = false;
+    _reportDirty();
+    if (wasSaving) widget.onSavingChanged?.call(false);
+    _loadCurrentMode();
+  }
+
+  void _loadCurrentMode() {
+    if (widget.authoringRequiresReopen) {
+      _catalog = null;
+      _authoringCatalog = null;
+      return;
+    }
+    final authoring = widget.authoring;
+    if (authoring == null) {
+      _authoringCatalog = null;
+      _catalog = _itemCatalogObservedLoad(widget.load);
+    } else {
+      _catalog = null;
+      _authoringCatalog = _itemCatalogObservedLoad(authoring.loadCatalog);
+    }
+  }
+
+  void _reloadAuthoringCheckpoint() {
+    final authoring = widget.authoring;
+    if (authoring == null) return;
+    _catalog = null;
+    _authoringCatalog = _itemCatalogObservedLoad(authoring.loadCatalog);
   }
 
   void _retry() => setState(_resetAndReload);
@@ -81,23 +169,57 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
   });
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<Revision3ItemCatalog>(
-    future: _catalog,
-    builder: (context, snapshot) {
-      if (snapshot.connectionState != ConnectionState.done) {
-        return const Center(
-          child: CircularProgressIndicator(key: Key('revision3-items-loading')),
-        );
-      }
-      if (snapshot.hasError) {
-        return _ItemCatalogLoadError(
-          error: snapshot.error.toString(),
-          onRetry: _retry,
-        );
-      }
-      return _catalogBody(context, snapshot.requireData);
-    },
-  );
+  Widget build(BuildContext context) {
+    if (widget.authoringRequiresReopen) {
+      return _ItemCatalogLoadError(
+        error: const Revision3ItemPatchRequiresReopenException(),
+        onRecover: widget.onRecoverAuthoring,
+      );
+    }
+    final authoring = widget.authoring;
+    if (authoring != null) {
+      return FutureBuilder<Revision3ItemPatchCatalog>(
+        future: _authoringCatalog,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(
+              child: CircularProgressIndicator(
+                key: Key('revision3-items-loading'),
+              ),
+            );
+          }
+          if (snapshot.hasError) {
+            return _ItemCatalogLoadError(
+              error: snapshot.error!,
+              onRetry: _retry,
+              onRecover: widget.onRecoverAuthoring,
+            );
+          }
+          return _authoringCatalogBody(
+            context,
+            snapshot.requireData,
+            authoring,
+          );
+        },
+      );
+    }
+    return FutureBuilder<Revision3ItemCatalog>(
+      future: _catalog,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(
+            child: CircularProgressIndicator(
+              key: Key('revision3-items-loading'),
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return _ItemCatalogLoadError(error: snapshot.error!, onRetry: _retry);
+        }
+        return _catalogBody(context, snapshot.requireData);
+      },
+    );
+  }
 
   Widget _catalogBody(BuildContext context, Revision3ItemCatalog catalog) {
     final foldedQuery = _query.trim().toLowerCase();
@@ -141,6 +263,7 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
           onClearQuery: _clearQuery,
           onCategoryChanged: _selectCategory,
           onSelected: _selectItem,
+          enabled: true,
         );
         if (!wide) {
           if (_compactDetailVisible && selected != null) {
@@ -170,17 +293,201 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
       },
     );
   }
+
+  Widget _authoringCatalogBody(
+    BuildContext context,
+    Revision3ItemPatchCatalog catalog,
+    Revision3ItemPatchAuthoringService authoring,
+  ) {
+    final foldedQuery = _query.trim().toLowerCase();
+    final presentations = <String, Revision3ItemCatalogEntry>{};
+    final filteredChoices = catalog.choices
+        .where((choice) {
+          final category = Revision3ItemCategory.parse(
+            choice.category.wireName,
+            'native item category',
+          );
+          if (_category != null && category != _category) return false;
+          return choice.matches(foldedQuery);
+        })
+        .toList(growable: false);
+    for (final choice in filteredChoices) {
+      presentations[choice.vanillaClass] = _itemPresentation(choice);
+    }
+    final counts = <Revision3ItemCategory, int>{};
+    for (final choice in catalog.choices) {
+      final category = Revision3ItemCategory.parse(
+        choice.category.wireName,
+        'native item category',
+      );
+      counts.update(category, (count) => count + 1, ifAbsent: () => 1);
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        Revision3ItemPatchChoice? selected;
+        for (final choice in filteredChoices) {
+          if (choice.vanillaClass == _selectedId) {
+            selected = choice;
+            break;
+          }
+        }
+        if (wide && selected == null && filteredChoices.isNotEmpty) {
+          selected = filteredChoices.first;
+        }
+        final items = filteredChoices
+            .map((choice) => presentations[choice.vanillaClass]!)
+            .toList(growable: false);
+        final browser = _ItemBrowser(
+          items: items,
+          totalCount: catalog.choices.length,
+          counts: counts,
+          selectedId: selected?.vanillaClass,
+          category: _category,
+          searchController: _search,
+          onQueryChanged: _changeQuery,
+          onClearQuery: _clearQuery,
+          onCategoryChanged: _selectCategory,
+          onSelected: (item) {
+            final choice = catalog.choices.firstWhere(
+              (candidate) => candidate.vanillaClass == item.id,
+            );
+            _selectAuthoringItem(choice);
+          },
+          enabled: widget.mutationsEnabled && !_saveInFlight,
+        );
+        Widget details(Revision3ItemPatchChoice choice, bool compact) {
+          final scopeEpoch = _authoringScopeEpoch;
+          return _EditableItemDetails(
+            key: ValueKey(
+              'revision3-items-editor-${choice.stableKey}-${catalog.projectRevision}',
+            ),
+            choice: choice,
+            item: presentations[choice.vanillaClass]!,
+            authoring: authoring,
+            initialDesiredOverrides: _authoringDrafts[choice.stableKey],
+            onDraftChanged: (desired) {
+              if (_sameAuthoringValues(desired, choice.currentOverrides)) {
+                _authoringDrafts.remove(choice.stableKey);
+              } else {
+                _authoringDrafts[choice.stableKey] =
+                    Map<String, AuthoringRevision3ItemScalarValue>.unmodifiable(
+                      desired,
+                    );
+              }
+              _reportDirty();
+            },
+            onPublished: () =>
+                _removePublishedDraft(scopeEpoch, choice.stableKey),
+            onReloadAfterFailure: _retry,
+            mutationsEnabled: widget.mutationsEnabled && !_saveInFlight,
+            onSaveStateChanged: _setSaveInFlight,
+            compact: compact,
+            onBack: compact
+                ? () => setState(() => _compactDetailVisible = false)
+                : null,
+          );
+        }
+
+        if (!wide) {
+          if (_compactDetailVisible && selected != null) {
+            return details(selected, true);
+          }
+          return browser;
+        }
+        final browserWidth = (constraints.maxWidth * 0.38).clamp(330.0, 440.0);
+        return Row(
+          key: const Key('revision3-items-wide-layout'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(width: browserWidth, child: browser),
+            const VerticalDivider(width: 1),
+            Expanded(
+              child: selected == null
+                  ? _EmptySelection(queryActive: filteredChoices.isEmpty)
+                  : details(selected, false),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _selectAuthoringItem(Revision3ItemPatchChoice choice) => setState(() {
+    _selectedId = choice.vanillaClass;
+    _compactDetailVisible = true;
+  });
+
+  void _reportDirty({bool force = false}) {
+    final dirty = _authoringDrafts.isNotEmpty;
+    if (!force && dirty == _lastReportedDirty) return;
+    _lastReportedDirty = dirty;
+    widget.onDirtyChanged?.call(dirty);
+  }
+
+  void _removePublishedDraft(int scopeEpoch, String stableKey) {
+    if (!mounted || scopeEpoch != _authoringScopeEpoch) return;
+    _authoringDrafts.remove(stableKey);
+    _reportDirty();
+  }
+
+  void _setSaveInFlight(Object owner, bool saving) {
+    if (!mounted) return;
+    if (saving) {
+      if (_activeSaveOwner != null && !identical(_activeSaveOwner, owner)) {
+        return;
+      }
+      _activeSaveOwner = owner;
+    } else {
+      if (!identical(_activeSaveOwner, owner)) return;
+      _activeSaveOwner = null;
+    }
+    if (_saveInFlight == saving) return;
+    setState(() => _saveInFlight = saving);
+    widget.onSavingChanged?.call(saving);
+  }
+}
+
+/// FutureBuilder may not attach its listener until the next rebuild after a
+/// Retry tap. Observe the future immediately as well, so an already-completed
+/// error is rendered instead of escaping through that hand-off window.
+Future<T> _itemCatalogObservedLoad<T>(Future<T> Function() load) {
+  final future = Future<T>.sync(load);
+  future.ignore();
+  return future;
 }
 
 class _ItemCatalogLoadError extends StatelessWidget {
-  const _ItemCatalogLoadError({required this.error, required this.onRetry});
+  const _ItemCatalogLoadError({
+    required this.error,
+    this.onRetry,
+    this.onRecover,
+  });
 
-  final String error;
-  final VoidCallback onRetry;
+  final Object error;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRecover;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
+    final requiresRecovery = error is Revision3ItemPatchRequiresReopenException;
+    final unsupported = error is Revision3ItemPatchUnsupportedSchemaException;
+    final message = switch (error) {
+      Revision3ItemPatchRequiresReopenException() =>
+        l10n.managedItemsCatalogRequiresReopen,
+      Revision3ItemPatchStaleCheckpointException() ||
+      Revision3ItemPatchNoChangesException() => l10n.managedItemsCatalogStale,
+      Revision3ItemPatchUnsupportedSchemaException() =>
+        l10n.managedItemsCatalogUnsupported,
+      _ => l10n.managedItemsCatalogLoadUnexpected,
+    };
+    final action = requiresRecovery
+        ? onRecover
+        : unsupported
+        ? null
+        : onRetry;
     return LayoutBuilder(
       builder: (context, constraints) {
         final minimumHeight = (constraints.maxHeight - 32).clamp(
@@ -205,17 +512,37 @@ class _ItemCatalogLoadError extends StatelessWidget {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      l10n.failedToLoadCatalog(error),
+                      l10n.managedItemsCatalogLoadTitle,
+                      style: Theme.of(context).textTheme.titleMedium,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      message,
                       key: const Key('revision3-items-load-error'),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      key: const Key('revision3-items-retry'),
-                      onPressed: onRetry,
-                      icon: const Icon(Icons.refresh),
-                      label: Text(l10n.managedDashboardRetry),
-                    ),
+                    if (action != null) ...[
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        key: Key(
+                          requiresRecovery
+                              ? 'revision3-items-recover'
+                              : 'revision3-items-retry',
+                        ),
+                        onPressed: action,
+                        icon: Icon(
+                          requiresRecovery
+                              ? Icons.health_and_safety_outlined
+                              : Icons.refresh,
+                        ),
+                        label: Text(
+                          requiresRecovery
+                              ? l10n.managedProjectRecoveryTry
+                              : l10n.managedItemsCatalogReload,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -239,6 +566,7 @@ class _ItemBrowser extends StatelessWidget {
     required this.onClearQuery,
     required this.onCategoryChanged,
     required this.onSelected,
+    required this.enabled,
   });
 
   final List<Revision3ItemCatalogEntry> items;
@@ -251,116 +579,790 @@ class _ItemBrowser extends StatelessWidget {
   final VoidCallback onClearQuery;
   final ValueChanged<Revision3ItemCategory?> onCategoryChanged;
   final ValueChanged<Revision3ItemCatalogEntry> onSelected;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return Column(
-      key: const Key('revision3-items-browser'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-          child: TextField(
-            key: const Key('revision3-items-search'),
-            controller: searchController,
-            onChanged: onQueryChanged,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              labelText: l10n.searchItems,
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      key: const Key('revision3-items-clear-search'),
-                      tooltip: l10n.clearAll,
-                      onPressed: onClearQuery,
-                      icon: const Icon(Icons.clear),
-                    ),
-              border: const OutlineInputBorder(),
+    final search = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: TextField(
+        key: const Key('revision3-items-search'),
+        controller: searchController,
+        enabled: enabled,
+        onChanged: onQueryChanged,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          labelText: l10n.searchItems,
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: searchController.text.isEmpty
+              ? null
+              : IconButton(
+                  key: const Key('revision3-items-clear-search'),
+                  tooltip: l10n.clearAll,
+                  onPressed: enabled ? onClearQuery : null,
+                  icon: const Icon(Icons.clear),
+                ),
+          border: const OutlineInputBorder(),
+        ),
+      ),
+    );
+    final categories = SingleChildScrollView(
+      key: const Key('revision3-items-category-scroll'),
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: ChoiceChip(
+              key: const Key('revision3-items-category-all'),
+              selected: category == null,
+              label: Text(l10n.categoryWithCount(l10n.changesAll, totalCount)),
+              onSelected: enabled ? (_) => onCategoryChanged(null) : null,
             ),
           ),
-        ),
-        SingleChildScrollView(
-          key: const Key('revision3-items-category-scroll'),
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-          child: Row(
-            children: [
+          for (final itemCategory in Revision3ItemCategory.values)
+            if (counts[itemCategory] case final count?)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 child: ChoiceChip(
-                  key: const Key('revision3-items-category-all'),
-                  selected: category == null,
-                  label: Text(
-                    l10n.categoryWithCount(l10n.changesAll, totalCount),
+                  key: ValueKey(
+                    'revision3-items-category-${itemCategory.name}',
                   ),
-                  onSelected: (_) => onCategoryChanged(null),
+                  selected: category == itemCategory,
+                  label: Text(
+                    l10n.categoryWithCount(
+                      _categoryLabel(l10n, itemCategory),
+                      count,
+                    ),
+                  ),
+                  onSelected: enabled
+                      ? (_) => onCategoryChanged(itemCategory)
+                      : null,
                 ),
               ),
-              for (final itemCategory in Revision3ItemCategory.values)
-                if (counts[itemCategory] case final count?)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: ChoiceChip(
-                      key: ValueKey(
-                        'revision3-items-category-${itemCategory.name}',
-                      ),
-                      selected: category == itemCategory,
-                      label: Text(
-                        l10n.categoryWithCount(
-                          _categoryLabel(l10n, itemCategory),
-                          count,
-                        ),
-                      ),
-                      onSelected: (_) => onCategoryChanged(itemCategory),
-                    ),
-                  ),
-            ],
-          ),
+        ],
+      ),
+    );
+    Widget itemTile(Revision3ItemCatalogEntry item) => ListTile(
+      key: ValueKey('revision3-items-result-${item.id}'),
+      selected: item.id == selectedId,
+      leading: const Icon(Icons.inventory_2_outlined),
+      title: Text(
+        item.displayName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+      subtitle: Text(item.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right),
+      enabled: enabled,
+      onTap: enabled ? () => onSelected(item) : null,
+    );
+    final empty = Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Text(
+          l10n.noItemsMatch,
+          key: const Key('revision3-items-empty'),
+          textAlign: TextAlign.center,
         ),
-        const Divider(height: 1),
-        Expanded(
-          child: items.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      l10n.noItemsMatch,
-                      key: const Key('revision3-items-empty'),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
-              : ListView.builder(
+      ),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxHeight < 360) {
+          return CustomScrollView(
+            key: const Key('revision3-items-browser'),
+            slivers: [
+              SliverToBoxAdapter(child: search),
+              SliverToBoxAdapter(child: categories),
+              const SliverToBoxAdapter(child: Divider(height: 1)),
+              if (items.isEmpty)
+                SliverFillRemaining(hasScrollBody: false, child: empty)
+              else
+                SliverList.builder(
                   key: const Key('revision3-items-results'),
                   itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    final selected = item.id == selectedId;
-                    return ListTile(
-                      key: ValueKey('revision3-items-result-${item.id}'),
-                      selected: selected,
-                      leading: const Icon(Icons.inventory_2_outlined),
-                      title: Text(
-                        item.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        item.id,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => onSelected(item),
-                    );
-                  },
+                  itemBuilder: (context, index) => itemTile(items[index]),
                 ),
+            ],
+          );
+        }
+        return Column(
+          key: const Key('revision3-items-browser'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            search,
+            categories,
+            const Divider(height: 1),
+            Expanded(
+              child: items.isEmpty
+                  ? empty
+                  : ListView.builder(
+                      key: const Key('revision3-items-results'),
+                      itemCount: items.length,
+                      itemBuilder: (context, index) => itemTile(items[index]),
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+Revision3ItemCatalogEntry _itemPresentation(Revision3ItemPatchChoice choice) =>
+    Revision3ItemCatalogEntry(
+      id: choice.vanillaClass,
+      displayName: choice.displayName,
+      category: Revision3ItemCategory.parse(
+        choice.category.wireName,
+        'native item category',
+      ),
+      fields: choice.fields
+          .map(
+            (field) => FieldSchema(
+              name: field.name,
+              type: switch (field.scalarType) {
+                AuthoringRevision3ItemScalarType.integer => FieldType.int_,
+                AuthoringRevision3ItemScalarType.float_ => FieldType.float_,
+                AuthoringRevision3ItemScalarType.boolean => FieldType.bool_,
+              },
+              minValue: field.minimumValue?.value as num?,
+              maxValue: field.maximumValue?.value as num?,
+              defaultValue: field.defaultValue?.value,
+            ),
+          )
+          .toList(growable: false),
+    );
+
+class _EditableItemDetails extends StatefulWidget {
+  const _EditableItemDetails({
+    required this.choice,
+    required this.item,
+    required this.authoring,
+    required this.initialDesiredOverrides,
+    required this.onDraftChanged,
+    required this.onPublished,
+    required this.onReloadAfterFailure,
+    required this.mutationsEnabled,
+    required this.onSaveStateChanged,
+    required this.compact,
+    this.onBack,
+    super.key,
+  });
+
+  final Revision3ItemPatchChoice choice;
+  final Revision3ItemCatalogEntry item;
+  final Revision3ItemPatchAuthoringService authoring;
+  final Map<String, AuthoringRevision3ItemScalarValue>? initialDesiredOverrides;
+  final ValueChanged<Map<String, AuthoringRevision3ItemScalarValue>>
+  onDraftChanged;
+  final VoidCallback onPublished;
+  final VoidCallback onReloadAfterFailure;
+  final bool mutationsEnabled;
+  final void Function(Object owner, bool saving) onSaveStateChanged;
+  final bool compact;
+  final VoidCallback? onBack;
+
+  @override
+  State<_EditableItemDetails> createState() => _EditableItemDetailsState();
+}
+
+class _EditableItemDetailsState extends State<_EditableItemDetails> {
+  final Map<String, TextEditingController> _controllers = {};
+  final Map<String, String?> _errors = {};
+  late Map<String, AuthoringRevision3ItemScalarValue> _desired;
+  final Object _saveOwner = Object();
+  bool _saving = false;
+  bool _published = false;
+  String? _saveError;
+  bool _canReloadAfterFailure = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _reset();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EditableItemDetails oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.choice, widget.choice)) _reset();
+  }
+
+  @override
+  void dispose() {
+    _disposeControllers();
+    super.dispose();
+  }
+
+  void _disposeControllers() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    _controllers.clear();
+  }
+
+  void _reset() {
+    _disposeControllers();
+    _errors.clear();
+    _desired = Map<String, AuthoringRevision3ItemScalarValue>.from(
+      widget.initialDesiredOverrides ?? widget.choice.currentOverrides,
+    );
+    for (final field in widget.choice.fields) {
+      final value = _desired[field.name] ?? field.defaultValue;
+      _controllers[field.name] = TextEditingController(
+        text: value == null ? '' : _authoringValueText(value),
+      );
+    }
+    _saving = false;
+    _published = false;
+    _saveError = null;
+    _canReloadAfterFailure = false;
+  }
+
+  bool get _dirty =>
+      !_sameAuthoringValues(_desired, widget.choice.currentOverrides);
+
+  void _notifyDraftChanged() => widget.onDraftChanged(_desired);
+
+  void _addOverride(Revision3ItemPatchFieldChoice field) {
+    if (!widget.mutationsEnabled || _saving || _published) return;
+    final value =
+        field.defaultValue ??
+        switch (field.scalarType) {
+          AuthoringRevision3ItemScalarType.integer =>
+            AuthoringRevision3ItemScalarValue.integer(0),
+          AuthoringRevision3ItemScalarType.float_ =>
+            AuthoringRevision3ItemScalarValue.float(0),
+          AuthoringRevision3ItemScalarType.boolean =>
+            AuthoringRevision3ItemScalarValue.boolean(false),
+        };
+    setState(() {
+      _desired[field.name] = value;
+      _controllers[field.name]!.text = _authoringValueText(value);
+      _errors[field.name] = null;
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    _notifyDraftChanged();
+  }
+
+  void _removeOverride(String name) {
+    if (!widget.mutationsEnabled || _saving || _published) return;
+    setState(() {
+      _desired.remove(name);
+      _errors[name] = null;
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    _notifyDraftChanged();
+  }
+
+  void _clearAllOverrides() {
+    if (!widget.mutationsEnabled || _saving || _published) return;
+    setState(() {
+      _desired.clear();
+      _errors.clear();
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    _notifyDraftChanged();
+  }
+
+  void _changeNumeric(Revision3ItemPatchFieldChoice field, String raw) {
+    if (!widget.mutationsEnabled || _saving || _published) return;
+    AuthoringRevision3ItemScalarValue? value;
+    String? error;
+    final trimmed = raw.trim();
+    if (field.scalarType == AuthoringRevision3ItemScalarType.integer) {
+      final parsed = int.tryParse(trimmed);
+      if (parsed != null) {
+        try {
+          value = AuthoringRevision3ItemScalarValue.integer(parsed);
+        } on FormatException {
+          value = null;
+        }
+      }
+    } else {
+      final parsed = double.tryParse(trimmed);
+      if (parsed != null && parsed.isFinite) {
+        value = AuthoringRevision3ItemScalarValue.float(parsed);
+      }
+    }
+    if (value == null) {
+      error = AppLocalizations.of(context).managedItemsInvalidNumber;
+    } else if (!field.accepts(value)) {
+      error = AppLocalizations.of(context).managedItemsNumberOutsideNativeRange(
+        _authoringBoundText(field.minimumValue!),
+        _authoringBoundText(field.maximumValue!),
+      );
+      value = null;
+    }
+    setState(() {
+      _errors[field.name] = error;
+      if (value != null) _desired[field.name] = value;
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    if (value != null) _notifyDraftChanged();
+  }
+
+  void _changeBoolean(String name, bool value) {
+    if (!widget.mutationsEnabled || _saving || _published) return;
+    setState(() {
+      _desired[name] = AuthoringRevision3ItemScalarValue.boolean(value);
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    _notifyDraftChanged();
+  }
+
+  Future<void> _save() async {
+    if (!widget.mutationsEnabled ||
+        _saving ||
+        _published ||
+        _errors.values.any((error) => error != null)) {
+      return;
+    }
+    final submittedOverrides =
+        Map<String, AuthoringRevision3ItemScalarValue>.unmodifiable(
+          Map<String, AuthoringRevision3ItemScalarValue>.from(_desired),
+        );
+    widget.onSaveStateChanged(_saveOwner, true);
+    setState(() {
+      _saving = true;
+      _saveError = null;
+      _canReloadAfterFailure = false;
+    });
+    try {
+      final publication = await widget.authoring.save(
+        choice: widget.choice,
+        desiredOverrides: submittedOverrides,
+      );
+      widget.onPublished();
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _published = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocalizations.of(
+              context,
+            ).managedItemsSaved(publication.projectRevision),
+          ),
         ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
+      final failure = switch (error) {
+        Revision3ItemPatchStaleCheckpointException() => (
+          l10n.managedItemsSaveStale,
+          true,
+        ),
+        Revision3ItemPatchRequiresReopenException() => (
+          l10n.managedItemsSaveRequiresReopen,
+          false,
+        ),
+        Revision3ItemPatchNoChangesException() => (
+          l10n.managedItemsSaveNoChanges,
+          true,
+        ),
+        Revision3ItemPatchUnsupportedSchemaException() => (
+          l10n.managedItemsSaveUnsupported,
+          true,
+        ),
+        _ => (l10n.managedItemsSaveUnexpected, false),
+      };
+      setState(() {
+        _saving = false;
+        _saveError = failure.$1;
+        _canReloadAfterFailure = failure.$2;
+      });
+    } finally {
+      widget.onSaveStateChanged(_saveOwner, false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final choice = widget.choice;
+    final canSave =
+        !_saving &&
+        widget.mutationsEnabled &&
+        !_published &&
+        _errors.values.every((error) => error == null) &&
+        (choice.canEdit ? _dirty : choice.hasPatch && _desired.isEmpty);
+    return ListView(
+      key: ValueKey('revision3-items-details-${widget.item.id}'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+      children: [
+        if (widget.compact)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('revision3-items-back'),
+              onPressed: widget.mutationsEnabled ? widget.onBack : null,
+              icon: const Icon(Icons.arrow_back),
+              label: Text(l10n.tabItems),
+            ),
+          ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Chip(
+              avatar: const Icon(Icons.verified_outlined, size: 18),
+              label: Text(l10n.managedItemsExactSchemaBadge),
+            ),
+            Chip(
+              avatar: const Icon(Icons.edit_outlined, size: 18),
+              label: Text(l10n.managedItemsEditableBadge),
+            ),
+            Chip(
+              avatar: const Icon(Icons.build_circle_outlined, size: 18),
+              label: Text(l10n.managedItemsBuildPendingBadge),
+            ),
+            Chip(
+              avatar: const Icon(Icons.inventory_2_outlined, size: 18),
+              label: Text(_categoryLabel(l10n, widget.item.category)),
+            ),
+            if (choice.hasPatch)
+              Chip(
+                avatar: const Icon(Icons.change_circle_outlined, size: 18),
+                label: Text(
+                  l10n.managedItemsCurrentChanges(
+                    choice.currentOverrides.length,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        SelectableText(
+          choice.displayName,
+          key: const Key('revision3-items-detail-name'),
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
+        const SizedBox(height: 4),
+        SelectableText(
+          choice.vanillaClass,
+          key: const Key('revision3-items-detail-id'),
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontFamily: 'monospace',
+          ),
+        ),
+        const SizedBox(height: 16),
+        Card.filled(
+          key: const Key('revision3-items-authoring-boundary'),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.info_outline, size: 20),
+                const SizedBox(width: 10),
+                Expanded(child: Text(l10n.managedItemsAuthoringBoundary)),
+              ],
+            ),
+          ),
+        ),
+        if (!choice.canEdit) ...[
+          const SizedBox(height: 12),
+          Card(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Text(l10n.managedItemsUnsupportedSchema),
+            ),
+          ),
+        ],
+        const SizedBox(height: 20),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final count = Text(
+              l10n.managedItemsCurrentChanges(_desired.length),
+              key: const Key('revision3-items-edit-count'),
+              style: Theme.of(context).textTheme.titleMedium,
+            );
+            final clear = TextButton(
+              key: const Key('revision3-items-clear-all'),
+              onPressed: !widget.mutationsEnabled || _saving || _published
+                  ? null
+                  : _clearAllOverrides,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  const Icon(Icons.restart_alt),
+                  Text(l10n.managedItemsClearChanges),
+                ],
+              ),
+            );
+            if (_desired.isEmpty) return count;
+            if (constraints.maxWidth < 520) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [count, const SizedBox(height: 4), clear],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: count),
+                Flexible(child: clear),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        if (choice.canEdit)
+          for (final field in choice.fields)
+            _EditableItemField(
+              key: ValueKey(
+                'revision3-items-edit-${choice.vanillaClass}-${field.name}',
+              ),
+              field: field,
+              activeValue: _desired[field.name],
+              controller: _controllers[field.name]!,
+              error: _errors[field.name],
+              enabled: widget.mutationsEnabled && !_saving && !_published,
+              onAdd: () => _addOverride(field),
+              onRemove: () => _removeOverride(field.name),
+              onNumericChanged: (raw) => _changeNumeric(field, raw),
+              onBooleanChanged: (value) => _changeBoolean(field.name, value),
+            ),
+        if (_saveError != null) ...[
+          const SizedBox(height: 12),
+          Card(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _saveError!,
+                    key: const Key('revision3-items-save-error'),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                  ),
+                  if (_canReloadAfterFailure) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const Key('revision3-items-reload-after-error'),
+                        onPressed: widget.onReloadAfterFailure,
+                        icon: const Icon(Icons.refresh),
+                        label: Text(l10n.managedItemsReloadDiscardDraft),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 18),
+        FilledButton.icon(
+          key: const Key('revision3-items-save'),
+          onPressed: canSave ? _save : null,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _desired.isEmpty && choice.hasPatch
+                      ? Icons.restore
+                      : Icons.save_outlined,
+                ),
+          label: Text(
+            _desired.isEmpty && choice.hasPatch
+                ? l10n.managedItemsRevertItem
+                : l10n.managedItemsSaveChanges,
+          ),
+        ),
+        if (!canSave && !_saving && !_published) ...[
+          const SizedBox(height: 8),
+          Text(
+            l10n.managedItemsNoUnsavedChanges,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
       ],
     );
   }
+}
+
+class _EditableItemField extends StatelessWidget {
+  const _EditableItemField({
+    required this.field,
+    required this.activeValue,
+    required this.controller,
+    required this.error,
+    required this.enabled,
+    required this.onAdd,
+    required this.onRemove,
+    required this.onNumericChanged,
+    required this.onBooleanChanged,
+    super.key,
+  });
+
+  final Revision3ItemPatchFieldChoice field;
+  final AuthoringRevision3ItemScalarValue? activeValue;
+  final TextEditingController controller;
+  final String? error;
+  final bool enabled;
+  final VoidCallback onAdd;
+  final VoidCallback onRemove;
+  final ValueChanged<String> onNumericChanged;
+  final ValueChanged<bool> onBooleanChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final defaultText = field.defaultValue == null
+        ? l10n.managedItemsDefaultUnknown
+        : l10n.managedItemsGameDefault(
+            _authoringValueText(field.defaultValue!),
+          );
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    field.name,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleSmall?.copyWith(fontFamily: 'monospace'),
+                  ),
+                ),
+                Chip(
+                  label: Text(field.scalarType.wireName),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            Text(
+              defaultText,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (activeValue == null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: ValueKey('revision3-items-add-${field.name}'),
+                  onPressed: enabled ? onAdd : null,
+                  icon: const Icon(Icons.add),
+                  label: Text(l10n.managedItemsChangeField),
+                ),
+              )
+            else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child:
+                        field.scalarType ==
+                            AuthoringRevision3ItemScalarType.boolean
+                        ? SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(l10n.managedItemsModValue),
+                            value: activeValue!.booleanValue!,
+                            onChanged: enabled ? onBooleanChanged : null,
+                          )
+                        : TextField(
+                            key: ValueKey(
+                              'revision3-items-value-${field.name}',
+                            ),
+                            controller: controller,
+                            enabled: enabled,
+                            decoration: InputDecoration(
+                              labelText: l10n.managedItemsModValue,
+                              errorText: error,
+                              isDense: true,
+                            ),
+                            keyboardType:
+                                field.scalarType ==
+                                    AuthoringRevision3ItemScalarType.integer
+                                ? const TextInputType.numberWithOptions(
+                                    signed: true,
+                                  )
+                                : const TextInputType.numberWithOptions(
+                                    signed: true,
+                                    decimal: true,
+                                  ),
+                            onChanged: onNumericChanged,
+                          ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    key: ValueKey('revision3-items-remove-${field.name}'),
+                    tooltip: l10n.managedItemsUseGameDefault,
+                    onPressed: enabled ? onRemove : null,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _authoringValueText(AuthoringRevision3ItemScalarValue value) =>
+    switch (value.type) {
+      AuthoringRevision3ItemScalarType.integer => value.integerValue.toString(),
+      AuthoringRevision3ItemScalarType.float_ => value.floatValue.toString(),
+      AuthoringRevision3ItemScalarType.boolean => value.booleanValue.toString(),
+    };
+
+String _authoringBoundText(AuthoringRevision3ItemScalarValue value) =>
+    switch (value.type) {
+      AuthoringRevision3ItemScalarType.integer =>
+        value.integerValue!.toString(),
+      AuthoringRevision3ItemScalarType.float_ => value.floatValue!.toString(),
+      AuthoringRevision3ItemScalarType.boolean =>
+        value.booleanValue! ? 'true' : 'false',
+    };
+
+bool _sameAuthoringValues(
+  Map<String, AuthoringRevision3ItemScalarValue> left,
+  Map<String, AuthoringRevision3ItemScalarValue> right,
+) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    final other = right[entry.key];
+    if (other == null ||
+        other.type != entry.value.type ||
+        other.value != entry.value.value) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class _ItemDetails extends StatelessWidget {
@@ -578,6 +1580,7 @@ String _categoryLabel(AppLocalizations l10n, Revision3ItemCategory category) =>
       Revision3ItemCategory.food => l10n.categoryFoodAndPotions,
       Revision3ItemCategory.misc => l10n.categoryMiscellaneous,
       Revision3ItemCategory.amulet => l10n.categoryAmulets,
+      Revision3ItemCategory.armor => l10n.managedItemsCategoryArmor,
       Revision3ItemCategory.ring => l10n.categoryRings,
       Revision3ItemCategory.trophy => l10n.categoryAnimalTrophies,
       Revision3ItemCategory.writing => l10n.categoryWritings,

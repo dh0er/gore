@@ -8,6 +8,20 @@ const _projectId = '11111111111111111111111111111111';
 const _draftId = '22222222222222222222222222222222';
 const _moduleId = '33333333333333333333333333333333';
 const _sentinelId = '44444444444444444444444444444444';
+const _localizationId = '55555555555555555555555555555555';
+const _lineId = '66666666666666666666666666666666';
+
+({String id, int version}) _generatorFor(AuthoringStoryDraftKind kind) =>
+    switch (kind) {
+      AuthoringStoryDraftKind.npcDraft => (
+        id: 'gore-authoring.logical-npc-clone-draft',
+        version: 1,
+      ),
+      AuthoringStoryDraftKind.questDraft => (
+        id: 'gore-authoring.draft-quest-skeleton',
+        version: 4,
+      ),
+    };
 
 Map<String, Object?> _ref(String id, String kind) => <String, Object?>{
   'project_id': _projectId,
@@ -30,69 +44,71 @@ Map<String, Object?> _entity({
   'payload': <String, Object?>{'kind': kind, 'data': data},
 };
 
-Map<String, Object?> _basisProject(AuthoringStoryDraftKind kind) =>
-    <String, Object?>{
-      'format': 2,
-      'schema_revision': 3,
-      'project_id': _projectId,
-      'revision': 7,
-      'meta': <String, Object?>{
-        'name': 'Removal fixture',
-        'version': '1.0.0',
-        'author': 'tests',
-      },
-      'target': <String, Object?>{
-        'executable': <String, Object?>{'byte_len': 1, 'sha256': 'a' * 64},
-      },
-      'authoring_locales': <Object?>['en'],
-      'entities': <String, Object?>{
-        _draftId: _entity(
-          id: _draftId,
-          displayName: kind == AuthoringStoryDraftKind.npcDraft
-              ? 'Test NPC'
-              : 'Test Quest',
-          revision: 3,
-          origin: <String, Object?>{'type': 'authored'},
-          kind: kind.wireName,
-          data: <String, Object?>{
-            'generator_id': 'test.story-generator',
-            'generator_version': 1,
-            'script_module': _ref(_moduleId, 'script_module'),
+Map<String, Object?> _basisProject(AuthoringStoryDraftKind kind) {
+  final generator = _generatorFor(kind);
+  return <String, Object?>{
+    'format': 2,
+    'schema_revision': 3,
+    'project_id': _projectId,
+    'revision': 7,
+    'meta': <String, Object?>{
+      'name': 'Removal fixture',
+      'version': '1.0.0',
+      'author': 'tests',
+    },
+    'target': <String, Object?>{
+      'executable': <String, Object?>{'byte_len': 1, 'sha256': 'a' * 64},
+    },
+    'authoring_locales': <Object?>['en'],
+    'entities': <String, Object?>{
+      _draftId: _entity(
+        id: _draftId,
+        displayName: kind == AuthoringStoryDraftKind.npcDraft
+            ? 'Test NPC'
+            : 'Test Quest',
+        revision: 3,
+        origin: <String, Object?>{'type': 'authored'},
+        kind: kind.wireName,
+        data: <String, Object?>{
+          'generator_id': generator.id,
+          'generator_version': generator.version,
+          'script_module': _ref(_moduleId, 'script_module'),
+        },
+      ),
+      _moduleId: _entity(
+        id: _moduleId,
+        displayName: 'Generated module',
+        revision: 4,
+        origin: <String, Object?>{
+          'type': 'generated',
+          'generator_id': generator.id,
+          'generator_version': generator.version,
+          'owner': _ref(_draftId, kind.wireName),
+        },
+        kind: 'script_module',
+        data: <String, Object?>{
+          'generator_id': generator.id,
+          'generator_version': generator.version,
+          'owner': _ref(_draftId, kind.wireName),
+          'source_sha256': 'b' * 64,
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
           },
-        ),
-        _moduleId: _entity(
-          id: _moduleId,
-          displayName: 'Generated module',
-          revision: 4,
-          origin: <String, Object?>{
-            'type': 'generated',
-            'generator_id': 'test.story-generator',
-            'generator_version': 1,
-            'owner': _ref(_draftId, kind.wireName),
-          },
-          kind: 'script_module',
-          data: <String, Object?>{
-            'generator_id': 'test.story-generator',
-            'generator_version': 1,
-            'owner': _ref(_draftId, kind.wireName),
-            'source_sha256': 'b' * 64,
-            'status': <String, Object?>{
-              'authoring': 'offline_draft',
-              'runtime': 'runtime_unqualified',
-            },
-          },
-        ),
-        _sentinelId: _entity(
-          id: _sentinelId,
-          displayName: 'Retained entity',
-          revision: 2,
-          origin: <String, Object?>{'type': 'authored'},
-          kind: 'dialog_graph',
-          data: <String, Object?>{'nodes': <Object?>[]},
-        ),
-      },
-      'asset_store': <String, Object?>{'assets': <String, Object?>{}},
-    };
+        },
+      ),
+      _sentinelId: _entity(
+        id: _sentinelId,
+        displayName: 'Retained entity',
+        revision: 2,
+        origin: <String, Object?>{'type': 'authored'},
+        kind: 'dialog_graph',
+        data: <String, Object?>{'nodes': <Object?>[]},
+      ),
+    },
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  };
+}
 
 String _headJson(String digit, int bytes) => jsonEncode(<String, Object?>{
   'store_format': 1,
@@ -135,6 +151,70 @@ Map<String, Object?> _fixture(AuthoringStoryDraftKind kind) {
       'publication_status': 'not_supported',
     },
   };
+}
+
+Map<String, Object?> _fixtureWithOutgoingDialogBinding(
+  AuthoringStoryDraftKind kind,
+) {
+  final fixture = _fixture(kind);
+  final basis = (fixture['basis']! as Map).cast<String, Object?>();
+  final basisEntities = (basis['entities']! as Map).cast<String, Object?>();
+  final draft = (basisEntities[_draftId]! as Map).cast<String, Object?>();
+  final draftPayload = (draft['payload']! as Map).cast<String, Object?>();
+  final draftData = (draftPayload['data']! as Map).cast<String, Object?>();
+  final binding = <String, Object?>{
+    'line': _ref(_lineId, 'dialog_line'),
+    if (kind == AuthoringStoryDraftKind.questDraft) 'objective_slot': 1,
+  };
+  switch (kind) {
+    case AuthoringStoryDraftKind.npcDraft:
+      draftData['greetings'] = <Object?>[binding];
+      break;
+    case AuthoringStoryDraftKind.questDraft:
+      draftData['transcript'] = <Object?>[binding];
+      break;
+  }
+  basisEntities[_localizationId] = _entity(
+    id: _localizationId,
+    displayName: 'Retained text',
+    revision: 1,
+    origin: <String, Object?>{
+      'type': 'new',
+      'authored_runtime_id': 'DIA_REMOVAL_TEXT',
+    },
+    kind: 'localization_entry',
+    data: <String, Object?>{
+      'loc_id': 'DIA_REMOVAL_TEXT',
+      'texts': <String, Object?>{'en': 'Retained after Draft removal.'},
+    },
+  );
+  basisEntities[_lineId] = _entity(
+    id: _lineId,
+    displayName: 'Retained line',
+    revision: 1,
+    origin: <String, Object?>{
+      'type': 'new',
+      'authored_runtime_id': 'DIA_REMOVAL_LINE',
+    },
+    kind: 'dialog_line',
+    data: <String, Object?>{
+      'localization': _ref(_localizationId, 'localization_entry'),
+      'speaker_hint': 'Removal test',
+      'voice_slots': <String, Object?>{},
+    },
+  );
+
+  final response = (fixture['response']! as Map).cast<String, Object?>();
+  final candidate =
+      jsonDecode(response['project_json']! as String) as Map<String, Object?>;
+  final candidateEntities = (candidate['entities']! as Map)
+      .cast<String, Object?>();
+  candidateEntities[_localizationId] = jsonDecode(
+    jsonEncode(basisEntities[_localizationId]),
+  );
+  candidateEntities[_lineId] = jsonDecode(jsonEncode(basisEntities[_lineId]));
+  response['project_json'] = jsonEncode(candidate);
+  return fixture;
 }
 
 AuthoringRevision3StoryDraftRemovalRequestV1 _request(
@@ -223,6 +303,50 @@ void main() {
         });
       },
     );
+
+    test('${kind.wireName} removal drops only its outgoing Dialog binding', () {
+      final fixture = _fixtureWithOutgoingDialogBinding(kind);
+      final request = _request(fixture, kind);
+      final response = (fixture['response']! as Map).cast<String, Object?>();
+
+      final prepared = AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+        response,
+        currentProjectJson: jsonEncode(fixture['basis']),
+        request: request,
+      );
+
+      final candidate =
+          jsonDecode(prepared.projectJson) as Map<String, Object?>;
+      final entities = (candidate['entities']! as Map).cast<String, Object?>();
+      expect(entities, isNot(contains(_draftId)));
+      expect(entities, isNot(contains(_moduleId)));
+      expect(entities, contains(_localizationId));
+      expect(entities, contains(_lineId));
+    });
+
+    test('${kind.wireName} removal rejects a Dialog ref at any other path', () {
+      final fixture = _fixtureWithOutgoingDialogBinding(kind);
+      final basis = (fixture['basis']! as Map).cast<String, Object?>();
+      final entities = (basis['entities']! as Map).cast<String, Object?>();
+      final draft = (entities[_draftId]! as Map).cast<String, Object?>();
+      final payload = (draft['payload']! as Map).cast<String, Object?>();
+      final data = (payload['data']! as Map).cast<String, Object?>();
+      final canonicalField = switch (kind) {
+        AuthoringStoryDraftKind.npcDraft => 'greetings',
+        AuthoringStoryDraftKind.questDraft => 'transcript',
+      };
+      data['unexpected_dialog_binding'] = data.remove(canonicalField);
+      final request = _request(fixture, kind);
+
+      expect(
+        () => AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+          (fixture['response']! as Map).cast<String, Object?>(),
+          currentProjectJson: jsonEncode(basis),
+          request: request,
+        ),
+        throwsFormatException,
+      );
+    });
   }
 
   test(
@@ -278,6 +402,34 @@ void main() {
     },
   );
 
+  test('arbitrary or obsolete Story generators are never removable', () {
+    for (final kind in AuthoringStoryDraftKind.values) {
+      for (final mutation in <void Function(Map<String, Object?>)>[
+        (data) => data['generator_id'] = 'legacy.story-generator',
+        (data) => data['generator_version'] =
+            kind == AuthoringStoryDraftKind.questDraft ? 2 : 0,
+      ]) {
+        final fixture = _fixture(kind);
+        final basis = (fixture['basis']! as Map).cast<String, Object?>();
+        final entities = (basis['entities']! as Map).cast<String, Object?>();
+        final draft = (entities[_draftId]! as Map).cast<String, Object?>();
+        final payload = (draft['payload']! as Map).cast<String, Object?>();
+        final data = (payload['data']! as Map).cast<String, Object?>();
+        mutation(data);
+        final request = _request(fixture, kind);
+
+        expect(
+          () => AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+            (fixture['response']! as Map).cast<String, Object?>(),
+            currentProjectJson: jsonEncode(basis),
+            request: request,
+          ),
+          throwsFormatException,
+        );
+      }
+    }
+  });
+
   test('a generated module shared by another Draft is never removable', () {
     final fixture = _fixture(AuthoringStoryDraftKind.questDraft);
     final basis = (fixture['basis']! as Map).cast<String, Object?>();
@@ -290,8 +442,8 @@ void main() {
       origin: <String, Object?>{'type': 'authored'},
       kind: 'quest_draft',
       data: <String, Object?>{
-        'generator_id': 'test.story-generator',
-        'generator_version': 1,
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
         'script_module': _ref(_moduleId, 'script_module'),
       },
     );

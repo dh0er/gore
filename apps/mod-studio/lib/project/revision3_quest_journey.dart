@@ -117,7 +117,7 @@ final class Revision3QuestJourneyDialogLine {
 
   int get displayOrder => transcriptIndex + 1;
   String get lineId => row.lineId;
-  int? get objectiveSlot => row.objectiveSlot;
+  int get objectiveSlot => row.objectiveSlot;
   bool get isSharedAcrossQuests => linkedQuestCount > 1;
 }
 
@@ -166,7 +166,6 @@ final class Revision3QuestJourneyProjection {
     required this.rootBehavior,
     required this.objectives,
     required this.orderedDialogLines,
-    required this.generalDialogLines,
   });
 
   factory Revision3QuestJourneyProjection.compose({
@@ -259,9 +258,7 @@ final class Revision3QuestJourneyProjection {
     ) {
       final row = transcript.rows[indexPosition];
       final reference = transcriptReferences[indexPosition];
-      final referenceSlot = reference.qualifier == null
-          ? null
-          : int.tryParse(reference.qualifier!);
+      final referenceSlot = int.tryParse(reference.qualifier ?? '');
       final line = index.entityById(row.lineId);
       final available = availableLines[row.lineId];
       _requireJourneyBinding(
@@ -271,8 +268,7 @@ final class Revision3QuestJourneyProjection {
             line.problemCount == 0 &&
             available != null &&
             identical(available, row.line) &&
-            reference.qualifier ==
-                (row.objectiveSlot == null ? null : '${row.objectiveSlot}') &&
+            reference.qualifier == '${row.objectiveSlot}' &&
             referenceSlot == row.objectiveSlot &&
             reference.resolution ==
                 Revision3ContentReferenceResolution.resolved &&
@@ -300,16 +296,11 @@ final class Revision3QuestJourneyProjection {
     }
 
     final rowsByStableSlot = <int, List<Revision3QuestJourneyDialogLine>>{};
-    final generalDialog = <Revision3QuestJourneyDialogLine>[];
     for (final line in orderedDialog) {
       final slot = line.objectiveSlot;
-      if (slot == null) {
-        generalDialog.add(line);
-      } else {
-        rowsByStableSlot
-            .putIfAbsent(slot, () => <Revision3QuestJourneyDialogLine>[])
-            .add(line);
-      }
+      rowsByStableSlot
+          .putIfAbsent(slot, () => <Revision3QuestJourneyDialogLine>[])
+          .add(line);
     }
     final stableSlots = questSummary.objectiveSlots.toSet();
     _requireJourneyBinding(rowsByStableSlot.keys.every(stableSlots.contains));
@@ -353,9 +344,6 @@ final class Revision3QuestJourneyProjection {
       orderedDialogLines: List<Revision3QuestJourneyDialogLine>.unmodifiable(
         orderedDialog,
       ),
-      generalDialogLines: List<Revision3QuestJourneyDialogLine>.unmodifiable(
-        generalDialog,
-      ),
     );
   }
 
@@ -380,9 +368,6 @@ final class Revision3QuestJourneyProjection {
 
   /// Complete transcript in exact authored order.
   final List<Revision3QuestJourneyDialogLine> orderedDialogLines;
-
-  /// Transcript rows without a persisted objective association.
-  final List<Revision3QuestJourneyDialogLine> generalDialogLines;
 
   /// Persistent Guided-mode progress derived only from exact project facts.
   Revision3QuestDraftSetup get draftSetup {

@@ -866,13 +866,11 @@ impl ProjectRevision3 {
                     binding.line.id
                 )));
             }
-            match binding.objective_slot {
-                Some(slot) if !active_slots.contains(&slot) => {
-                    return Err(invalid(format!(
-                        "binding {index} targets inactive objective slot {slot}"
-                    )));
-                }
-                _ => {}
+            if !active_slots.contains(&binding.objective_slot) {
+                return Err(invalid(format!(
+                    "binding {index} targets inactive objective slot {}",
+                    binding.objective_slot
+                )));
             }
         }
         Ok(())

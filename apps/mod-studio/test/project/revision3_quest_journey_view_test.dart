@@ -14,6 +14,8 @@ import '../support/revision3_quest_outline_fixture.dart';
 
 const _lineId = '40000000000000000000000000000001';
 const _localizationId = '50000000000000000000000000000001';
+const _collisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 
 void main() {
   testWidgets('loads once and forwards every panel callback', (tester) async {
@@ -659,6 +661,10 @@ Revision3ContentIndex _v4Index({
       kind: 'quest_draft',
       displayName: title,
       revision: 4,
+      origin: <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_FIND_HOMER',
+      },
       summary: <String, Object?>{
         'technical_id': 'GORE_FIND_HOMER',
         'title': title,
@@ -681,9 +687,20 @@ Revision3ContentIndex _v4Index({
         ),
         _reference(
           role: 'quest_transcript_line',
+          qualifier: '1',
           targetId: _lineId,
           expectedKind: 'dialog_line',
         ),
+      ],
+      assetReferences: <Object?>[
+        <String, Object?>{
+          'role': 'quest_collision_artifact',
+          'sha256': revision3QuestOutlineArtifactSha,
+          'byte_len': 123,
+          'logical_name': null,
+          'expected_media_type': _collisionMediaType,
+          'resolution': 'resolved',
+        },
       ],
     ),
     _entity(
@@ -717,6 +734,11 @@ Revision3ContentIndex _v4Index({
           targetId: revision3QuestOutlineQuestId,
           expectedKind: 'quest_draft',
         ),
+        _reference(
+          role: 'script_owner',
+          targetId: revision3QuestOutlineQuestId,
+          expectedKind: 'quest_draft',
+        ),
       ],
     ),
     _entity(
@@ -747,7 +769,14 @@ Revision3ContentIndex _v4Index({
       },
     ),
   ],
-  'assets': <Object?>[],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': revision3QuestOutlineArtifactSha,
+      'byte_len': 123,
+      'media_type': _collisionMediaType,
+      'class': 'quest_collision_artifact',
+    },
+  ],
 });
 
 Map<String, Object?> _entity({
@@ -758,6 +787,7 @@ Map<String, Object?> _entity({
   required Map<String, Object?> summary,
   Map<String, Object?>? origin,
   List<Object?> references = const <Object?>[],
+  List<Object?> assetReferences = const <Object?>[],
 }) => <String, Object?>{
   'id': id,
   'kind': kind,
@@ -771,16 +801,17 @@ Map<String, Object?> _entity({
       },
   'summary': <String, Object?>{'kind': kind, 'data': summary},
   'references': references,
-  'asset_references': <Object?>[],
+  'asset_references': assetReferences,
 };
 
 Map<String, Object?> _reference({
   required String role,
+  String? qualifier,
   required String targetId,
   required String expectedKind,
 }) => <String, Object?>{
   'role': role,
-  'qualifier': null,
+  'qualifier': qualifier,
   'target': <String, Object?>{
     'project_id': revision3QuestOutlineProjectId,
     'entity_id': targetId,

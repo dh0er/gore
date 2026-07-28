@@ -820,6 +820,10 @@ Map<String, Object?> _contentIndexJson({bool bindSecondLine = false}) =>
           kind: 'npc_draft',
           displayName: 'Asghan',
           revision: 4,
+          origin: <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': 'OM_GRD_Asghan_263',
+          },
           summaryData: <String, Object?>{
             'unique_name': 'OM_GRD_Asghan_263',
             'module_namespace': 'PROJECT.NPCS.ASGHAN',
@@ -855,11 +859,11 @@ Map<String, Object?> _contentIndexJson({bool bindSecondLine = false}) =>
           origin: _generatedOrigin(
             ownerId: _npcId,
             ownerKind: 'npc_draft',
-            generatorId: 'gore-authoring.draft-npc-skeleton',
+            generatorId: 'gore-authoring.logical-npc-clone-draft',
           ),
           summaryData: <String, Object?>{
-            'generator_id': 'gore-authoring.draft-npc-skeleton',
-            'generator_version': 4,
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
+            'generator_version': 1,
             'module_namespace': 'PROJECT.NPCS.ASGHAN',
             'module_relative_path': 'PROJECT/NPCS/ASGHAN.as',
             'status': <String, Object?>{
@@ -870,6 +874,11 @@ Map<String, Object?> _contentIndexJson({bool bindSecondLine = false}) =>
           references: <Object?>[
             _reference(
               role: 'origin_owner',
+              targetId: _npcId,
+              expectedKind: 'npc_draft',
+            ),
+            _reference(
+              role: 'script_owner',
               targetId: _npcId,
               expectedKind: 'npc_draft',
             ),

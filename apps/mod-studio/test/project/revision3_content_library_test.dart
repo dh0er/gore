@@ -808,7 +808,7 @@ void main() {
     expect(editedNpc, _npcId);
   });
 
-  testWidgets('V4 fallback keeps stable-slot outline in the bounded Overview', (
+  testWidgets('current Quest keeps stable-slot outline in bounded Overview', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
@@ -816,8 +816,6 @@ void main() {
     var contextCalls = 0;
     await _pumpLoadedLibrary(
       tester,
-      questGeneratorVersion: 4,
-      questGeneratorId: 'gore-authoring.draft-quest-skeleton',
       editQuestOutline: (index, quest) async => outlineCalls++,
       editQuestContext: (index, quest) async => contextCalls++,
       editQuestTransitions: (index, quest) async {},
@@ -850,31 +848,18 @@ void main() {
     expect(contextCalls, 1);
   });
 
-  testWidgets(
-    'unrelated V4 generator does not claim stable objective identities',
-    (tester) async {
-      await _setSurfaceSize(tester, const Size(1200, 800));
-      await _pumpLoadedLibrary(
-        tester,
+  test('arbitrary or obsolete Quest generators are rejected', () {
+    expect(
+      () => _fixture(
         questGeneratorVersion: 4,
         questGeneratorId: 'gore-authoring.unrelated-generator',
-        editQuestOutline: (index, quest) async {},
-      );
-      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
-      await tester.pump();
-      expect(find.text('Draft only'), findsOneWidget);
-      expect(find.text('Build blocked'), findsOneWidget);
-      expect(find.text('Runtime not verified'), findsOneWidget);
-      expect(
-        find.text('Keeps objective IDs and behavior connections intact'),
-        findsNothing,
-      );
-    },
-  );
+      ),
+      throwsFormatException,
+    );
+    expect(() => _fixture(questGeneratorVersion: 2), throwsFormatException);
+  });
 
-  testWidgets('fallback routes Quest context editing from Overview', (
-    tester,
-  ) async {
+  testWidgets('routes Quest context editing from Overview', (tester) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
     var contextCalls = 0;
     await _pumpLoadedLibrary(
@@ -1260,63 +1245,6 @@ void main() {
     );
   });
 
-  testWidgets('keeps same-role qualified backlinks as distinct siblings', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    await _pumpLibrary(
-      tester,
-      load: () async => _fixture(duplicateBacklinks: true),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
-    await tester.pump();
-    await _openWorkbenchSection(
-      tester,
-      Revision3StoryWorkbenchSection.references,
-      _questId,
-    );
-    final firstBacklink = find.byKey(
-      const Key(
-        'revision3-content-backlink-$_questId-$_moduleId-origin_owner-0',
-      ),
-    );
-    await tester.scrollUntilVisible(
-      firstBacklink,
-      120,
-      scrollable: find.descendant(
-        of: find.byKey(
-          Key(
-            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.references.name}-$_questId',
-          ),
-        ),
-        matching: find.byType(Scrollable),
-      ),
-    );
-
-    expect(firstBacklink, findsOneWidget);
-    final secondBacklink = find.byKey(
-      const Key(
-        'revision3-content-backlink-$_questId-$_moduleId-origin_owner-2',
-      ),
-    );
-    await tester.scrollUntilVisible(
-      secondBacklink,
-      80,
-      scrollable: find.descendant(
-        of: find.byKey(
-          Key(
-            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.references.name}-$_questId',
-          ),
-        ),
-        matching: find.byType(Scrollable),
-      ),
-    );
-    expect(secondBacklink, findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
-
   testWidgets('shows honest draft boundaries and disabled unmodeled sections', (
     tester,
   ) async {
@@ -1384,100 +1312,6 @@ void main() {
       ),
       findsOneWidget,
     );
-  });
-
-  testWidgets(
-    'exposes one chip semantic and explicit reference status labels',
-    (tester) async {
-      final semantics = tester.ensureSemantics();
-      await _setSurfaceSize(tester, const Size(1200, 800));
-      await _pumpLibrary(
-        tester,
-        load: () async => _fixture(brokenQuestReference: true),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
-      await tester.pump();
-      expect(find.bySemanticsLabel('Draft only'), findsOneWidget);
-      expect(find.bySemanticsLabel('Build blocked'), findsOneWidget);
-      expect(find.bySemanticsLabel('Runtime not verified'), findsOneWidget);
-      expect(find.bySemanticsLabel('Overview'), findsWidgets);
-      expect(find.bySemanticsLabel('Story'), findsNothing);
-      expect(find.bySemanticsLabel('Logic'), findsNothing);
-
-      await _openWorkbenchSection(
-        tester,
-        Revision3StoryWorkbenchSection.references,
-        _questId,
-      );
-      expect(
-        find.bySemanticsLabel(RegExp(r'Reference resolved')),
-        findsWidgets,
-      );
-      expect(
-        find.bySemanticsLabel(RegExp(r'Reference unresolved')),
-        findsOneWidget,
-      );
-      semantics.dispose();
-    },
-  );
-
-  testWidgets('details unresolved references without claiming readiness', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    await _pumpLibrary(
-      tester,
-      load: () async => _fixture(brokenQuestReference: true),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
-    await tester.pump();
-    await _openWorkbenchSection(
-      tester,
-      Revision3StoryWorkbenchSection.problemsChecks,
-      _questId,
-    );
-
-    expect(
-      find.descendant(
-        of: find.byKey(
-          Key(
-            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
-          ),
-        ),
-        matching: find.text('1 unresolved project reference'),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('missing_entity / Generated script'),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(
-        Key('revision3-story-workbench-action-inspect-quest_draft-$_questId'),
-      ),
-      findsOneWidget,
-    );
-    final scopeNotice = find.text(
-      'Reference status only; this is not build or runtime readiness.',
-    );
-    await tester.scrollUntilVisible(
-      scopeNotice,
-      80,
-      scrollable: find.descendant(
-        of: find.byKey(
-          Key(
-            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
-          ),
-        ),
-        matching: find.byType(Scrollable),
-      ),
-    );
-    expect(scopeNotice, findsOneWidget);
   });
 
   testWidgets('preserves a section across revision reload and clears deletion', (
@@ -2594,8 +2428,8 @@ Future<void> _expectOverviewActionFullyInteractive(WidgetTester tester) async {
 
 Future<void> _pumpLoadedLibrary(
   WidgetTester tester, {
-  int questGeneratorVersion = 2,
-  String questGeneratorId = 'gore-authoring.quest-draft',
+  int questGeneratorVersion = 4,
+  String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
@@ -2688,11 +2522,9 @@ Future<void> _pumpLibrary(
 
 Revision3ContentIndex _fixture({
   int revision = 7,
-  bool duplicateBacklinks = false,
-  bool brokenQuestReference = false,
   bool includeQuest = true,
-  int questGeneratorVersion = 2,
-  String questGeneratorId = 'gore-authoring.quest-draft',
+  int questGeneratorVersion = 4,
+  String questGeneratorId = 'gore-authoring.draft-quest-skeleton',
   bool includeNpc = true,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
@@ -2754,13 +2586,19 @@ Revision3ContentIndex _fixture({
         'display_name': 'Gate Guard source',
         'revision': 0,
         'origin': <String, Object?>{
-          'type': 'new',
-          'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+          'type': 'generated',
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': <String, Object?>{
+            'project_id': _projectId,
+            'entity_id': _npcId,
+            'expected_kind': 'npc_draft',
+          },
         },
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'content-library.fixture.npc',
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
             'generator_version': 1,
             'module_namespace': 'PROJECT.NPCS.GATEGUARD',
             'module_relative_path': 'Project/Npcs/GateGuard.as',
@@ -2770,7 +2608,28 @@ Revision3ContentIndex _fixture({
             },
           },
         },
-        'references': <Object?>[],
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'origin_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': _npcId,
+              'expected_kind': 'npc_draft',
+            },
+            'resolution': 'resolved',
+          },
+          <String, Object?>{
+            'role': 'script_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': _npcId,
+              'expected_kind': 'npc_draft',
+            },
+            'resolution': 'resolved',
+          },
+        ],
         'asset_references': <Object?>[],
       },
     if (includeQuest)
@@ -2793,6 +2652,8 @@ Revision3ContentIndex _fixture({
               'Inspect the old gate',
               'Report the secured gate',
             ],
+            'objective_slots': <Object?>[1, 2, 3],
+            'transcript_count': 0,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'parent_runtime_class': 'B_Quest_FindHomer_C',
             'giver_runtime_unique_name': 'ASGHAN',
@@ -2804,10 +2665,10 @@ Revision3ContentIndex _fixture({
             'qualifier': null,
             'target': <String, Object?>{
               'project_id': _projectId,
-              'entity_id': brokenQuestReference ? _missingId : _moduleId,
+              'entity_id': _moduleId,
               'expected_kind': 'script_module',
             },
-            'resolution': brokenQuestReference ? 'missing_entity' : 'resolved',
+            'resolution': 'resolved',
           },
         ],
         'asset_references': <Object?>[
@@ -2872,17 +2733,6 @@ Revision3ContentIndex _fixture({
             },
             'resolution': 'resolved',
           },
-          if (duplicateBacklinks)
-            <String, Object?>{
-              'role': 'origin_owner',
-              'qualifier': 'alternate',
-              'target': <String, Object?>{
-                'project_id': _projectId,
-                'entity_id': _questId,
-                'expected_kind': 'quest_draft',
-              },
-              'resolution': 'resolved',
-            },
         ],
         'asset_references': <Object?>[],
       },

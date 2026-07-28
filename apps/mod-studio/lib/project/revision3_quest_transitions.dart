@@ -1531,11 +1531,7 @@ void _questTransitionsRequireExactDelta(
     baseQuest.data['input'],
     'revision-3 Quest transitions basis input',
   );
-  if (baseInput.containsKey('transition_plan')) {
-    normalizedInput['transition_plan'] = baseInput['transition_plan'];
-  } else {
-    normalizedInput.remove('transition_plan');
-  }
+  normalizedInput['transition_plan'] = baseInput['transition_plan'];
   if (!_authoringJsonDeepEquals(normalizedQuest, baseQuestObject)) {
     throw const FormatException(
       'authoring revision-3 Quest transitions candidate changed a non-plan Quest field',
@@ -1722,11 +1718,6 @@ _questTransitionsRequireBasis(
         )
       : const <String>[];
   final titles = <String>[firstTitle, ...additional];
-  if (generatorVersion != _authoringRevision3QuestGeneratorVersion) {
-    throw const FormatException(
-      'revision-3 Quest transitions require generator version 4',
-    );
-  }
   final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
     input['transition_plan'],
   );

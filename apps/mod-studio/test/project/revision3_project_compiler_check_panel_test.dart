@@ -158,6 +158,11 @@ void main() {
         isTrue,
       );
     }
+    final disabled = compiled.toTestReleaseCheck(
+      l10n: AppLocalizationsEn(),
+      onPressed: null,
+    );
+    expect(disabled.onPressed, isNull);
 
     final reopen = _controller(checkpoint: checkpoint);
     addTearDown(reopen.dispose);

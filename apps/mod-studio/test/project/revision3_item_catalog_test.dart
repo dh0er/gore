@@ -165,6 +165,15 @@ void main() {
         special.map((item) => item.category),
         everyElement(Revision3ItemCategory.special),
       );
+      for (final id in const <String>['ItMi_Oldcoin_01', 'ItMi_Orenugget']) {
+        final item = catalog.items.singleWhere((entry) => entry.id == id);
+        final maxStack = item.fields.singleWhere(
+          (field) => field.name == 'm_MaxStack',
+        );
+        expect(maxStack.defaultValue, 0, reason: id);
+        expect(maxStack.minValue, isNull, reason: id);
+        expect(maxStack.maxValue, isNull, reason: id);
+      }
     },
   );
 }

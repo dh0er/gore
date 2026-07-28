@@ -22,6 +22,17 @@ final _head = AuthoringWorkingHead.fromCanonicalJson(
   }),
 );
 
+final _otherHead = AuthoringWorkingHead.fromCanonicalJson(
+  jsonEncode(<String, Object?>{
+    'store_format': 1,
+    'snapshot': <String, Object?>{
+      'byte_len': 322,
+      'sha256':
+          'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    },
+  }),
+);
+
 void main() {
   testWidgets('loads exact readiness and explains unavailable build action', (
     tester,
@@ -120,6 +131,72 @@ void main() {
     expect(planCalls, 3);
   });
 
+  testWidgets('same-head parent rebuild preserves a pending action guard', (
+    tester,
+  ) async {
+    final action = Completer<void>();
+    var actionCalls = 0;
+    var planCalls = 0;
+    var hostRevision = 0;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              return Column(
+                children: [
+                  Revision3VoiceBuildReadinessPanel(
+                    projectId: _projectId,
+                    projectRevision: 7,
+                    checkpointIdentity: _head.canonicalJson,
+                    plan: () async {
+                      planCalls += 1;
+                      return _blockedPlan();
+                    },
+                    onResolveVoiceTarget:
+                        ({required initialLineId, required initialLocale}) {
+                          actionCalls += 1;
+                          return action.future;
+                        },
+                  ),
+                  SizedBox(width: hostRevision.toDouble()),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('revision3-voice-readiness-toggle-blockers')),
+    );
+    await tester.pumpAndSettle();
+    final blockerAction = find.byKey(
+      const ValueKey('revision3-voice-readiness-blocker-action-0'),
+    );
+    await tester.tap(blockerAction);
+    await tester.pump();
+    expect(actionCalls, 1);
+    expect(tester.widget<TextButton>(blockerAction).onPressed, isNull);
+
+    updateHost(() => hostRevision += 1);
+    await tester.pump();
+    expect(tester.widget<TextButton>(blockerAction).onPressed, isNull);
+    expect(actionCalls, 1);
+
+    action.complete();
+    await tester.pumpAndSettle();
+    expect(planCalls, 2);
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-action-error')),
+      findsNothing,
+    );
+  });
+
   testWidgets('shows global blockers without inventing a deep link', (
     tester,
   ) async {
@@ -187,6 +264,7 @@ void main() {
               return Revision3VoiceBuildReadinessPanel(
                 projectId: projectId,
                 projectRevision: projectRevision,
+                checkpointIdentity: _head.canonicalJson,
                 plan: () {
                   calls += 1;
                   return calls == 1 ? first.future : second.future;
@@ -239,6 +317,132 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets('same-revision canonical-head change reloads exact readiness', (
+    tester,
+  ) async {
+    final first = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    final second = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    var calls = 0;
+    var checkpointIdentity = _head.canonicalJson;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              return Revision3VoiceBuildReadinessPanel(
+                projectId: _projectId,
+                projectRevision: 7,
+                checkpointIdentity: checkpointIdentity,
+                plan: () {
+                  calls += 1;
+                  return calls == 1 ? first.future : second.future;
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    updateHost(() => checkpointIdentity = _otherHead.canonicalJson);
+    await tester.pump();
+    expect(calls, 2);
+
+    first.complete(_readyPlan());
+    await tester.pump();
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-loading')),
+      findsOneWidget,
+    );
+
+    second.complete(_readyPlan(head: _otherHead));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice is ready'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-error')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('same-revision head drift invalidates a pending old action', (
+    tester,
+  ) async {
+    final action = Completer<void>();
+    final replacement = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    var calls = 0;
+    var checkpointIdentity = _head.canonicalJson;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              return Revision3VoiceBuildReadinessPanel(
+                projectId: _projectId,
+                projectRevision: 7,
+                checkpointIdentity: checkpointIdentity,
+                plan: () {
+                  calls += 1;
+                  if (calls == 1) return Future.value(_blockedPlan());
+                  return replacement.future;
+                },
+                onResolveVoiceTarget:
+                    ({required initialLineId, required initialLocale}) =>
+                        action.future,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('revision3-voice-readiness-toggle-blockers')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('revision3-voice-readiness-blocker-action-0')),
+    );
+    await tester.pump();
+
+    updateHost(() => checkpointIdentity = _otherHead.canonicalJson);
+    await tester.pump();
+    expect(calls, 2);
+
+    action.complete();
+    await tester.pump();
+    expect(calls, 2);
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-action-error')),
+      findsNothing,
+    );
+
+    replacement.complete(_readyPlan(head: _otherHead));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice is ready'), findsOneWidget);
+  });
+
+  testWidgets('rejects a plan from another canonical head', (tester) async {
+    await _pumpPanel(
+      tester,
+      checkpointIdentity: _otherHead.canonicalJson,
+      plan: () async => _readyPlan(),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-error')),
+      findsOneWidget,
+    );
+    expect(find.text('Voice is ready'), findsNothing);
+  });
 }
 
 Future<void> _pumpPanel(
@@ -246,6 +450,7 @@ Future<void> _pumpPanel(
   required Future<AuthoringRevision3VoiceBuildPlanResult> Function() plan,
   String projectId = _projectId,
   int projectRevision = 7,
+  String? checkpointIdentity,
   FutureOr<void> Function({
     required String initialLineId,
     required String initialLocale,
@@ -264,6 +469,7 @@ Future<void> _pumpPanel(
       body: Revision3VoiceBuildReadinessPanel(
         projectId: projectId,
         projectRevision: projectRevision,
+        checkpointIdentity: checkpointIdentity ?? _head.canonicalJson,
         plan: plan,
         onResolveVoiceTarget: onResolveVoiceTarget,
         onManageVoiceTakes: onManageVoiceTakes,
@@ -277,11 +483,12 @@ Future<void> _pumpPanel(
 AuthoringRevision3VoiceBuildPlanResult _readyPlan({
   String projectId = _projectId,
   int revision = 7,
+  AuthoringWorkingHead? head,
 }) => AuthoringRevision3VoiceBuildPlanResult.fromJson(
   <String, Object?>{
     'ok': true,
     'outcome': 'ready',
-    'basis_head_json': _head.canonicalJson,
+    'basis_head_json': (head ?? _head).canonicalJson,
     'project_id': projectId,
     'project_revision': revision,
     'total_slots': 2,
@@ -291,7 +498,7 @@ AuthoringRevision3VoiceBuildPlanResult _readyPlan({
     'build_authority': 'not_granted',
     'deployment_status': 'not_performed',
   },
-  expectedHead: _head,
+  expectedHead: head ?? _head,
   expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
     slotCount: 2,
     projectId: projectId,

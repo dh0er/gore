@@ -30,11 +30,15 @@ import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_voice_slot_creation_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
+import 'package:gore_mod/project/revision3_item_patch_authoring.dart';
+import 'package:gore_mod/project/revision3_items_view.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_greeting_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
+import 'package:gore_mod/project/revision3_project_build_plan_panel.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
+import 'package:gore_mod/project/revision3_project_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
 import 'package:gore_mod/project/revision3_test_release_workspace.dart';
@@ -61,6 +65,7 @@ import 'package:gore_mod/scripts/domain/script_compile_install_state_provider.da
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_item_patch_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_project_problems_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
@@ -76,10 +81,17 @@ const _homeNpcGreetingModuleId = '89898989898989898989898989898989';
 const _homeQuestOpeningRecipeQuestId = '67676767676767676767676767676767';
 const _homeQuestOpeningRecipeModuleId = '68686868686868686868686868686868';
 const _homeQuestOpeningRecipeTechnicalId = 'GORE_QUEST_OPENING_RECIPE';
+const _homeQuestOpeningRecipeCollisionSha =
+    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const _homeQuestOpeningRecipeCollisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 const _homeCreatedNpcId = '29292929292929292929292929292929';
 const _homeCreatedNpcModuleId = '39393939393939393939393939393939';
 const _homeCreatedNpcUniqueName = 'GORE_NORTH_GATE_GUARD';
 const _homeCreatedNpcModuleNamespace = 'GoreMods.Npcs.NorthGateGuard';
+const _homeItemPatchProjectId = '16161616161616161616161616161616';
+const _homeItemPatchVanillaClass = 'ItFo_Apple';
+const _homeItemPatchCatalogLayer = 'base-game.items.g1r.bundled.v1';
 
 void main() {
   test(
@@ -135,6 +147,483 @@ void main() {
         ),
         isFalse,
       );
+    },
+  );
+
+  testWidgets(
+    'managed Content Items reaches exact ItemPatch lease and advances the project',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeItemPatchManagedLease(
+        root: Directory(r'C:\mods\home-item-patch'),
+        projectId: _homeItemPatchProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedItems(tester);
+
+      expect(managed.itemCatalogReadCalls, 1);
+      expect(find.text('Exact project schema'), findsOneWidget);
+      expect(find.text('Managed edit'), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-items-authoring-boundary')),
+        findsOneWidget,
+      );
+      final addValue = find.byKey(const Key('revision3-items-add-m_Value'));
+      expect(addValue, findsOneWidget);
+      await tester.tap(addValue);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('revision3-items-value-m_Value')),
+        '9',
+      );
+      await tester.pump();
+
+      final save = find.byKey(const Key('revision3-items-save'));
+      final itemDetails = find.byKey(
+        const ValueKey('revision3-items-details-$_homeItemPatchVanillaClass'),
+      );
+      final itemDetailsScroll = find
+          .descendant(of: itemDetails, matching: find.byType(Scrollable))
+          .first;
+      for (var attempt = 0; attempt < 8; attempt++) {
+        if (save.hitTestable().evaluate().isNotEmpty) break;
+        await tester.drag(itemDetailsScroll, const Offset(0, -240));
+        await tester.pump();
+      }
+      expect(save.hitTestable(), findsOneWidget);
+      expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      expect(managed.itemPatchPublishCalls, 1);
+      expect(managed.itemCatalogReadCalls, greaterThanOrEqualTo(2));
+      final plan = managed.lastItemPatchPlan!;
+      expect(plan.expectedProjectId, _homeItemPatchProjectId);
+      expect(plan.expectedProjectRevision, 7);
+      expect(plan.expectedHead.canonicalJson, _head(7).canonicalJson);
+      expect(plan.action, AuthoringRevision3ItemPatchAction.upsert);
+      expect(plan.vanillaClass, _homeItemPatchVanillaClass);
+      expect(plan.fields['m_Value']!.integerValue, 9);
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, 8);
+      expect(current.head.canonicalJson, _head(8).canonicalJson);
+      expect(current.requiresReopen, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'managed Item draft guards Open, Restore, Close, and global mutation',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeItemPatchManagedLease(
+        root: Directory(r'C:\mods\home-item-dirty'),
+        projectId: _homeItemPatchProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      var projectPickerCalls = 0;
+      var backupPickerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async {
+          projectPickerCalls++;
+          return r'C:\mods\replacement-item-project';
+        },
+        pickProjectBackup: () async {
+          backupPickerCalls++;
+          return r'C:\backups\replacement-item-project.goremod';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedItems(tester);
+      await tester.tap(find.byKey(const Key('revision3-items-add-m_Value')));
+      await tester.pump();
+      final valueField = find.byKey(const Key('revision3-items-value-m_Value'));
+      await tester.enterText(valueField, '9');
+      await tester.pump();
+      await tester.pump();
+
+      final l10n = AppLocalizations.of(tester.element(valueField));
+      final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
+      expect(tester.widget<OutlinedButton>(undo).onPressed, isNull);
+      expect(
+        find.byTooltip(l10n.managedProjectHistoryDirtyBlocked),
+        findsOneWidget,
+      );
+      final projectMenu = find.byKey(const Key('project-menu'));
+      final exportItem = tester
+          .widget<PopupMenuButton<String>>(projectMenu)
+          .itemBuilder(tester.element(projectMenu))
+          .whereType<PopupMenuItem<String>>()
+          .singleWhere(
+            (item) => item.key == const Key('project-export-managed-revision3'),
+          );
+      expect(exportItem.enabled, isFalse);
+
+      tester.widget<PopupMenuButton<String>>(projectMenu).onSelected!(
+        'openManagedRevision3',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(projectPickerCalls, 0);
+      expect(managed.closeCalls, 0);
+      await tester.tap(
+        find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(valueField).controller!.text, '9');
+
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('restoreManagedRevision3');
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(backupPickerCalls, 0);
+      await tester.tap(
+        find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(valueField).controller!.text, '9');
+      expect(managed.itemPatchPublishCalls, 0);
+
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('close');
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(managed.closeCalls, 0);
+      await tester.tap(
+        find.widgetWithText(FilledButton, l10n.managedLocalizationDiscard),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.closeCalls, 1);
+      expect(managed.itemPatchPublishCalls, 0);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'managed Item draft gates Dialog Voice and DataAsset mutations until discard or save',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeItemPatchManagedLease(
+        root: Directory(r'C:\mods\home-item-global-dirty'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _homeItemPatchVoiceContentIndex(
+          lease as _FakeItemPatchManagedLease,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, locId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: locId,
+                  lineId: revision3VoiceContentLineId,
+                  voiceSlotLocales: const <String>{'de'},
+                ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: r'C:\Games\G1R\Gothic1Remake.exe',
+      );
+      addTearDown(container.dispose);
+
+      Future<void> expectDialogAndVoiceEnabled(bool enabled) async {
+        await _navigateManagedLocalizationVoice(tester);
+        for (final key in const <Key>[
+          Key('revision3-localization-new-line'),
+          Key('revision3-localization-add-voice'),
+          Key('revision3-localization-manage-voice'),
+          Key('revision3-localization-resolve-voice'),
+          Key('revision3-localization-import-voice-folder'),
+        ]) {
+          _expectLocalizationVoiceAction(tester, key: key, enabled: enabled);
+        }
+      }
+
+      Future<void> expectDataAssetImportEnabled(bool enabled) async {
+        await _navigateManagedDataAssets(tester);
+        var action = find.byKey(const Key('revision3-dataasset-stage-add'));
+        if (action.evaluate().isEmpty) {
+          action = await _revealManagedDataAssetExpertAction(
+            tester,
+            const Key('revision3-dataasset-stage-add'),
+          );
+        }
+        expect(
+          tester.widget<FilledButton>(action).onPressed,
+          enabled ? isNotNull : isNull,
+        );
+      }
+
+      Future<void> addValueDraft(String value) async {
+        await _navigateManagedItems(tester);
+        final add = find.byKey(const Key('revision3-items-add-m_Value'));
+        expect(add, findsOneWidget);
+        await tester.ensureVisible(add);
+        await tester.tap(add);
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const Key('revision3-items-value-m_Value')),
+          value,
+        );
+        await tester.pump();
+        await tester.pump();
+      }
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await addValueDraft('9');
+
+      await expectDialogAndVoiceEnabled(false);
+      await expectDataAssetImportEnabled(false);
+      expect(managed.dialogLinePublishCalls, 0);
+      expect(managed.voicePublishCalls, 0);
+      expect(managed.dataAssetPublishCalls, 0);
+
+      await _navigateManagedItems(tester);
+      final remove = find.byKey(const Key('revision3-items-remove-m_Value'));
+      expect(remove, findsOneWidget);
+      await tester.ensureVisible(remove);
+      await tester.tap(remove);
+      await tester.pump();
+      await tester.pump();
+
+      await expectDialogAndVoiceEnabled(true);
+      await expectDataAssetImportEnabled(true);
+
+      await addValueDraft('11');
+      final save = find.byKey(const Key('revision3-items-save'));
+      final details = find.byKey(
+        const ValueKey('revision3-items-details-$_homeItemPatchVanillaClass'),
+      );
+      final scroll = find
+          .descendant(of: details, matching: find.byType(Scrollable))
+          .first;
+      for (var attempt = 0; attempt < 8; attempt++) {
+        if (save.hitTestable().evaluate().isNotEmpty) break;
+        await tester.drag(scroll, const Offset(0, -240));
+        await tester.pump();
+      }
+      expect(save.hitTestable(), findsOneWidget);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      expect(managed.itemPatchPublishCalls, 1);
+      await expectDialogAndVoiceEnabled(true);
+      await expectDataAssetImportEnabled(true);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'managed Item draft blocks external checks and stale direct callbacks but keeps NPC inspection',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_item_external_gate_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final fixture = _npcManagedCompilerFixture();
+      final managed = _FakeItemPatchManagedLease(
+        root: Directory(r'C:\mods\item-external-action-gate'),
+        projectId: revision3NpcInspectionProjectId,
+        projectRevision: 7,
+        head: fixture.head,
+        canonicalProjectJsonValue: fixture.projectJson,
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onNpcSourceInspection: (lease, npcId) async =>
+            revision3NpcInspectionResult(
+              head: lease.head,
+              projectJson: lease.canonicalProjectJson,
+              npcId: npcId,
+            ),
+        onProjectCompilerCheck: (_, _) async =>
+            throw StateError('dirty Item draft reached the project compiler'),
+        onManagedCompilerCheck: (_, _, _, _, _, _, _) async =>
+            throw StateError('dirty Item draft reached the managed compiler'),
+        onVoicePlan: _readyVoicePlan,
+        onVoiceBuild: (_, _, _) =>
+            throw StateError('dirty Item draft reached the Voice builder'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      Future<void> openNpcInspection() async {
+        await _navigateManagedContent(tester);
+        await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+        final problemsTab = find.byKey(
+          const Key(
+            'revision3-story-workbench-tab-problemsChecks-'
+            '$revision3NpcInspectionNpcId',
+          ),
+        );
+        await tester.ensureVisible(problemsTab);
+        await tester.tap(problemsTab);
+        await tester.pumpAndSettle();
+        final inspect = _storyWorkbenchAction(
+          const Key(
+            'revision3-story-workbench-action-inspect-npc_draft-'
+            '$revision3NpcInspectionNpcId',
+          ),
+        );
+        await _revealWorkbenchAction(tester, inspect);
+        expect(_workbenchActionTileWidget(tester, inspect).enabled, isTrue);
+        await _tapWorkbenchAction(tester, inspect);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('revision3-npc-profile-dialog')),
+          findsOneWidget,
+        );
+      }
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedItems(tester);
+      final reportItemDirty = tester
+          .widget<Revision3ItemsView>(find.byType(Revision3ItemsView))
+          .onDirtyChanged!;
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final cleanWorkspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      final staleOpenProjectCompiler = cleanWorkspace.scripts.onPressed!;
+      final cleanVoiceReadiness = tester
+          .widget<Revision3VoiceBuildReadinessPanel>(
+            find.byType(Revision3VoiceBuildReadinessPanel),
+          );
+      final staleOpenVoiceBuild = cleanVoiceReadiness.onBuild!;
+
+      staleOpenProjectCompiler();
+      await tester.pumpAndSettle();
+      final staleProjectCompilerCheck = tester
+          .widget<Revision3ProjectCompilerCheckDialog>(
+            find.byType(Revision3ProjectCompilerCheckDialog),
+          )
+          .check;
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-close')),
+      );
+      await tester.pumpAndSettle();
+
+      await openNpcInspection();
+      final staleManagedCompilerCheck = tester
+          .widget<Revision3ManagedCompilerCheckPanel>(
+            find.byType(Revision3ManagedCompilerCheckPanel),
+          )
+          .check;
+      await tester.tap(
+        find.byKey(const Key('revision3-npc-profile-dialog-close')),
+      );
+      await tester.pumpAndSettle();
+
+      reportItemDirty(true);
+      await tester.pump();
+      await tester.pump();
+
+      staleOpenProjectCompiler();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-compiler-dialog')),
+        findsNothing,
+      );
+      await expectLater(
+        staleProjectCompilerCheck(gameRoot: gameRoot.path),
+        throwsA(isA<StateError>()),
+      );
+      await Future<void>.sync(staleOpenVoiceBuild);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-build-dialog')),
+        findsNothing,
+      );
+      await expectLater(
+        staleManagedCompilerCheck(),
+        throwsA(isA<StateError>()),
+      );
+      expect(managed.projectCompilerCheckCalls, 0);
+      expect(managed.managedCompilerCheckCalls, 0);
+      expect(managed.voiceBuildCalls, 0);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final dirtyWorkspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(dirtyWorkspace.scripts.onPressed, isNull);
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const Key('revision3-test-release-scripts-action')),
+            )
+            .onPressed,
+        isNull,
+      );
+      final dirtyVoiceReadiness = tester
+          .widget<Revision3VoiceBuildReadinessPanel>(
+            find.byType(Revision3VoiceBuildReadinessPanel),
+          );
+      expect(dirtyVoiceReadiness.onResolveVoiceTarget, isNull);
+      expect(dirtyVoiceReadiness.onManageVoiceTakes, isNull);
+      expect(dirtyVoiceReadiness.onBuild, isNull);
+
+      await openNpcInspection();
+      expect(managed.npcSourceInspectionCalls, 2);
+      expect(find.byType(Revision3ManagedCompilerCheckPanel), findsNothing);
+      expect(managed.managedCompilerCheckCalls, 0);
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -1453,6 +1942,33 @@ void main() {
       await tester.pump();
       await tester.pump();
 
+      _expectLocalizationVoiceAction(
+        tester,
+        key: const Key('revision3-localization-import-voice-folder'),
+        enabled: true,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-import-voice-folder')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text(l10n.managedLocalizationVoiceUnsavedTitle),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(textField).controller!.text, draft);
+      await _navigateManagedDataAssets(tester);
+      final dataAssetImport = await _revealManagedDataAssetExpertAction(
+        tester,
+        const Key('revision3-dataasset-stage-add'),
+      );
+      expect(tester.widget<FilledButton>(dataAssetImport).onPressed, isNull);
+      await _navigateManagedLocalizationVoice(tester);
+      expect(tester.widget<TextField>(textField).controller!.text, draft);
+
       final undo = find.byKey(Revision3ProjectCommandBar.undoKey);
       expect(undo, findsOneWidget);
       expect(tester.widget<OutlinedButton>(undo).onPressed, isNull);
@@ -1701,6 +2217,186 @@ void main() {
         find.byKey(const Key('revision3-quest-transitions-dialog')),
         findsNothing,
       );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'dirty localization blocks external checks and stale direct callbacks but keeps Quest inspection',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_localization_external_gate_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final fixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\localization-external-action-gate'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: fixture.head,
+        canonicalProjectJsonValue: fixture.projectJson,
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestSourceInspection: (lease, requestedGameRoot, questId) async {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(questId, revision3QuestOutlineQuestId);
+          return _questSourceInspection(
+            fixture: fixture,
+            expectedHead: lease.head,
+          );
+        },
+        onProjectCompilerCheck: (_, _) async =>
+            throw StateError('dirty localization reached the project compiler'),
+        onManagedCompilerCheck: (_, _, _, _, _, _, _) async =>
+            throw StateError('dirty localization reached the managed compiler'),
+        onVoicePlan: _readyVoicePlan,
+        onVoiceBuild: (_, _, _) =>
+            throw StateError('dirty localization reached the Voice builder'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      Future<void> openQuestInspection() async {
+        await _navigateManagedContent(tester);
+        await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
+        final problemsTab = find.byKey(
+          const Key(
+            'revision3-story-workbench-tab-problemsChecks-'
+            '$revision3QuestOutlineQuestId',
+          ),
+        );
+        await tester.ensureVisible(problemsTab);
+        await tester.tap(problemsTab);
+        await tester.pumpAndSettle();
+        final inspect = _storyWorkbenchAction(
+          const Key(
+            'revision3-story-workbench-action-inspect-quest_draft-'
+            '$revision3QuestOutlineQuestId',
+          ),
+        );
+        await _revealWorkbenchAction(tester, inspect);
+        expect(_workbenchActionTileWidget(tester, inspect).enabled, isTrue);
+        await _tapWorkbenchAction(tester, inspect);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('revision3-quest-source-inspection-dialog')),
+          findsOneWidget,
+        );
+      }
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+      final reportLocalizationDirty = tester
+          .widget<Revision3LocalizationVoiceWorkspace>(
+            find.byType(Revision3LocalizationVoiceWorkspace),
+          )
+          .onDirtyChanged!;
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final cleanWorkspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      final staleOpenProjectCompiler = cleanWorkspace.scripts.onPressed!;
+      final cleanVoiceReadiness = tester
+          .widget<Revision3VoiceBuildReadinessPanel>(
+            find.byType(Revision3VoiceBuildReadinessPanel),
+          );
+      final staleOpenVoiceBuild = cleanVoiceReadiness.onBuild!;
+
+      staleOpenProjectCompiler();
+      await tester.pumpAndSettle();
+      final staleProjectCompilerCheck = tester
+          .widget<Revision3ProjectCompilerCheckDialog>(
+            find.byType(Revision3ProjectCompilerCheckDialog),
+          )
+          .check;
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-close')),
+      );
+      await tester.pumpAndSettle();
+
+      await openQuestInspection();
+      final staleManagedCompilerCheck = tester
+          .widget<Revision3ManagedCompilerCheckPanel>(
+            find.byType(Revision3ManagedCompilerCheckPanel),
+          )
+          .check;
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-source-inspection-close')),
+      );
+      await tester.pumpAndSettle();
+
+      reportLocalizationDirty(true);
+      await tester.pump();
+      await tester.pump();
+
+      staleOpenProjectCompiler();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-compiler-dialog')),
+        findsNothing,
+      );
+      await expectLater(
+        staleProjectCompilerCheck(gameRoot: gameRoot.path),
+        throwsA(isA<StateError>()),
+      );
+      await Future<void>.sync(staleOpenVoiceBuild);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-build-dialog')),
+        findsNothing,
+      );
+      await expectLater(
+        staleManagedCompilerCheck(),
+        throwsA(isA<StateError>()),
+      );
+      expect(managed.projectCompilerCheckCalls, 0);
+      expect(managed.managedCompilerCheckCalls, 0);
+      expect(managed.voiceBuildCalls, 0);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      final dirtyWorkspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(dirtyWorkspace.scripts.onPressed, isNull);
+      expect(
+        tester
+            .widget<TextButton>(
+              find.byKey(const Key('revision3-test-release-scripts-action')),
+            )
+            .onPressed,
+        isNull,
+      );
+      final dirtyVoiceReadiness = tester
+          .widget<Revision3VoiceBuildReadinessPanel>(
+            find.byType(Revision3VoiceBuildReadinessPanel),
+          );
+      expect(dirtyVoiceReadiness.onResolveVoiceTarget, isNull);
+      expect(dirtyVoiceReadiness.onManageVoiceTakes, isNull);
+      expect(dirtyVoiceReadiness.onBuild, isNull);
+
+      await openQuestInspection();
+      expect(managed.questSourceInspectionCalls, 2);
+      expect(find.byType(Revision3ManagedCompilerCheckPanel), findsNothing);
+      expect(managed.managedCompilerCheckCalls, 0);
       expect(tester.takeException(), isNull);
     },
   );
@@ -2846,6 +3542,95 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.widget<FilledButton>(deployment).onPressed, isNull);
       expect(managed.projectBuildPlanCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'build preview opens exact Voice problems without enabling release authority',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final buildPlan = _unresolvedProjectBuildPlanResult(
+        head: _head(7),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+      );
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory(r'C:\mods\project-build-preview-voice'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onProjectBuildPlan: (_) => buildPlan,
+        onVoicePlan: _unresolvedVoicePlan,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedHomeTask(tester, const Key('managed-home-build'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-project-build-plan-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-build-plan-error')),
+        findsNothing,
+      );
+      expect(find.text('Preparation required'), findsOneWidget);
+      final capturedVoiceDetails = tester
+          .widget<Revision3ProjectBuildPlanPanel>(
+            find.byType(Revision3ProjectBuildPlanPanel),
+          )
+          .openVoiceDetails!;
+      final details = find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-voice-details-voiceTargetUnresolved',
+        ),
+      );
+      await tester.ensureVisible(details);
+      await tester.tap(details);
+      await tester.pumpAndSettle();
+
+      expect(
+        find
+            .byKey(const Key('revision3-test-release-voice-continuation-slot'))
+            .hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-readiness-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('0 of 1 Voice slots are ready.'), findsOneWidget);
+      expect(managed.projectBuildPlanCalls, 1);
+      expect(managed.voicePlanCalls, 1);
+
+      final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.playableBuild.evidence, isNull);
+      expect(workspace.playableBuild.onPressed, isNull);
+      expect(workspace.deployment.evidence, isNull);
+      expect(workspace.deployment.onPressed, isNull);
+
+      managed.head = _head(8);
+      await coordinator.verifyCurrent();
+      await expectLater(
+        Future<void>.sync(capturedVoiceDetails),
+        throwsA(isA<StateError>()),
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -4564,12 +5349,12 @@ void main() {
     },
   );
 
-  testWidgets('Problems opens the exact referenced entity in Story checks', (
+  testWidgets('Problems opens the exact non-Story source in Content', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
     final fixture = revision3ProjectProblemsFixture(
-      includeDialogGraph: false,
+      includeDialogGraph: true,
       includeReferenceProblem: true,
       includeAssetProblem: false,
       includeVoiceProblems: false,
@@ -4611,28 +5396,15 @@ void main() {
     await tester.tap(openEntity);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('revision3-story-workspace')), findsOneWidget);
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+    expect(
+      find.byKey(const Key('revision3-content-workspace-navigation')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(
         const Key(
           'revision3-content-entity-details-'
-          '$revision3ProjectProblemsNpcId',
-        ),
-      ),
-      findsOneWidget,
-    );
-    final problemsTab = find.byKey(
-      const Key(
-        'revision3-story-workbench-tab-problemsChecks-'
-        '$revision3ProjectProblemsNpcId',
-      ),
-    );
-    expect(problemsTab, findsOneWidget);
-    expect(tester.widget<ChoiceChip>(problemsTab).selected, isTrue);
-    expect(
-      find.byKey(
-        const Key(
-          'revision3-story-workbench-section-problemsChecks-'
           '$revision3ProjectProblemsNpcId',
         ),
       ),
@@ -4645,7 +5417,7 @@ void main() {
     (tester) async {
       await _setDesktopTestSurface(tester);
       final fixture = revision3ProjectProblemsFixture(
-        includeDialogGraph: false,
+        includeDialogGraph: true,
         includeReferenceProblem: true,
         includeAssetProblem: false,
         includeVoiceProblems: false,
@@ -4717,7 +5489,7 @@ void main() {
     (tester) async {
       await _setDesktopTestSurface(tester);
       final fixture = revision3ProjectProblemsFixture(
-        includeDialogGraph: false,
+        includeDialogGraph: true,
         includeReferenceProblem: true,
         includeAssetProblem: false,
         includeVoiceProblems: false,
@@ -4787,7 +5559,7 @@ void main() {
     (tester) async {
       await _setDesktopTestSurface(tester);
       final fixture = revision3ProjectProblemsFixture(
-        includeDialogGraph: false,
+        includeDialogGraph: true,
         includeReferenceProblem: true,
         includeAssetProblem: false,
         includeVoiceProblems: false,
@@ -5011,7 +5783,7 @@ void main() {
       );
       await tester.ensureVisible(resolve);
       await tester.tap(resolve);
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(tester, find.text('Current target: unresolved'));
 
       expect(
         find.byKey(const Key('revision3-voice-target-dialog')),
@@ -5143,7 +5915,10 @@ void main() {
       final build = find.byKey(const Key('revision3-voice-readiness-build'));
       await tester.ensureVisible(build);
       await tester.tap(build);
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-voice-build-folder-name')),
+      );
 
       expect(
         find.byKey(const Key('revision3-voice-build-dialog')),
@@ -5164,7 +5939,8 @@ void main() {
       await tester.tap(
         find.byKey(const Key('revision3-voice-build-choose-parent')),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(pickerLabel, 'Übergeordneten Ordner für das Voice-Bundle wählen');
 
       final reportDeepLinkFailure = tester
@@ -5929,7 +6705,7 @@ void main() {
           expect(plan.expectedModuleRevision, 5);
           expect(plan.expectedTranscriptCount, 0);
           expect(plan.index, 0);
-          expect(plan.objectiveSlot, isNull);
+          expect(plan.objectiveSlot, 1);
           expect(plan.line.lineDisplayName, openingLineName);
           expect(plan.line.speakerHint, 'Asghan');
           expect(plan.line.locale, 'de');
@@ -9639,7 +10415,10 @@ void main() {
       expect(buildBundle, findsOneWidget);
       await tester.ensureVisible(buildBundle);
       await tester.tap(buildBundle);
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-voice-build-folder-name')),
+      );
       expect(
         find.byKey(const Key('revision3-voice-build-dialog')),
         findsOneWidget,
@@ -9651,11 +10430,17 @@ void main() {
       await tester.tap(
         find.byKey(const Key('revision3-voice-build-choose-parent')),
       );
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-voice-build-parent')),
+      );
       final expectedOutput = p.join(buildParent.path, 'asghan-home-bundle');
       expect(find.text(expectedOutput), findsOneWidget);
       await tester.tap(find.byKey(const Key('revision3-voice-build-submit')));
-      await tester.pumpAndSettle();
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const Key('revision3-voice-build-built')),
+      );
 
       expect(managed.voiceBuildCalls, 1);
       expect(buildGameRoot, gameRoot.path);
@@ -11455,6 +12240,21 @@ Future<void> _navigateManagedContent(WidgetTester tester) async {
   );
 }
 
+Future<void> _navigateManagedItems(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-tab-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-items'),
+  );
+  expect(
+    find.byKey(const Key('revision3-content-workspace-page-items')),
+    findsOneWidget,
+  );
+}
+
 Future<void> _navigateManagedBaseGameContent(WidgetTester tester) async {
   await _navigateManagedWorkspace(
     tester,
@@ -12560,6 +13360,79 @@ class _FakeManagedLease
   }
 }
 
+final class _FakeItemPatchManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ItemPatchLease {
+  _FakeItemPatchManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    super.canonicalProjectJsonValue,
+    super.onNpcSourceInspection,
+    super.onProjectCompilerCheck,
+    super.onManagedCompilerCheck,
+    super.onVoicePlan,
+    super.onVoiceBuild,
+    Revision3ContentIndex Function(_FakeManagedLease lease)?
+    contentIndexBuilder,
+    super.onDialogLocalizationEditSeed,
+  }) : super(
+         contentIndexBuilder:
+             contentIndexBuilder ??
+             (lease) => _homeItemPatchContentIndex(
+               lease as _FakeItemPatchManagedLease,
+             ),
+       );
+
+  int itemCatalogReadCalls = 0;
+  int itemPatchPublishCalls = 0;
+  Revision3ItemPatchTechnicalPlan? lastItemPatchPlan;
+
+  @override
+  bool get supportsItemPatch => true;
+
+  @override
+  void markRequiresReopenAfterItemPatchUncertainty() {
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1() async {
+    itemCatalogReadCalls++;
+    return _homeItemPatchCatalogResult(this);
+  }
+
+  @override
+  Future<Revision3ItemPatchPublication> prepareAndPublishItemPatchV1({
+    required Revision3ItemPatchTechnicalPlan plan,
+  }) async {
+    itemPatchPublishCalls++;
+    lastItemPatchPlan = plan;
+    final change = switch ((plan.action, plan.expectedEntityRevision)) {
+      (AuthoringRevision3ItemPatchAction.remove, _) =>
+        AuthoringRevision3ItemPatchChange.removed,
+      (AuthoringRevision3ItemPatchAction.upsert, null) =>
+        AuthoringRevision3ItemPatchChange.created,
+      _ => AuthoringRevision3ItemPatchChange.updated,
+    };
+    projectRevision++;
+    head = _head(projectRevision);
+    return Revision3ItemPatchPublication(
+      projectId: projectId,
+      projectRevision: projectRevision,
+      entityId: plan.entityId,
+      entityRevision: switch (change) {
+        AuthoringRevision3ItemPatchChange.created => 0,
+        AuthoringRevision3ItemPatchChange.updated =>
+          plan.expectedEntityRevision! + 1,
+        AuthoringRevision3ItemPatchChange.removed => null,
+      },
+      change: change,
+      vanillaClass: plan.vanillaClass,
+    );
+  }
+}
+
 final class _FakeProjectBuildPlanManagedLease extends _FakeManagedLease
     implements ManagedRevision3ProjectBuildPlanLease {
   _FakeProjectBuildPlanManagedLease({
@@ -12569,6 +13442,7 @@ final class _FakeProjectBuildPlanManagedLease extends _FakeManagedLease
     required super.head,
     required super.contentIndexBuilder,
     required this.onProjectBuildPlan,
+    super.onVoicePlan,
   });
 
   final _ProjectBuildPlanCallback onProjectBuildPlan;
@@ -13281,6 +14155,129 @@ Revision3ContentIndex _contentIndex({
   'assets': <Object?>[],
 });
 
+Map<String, Object?> _homeItemPatchSeal(String digit, int byteLength) =>
+    <String, Object?>{'byte_len': byteLength, 'sha256': digit * 64};
+
+Map<String, Object?> _homeItemPatchTarget() => <String, Object?>{
+  'executable': _homeItemPatchSeal('5', 1),
+};
+
+AuthoringRevision3ItemCatalogReadResult _homeItemPatchCatalogResult(
+  _FakeItemPatchManagedLease lease,
+) {
+  final catalogJson = jsonEncode(<String, Object?>{
+    'catalog_layer': _homeItemPatchCatalogLayer,
+    'catalog_seal': _homeItemPatchSeal('c', 9000),
+    'entries': <Object?>[
+      <String, Object?>{
+        'category': 'food',
+        'fields': <Object?>[
+          revision3ItemNumericField(
+            name: 'm_Value',
+            scalarType: 'integer',
+            defaultValue: <String, Object?>{'type': 'integer', 'data': 4},
+          ),
+          revision3ItemNumericField(
+            name: 'm_Weight',
+            scalarType: 'float',
+            defaultValue: <String, Object?>{'type': 'float', 'data': 0.25},
+          ),
+        ],
+        'runtime_path': '/Script/Angelscript.$_homeItemPatchVanillaClass',
+        'source_seal': _homeItemPatchSeal('d', 500),
+        'vanilla_class': _homeItemPatchVanillaClass,
+      },
+    ],
+    'schema_revision': 1,
+    'target': _homeItemPatchTarget(),
+  });
+  return AuthoringRevision3ItemCatalogReadResult.fromJson(<String, Object?>{
+    'ok': true,
+    'head_json': lease.head.canonicalJson,
+    'project_id': lease.projectId,
+    'project_revision': lease.projectRevision,
+    'catalog_json': catalogJson,
+    'catalog_seal': _homeItemPatchSeal('c', 9000),
+    'catalog_authority': 'native_embedded_schema_exact_current_project',
+    'build_status': 'not_evaluated',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_applicable',
+  }, expectedHead: lease.head);
+}
+
+Revision3ContentIndex _homeItemPatchContentIndex(
+  _FakeItemPatchManagedLease lease,
+) {
+  final plan = lease.lastItemPatchPlan;
+  final hasPatch =
+      plan != null && plan.action == AuthoringRevision3ItemPatchAction.upsert;
+  final fieldTypes = <String, Object?>{};
+  final fields = <String, Object?>{};
+  if (hasPatch) {
+    for (final entry in plan.fields.entries) {
+      fieldTypes[entry.key] = entry.value.type.wireName;
+      fields[entry.key] = <String, Object?>{
+        'type': entry.value.type.wireName,
+        'data': entry.value.value,
+      };
+    }
+  }
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': lease.projectId,
+    'project_revision': lease.projectRevision,
+    'project_name': 'Managed Items project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': _homeItemPatchTarget(),
+    'authoring_locales': <Object?>[],
+    'entity_counts': <String, Object?>{if (hasPatch) 'item_patch': 1},
+    'entities': <Object?>[
+      if (hasPatch)
+        <String, Object?>{
+          'id': plan.entityId,
+          'kind': 'item_patch',
+          'display_name': plan.displayName ?? 'Apple',
+          'revision': plan.expectedEntityRevision == null
+              ? 0
+              : plan.expectedEntityRevision! + 1,
+          'origin': <String, Object?>{
+            'type': 'vanilla',
+            'generation': _homeItemPatchTarget(),
+            'catalog_layer': plan.expectedCatalogLayer,
+            'canonical_selector': plan.vanillaClass,
+            'source_seal': <String, Object?>{
+              'byte_len': plan.expectedSourceSeal.byteLength,
+              'sha256': plan.expectedSourceSeal.sha256,
+            },
+          },
+          'summary': <String, Object?>{
+            'kind': 'item_patch',
+            'data': <String, Object?>{
+              'vanilla_class': plan.vanillaClass,
+              'field_count': fields.length,
+              'field_types': fieldTypes,
+              'fields': fields,
+            },
+          },
+          'references': <Object?>[],
+          'asset_references': <Object?>[],
+        },
+    ],
+    'assets': <Object?>[],
+  });
+}
+
+Revision3ContentIndex _homeItemPatchVoiceContentIndex(
+  _FakeItemPatchManagedLease lease,
+) {
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: lease.projectRevision,
+  );
+  json['target'] = _homeItemPatchTarget();
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
 Revision3ContentIndex _createdNpcContentIndex({
   required String projectId,
   required int revision,
@@ -13679,12 +14676,21 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
               _dialogLineEntityReference(
                 projectId: projectId,
                 role: 'quest_transcript_line',
-                qualifier: createPlan!.objectiveSlot?.toString(),
+                qualifier: createPlan!.objectiveSlot.toString(),
                 entityId: line.lineId,
                 expectedKind: 'dialog_line',
               ),
           ],
-          'asset_references': <Object?>[],
+          'asset_references': <Object?>[
+            <String, Object?>{
+              'role': 'quest_collision_artifact',
+              'sha256': _homeQuestOpeningRecipeCollisionSha,
+              'byte_len': 123,
+              'logical_name': null,
+              'expected_media_type': _homeQuestOpeningRecipeCollisionMediaType,
+              'resolution': 'resolved',
+            },
+          ],
         },
         <String, Object?>{
           'id': _homeQuestOpeningRecipeModuleId,
@@ -13718,6 +14724,12 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
             _dialogLineEntityReference(
               projectId: projectId,
               role: 'origin_owner',
+              entityId: _homeQuestOpeningRecipeQuestId,
+              expectedKind: 'quest_draft',
+            ),
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'script_owner',
               entityId: _homeQuestOpeningRecipeQuestId,
               expectedKind: 'quest_draft',
             ),
@@ -13827,7 +14839,14 @@ Revision3ContentIndex _questOpeningRecipeContentIndex({
       'script_module': 1,
     },
     'entities': entities,
-    'assets': <Object?>[],
+    'assets': <Object?>[
+      <String, Object?>{
+        'sha256': _homeQuestOpeningRecipeCollisionSha,
+        'byte_len': 123,
+        'media_type': _homeQuestOpeningRecipeCollisionMediaType,
+        'class': 'quest_collision_artifact',
+      },
+    ],
   });
 }
 
@@ -14522,6 +15541,16 @@ _npcManagedCompilerFixture() {
     },
     'resolution': 'resolved',
   };
+  final scriptOwnerReference = <String, Object?>{
+    'role': 'script_owner',
+    'qualifier': null,
+    'target': <String, Object?>{
+      'project_id': revision3NpcInspectionProjectId,
+      'entity_id': revision3NpcInspectionNpcId,
+      'expected_kind': 'npc_draft',
+    },
+    'resolution': 'resolved',
+  };
   final contentIndex = Revision3ContentIndex.fromJsonObject(<String, Object?>{
     'schema_revision': 1,
     'project_id': revision3NpcInspectionProjectId,
@@ -14584,7 +15613,7 @@ _npcManagedCompilerFixture() {
             },
           },
         },
-        'references': <Object?>[referenceToNpc],
+        'references': <Object?>[referenceToNpc, scriptOwnerReference],
         'asset_references': <Object?>[],
       },
     ],
@@ -14957,7 +15986,16 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
           'resolution': 'resolved',
         },
       ],
-      'asset_references': <Object?>[],
+      'asset_references': <Object?>[
+        <String, Object?>{
+          'role': 'quest_collision_artifact',
+          'sha256': _homeQuestOpeningRecipeCollisionSha,
+          'byte_len': 123,
+          'logical_name': null,
+          'expected_media_type': _homeQuestOpeningRecipeCollisionMediaType,
+          'resolution': 'resolved',
+        },
+      ],
     },
     <String, Object?>{
       'id': revision3QuestOutlineModuleId,
@@ -15012,7 +16050,14 @@ Revision3ContentIndex _storyWorkbenchGameGateIndex({
       'asset_references': <Object?>[],
     },
   ],
-  'assets': <Object?>[],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': _homeQuestOpeningRecipeCollisionSha,
+      'byte_len': 123,
+      'media_type': _homeQuestOpeningRecipeCollisionMediaType,
+      'class': 'quest_collision_artifact',
+    },
+  ],
 });
 
 Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
@@ -15066,7 +16111,16 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
           expectedKind: 'dialog_line',
         ),
       ],
-      'asset_references': <Object?>[],
+      'asset_references': <Object?>[
+        <String, Object?>{
+          'role': 'quest_collision_artifact',
+          'sha256': _homeQuestOpeningRecipeCollisionSha,
+          'byte_len': 123,
+          'logical_name': null,
+          'expected_media_type': _homeQuestOpeningRecipeCollisionMediaType,
+          'resolution': 'resolved',
+        },
+      ],
     },
     <String, Object?>{
       'id': _homeQuestTranscriptModuleId,
@@ -15102,12 +16156,29 @@ Revision3ContentIndex _questTranscriptHomeIndex({required int revision}) {
           targetId: _homeQuestTranscriptQuestId,
           expectedKind: 'quest_draft',
         ),
+        _homeContentReference(
+          role: 'script_owner',
+          targetId: _homeQuestTranscriptQuestId,
+          expectedKind: 'quest_draft',
+        ),
       ],
       'asset_references': <Object?>[],
     },
   ]);
   entities.sort(
     (left, right) => (left['id']! as String).compareTo(right['id']! as String),
+  );
+  final assets = (json['assets']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  assets.add(<String, Object?>{
+    'sha256': _homeQuestOpeningRecipeCollisionSha,
+    'byte_len': 123,
+    'media_type': _homeQuestOpeningRecipeCollisionMediaType,
+    'class': 'quest_collision_artifact',
+  });
+  assets.sort(
+    (left, right) =>
+        (left['sha256']! as String).compareTo(right['sha256']! as String),
   );
   return Revision3ContentIndex.fromJsonObject(json);
 }
@@ -15197,8 +16268,8 @@ Revision3ContentIndex _npcGreetingHomeIndex({
       'revision': 5,
       'origin': <String, Object?>{
         'type': 'generated',
-        'generator_id': 'gore-authoring.draft-npc-skeleton',
-        'generator_version': 4,
+        'generator_id': 'gore-authoring.logical-npc-clone-draft',
+        'generator_version': 1,
         'owner': <String, Object?>{
           'project_id': revision3VoiceContentProjectId,
           'entity_id': _homeNpcGreetingNpcId,
@@ -15208,8 +16279,8 @@ Revision3ContentIndex _npcGreetingHomeIndex({
       'summary': <String, Object?>{
         'kind': 'script_module',
         'data': <String, Object?>{
-          'generator_id': 'gore-authoring.draft-npc-skeleton',
-          'generator_version': 4,
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
           'module_namespace': 'PROJECT.NPCS.ASGHAN',
           'module_relative_path': 'PROJECT/NPCS/ASGHAN.as',
           'status': <String, Object?>{
@@ -15221,6 +16292,11 @@ Revision3ContentIndex _npcGreetingHomeIndex({
       'references': <Object?>[
         _homeContentReference(
           role: 'origin_owner',
+          targetId: _homeNpcGreetingNpcId,
+          expectedKind: 'npc_draft',
+        ),
+        _homeContentReference(
+          role: 'script_owner',
           targetId: _homeNpcGreetingNpcId,
           expectedKind: 'npc_draft',
         ),
@@ -15460,6 +16536,108 @@ AuthoringRevision3ProjectBuildPlanResult _emptyProjectBuildPlanResult({
         'plan_seal': planSeal,
         'domains': domains,
         'blockers': <Object?>[],
+        'scope': 'project_build_readiness_only',
+        'build_authority': 'not_granted',
+        'artifact_status': 'not_created',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+    },
+    expectedHead: head,
+    expectedProjectJson: projectJson,
+  );
+}
+
+AuthoringRevision3ProjectBuildPlanResult _unresolvedProjectBuildPlanResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final projectJson = revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+    1,
+    projectId: projectId,
+    projectRevision: projectRevision,
+  );
+  Map<String, Object?> seal(List<int> bytes) => <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+
+  final inputSeal = seal(
+    utf8.encode(
+      jsonEncode(<String, Object?>{
+        'format': 'gore.authoring.revision3-project-build-input.v1',
+        'project': seal(utf8.encode(projectJson)),
+        'dataasset_stage_manifests': <Object?>[],
+      }),
+    ),
+  );
+  final domains = <Object?>[
+    for (final domain in const <String>[
+      'localization',
+      'dialog',
+      'voice',
+      'npc',
+      'quest',
+      'scripts',
+      'items',
+      'data_assets',
+    ])
+      <String, Object?>{
+        'domain': domain,
+        'status': domain == 'voice' ? 'blocked' : 'not_present',
+        'content_count': domain == 'voice' ? 1 : 0,
+        'ready_count': 0,
+        'blocked_count': domain == 'voice' ? 1 : 0,
+      },
+  ];
+  final blockers = <Object?>[
+    <String, Object?>{
+      'category': 'author_project',
+      'domain': 'voice',
+      'reason': 'voice_target_unresolved',
+      'affected_count': 1,
+    },
+    <String, Object?>{
+      'category': 'author_project',
+      'domain': 'voice',
+      'reason': 'voice_selected_take_missing',
+      'affected_count': 1,
+    },
+  ];
+  final planProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-plan.v1',
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'outcome': 'blocked',
+    'production_content_count': 1,
+    'input_seal': inputSeal,
+    'domains': domains,
+    'blockers': blockers,
+    'scope': 'project_build_readiness_only',
+    'build_authority': 'not_granted',
+    'artifact_status': 'not_created',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
+  final planSeal = seal(utf8.encode(jsonEncode(planProjection)));
+  return AuthoringRevision3ProjectBuildPlanResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'basis_head_json': head.canonicalJson,
+      'plan': <String, Object?>{
+        'schema_revision': 1,
+        'project_id': projectId,
+        'project_revision': projectRevision,
+        'outcome': 'blocked',
+        'production_content_count': 1,
+        'input_seal': inputSeal,
+        'plan_seal': planSeal,
+        'domains': domains,
+        'blockers': blockers,
         'scope': 'project_build_readiness_only',
         'build_authority': 'not_granted',
         'artifact_status': 'not_created',

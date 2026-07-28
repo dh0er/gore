@@ -660,11 +660,15 @@ Revision3ContentIndex _contentIndex(
   List<String> names, {
   bool includeAsset = false,
 }) {
-  const moduleId = 'ffffffffffffffffffffffffffffffff';
-  final entities = <Object?>[
-    for (var index = 0; index < names.length; index++)
+  const projectId = '11111111111111111111111111111111';
+  final entities = <Object?>[];
+  for (var index = 0; index < names.length; index++) {
+    final npcId = (index + 1).toRadixString(16).padLeft(32, '0');
+    final moduleId = (0x10000 + index).toRadixString(16).padLeft(32, '0');
+    final namespace = 'PROJECT.NPCS.NPC$index';
+    entities.addAll(<Object?>[
       <String, Object?>{
-        'id': (index + 1).toRadixString(16).padLeft(32, '0'),
+        'id': npcId,
         'kind': 'npc_draft',
         'display_name': names[index],
         'revision': 0,
@@ -676,7 +680,7 @@ Revision3ContentIndex _contentIndex(
           'kind': 'npc_draft',
           'data': <String, Object?>{
             'unique_name': 'NPC_$index',
-            'module_namespace': 'PROJECT.NPCS.NPC$index',
+            'module_namespace': namespace,
             'parent_character_definition': 'CharacterDefinition_$index',
             'parent_ai_agent_config': 'AIAgentConfig_$index',
             'parent_spawn_definition': 'SpawnDefinition_$index',
@@ -688,7 +692,7 @@ Revision3ContentIndex _contentIndex(
             'role': 'draft_script_module',
             'qualifier': null,
             'target': <String, Object?>{
-              'project_id': '11111111111111111111111111111111',
+              'project_id': projectId,
               'entity_id': moduleId,
               'expected_kind': 'script_module',
             },
@@ -697,36 +701,57 @@ Revision3ContentIndex _contentIndex(
         ],
         'asset_references': <Object?>[],
       },
-    if (names.isNotEmpty)
       <String, Object?>{
         'id': moduleId,
         'kind': 'script_module',
-        'display_name': 'Generated character source',
+        'display_name': 'Generated character source $index',
         'revision': 0,
         'origin': <String, Object?>{
-          'type': 'new',
-          'authored_runtime_id': 'GENERATED_CHARACTER_SOURCE',
+          'type': 'generated',
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': <String, Object?>{
+            'project_id': projectId,
+            'entity_id': npcId,
+            'expected_kind': 'npc_draft',
+          },
         },
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'global-search.fixture.npc',
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
             'generator_version': 1,
-            'module_namespace': 'PROJECT.NPCS.GENERATED',
-            'module_relative_path': 'Project/Npcs/Generated.as',
+            'module_namespace': namespace,
+            'module_relative_path': 'Project/Npcs/Npc$index.as',
             'status': <String, Object?>{
               'authoring': 'offline_draft',
               'runtime': 'runtime_unqualified',
             },
           },
         },
-        'references': <Object?>[],
+        'references': <Object?>[
+          _storyOwnerReference(
+            role: 'origin_owner',
+            projectId: projectId,
+            ownerId: npcId,
+          ),
+          _storyOwnerReference(
+            role: 'script_owner',
+            projectId: projectId,
+            ownerId: npcId,
+          ),
+        ],
         'asset_references': <Object?>[],
       },
-  ];
+    ]);
+  }
+  entities.sort(
+    (left, right) => ((left! as Map<String, Object?>)['id']! as String)
+        .compareTo((right! as Map<String, Object?>)['id']! as String),
+  );
   return Revision3ContentIndex.fromJsonObject(<String, Object?>{
     'schema_revision': 1,
-    'project_id': '11111111111111111111111111111111',
+    'project_id': projectId,
     'project_revision': 1,
     'project_name': 'Fixture',
     'project_version': '0.1.0',
@@ -735,7 +760,10 @@ Revision3ContentIndex _contentIndex(
     'authoring_locales': <Object?>['de'],
     'entity_counts': names.isEmpty
         ? <String, Object?>{}
-        : <String, Object?>{'npc_draft': names.length, 'script_module': 1},
+        : <String, Object?>{
+            'npc_draft': names.length,
+            'script_module': names.length,
+          },
     'entities': entities,
     'assets': includeAsset
         ? <Object?>[
@@ -749,6 +777,21 @@ Revision3ContentIndex _contentIndex(
         : <Object?>[],
   });
 }
+
+Map<String, Object?> _storyOwnerReference({
+  required String role,
+  required String projectId,
+  required String ownerId,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': null,
+  'target': <String, Object?>{
+    'project_id': projectId,
+    'entity_id': ownerId,
+    'expected_kind': 'npc_draft',
+  },
+  'resolution': 'resolved',
+};
 
 Revision3BaseGameContentCatalog _baseCatalog({
   List<String> npcNames = const <String>['Other NPC'],

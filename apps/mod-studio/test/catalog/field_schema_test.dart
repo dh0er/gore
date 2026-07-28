@@ -22,22 +22,38 @@ void main() {
     test('drops a default whose type mismatches the field', () {
       // int field with a string default (unvalidated user dump) -> dropped.
       expect(
-        FieldSchema.fromJson({'name': 'a', 'type': 'int', 'default': '4.0'}).defaultValue,
+        FieldSchema.fromJson({
+          'name': 'a',
+          'type': 'int',
+          'default': '4.0',
+        }).defaultValue,
         isNull,
       );
       // int field with a double default -> dropped (would crash int.parse).
       expect(
-        FieldSchema.fromJson({'name': 'b', 'type': 'int', 'default': 4.0}).defaultValue,
+        FieldSchema.fromJson({
+          'name': 'b',
+          'type': 'int',
+          'default': 4.0,
+        }).defaultValue,
         isNull,
       );
       // float accepts an int default.
       expect(
-        FieldSchema.fromJson({'name': 'c', 'type': 'float', 'default': 4}).defaultValue,
+        FieldSchema.fromJson({
+          'name': 'c',
+          'type': 'float',
+          'default': 4,
+        }).defaultValue,
         4,
       );
       // bool with a string default -> dropped.
       expect(
-        FieldSchema.fromJson({'name': 'd', 'type': 'bool', 'default': 'true'}).defaultValue,
+        FieldSchema.fromJson({
+          'name': 'd',
+          'type': 'bool',
+          'default': 'true',
+        }).defaultValue,
         isNull,
       );
     });
@@ -54,6 +70,82 @@ void main() {
       expect(f.enumValues, ['Low', 'Mid', 'High']);
       expect(f.enumBackingValues, [0, 5, 9]);
       expect(f.defaultValue, 5);
+    });
+
+    test('plain parser does not infer a native numeric domain', () {
+      final f = FieldSchema.fromJson({'name': 'm_Value', 'type': 'int'});
+      expect(f.numericDomain, isNull);
+    });
+  });
+
+  group('FieldSchema.fromItemModelJson', () {
+    test('attaches only verified int32 and float32 item domains', () {
+      expect(
+        FieldSchema.fromItemModelJson({
+          'name': 'm_Value',
+          'type': 'int',
+        }).numericDomain,
+        FieldNumericDomain.signedInteger32,
+      );
+      expect(
+        FieldSchema.fromItemModelJson({
+          'name': 'm_Weight',
+          'type': 'float',
+        }).numericDomain,
+        FieldNumericDomain.finiteFloat32,
+      );
+      expect(
+        FieldSchema.fromItemModelJson({
+          'name': 'm_AutoTarget',
+          'type': 'bool',
+        }).type,
+        FieldType.bool_,
+      );
+    });
+
+    test('rejects matching names with different or missing raw types', () {
+      expect(
+        () => FieldSchema.fromItemModelJson({
+          'name': 'm_Weight',
+          'type': 'double',
+        }),
+        throwsFormatException,
+      );
+      expect(
+        () =>
+            FieldSchema.fromItemModelJson({'name': 'm_Value', 'type': 'int64'}),
+        throwsFormatException,
+      );
+      expect(
+        () => FieldSchema.fromItemModelJson({'name': 'm_Value'}),
+        throwsFormatException,
+      );
+      expect(
+        () => FieldSchema.fromItemModelJson({
+          'name': 'm_Unverified',
+          'type': 'int',
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('drops a verified field default outside its native domain', () {
+      expect(
+        FieldSchema.fromItemModelJson({
+          'name': 'm_Value',
+          'type': 'int',
+          'default': 0x80000000,
+        }).defaultValue,
+        isNull,
+      );
+      expect(
+        FieldSchema.fromItemModelJson({
+          'name': 'm_Weight',
+          'type': 'float',
+          'default': 1e39,
+        }).defaultValue,
+        isNull,
+      );
     });
   });
 }

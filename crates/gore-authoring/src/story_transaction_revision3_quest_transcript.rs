@@ -33,7 +33,7 @@ pub enum Revision3QuestTranscriptIntentV1 {
     },
     CreateAndInsert {
         index: u16,
-        objective_slot: Option<u16>,
+        objective_slot: u16,
         line: Revision3DialogLineInsertRequestV1,
     },
 }
@@ -592,13 +592,13 @@ fn validate_bindings(
                 },
             );
         }
-        match binding.objective_slot {
-            Some(slot) if !active_slots.contains(&slot) => {
-                return Err(
-                    Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot { index, slot },
-                );
-            }
-            _ => {}
+        if !active_slots.contains(&binding.objective_slot) {
+            return Err(
+                Revision3QuestTranscriptEditConflictV1::InactiveObjectiveSlot {
+                    index,
+                    slot: binding.objective_slot,
+                },
+            );
         }
     }
     Ok(())

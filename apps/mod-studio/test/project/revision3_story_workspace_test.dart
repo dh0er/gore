@@ -957,8 +957,8 @@ void main() {
                   ),
                   const SizedBox(height: 900),
                   const Text(
-                    'General dialog reached',
-                    key: Key('test-compact-journey-general-dialog'),
+                    'End of journey reached',
+                    key: Key('test-compact-journey-end'),
                   ),
                 ],
               ),
@@ -998,11 +998,13 @@ void main() {
             matching: find.byType(Scrollable),
           )
           .first;
-      final general = find.byKey(
-        const Key('test-compact-journey-general-dialog'),
+      final journeyEnd = find.byKey(const Key('test-compact-journey-end'));
+      await tester.scrollUntilVisible(
+        journeyEnd,
+        240,
+        scrollable: journeyScroll,
       );
-      await tester.scrollUntilVisible(general, 240, scrollable: journeyScroll);
-      expect(general.hitTestable(), findsOneWidget);
+      expect(journeyEnd.hitTestable(), findsOneWidget);
 
       final openLine = find.byKey(const Key('test-compact-journey-open-line'));
       await tester.ensureVisible(openLine);
@@ -2030,7 +2032,7 @@ void main() {
     },
   );
 
-  test('removal preflight proves the pair and filters incoming ownership', () {
+  test('removal preflight proves the exact current pair', () {
     final exactIndex = _fixture();
     final exact = Revision3StoryDraftRemovalPreflight.fromIndex(
       index: exactIndex,
@@ -2039,33 +2041,6 @@ void main() {
     expect(exact.hasExactPair, isTrue);
     expect(exact.scriptModule?.id, _moduleId);
     expect(exact.canRemove, isTrue);
-
-    final blockedIndex = _fixture(
-      includeBlocker: true,
-      blockerExpectedKind: 'npc_draft',
-      blockerResolution: 'kind_mismatch',
-    );
-    final blocked = Revision3StoryDraftRemovalPreflight.fromIndex(
-      index: blockedIndex,
-      draft: blockedIndex.entityById(_questId)!,
-    );
-    expect(blocked.hasExactPair, isTrue);
-    expect(blocked.canRemove, isFalse);
-    expect(blocked.blockers, hasLength(1));
-    expect(blocked.blockers.single.source.id, _blockerId);
-    expect(blocked.blockers.single.reference.role, 'script_owner');
-
-    final foreignIndex = _fixture(
-      includeBlocker: true,
-      blockerProjectId: _projectB,
-      blockerResolution: 'foreign_project',
-    );
-    final foreign = Revision3StoryDraftRemovalPreflight.fromIndex(
-      index: foreignIndex,
-      draft: foreignIndex.entityById(_questId)!,
-    );
-    expect(foreign.canRemove, isTrue);
-    expect(foreign.blockers, isEmpty);
 
     final transcriptIndex = _fixture(includeTranscriptLine: true);
     final transcript = Revision3StoryDraftRemovalPreflight.fromIndex(
@@ -2078,6 +2053,41 @@ void main() {
       transcriptIndex.entityById(_transcriptLineId)?.kind,
       Revision3ContentEntityKind.dialogLine,
       reason: 'removal only drops the Quest edge, never its target line',
+    );
+
+    final greetingIndex = _fixture(
+      includeQuest: false,
+      npcExactPair: true,
+      includeNpcGreetingLine: true,
+    );
+    final greeting = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: greetingIndex,
+      draft: greetingIndex.entityById(_npcId)!,
+    );
+    expect(greeting.canRemove, isTrue);
+    expect(greeting.blockers, isEmpty);
+    expect(
+      greetingIndex.entityById(_greetingLineId)?.kind,
+      Revision3ContentEntityKind.dialogLine,
+      reason: 'removal only drops the NPC edge, never its target line',
+    );
+  });
+
+  test('ContentIndex rejects arbitrary NPC generator ownership', () {
+    final exactIndex = _fixture(includeQuest: false, npcExactPair: true);
+    final exact = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: exactIndex,
+      draft: exactIndex.entityById(_npcId)!,
+    );
+    expect(exact.canRemove, isTrue);
+
+    expect(
+      () => _fixture(
+        includeQuest: false,
+        npcExactPair: true,
+        npcGeneratorId: 'unsupported.npc-generator',
+      ),
+      throwsFormatException,
     );
   });
 
@@ -2285,51 +2295,21 @@ void main() {
     );
   });
 
-  testWidgets('incoming blocker is listed and opens its external source', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    String? openedEntity;
-    var removeCalls = 0;
-    await _pumpWorkspace(
-      tester,
-      load: () async => _fixture(includeBlocker: true),
-      removeDraft:
-          ({required index, required draft, required scriptModule}) async {
-            removeCalls++;
-          },
-      onOpenExternalEntity: (entityId) => openedEntity = entityId,
-    );
-    await tester.pumpAndSettle();
-    await _openQuestRemovalMenu(tester);
-
-    final remove = tester.widget<PopupMenuItem<Object?>>(
-      find.byKey(Key('revision3-story-workbench-remove-$_questId')),
-    );
-    expect(remove.enabled, isFalse);
-    expect(find.text('1 removal blockers.'), findsOneWidget);
-    await tester.tap(
-      find.byKey(
-        Key('revision3-story-workbench-review-remove-blockers-$_questId'),
+  test('ContentIndex rejects unsupported ScriptModule blocker projections', () {
+    for (final invalidProjection in <Revision3ContentIndex Function()>[
+      () => _fixture(
+        includeBlocker: true,
+        blockerExpectedKind: 'npc_draft',
+        blockerResolution: 'kind_mismatch',
       ),
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('revision3-story-remove-blockers-dialog')),
-      findsOneWidget,
-    );
-    expect(
-      find.text('Referencing helper source · script_owner'),
-      findsOneWidget,
-    );
-    await tester.tap(
-      find.byKey(
-        Key('revision3-story-remove-blocker-$_blockerId-script_owner-0'),
+      () => _fixture(
+        includeBlocker: true,
+        blockerProjectId: _projectB,
+        blockerResolution: 'foreign_project',
       ),
-    );
-    await tester.pumpAndSettle();
-    expect(openedEntity, _blockerId);
-    expect(removeCalls, 0);
+    ]) {
+      expect(invalidProjection, throwsFormatException);
+    }
   });
 
   testWidgets('reopen lock disables removal with its concrete reason', (
@@ -2350,28 +2330,15 @@ void main() {
     expect(find.text('Reopen this managed project first.'), findsOneWidget);
   });
 
-  testWidgets('draft without an exact generated script pair is disabled', (
-    tester,
-  ) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    await _pumpWorkspace(
-      tester,
-      load: () async => _fixture(),
-      removeDraft:
-          ({required index, required draft, required scriptModule}) async {},
+  test('ContentIndex rejects an NPC without its exact generated pair', () {
+    expect(
+      () => _fixture(includeQuest: false, npcExactPair: false),
+      throwsFormatException,
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(Key('revision3-story-workbench-more-$_npcId')));
-    await tester.pumpAndSettle();
-    final remove = tester.widget<PopupMenuItem<Object?>>(
-      find.byKey(Key('revision3-story-workbench-remove-$_npcId')),
-    );
-    expect(remove.enabled, isFalse);
-    expect(find.text('Draft pair unavailable.'), findsOneWidget);
   });
 
   testWidgets(
-    'new blocker after confirmation refreshes and never retries automatically',
+    'failed removal refreshes current content and never retries automatically',
     (tester) async {
       await _setSurfaceSize(tester, const Size(1200, 800));
       var currentIndex = _fixture();
@@ -2382,8 +2349,8 @@ void main() {
         removeDraft:
             ({required index, required draft, required scriptModule}) async {
               calls++;
-              currentIndex = _fixture(includeBlocker: true);
-              throw StateError('new incoming reference');
+              currentIndex = _fixture(projectName: 'Refreshed exact project');
+              throw StateError('publication failed');
             },
       );
       await tester.pumpAndSettle();
@@ -2398,16 +2365,9 @@ void main() {
       expect(calls, 1);
       expect(
         find.byKey(const Key('revision3-story-remove-blockers-dialog')),
-        findsOneWidget,
+        findsNothing,
       );
-      expect(
-        find.text('Referencing helper source · script_owner'),
-        findsOneWidget,
-      );
-      await tester.tap(
-        find.byKey(const Key('revision3-story-remove-blockers-close')),
-      );
-      await tester.pumpAndSettle();
+      expect(find.textContaining('REMOVE FAILED:'), findsOneWidget);
       expect(calls, 1);
     },
   );
@@ -2633,6 +2593,8 @@ Revision3ContentIndex _fixture({
   bool includeTranscriptLine = false,
   bool includeNpcGreetingLine = false,
   bool includeOtherNpc = false,
+  bool npcExactPair = true,
+  String npcGeneratorId = 'gore-authoring.logical-npc-clone-draft',
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': projectId,
@@ -2713,14 +2675,25 @@ Revision3ContentIndex _fixture({
         'kind': 'script_module',
         'display_name': 'Gate Guard source',
         'revision': 0,
-        'origin': <String, Object?>{
-          'type': 'new',
-          'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
-        },
+        'origin': npcExactPair
+            ? <String, Object?>{
+                'type': 'generated',
+                'generator_id': npcGeneratorId,
+                'generator_version': 1,
+                'owner': <String, Object?>{
+                  'project_id': projectId,
+                  'entity_id': _npcId,
+                  'expected_kind': 'npc_draft',
+                },
+              }
+            : <String, Object?>{
+                'type': 'new',
+                'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+              },
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'story-workspace.fixture.npc',
+            'generator_id': npcGeneratorId,
             'generator_version': 1,
             'module_namespace': 'PROJECT.NPCS.GATEGUARD',
             'module_relative_path': 'Project/Npcs/GateGuard.as',
@@ -2730,7 +2703,30 @@ Revision3ContentIndex _fixture({
             },
           },
         },
-        'references': <Object?>[],
+        'references': <Object?>[
+          if (npcExactPair)
+            <String, Object?>{
+              'role': 'origin_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': projectId,
+                'entity_id': _npcId,
+                'expected_kind': 'npc_draft',
+              },
+              'resolution': 'resolved',
+            },
+          if (npcExactPair)
+            <String, Object?>{
+              'role': 'script_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': projectId,
+                'entity_id': _npcId,
+                'expected_kind': 'npc_draft',
+              },
+              'resolution': 'resolved',
+            },
+        ],
         'asset_references': <Object?>[],
       },
     if (includeOtherNpc)
@@ -2775,13 +2771,19 @@ Revision3ContentIndex _fixture({
         'display_name': 'Harbor Guard source',
         'revision': 0,
         'origin': <String, Object?>{
-          'type': 'new',
-          'authored_runtime_id': 'GORE_HARBOR_GUARD_SOURCE',
+          'type': 'generated',
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': <String, Object?>{
+            'project_id': projectId,
+            'entity_id': _otherNpcId,
+            'expected_kind': 'npc_draft',
+          },
         },
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'story-workspace.fixture.npc',
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
             'generator_version': 1,
             'module_namespace': 'PROJECT.NPCS.HARBORGUARD',
             'module_relative_path': 'Project/Npcs/HarborGuard.as',
@@ -2791,7 +2793,28 @@ Revision3ContentIndex _fixture({
             },
           },
         },
-        'references': <Object?>[],
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'origin_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _otherNpcId,
+              'expected_kind': 'npc_draft',
+            },
+            'resolution': 'resolved',
+          },
+          <String, Object?>{
+            'role': 'script_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _otherNpcId,
+              'expected_kind': 'npc_draft',
+            },
+            'resolution': 'resolved',
+          },
+        ],
         'asset_references': <Object?>[],
       },
     if (includeQuest)
@@ -2810,7 +2833,8 @@ Revision3ContentIndex _fixture({
             'technical_id': 'GORE_FIND_HOMER',
             'title': 'Find Homer',
             'objective_title': 'Ask Asghan about Homer',
-            if (includeTranscriptLine) 'transcript_count': 1,
+            'objective_slots': <Object?>[1],
+            'transcript_count': includeTranscriptLine ? 1 : 0,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'parent_runtime_class': 'B_Quest_FindHomer_C',
             'giver_runtime_unique_name': 'ASGHAN',
@@ -2830,7 +2854,7 @@ Revision3ContentIndex _fixture({
           if (includeTranscriptLine)
             <String, Object?>{
               'role': 'quest_transcript_line',
-              'qualifier': null,
+              'qualifier': '1',
               'target': <String, Object?>{
                 'project_id': projectId,
                 'entity_id': _transcriptLineId,
@@ -2859,8 +2883,8 @@ Revision3ContentIndex _fixture({
         'revision': 0,
         'origin': <String, Object?>{
           'type': 'generated',
-          'generator_id': 'gore-authoring.quest-draft',
-          'generator_version': 2,
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
           'owner': <String, Object?>{
             'project_id': projectId,
             'entity_id': _questId,
@@ -2870,8 +2894,8 @@ Revision3ContentIndex _fixture({
         'summary': <String, Object?>{
           'kind': 'script_module',
           'data': <String, Object?>{
-            'generator_id': 'gore-authoring.quest-draft',
-            'generator_version': 2,
+            'generator_id': 'gore-authoring.draft-quest-skeleton',
+            'generator_version': 4,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'module_relative_path': 'Project/Quests/FindHomer.as',
             'status': <String, Object?>{

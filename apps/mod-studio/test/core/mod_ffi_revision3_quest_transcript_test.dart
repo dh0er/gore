@@ -65,7 +65,7 @@ void main() {
   test('request rejects duplicate lines, inactive slots and no-op order', () {
     final basis = _basisProjectJson();
     final fixture = Revision3QuestOutlineFixture();
-    AuthoringRevision3QuestTranscriptBindingV1 binding(int? slot) =>
+    AuthoringRevision3QuestTranscriptBindingV1 binding(int slot) =>
         AuthoringRevision3QuestTranscriptBindingV1(
           projectId: revision3QuestOutlineProjectId,
           lineId: _lineId,
@@ -88,6 +88,73 @@ void main() {
         expectedQuestRevision: fixture.questRevision,
         intent: AuthoringRevision3QuestTranscriptReplaceIntentV1(
           bindings: <AuthoringRevision3QuestTranscriptBindingV1>[binding(99)],
+        ),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('request and exact basis reject null or missing objective slots', () {
+    final basis = _basisProjectJson();
+    final fixture = Revision3QuestOutlineFixture();
+    final request = AuthoringRevision3QuestTranscriptRequestV1.forProject(
+      expectedHead: fixture.head,
+      currentProjectJson: basis,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      intent: AuthoringRevision3QuestTranscriptReplaceIntentV1(
+        bindings: <AuthoringRevision3QuestTranscriptBindingV1>[
+          AuthoringRevision3QuestTranscriptBindingV1(
+            projectId: revision3QuestOutlineProjectId,
+            lineId: _lineId,
+            objectiveSlot: 1,
+          ),
+        ],
+      ),
+    );
+    final nullRequest = request.canonicalJson.replaceFirst(
+      '"objective_slot":1',
+      '"objective_slot":null',
+    );
+    final missingRequest = request.canonicalJson.replaceFirst(
+      ',"objective_slot":1',
+      '',
+    );
+    for (final invalid in <String>[nullRequest, missingRequest]) {
+      expect(
+        () => AuthoringRevision3QuestTranscriptRequestV1.fromCanonicalJson(
+          invalid,
+          currentProjectJson: basis,
+        ),
+        throwsFormatException,
+      );
+    }
+
+    final project = jsonDecode(basis) as Map<String, Object?>;
+    final entities = (project['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+        .cast<String, Object?>();
+    final data = ((quest['payload']! as Map)['data']! as Map)
+        .cast<String, Object?>();
+    data['transcript'] = <Object?>[
+      <String, Object?>{
+        'line': <String, Object?>{
+          'project_id': revision3QuestOutlineProjectId,
+          'id': _lineId,
+          'expected_kind': 'dialog_line',
+        },
+        'objective_slot': null,
+      },
+    ];
+    final nullBasis = jsonEncode(project);
+    expect(
+      () => AuthoringRevision3QuestTranscriptRequestV1.forProject(
+        expectedHead: fixture.head,
+        currentProjectJson: nullBasis,
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        intent: AuthoringRevision3QuestTranscriptReplaceIntentV1(
+          bindings: const <AuthoringRevision3QuestTranscriptBindingV1>[],
         ),
       ),
       throwsFormatException,

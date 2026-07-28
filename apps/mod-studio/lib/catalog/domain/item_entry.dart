@@ -14,28 +14,32 @@ class CatalogItem {
   /// Human-readable name derived from the class id (no localisation data).
   final String displayName;
 
-  /// Editable CDO fields for this item. Populated from model.json; falls
-  /// back to [kDefaultItemFields] when the model has no per-class data.
+  /// Editable CDO fields for this item, populated only from model evidence.
+  /// An item without per-class evidence receives an empty list.
   final List<FieldSchema> fields;
 
   /// Build a [CatalogItem] from the item_catalog.json entry +
   /// the per-class field list extracted from model.json.
   factory CatalogItem.fromCatalogEntry(
     Map<String, Object?> catalogEntry, {
-    List<FieldSchema> fields = kDefaultItemFields,
+    required List<FieldSchema> fields,
   }) {
     final id = catalogEntry['id'] as String? ?? '';
-    return CatalogItem(
-      id:          id,
-      displayName: _displayName(id),
-      fields:      fields,
-    );
+    return CatalogItem(id: id, displayName: _displayName(id), fields: fields);
   }
 
   static String _displayName(String id) {
     const prefixes = [
-      'ItMw_', 'ItRw_', 'ItAr_', 'ItFo_', 'ItMi_',
-      'ItAt_', 'ItWr_', 'ItMs_', 'ItKe_', 'ItAm_',
+      'ItMw_',
+      'ItRw_',
+      'ItAr_',
+      'ItFo_',
+      'ItMi_',
+      'ItAt_',
+      'ItWr_',
+      'ItMs_',
+      'ItKe_',
+      'ItAm_',
     ];
     var name = id;
     for (final prefix in prefixes) {

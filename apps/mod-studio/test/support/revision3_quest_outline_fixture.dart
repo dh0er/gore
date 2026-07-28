@@ -225,11 +225,13 @@ final class Revision3QuestOutlineFixture {
             'technical_id': 'GORE_FIND_HOMER',
             'title': title,
             'objective_title': objectiveTitles.first,
-            'additional_objective_titles': objectiveTitles.skip(1).toList(),
+            if (objectiveTitles.length > 1)
+              'additional_objective_titles': objectiveTitles.skip(1).toList(),
             'objective_slots': List<int>.generate(
               objectiveTitles.length,
               (index) => index + 1,
             ),
+            'transcript_count': 0,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'parent_runtime_class': 'UQuest_SwampCamp_SCChapter2',
             'giver_runtime_unique_name': 'OM_GRD_Asghan_263',
@@ -285,6 +287,11 @@ final class Revision3QuestOutlineFixture {
         'references': <Object?>[
           _contentReference(
             role: 'origin_owner',
+            targetId: revision3QuestOutlineQuestId,
+            expectedKind: 'quest_draft',
+          ),
+          _contentReference(
+            role: 'script_owner',
             targetId: revision3QuestOutlineQuestId,
             expectedKind: 'quest_draft',
           ),
@@ -388,7 +395,7 @@ final class Revision3QuestOutlineFixture {
                 'id': '44444444444444444444444444444444',
                 'expected_kind': 'dialog_line',
               },
-              'objective_slot': null,
+              'objective_slot': 1,
             },
           ],
       },

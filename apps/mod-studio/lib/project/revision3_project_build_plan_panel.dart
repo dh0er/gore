@@ -6,6 +6,7 @@ import '../core/mod_ffi.dart';
 
 typedef Revision3ProjectBuildPlanLoader =
     Future<AuthoringRevision3ProjectBuildPlanResult> Function();
+typedef Revision3ProjectBuildPlanOpenVoiceDetails = FutureOr<void> Function();
 
 typedef Revision3ProjectBuildPlanCountCopy = String Function(int count);
 typedef Revision3ProjectBuildPlanProgressCopy =
@@ -186,6 +187,9 @@ final class Revision3ProjectBuildPlanCopy {
     required this.toolkitBlockersBody,
     required this.affectedCount,
     required this.blockerReason,
+    required this.openVoiceDetailsLabel,
+    required this.actionFailedMessage,
+    required this.actionInProgressSemanticsLabel,
     required this.technicalDetailsTitle,
     required this.technicalDetailsBody,
     required this.inputSealLabel,
@@ -226,6 +230,10 @@ final class Revision3ProjectBuildPlanCopy {
           'These content types are not lowered by the toolkit yet.',
       affectedCount = _englishAffectedCount,
       blockerReason = _englishBlockerReason,
+      openVoiceDetailsLabel = 'Show exact Voice problems',
+      actionFailedMessage =
+          'The exact Voice problems are no longer available. Refresh this preview and try again.',
+      actionInProgressSemanticsLabel = 'Opening exact Voice problems',
       technicalDetailsTitle = 'Technical verification',
       technicalDetailsBody =
           'Deterministic seals bind this preview to its exact inputs and result.',
@@ -266,6 +274,10 @@ final class Revision3ProjectBuildPlanCopy {
           'Diese Inhaltstypen kann das Toolkit noch nicht umsetzen.',
       affectedCount = _germanAffectedCount,
       blockerReason = _germanBlockerReason,
+      openVoiceDetailsLabel = 'Exakte Voice-Probleme anzeigen',
+      actionFailedMessage =
+          'Die exakten Voice-Probleme sind nicht mehr aktuell. Aktualisiere diese Vorschau und versuche es erneut.',
+      actionInProgressSemanticsLabel = 'Exakte Voice-Probleme werden geöffnet',
       technicalDetailsTitle = 'Technische Verifikation',
       technicalDetailsBody =
           'Deterministische Siegel binden diese Vorschau an ihre exakten Eingaben und ihr Ergebnis.',
@@ -298,6 +310,9 @@ final class Revision3ProjectBuildPlanCopy {
   final String toolkitBlockersBody;
   final Revision3ProjectBuildPlanCountCopy affectedCount;
   final Revision3ProjectBuildPlanReasonCopy blockerReason;
+  final String openVoiceDetailsLabel;
+  final String actionFailedMessage;
+  final String actionInProgressSemanticsLabel;
   final String technicalDetailsTitle;
   final String technicalDetailsBody;
   final String inputSealLabel;
@@ -313,12 +328,14 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
   const Revision3ProjectBuildPlanPanel({
     required this.checkpoint,
     required this.load,
+    this.openVoiceDetails,
     this.copy = const Revision3ProjectBuildPlanCopy.english(),
     super.key,
   });
 
   final Revision3ProjectBuildPlanCheckpoint checkpoint;
   final Revision3ProjectBuildPlanLoader load;
+  final Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails;
   final Revision3ProjectBuildPlanCopy copy;
 
   @override
@@ -329,6 +346,9 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
 class _Revision3ProjectBuildPlanPanelState
     extends State<Revision3ProjectBuildPlanPanel> {
   late final Revision3ProjectBuildPlanController _controller;
+  int _actionEpoch = 0;
+  bool _openingVoiceDetails = false;
+  String? _actionError;
 
   @override
   void initState() {
@@ -343,13 +363,86 @@ class _Revision3ProjectBuildPlanPanelState
   @override
   void didUpdateWidget(covariant Revision3ProjectBuildPlanPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.checkpoint != widget.checkpoint) {
+      _actionEpoch++;
+      _openingVoiceDetails = false;
+      _actionError = null;
+    }
     _controller.synchronize(checkpoint: widget.checkpoint, load: widget.load);
   }
 
   @override
   void dispose() {
+    _actionEpoch++;
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    _actionEpoch++;
+    if (mounted) {
+      setState(() {
+        _openingVoiceDetails = false;
+        _actionError = null;
+      });
+    }
+    await _controller.refresh();
+  }
+
+  Future<void> _openVoiceDetails(
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+  ) async {
+    final action = widget.openVoiceDetails;
+    if (action == null || _openingVoiceDetails) return;
+    try {
+      _requireCurrentReadyCheckpoint(checkpoint);
+    } catch (_) {
+      if (mounted && widget.checkpoint == checkpoint) {
+        setState(() => _actionError = widget.copy.actionFailedMessage);
+      }
+      return;
+    }
+    final epoch = ++_actionEpoch;
+    setState(() {
+      _openingVoiceDetails = true;
+      _actionError = null;
+    });
+    try {
+      await Future<void>.sync(action);
+      if (!_isCurrentAction(epoch, checkpoint)) return;
+      _requireCurrentReadyCheckpoint(checkpoint);
+    } catch (_) {
+      if (_isCurrentAction(epoch, checkpoint)) {
+        setState(() => _actionError = widget.copy.actionFailedMessage);
+      }
+    } finally {
+      if (_isCurrentAction(epoch, checkpoint)) {
+        setState(() => _openingVoiceDetails = false);
+      }
+    }
+  }
+
+  bool _isCurrentAction(
+    int epoch,
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+  ) =>
+      mounted &&
+      epoch == _actionEpoch &&
+      widget.checkpoint == checkpoint &&
+      _controller.snapshot.checkpoint == checkpoint;
+
+  void _requireCurrentReadyCheckpoint(
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+  ) {
+    final snapshot = _controller.snapshot;
+    if (!mounted ||
+        widget.checkpoint != checkpoint ||
+        snapshot.checkpoint != checkpoint ||
+        snapshot.state != Revision3ProjectBuildPlanLoadState.ready ||
+        snapshot.result == null) {
+      throw StateError('The exact project build preview is no longer current.');
+    }
+    _verifyExactCheckpoint(snapshot.result!, checkpoint);
   }
 
   @override
@@ -377,7 +470,7 @@ class _Revision3ProjectBuildPlanPanelState
                 loading:
                     snapshot.state ==
                     Revision3ProjectBuildPlanLoadState.loading,
-                refresh: _controller.refresh,
+                refresh: _refresh,
               ),
               const SizedBox(height: 10),
               _PreviewBoundary(copy: widget.copy),
@@ -392,11 +485,16 @@ class _Revision3ProjectBuildPlanPanelState
                 ),
                 Revision3ProjectBuildPlanLoadState.failed => _BuildPlanError(
                   copy: widget.copy,
-                  retry: _controller.refresh,
+                  retry: _refresh,
                 ),
                 Revision3ProjectBuildPlanLoadState.ready => _BuildPlanReport(
                   result: snapshot.result!,
                   copy: widget.copy,
+                  openVoiceDetails: widget.openVoiceDetails == null
+                      ? null
+                      : () => _openVoiceDetails(snapshot.checkpoint),
+                  openingVoiceDetails: _openingVoiceDetails,
+                  actionError: _actionError,
                 ),
               },
             ],
@@ -538,10 +636,19 @@ class _BuildPlanError extends StatelessWidget {
 }
 
 class _BuildPlanReport extends StatelessWidget {
-  const _BuildPlanReport({required this.result, required this.copy});
+  const _BuildPlanReport({
+    required this.result,
+    required this.copy,
+    required this.openVoiceDetails,
+    required this.openingVoiceDetails,
+    required this.actionError,
+  });
 
   final AuthoringRevision3ProjectBuildPlanResult result;
   final Revision3ProjectBuildPlanCopy copy;
+  final VoidCallback? openVoiceDetails;
+  final bool openingVoiceDetails;
+  final String? actionError;
 
   @override
   Widget build(BuildContext context) {
@@ -593,6 +700,8 @@ class _BuildPlanReport extends StatelessWidget {
             description: copy.authorBlockersBody,
             blockers: authorBlockers,
             copy: copy,
+            openVoiceDetails: openVoiceDetails,
+            openingVoiceDetails: openingVoiceDetails,
           ),
         ],
         if (toolkitBlockers.isNotEmpty) ...[
@@ -604,6 +713,19 @@ class _BuildPlanReport extends StatelessWidget {
             description: copy.toolkitBlockersBody,
             blockers: toolkitBlockers,
             copy: copy,
+            openVoiceDetails: openVoiceDetails,
+            openingVoiceDetails: openingVoiceDetails,
+          ),
+        ],
+        if (actionError case final actionError?) ...[
+          const SizedBox(height: 8),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              actionError,
+              key: const Key('revision3-project-build-plan-action-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ),
         ],
         const SizedBox(height: 8),
@@ -768,6 +890,8 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
     required this.description,
     required this.blockers,
     required this.copy,
+    required this.openVoiceDetails,
+    required this.openingVoiceDetails,
     super.key,
   });
 
@@ -776,6 +900,8 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
   final String description;
   final List<AuthoringRevision3ProjectBuildBlocker> blockers;
   final Revision3ProjectBuildPlanCopy copy;
+  final VoidCallback? openVoiceDetails;
+  final bool openingVoiceDetails;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -807,7 +933,18 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           for (var index = 0; index < blockers.length; index++) ...[
-            _BuildPlanBlockerRow(blocker: blockers[index], copy: copy),
+            _BuildPlanBlockerRow(
+              blocker: blockers[index],
+              copy: copy,
+              openVoiceDetails:
+                  openVoiceDetails != null &&
+                      revision3ProjectBuildPlanHasExactVoiceDetails(
+                        blockers[index].reason,
+                      )
+                  ? openVoiceDetails
+                  : null,
+              openingVoiceDetails: openingVoiceDetails,
+            ),
             if (index != blockers.length - 1) const Divider(height: 12),
           ],
         ],
@@ -817,10 +954,17 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
 }
 
 class _BuildPlanBlockerRow extends StatelessWidget {
-  const _BuildPlanBlockerRow({required this.blocker, required this.copy});
+  const _BuildPlanBlockerRow({
+    required this.blocker,
+    required this.copy,
+    required this.openVoiceDetails,
+    required this.openingVoiceDetails,
+  });
 
   final AuthoringRevision3ProjectBuildBlocker blocker;
   final Revision3ProjectBuildPlanCopy copy;
+  final VoidCallback? openVoiceDetails;
+  final bool openingVoiceDetails;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -845,9 +989,45 @@ class _BuildPlanBlockerRow extends StatelessWidget {
           ),
         ],
       ),
+      if (openVoiceDetails != null) ...[
+        const SizedBox(height: 4),
+        Semantics(
+          liveRegion: openingVoiceDetails,
+          label: openingVoiceDetails
+              ? copy.actionInProgressSemanticsLabel
+              : null,
+          child: TextButton.icon(
+            key: ValueKey(
+              'revision3-project-build-plan-voice-details-${blocker.reason.name}',
+            ),
+            onPressed: openingVoiceDetails ? null : openVoiceDetails,
+            icon: openingVoiceDetails
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.arrow_forward),
+            label: Text(copy.openVoiceDetailsLabel),
+          ),
+        ),
+      ],
     ],
   );
 }
+
+@visibleForTesting
+bool revision3ProjectBuildPlanHasExactVoiceDetails(
+  AuthoringRevision3ProjectBuildBlockReason reason,
+) => switch (reason) {
+  AuthoringRevision3ProjectBuildBlockReason.voiceTargetUnresolved ||
+  AuthoringRevision3ProjectBuildBlockReason.voiceTargetAmbiguous ||
+  AuthoringRevision3ProjectBuildBlockReason.voiceAddUnqualified ||
+  AuthoringRevision3ProjectBuildBlockReason.voiceSelectedTakeMissing ||
+  AuthoringRevision3ProjectBuildBlockReason.voiceSelectedTakeNotApproved ||
+  AuthoringRevision3ProjectBuildBlockReason.voiceSelectedTakeCodecUnqualified =>
+    true,
+  _ => false,
+};
 
 class _TechnicalSeals extends StatelessWidget {
   const _TechnicalSeals({required this.plan, required this.copy});

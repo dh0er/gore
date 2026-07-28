@@ -140,7 +140,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('narrow view stacks cleanly and keeps general dialog reachable', (
+  testWidgets('narrow view stacks cleanly and keeps final dialog reachable', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(360, 640));
@@ -160,16 +160,15 @@ void main() {
     expect(find.byKey(const Key('revision3-quest-journey-narrow')), findsOne);
     expect(tester.takeException(), isNull);
 
-    final general = find.byKey(
-      const Key('revision3-quest-journey-general-dialog'),
+    final lastLine = find.byKey(
+      const Key('revision3-quest-journey-dialog-line-2'),
     );
     await tester.scrollUntilVisible(
-      general,
+      lastLine,
       350,
       scrollable: find.byType(Scrollable).first,
     );
-    expect(general, findsOne);
-    expect(find.text('General dialog'), findsOne);
+    expect(lastLine, findsOne);
     expect(find.text('Dialog line 3'), findsOne);
     expect(tester.takeException(), isNull);
   });
@@ -573,7 +572,7 @@ void main() {
   );
 
   testWidgets(
-    'German narrow view localizes actions, boundaries and general dialog',
+    'German narrow view localizes actions, boundaries and objective dialogs',
     (tester) async {
       await _setSurfaceSize(tester, const Size(360, 700));
       final projection = await _projection(german: true);
@@ -619,24 +618,20 @@ void main() {
       await tester.pumpAndSettle();
       expect(transitionEdits, 1);
 
-      final general = find.byKey(
-        const Key('revision3-quest-journey-general-dialog'),
+      final lastLine = find.byKey(
+        const Key('revision3-quest-journey-dialog-line-2'),
       );
       await tester.scrollUntilVisible(
-        general,
+        lastLine,
         350,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('Allgemeiner Dialog'), findsOne);
       expect(find.text('Dialogzeile 3'), findsOne);
       expect(find.textContaining('Text in 1 Sprache'), findsNWidgets(4));
       expect(find.textContaining('0 Sprachaufnahmen'), findsNWidgets(4));
 
-      final generalLine = find.byKey(
-        const Key('revision3-quest-journey-dialog-line-2'),
-      );
-      await tester.ensureVisible(generalLine);
-      await tester.tap(generalLine);
+      await tester.ensureVisible(lastLine);
+      await tester.tap(lastLine);
       await tester.pumpAndSettle();
       expect(opened?.lineId, _lineIds[1]);
 
@@ -649,7 +644,6 @@ void main() {
         'Main Quest',
         'Objectives',
         'Original fixed behavior',
-        'General dialog',
         'Linked dialog',
         'Not used',
         'Direct trigger allowed',
@@ -711,7 +705,6 @@ void main() {
       find.text('No dialog is linked to this objective.'),
       findsNWidgets(3),
     );
-    expect(find.text('No general dialog is linked to this Quest.'), findsOne);
     expect(find.textContaining('No dialog exists in the game'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -858,11 +851,11 @@ Map<String, Object?> _contentIndexJson({
         ];
   final lineLabels = german ? _germanLineLabels : _lineLabels;
   final bindings = emptyTranscript
-      ? const <({int lineIndex, int? slot})>[]
-      : <({int lineIndex, int? slot})>[
+      ? const <({int lineIndex, int slot})>[]
+      : <({int lineIndex, int slot})>[
           (lineIndex: 2, slot: 1),
           (lineIndex: 0, slot: 1),
-          (lineIndex: 1, slot: null),
+          (lineIndex: 1, slot: 3),
         ];
   final lineCount = emptyTranscript ? 0 : 3;
   return <String, Object?>{
@@ -891,6 +884,10 @@ Map<String, Object?> _contentIndexJson({
         kind: 'quest_draft',
         displayName: title,
         revision: 4,
+        origin: <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_FIND_HOMER',
+        },
         summary: <String, Object?>{
           'technical_id': 'GORE_FIND_HOMER',
           'title': title,
@@ -911,11 +908,12 @@ Map<String, Object?> _contentIndexJson({
           for (final binding in bindings)
             _reference(
               role: 'quest_transcript_line',
-              qualifier: binding.slot?.toString(),
+              qualifier: binding.slot.toString(),
               targetId: _lineIds[binding.lineIndex],
               expectedKind: 'dialog_line',
             ),
         ],
+        assetReferences: _questCollisionAssetReferences,
       ),
       _entity(
         id: revision3QuestOutlineModuleId,
@@ -945,6 +943,11 @@ Map<String, Object?> _contentIndexJson({
         references: <Object?>[
           _reference(
             role: 'origin_owner',
+            targetId: revision3QuestOutlineQuestId,
+            expectedKind: 'quest_draft',
+          ),
+          _reference(
+            role: 'script_owner',
             targetId: revision3QuestOutlineQuestId,
             expectedKind: 'quest_draft',
           ),
@@ -980,7 +983,15 @@ Map<String, Object?> _contentIndexJson({
           },
         ),
     ],
-    'assets': <Object?>[],
+    'assets': <Object?>[
+      <String, Object?>{
+        'sha256': revision3QuestOutlineArtifactSha,
+        'byte_len': 123,
+        'media_type':
+            'application/vnd.gore.quest-collision-capability+json;version=2',
+        'class': 'quest_collision_artifact',
+      },
+    ],
   };
 }
 
@@ -992,6 +1003,7 @@ Map<String, Object?> _entity({
   required Map<String, Object?> summary,
   Map<String, Object?>? origin,
   List<Object?> references = const <Object?>[],
+  List<Object?> assetReferences = const <Object?>[],
 }) => <String, Object?>{
   'id': id,
   'kind': kind,
@@ -1005,8 +1017,20 @@ Map<String, Object?> _entity({
       },
   'summary': <String, Object?>{'kind': kind, 'data': summary},
   'references': references,
-  'asset_references': <Object?>[],
+  'asset_references': assetReferences,
 };
+
+const _questCollisionAssetReferences = <Object?>[
+  <String, Object?>{
+    'role': 'quest_collision_artifact',
+    'sha256': revision3QuestOutlineArtifactSha,
+    'byte_len': 123,
+    'logical_name': null,
+    'expected_media_type':
+        'application/vnd.gore.quest-collision-capability+json;version=2',
+    'resolution': 'resolved',
+  },
+];
 
 Map<String, Object?> _reference({
   required String role,

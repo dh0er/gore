@@ -146,7 +146,7 @@ final class Revision3ProjectCompilerCheckSnapshot {
 
   Revision3TestReleaseCheck toTestReleaseCheck({
     required AppLocalizations l10n,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
   }) {
     final state = checkState;
     final evidence = isEvaluated

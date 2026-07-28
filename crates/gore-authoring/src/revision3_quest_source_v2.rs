@@ -1429,7 +1429,7 @@ mod tests {
             );
             quest.transcript = vec![QuestTranscriptBindingV1 {
                 line: TypedRef::new(project_id, line_id, EntityKind::DialogLine),
-                objective_slot: Some(1),
+                objective_slot: 1,
             }];
             quest.clone()
         };

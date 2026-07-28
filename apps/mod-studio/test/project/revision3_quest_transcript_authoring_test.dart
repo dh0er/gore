@@ -18,6 +18,10 @@ const _slotId = '33333333333333333333333333333333';
 const _takeId = '44444444444444444444444444444444';
 const _questId = '55555555555555555555555555555555';
 const _moduleId = '66666666666666666666666666666666';
+const _collisionSha =
+    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const _collisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -54,34 +58,77 @@ void main() {
       () => Revision3ContentIndex.fromJsonObject(foreignTarget),
       throwsFormatException,
     );
+
+    final missingSlots = _contentIndexJson();
+    final slotlessQuest = ((missingSlots['entities']! as List)[4] as Map)
+        .cast<String, Object?>();
+    final slotlessSummary = (slotlessQuest['summary']! as Map)
+        .cast<String, Object?>();
+    (slotlessSummary['data']! as Map).remove('objective_slots');
+    expect(
+      () => Revision3ContentIndex.fromJsonObject(missingSlots),
+      throwsFormatException,
+    );
+
+    for (final slots in <List<Object?>>[
+      <Object?>[],
+      <Object?>[1],
+    ]) {
+      final mismatchedSlots = _contentIndexJson();
+      final mismatchedQuest =
+          ((mismatchedSlots['entities']! as List)[4] as Map);
+      final mismatchedSummary = mismatchedQuest['summary']! as Map;
+      (mismatchedSummary['data']! as Map)['objective_slots'] = slots;
+      expect(
+        () => Revision3ContentIndex.fromJsonObject(mismatchedSlots),
+        throwsFormatException,
+      );
+    }
+
+    final nullSlottedTranscript = _contentIndexJson();
+    final nullSlottedQuest =
+        ((nullSlottedTranscript['entities']! as List)[4] as Map);
+    ((nullSlottedQuest['references']! as List)[1] as Map)['qualifier'] = null;
+    expect(
+      () => Revision3ContentIndex.fromJsonObject(nullSlottedTranscript),
+      throwsFormatException,
+    );
+
+    for (final mutation in <void Function(Map)>[
+      (module) =>
+          (module['origin'] as Map)['generator_id'] = 'old.quest-generator',
+      (module) => (module['origin'] as Map)['generator_version'] = 2,
+      (module) =>
+          ((module['summary'] as Map)['data'] as Map)['generator_version'] = 2,
+    ]) {
+      final oldGenerator = _contentIndexJson();
+      final module = (oldGenerator['entities']! as List)[5] as Map;
+      mutation(module);
+      expect(
+        () => Revision3ContentIndex.fromJsonObject(oldGenerator),
+        throwsFormatException,
+      );
+    }
   });
 
-  test(
-    'ContentIndex diagnoses truthful unresolved Quest refs while authoring rejects them',
-    () async {
-      for (final referenceIndex in <int>[0, 1]) {
-        final unresolved = _contentIndexJson();
-        final quest = ((unresolved['entities']! as List)[4] as Map)
-            .cast<String, Object?>();
-        final reference = (quest['references']! as List)[referenceIndex] as Map;
-        final target = (reference['target']! as Map).cast<String, Object?>();
-        target['entity_id'] = referenceIndex == 0
-            ? '77777777777777777777777777777777'
-            : '88888888888888888888888888888888';
-        reference['resolution'] = 'missing_entity';
+  test('ContentIndex rejects unresolved Quest closure references', () {
+    for (final referenceIndex in <int>[0, 1]) {
+      final unresolved = _contentIndexJson();
+      final quest = ((unresolved['entities']! as List)[4] as Map)
+          .cast<String, Object?>();
+      final reference = (quest['references']! as List)[referenceIndex] as Map;
+      final target = (reference['target']! as Map).cast<String, Object?>();
+      target['entity_id'] = referenceIndex == 0
+          ? '77777777777777777777777777777777'
+          : '88888888888888888888888888888888';
+      reference['resolution'] = 'missing_entity';
 
-        final index = Revision3ContentIndex.fromJsonObject(unresolved);
-        expect(index.entityById(_questId), isNotNull);
-        await expectLater(
-          _service(
-            index: index,
-            head: manifestHead(4096, 'b'),
-          ).load(questId: _questId, expectedQuestRevision: 4),
-          throwsA(isA<Revision3QuestTranscriptStaleCheckpointException>()),
-        );
-      }
-    },
-  );
+      expect(
+        () => Revision3ContentIndex.fromJsonObject(unresolved),
+        throwsFormatException,
+      );
+    }
+  });
 
   test(
     'projection preserves transcript order, stable slots and Voice coverage',
@@ -179,6 +226,23 @@ void main() {
       expect(captured!.bindings.single.objectiveSlot, 1);
     },
   );
+
+  test('draft rejects an inactive objective slot', () async {
+    final head = manifestHead(4096, 'b');
+    final index = Revision3ContentIndex.fromJsonObject(_contentIndexJson());
+    final service = _service(index: index, head: head);
+    final projection = await service.load(
+      questId: _questId,
+      expectedQuestRevision: 4,
+    );
+    final draft = Revision3QuestTranscriptDraft.fromProjection(projection);
+    final detached = draft.detachAt(0);
+
+    expect(
+      () => draft.attach(detached.line, objectiveSlot: 99),
+      throwsFormatException,
+    );
+  });
 
   test('text preview is lazy and exact-head bound', () async {
     final head = manifestHead(4096, 'b');
@@ -1104,6 +1168,10 @@ Map<String, Object?> _contentIndexJson() => <String, Object?>{
       kind: 'quest_draft',
       displayName: 'Secure the gate',
       revision: 4,
+      origin: <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_SECURE_GATE',
+      },
       summaryData: <String, Object?>{
         'technical_id': 'GORE_SECURE_GATE',
         'title': 'Secure the gate',
@@ -1128,6 +1196,16 @@ Map<String, Object?> _contentIndexJson() => <String, Object?>{
           expectedKind: 'dialog_line',
         ),
       ],
+      assetReferences: <Object?>[
+        <String, Object?>{
+          'role': 'quest_collision_artifact',
+          'sha256': _collisionSha,
+          'byte_len': 123,
+          'logical_name': null,
+          'expected_media_type': _collisionMediaType,
+          'resolution': 'resolved',
+        },
+      ],
     ),
     _entity(
       id: _moduleId,
@@ -1138,6 +1216,7 @@ Map<String, Object?> _contentIndexJson() => <String, Object?>{
         ownerId: _questId,
         ownerKind: 'quest_draft',
         generatorId: 'gore-authoring.draft-quest-skeleton',
+        generatorVersion: 4,
       ),
       summaryData: <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
@@ -1155,10 +1234,22 @@ Map<String, Object?> _contentIndexJson() => <String, Object?>{
           targetId: _questId,
           expectedKind: 'quest_draft',
         ),
+        _reference(
+          role: 'script_owner',
+          targetId: _questId,
+          expectedKind: 'quest_draft',
+        ),
       ],
     ),
   ],
-  'assets': <Object?>[],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': _collisionSha,
+      'byte_len': 123,
+      'media_type': _collisionMediaType,
+      'class': 'quest_collision_artifact',
+    },
+  ],
 };
 
 Map<String, Object?> _entity({
@@ -1169,6 +1260,7 @@ Map<String, Object?> _entity({
   required Map<String, Object?> summaryData,
   Map<String, Object?>? origin,
   List<Object?> references = const <Object?>[],
+  List<Object?> assetReferences = const <Object?>[],
 }) => <String, Object?>{
   'id': id,
   'kind': kind,
@@ -1179,17 +1271,18 @@ Map<String, Object?> _entity({
       <String, Object?>{'type': 'new', 'authored_runtime_id': 'AUTHORED_$kind'},
   'summary': <String, Object?>{'kind': kind, 'data': summaryData},
   'references': references,
-  'asset_references': <Object?>[],
+  'asset_references': assetReferences,
 };
 
 Map<String, Object?> _generatedOrigin({
   required String ownerId,
   required String ownerKind,
   required String generatorId,
+  int generatorVersion = 1,
 }) => <String, Object?>{
   'type': 'generated',
   'generator_id': generatorId,
-  'generator_version': 1,
+  'generator_version': generatorVersion,
   'owner': <String, Object?>{
     'project_id': _projectId,
     'entity_id': ownerId,

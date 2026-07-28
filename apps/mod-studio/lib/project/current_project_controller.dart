@@ -17,6 +17,7 @@ import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_dialog_voice_slot_creation_authoring.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
+import 'revision3_item_patch_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_npc_greeting_authoring.dart';
 import 'revision3_npc_profile_edit_authoring.dart';
@@ -495,6 +496,25 @@ bool _revision3DialogLocalizationEditErrorIsStale(String code) => const {
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TARGET_CONFLICT',
 }.contains(code);
 
+bool _revision3ItemPatchErrorIsStale(String code) => const {
+  'AUTHORING_REVISION3_ITEM_PATCH_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_ENTITY_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_FIELD_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROVENANCE_CONFLICT',
+  'AUTHORING_REVISION3_ITEM_PATCH_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3ItemPatchErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_ITEM_PATCH_INPUT_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_INVALID',
+  'AUTHORING_REVISION3_ITEM_PATCH_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_REVISION_LIMIT',
+  'AUTHORING_REVISION3_ITEM_PATCH_SIGNED_WIRE_LIMIT',
+}.contains(code);
+
 final class Revision3ManagedCompilerCheckRequiresReopenException
     implements Exception {
   const Revision3ManagedCompilerCheckRequiresReopenException();
@@ -707,6 +727,21 @@ abstract interface class ManagedRevision3DialogLocalizationReadLease {
 /// Optional exact-current, evidence-only whole-project build planning.
 abstract interface class ManagedRevision3ProjectBuildPlanLease {
   Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1();
+}
+
+/// Optional exact-current authority for native Item schema discovery and one
+/// managed ItemPatch publication. It stays separate so unrelated leases and
+/// test doubles do not gain Item mutation authority implicitly.
+abstract interface class ManagedRevision3ItemPatchLease {
+  bool get supportsItemPatch;
+
+  void markRequiresReopenAfterItemPatchUncertainty();
+
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1();
+
+  Future<Revision3ItemPatchPublication> prepareAndPublishItemPatchV1({
+    required Revision3ItemPatchTechnicalPlan plan,
+  });
 }
 
 /// Optional exact-current capability for full authored-text editing. Keeping
@@ -1014,7 +1049,8 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3ReviewedDataAssetBuildLease,
         ManagedRevision3RestorableProjectExportLease,
         ManagedRevision3StoryDraftRemovalLease,
-        ManagedRevision3ProjectBuildPlanLease {
+        ManagedRevision3ProjectBuildPlanLease,
+        ManagedRevision3ItemPatchLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -1049,6 +1085,22 @@ final class _ManagedRevision3SessionLease
 
   @override
   bool get supportsProjectHistory => _session.supportsProjectHistory;
+
+  @override
+  bool get supportsItemPatch => _session.supportsItemPatch;
+
+  @override
+  void markRequiresReopenAfterItemPatchUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  Future<AuthoringRevision3ItemCatalogReadResult> readItemCatalogV1() =>
+      _session.readItemCatalogV1();
+
+  @override
+  Future<Revision3ItemPatchPublication> prepareAndPublishItemPatchV1({
+    required Revision3ItemPatchTechnicalPlan plan,
+  }) => _session.prepareAndPublishItemPatchV1(plan: plan);
 
   @override
   Future<Revision3ProjectHistorySnapshot> readProjectHistoryV1() =>
@@ -2668,6 +2720,245 @@ final class CurrentProjectCoordinator
         );
       }
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read the native embedded Item schema for one exact visible managed R3
+  /// checkpoint. The result is chooser evidence only and grants no build,
+  /// deployment, game, save, runtime, or publication authority.
+  Future<AuthoringRevision3ItemCatalogReadResult>
+  readCurrentRevision3ItemCatalogV1({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Item authoring is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ItemPatchRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ItemPatchStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ItemPatchLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease has no Item authoring capability',
+      );
+    }
+    final itemLease = lease as ManagedRevision3ItemPatchLease;
+    if (!itemLease.supportsItemPatch) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 Store has no Item authoring capability',
+      );
+    }
+    try {
+      final result = await itemLease.readItemCatalogV1();
+      final matches =
+          identical(_current, current) &&
+          identical(current.lease, lease) &&
+          !lease.requiresReopen &&
+          lease.root.path == expectedRoot &&
+          lease.projectId == expectedProjectId &&
+          lease.projectRevision == expectedProjectRevision &&
+          lease.head.canonicalJson == expectedHead.canonicalJson &&
+          result.head.canonicalJson == expectedHead.canonicalJson &&
+          result.projectId == expectedProjectId &&
+          result.projectRevision == expectedProjectRevision &&
+          result.catalogAuthority ==
+              AuthoringRevision3ItemCatalogAuthority
+                  .nativeEmbeddedSchemaExactCurrentProject &&
+          result.buildStatus ==
+              AuthoringRevision3ItemCatalogBuildStatus.notEvaluated &&
+          result.runtimeStatus ==
+              AuthoringRevision3ItemRuntimeStatus.runtimeUnqualified &&
+          result.publicationStatus ==
+              AuthoringRevision3ItemCatalogPublicationStatus.notApplicable;
+      if (!matches) {
+        itemLease.markRequiresReopenAfterItemPatchUncertainty();
+        throw const Revision3ItemPatchRequiresReopenException();
+      }
+      return result;
+    } on ModFfiException catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemPatchErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      itemLease.markRequiresReopenAfterItemPatchUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3ItemPatchRequiresReopenException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is CurrentProjectOperationUnsupportedException ||
+          error is Revision3ItemPatchUnsupportedSchemaException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      itemLease.markRequiresReopenAfterItemPatchUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3ItemPatchRequiresReopenException(),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one exact ItemPatch create, update, or revert through the app-wide
+  /// managed-project lane. The lease re-reads native schema evidence, prepares
+  /// only, fully reopens, fixed-head-CAS publishes, and reopens the published
+  /// generation before returning.
+  Future<Revision3ItemPatchPublication>
+  prepareAndPublishCurrentRevision3ItemPatchV1({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3ItemPatchTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Item authoring is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ItemPatchRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        plan.expectedProjectId != expectedProjectId ||
+        plan.expectedProjectRevision != expectedProjectRevision ||
+        plan.expectedHead.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ItemPatchStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ItemPatchLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease has no Item authoring capability',
+      );
+    }
+    final itemLease = lease as ManagedRevision3ItemPatchLease;
+    if (!itemLease.supportsItemPatch) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 Store has no Item authoring capability',
+      );
+    }
+    final expectedChange = switch ((plan.action, plan.expectedEntityRevision)) {
+      (AuthoringRevision3ItemPatchAction.remove, _) =>
+        AuthoringRevision3ItemPatchChange.removed,
+      (AuthoringRevision3ItemPatchAction.upsert, null) =>
+        AuthoringRevision3ItemPatchChange.created,
+      _ => AuthoringRevision3ItemPatchChange.updated,
+    };
+    final expectedEntityRevision = switch (expectedChange) {
+      AuthoringRevision3ItemPatchChange.created => 0,
+      AuthoringRevision3ItemPatchChange.updated =>
+        plan.expectedEntityRevision! + 1,
+      AuthoringRevision3ItemPatchChange.removed => null,
+    };
+    try {
+      final previousHead = lease.head.canonicalJson;
+      final publication = await itemLease.prepareAndPublishItemPatchV1(
+        plan: plan,
+      );
+      final matches =
+          identical(_current, current) &&
+          identical(current.lease, lease) &&
+          !lease.requiresReopen &&
+          lease.root.path == expectedRoot &&
+          lease.projectId == expectedProjectId &&
+          lease.projectRevision == expectedProjectRevision + 1 &&
+          lease.head.canonicalJson != previousHead &&
+          publication.projectId == expectedProjectId &&
+          publication.projectId == lease.projectId &&
+          publication.projectRevision == expectedProjectRevision + 1 &&
+          publication.projectRevision == lease.projectRevision &&
+          publication.entityId == plan.entityId &&
+          publication.entityRevision == expectedEntityRevision &&
+          publication.change == expectedChange &&
+          publication.vanillaClass == plan.vanillaClass;
+      if (!matches) {
+        itemLease.markRequiresReopenAfterItemPatchUncertainty();
+        throw const Revision3ItemPatchRequiresReopenException();
+      }
+      return publication;
+    } on ModFfiException catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemPatchErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error.code == 'AUTHORING_REVISION3_ITEM_PATCH_NO_CHANGES') {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchNoChangesException(),
+          stackTrace,
+        );
+      }
+      if (_revision3ItemPatchErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      itemLease.markRequiresReopenAfterItemPatchUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3ItemPatchRequiresReopenException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ItemPatchRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ArgumentError ||
+          error is FormatException ||
+          error is UnsupportedError ||
+          error is Revision3ItemPatchNoChangesException ||
+          error is Revision3ItemPatchStaleCheckpointException ||
+          error is Revision3ItemPatchUnsupportedSchemaException ||
+          error is CurrentProjectOperationUnsupportedException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      itemLease.markRequiresReopenAfterItemPatchUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3ItemPatchRequiresReopenException(),
+        stackTrace,
+      );
     } finally {
       _refreshCurrentIfUnchanged(current);
     }

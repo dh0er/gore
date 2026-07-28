@@ -12,6 +12,10 @@ const _moduleId = '44444444444444444444444444444444';
 const _npcModuleId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _collisionSha =
+    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const _collisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
 
 void main() {
   test('Quest and NPC expose four canonical productive sections', () {
@@ -924,6 +928,8 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               'technical_id': 'GORE_FIND_HOMER',
               'title': 'Find Homer',
               'objective_title': 'Ask Asghan about Homer',
+              'objective_slots': <Object?>[1],
+              'transcript_count': 0,
               'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
               'parent_runtime_class': 'B_Quest_FindHomer_C',
               'giver_runtime_unique_name': 'ASGHAN',
@@ -941,7 +947,16 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               'resolution': 'resolved',
             },
           ],
-          'asset_references': <Object?>[],
+          'asset_references': <Object?>[
+            <String, Object?>{
+              'role': 'quest_collision_artifact',
+              'sha256': _collisionSha,
+              'byte_len': 123,
+              'logical_name': null,
+              'expected_media_type': _collisionMediaType,
+              'resolution': 'resolved',
+            },
+          ],
         },
         <String, Object?>{
           'id': _npcModuleId,
@@ -949,13 +964,19 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'display_name': 'Gate Guard source',
           'revision': 0,
           'origin': <String, Object?>{
-            'type': 'new',
-            'authored_runtime_id': 'GORE_GATE_GUARD_SOURCE',
+            'type': 'generated',
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
+            'generator_version': 1,
+            'owner': <String, Object?>{
+              'project_id': _projectA,
+              'entity_id': _npcId,
+              'expected_kind': 'npc_draft',
+            },
           },
           'summary': <String, Object?>{
             'kind': 'script_module',
             'data': <String, Object?>{
-              'generator_id': 'workbench.fixture.npc',
+              'generator_id': 'gore-authoring.logical-npc-clone-draft',
               'generator_version': 1,
               'module_namespace': 'PROJECT.NPCS.GATEGUARD',
               'module_relative_path': 'Project/Npcs/GateGuard.as',
@@ -965,7 +986,28 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               },
             },
           },
-          'references': <Object?>[],
+          'references': <Object?>[
+            <String, Object?>{
+              'role': 'origin_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': _projectA,
+                'entity_id': _npcId,
+                'expected_kind': 'npc_draft',
+              },
+              'resolution': 'resolved',
+            },
+            <String, Object?>{
+              'role': 'script_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': _projectA,
+                'entity_id': _npcId,
+                'expected_kind': 'npc_draft',
+              },
+              'resolution': 'resolved',
+            },
+          ],
           'asset_references': <Object?>[],
         },
         <String, Object?>{
@@ -1008,14 +1050,20 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'display_name': 'Find Homer source',
           'revision': entityRevision,
           'origin': <String, Object?>{
-            'type': 'new',
-            'authored_runtime_id': 'GORE_FIND_HOMER_SOURCE',
+            'type': 'generated',
+            'generator_id': 'gore-authoring.draft-quest-skeleton',
+            'generator_version': 4,
+            'owner': <String, Object?>{
+              'project_id': _projectA,
+              'entity_id': _questId,
+              'expected_kind': 'quest_draft',
+            },
           },
           'summary': <String, Object?>{
             'kind': 'script_module',
             'data': <String, Object?>{
-              'generator_id': 'workbench.fixture',
-              'generator_version': 1,
+              'generator_id': 'gore-authoring.draft-quest-skeleton',
+              'generator_version': 4,
               'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
               'module_relative_path': 'Project/Quests/FindHomer.as',
               'status': <String, Object?>{
@@ -1024,9 +1072,37 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               },
             },
           },
-          'references': <Object?>[],
+          'references': <Object?>[
+            <String, Object?>{
+              'role': 'origin_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': _projectA,
+                'entity_id': _questId,
+                'expected_kind': 'quest_draft',
+              },
+              'resolution': 'resolved',
+            },
+            <String, Object?>{
+              'role': 'script_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': _projectA,
+                'entity_id': _questId,
+                'expected_kind': 'quest_draft',
+              },
+              'resolution': 'resolved',
+            },
+          ],
           'asset_references': <Object?>[],
         },
       ],
-      'assets': <Object?>[],
+      'assets': <Object?>[
+        <String, Object?>{
+          'sha256': _collisionSha,
+          'byte_len': 123,
+          'media_type': _collisionMediaType,
+          'class': 'quest_collision_artifact',
+        },
+      ],
     });

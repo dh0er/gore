@@ -833,6 +833,10 @@ Map<String, Object?> _contentIndexJson({
       kind: 'npc_draft',
       displayName: 'Managed Guard',
       revision: npcRevision,
+      origin: <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GoreManagedGuard',
+      },
       summaryData: <String, Object?>{
         'unique_name': 'GoreManagedGuard',
         'module_namespace': 'GoreMods.Npcs.ManagedGuard',
@@ -878,6 +882,11 @@ Map<String, Object?> _contentIndexJson({
       references: <Object?>[
         _reference(
           role: 'origin_owner',
+          targetId: _npcId,
+          expectedKind: 'npc_draft',
+        ),
+        _reference(
+          role: 'script_owner',
           targetId: _npcId,
           expectedKind: 'npc_draft',
         ),

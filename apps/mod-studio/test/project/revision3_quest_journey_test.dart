@@ -6,7 +6,7 @@ import 'package:gore_mod/project/revision3_quest_transcript_authoring.dart';
 
 import '../support/revision3_quest_outline_fixture.dart';
 
-typedef _TranscriptBinding = ({int lineIndex, int? objectiveSlot});
+typedef _TranscriptBinding = ({int lineIndex, int objectiveSlot});
 
 const _otherQuestId = '60000000000000000000000000000000';
 const _otherModuleId = '70000000000000000000000000000000';
@@ -18,7 +18,7 @@ void main() {
       final parts = await _JourneyFixture(
         bindings: const <_TranscriptBinding>[
           (lineIndex: 1, objectiveSlot: 3),
-          (lineIndex: 0, objectiveSlot: null),
+          (lineIndex: 0, objectiveSlot: 2),
           (lineIndex: 2, objectiveSlot: 1),
         ],
         sharedLineIndex: 1,
@@ -65,7 +65,6 @@ void main() {
         journey.orderedDialogLines.map((line) => line.transcriptIndex),
         <int>[0, 1, 2],
       );
-      expect(journey.generalDialogLines.single.lineId, _lineId(0));
       expect(
         journey.objectives
             .singleWhere((objective) => objective.stableObjectiveSlot == 3)
@@ -73,6 +72,14 @@ void main() {
             .single
             .lineId,
         _lineId(1),
+      );
+      expect(
+        journey.objectives
+            .singleWhere((objective) => objective.stableObjectiveSlot == 2)
+            .dialogLines
+            .single
+            .lineId,
+        _lineId(0),
       );
       expect(
         journey.objectives
@@ -91,7 +98,7 @@ void main() {
 
   test('derives the two persisted Draft setup stages', () async {
     final completeParts = await _JourneyFixture(
-      bindings: const <_TranscriptBinding>[(lineIndex: 0, objectiveSlot: null)],
+      bindings: const <_TranscriptBinding>[(lineIndex: 0, objectiveSlot: 1)],
     ).load();
     final complete = completeParts.compose().draftSetup;
 
@@ -127,7 +134,7 @@ void main() {
       final fixture = _JourneyFixture(
         bindings: const <_TranscriptBinding>[
           (lineIndex: 0, objectiveSlot: 1),
-          (lineIndex: 1, objectiveSlot: null),
+          (lineIndex: 1, objectiveSlot: 2),
         ],
         sharedLineIndex: 0,
       );
@@ -189,14 +196,14 @@ void main() {
     final parts = await _JourneyFixture(
       bindings: List<_TranscriptBinding>.generate(
         revision3QuestJourneyMaxDialogLines,
-        (index) => (lineIndex: index, objectiveSlot: null),
+        (index) => (lineIndex: index, objectiveSlot: 1),
       ),
     ).load(onLocalizationRead: () => localizationReads++);
 
     final journey = parts.compose();
 
     expect(journey.orderedDialogLines, hasLength(256));
-    expect(journey.generalDialogLines, hasLength(256));
+    expect(journey.objectives.first.dialogLines, hasLength(256));
     expect(localizationReads, 0);
   });
 
@@ -204,7 +211,7 @@ void main() {
     final fixture = _JourneyFixture(
       bindings: List<_TranscriptBinding>.generate(
         revision3QuestJourneyMaxDialogLines + 1,
-        (index) => (lineIndex: index, objectiveSlot: null),
+        (index) => (lineIndex: index, objectiveSlot: 1),
       ),
     );
 
@@ -385,7 +392,15 @@ final class _JourneyFixture {
             namespace: 'PROJECT.QUESTS.SHAREDREVIEW',
           ),
       ],
-      'assets': <Object?>[],
+      'assets': <Object?>[
+        <String, Object?>{
+          'sha256': revision3QuestOutlineArtifactSha,
+          'byte_len': 123,
+          'media_type':
+              'application/vnd.gore.quest-collision-capability+json;version=2',
+          'class': 'quest_collision_artifact',
+        },
+      ],
     };
   }
 
@@ -394,6 +409,10 @@ final class _JourneyFixture {
     kind: 'quest_draft',
     displayName: 'Find Homer',
     revision: questRevision,
+    origin: <String, Object?>{
+      'type': 'new',
+      'authored_runtime_id': 'GORE_FIND_HOMER',
+    },
     summaryData: <String, Object?>{
       'technical_id': 'GORE_FIND_HOMER',
       'title': 'Find Homer',
@@ -418,11 +437,12 @@ final class _JourneyFixture {
       for (final binding in bindings)
         _reference(
           role: 'quest_transcript_line',
-          qualifier: binding.objectiveSlot?.toString(),
+          qualifier: binding.objectiveSlot.toString(),
           targetId: _lineId(binding.lineIndex),
           expectedKind: 'dialog_line',
         ),
     ],
+    assetReferences: _questCollisionAssetReferences,
   );
 
   Map<String, Object?> _otherQuestEntity(int lineIndex) => _entity(
@@ -430,6 +450,10 @@ final class _JourneyFixture {
     kind: 'quest_draft',
     displayName: 'Review shared report',
     revision: 1,
+    origin: <String, Object?>{
+      'type': 'new',
+      'authored_runtime_id': 'GORE_SHARED_REVIEW',
+    },
     summaryData: <String, Object?>{
       'technical_id': 'GORE_SHARED_REVIEW',
       'title': 'Review shared report',
@@ -448,10 +472,12 @@ final class _JourneyFixture {
       ),
       _reference(
         role: 'quest_transcript_line',
+        qualifier: '1',
         targetId: _lineId(lineIndex),
         expectedKind: 'dialog_line',
       ),
     ],
+    assetReferences: _questCollisionAssetReferences,
   );
 
   Map<String, Object?> _moduleEntity({
@@ -477,6 +503,11 @@ final class _JourneyFixture {
     references: <Object?>[
       _reference(
         role: 'origin_owner',
+        targetId: ownerId,
+        expectedKind: 'quest_draft',
+      ),
+      _reference(
+        role: 'script_owner',
         targetId: ownerId,
         expectedKind: 'quest_draft',
       ),
@@ -521,6 +552,7 @@ Map<String, Object?> _entity({
   required Map<String, Object?> summaryData,
   Map<String, Object?>? origin,
   List<Object?> references = const <Object?>[],
+  List<Object?> assetReferences = const <Object?>[],
 }) => <String, Object?>{
   'id': id,
   'kind': kind,
@@ -534,8 +566,20 @@ Map<String, Object?> _entity({
       },
   'summary': <String, Object?>{'kind': kind, 'data': summaryData},
   'references': references,
-  'asset_references': <Object?>[],
+  'asset_references': assetReferences,
 };
+
+const _questCollisionAssetReferences = <Object?>[
+  <String, Object?>{
+    'role': 'quest_collision_artifact',
+    'sha256': revision3QuestOutlineArtifactSha,
+    'byte_len': 123,
+    'logical_name': null,
+    'expected_media_type':
+        'application/vnd.gore.quest-collision-capability+json;version=2',
+    'resolution': 'resolved',
+  },
+];
 
 Map<String, Object?> _generatedOrigin({required String ownerId}) =>
     <String, Object?>{

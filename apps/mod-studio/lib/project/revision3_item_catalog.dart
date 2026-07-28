@@ -14,6 +14,7 @@ enum Revision3ItemCategory {
   food('food'),
   misc('misc'),
   amulet('amulet'),
+  armor('armor'),
   ring('ring'),
   trophy('trophy'),
   writing('writing'),

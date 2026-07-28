@@ -9,13 +9,16 @@ String fieldErrorText(AppLocalizations l10n, FieldError error) {
     NotWholeNumberError() => l10n.validationMustBeWholeNumber,
     NotANumberError() => l10n.validationMustBeNumber,
     NotFiniteError() => l10n.validationMustBeFinite,
-    BelowMinimumError(:final minValue) =>
-      l10n.validationMustBeAtLeast(_numText(minValue)),
-    AboveMaximumError(:final maxValue) =>
-      l10n.validationMustBeAtMost(_numText(maxValue)),
+    BelowMinimumError(:final minValue) => l10n.validationMustBeAtLeast(
+      _numText(minValue),
+    ),
+    AboveMaximumError(:final maxValue) => l10n.validationMustBeAtMost(
+      _numText(maxValue),
+    ),
     NotBoolError() => l10n.validationMustBeBool,
-    NotInEnumError(:final allowed) =>
-      l10n.validationMustBeOneOf(allowed.join(', ')),
+    NotInEnumError(:final allowed) => l10n.validationMustBeOneOf(
+      allowed.join(', '),
+    ),
   };
 }
 
@@ -33,6 +36,6 @@ String modNameErrorText(AppLocalizations l10n, ModNameError error) {
 /// matching the previous interpolation of `num` values.
 String _numText(num n) {
   if (n is int) return n.toString();
-  if (n == n.roundToDouble()) return n.toInt().toString();
-  return n.toString();
+  final text = n.toString();
+  return text.endsWith('.0') ? text.substring(0, text.length - 2) : text;
 }

@@ -299,7 +299,7 @@ fn automatic_root_start(plan: &mut QuestTransitionPlanV1) {
 
 fn attach_transcript(
     project: &mut ProjectRevision3,
-    objective_slot: Option<u16>,
+    objective_slot: u16,
 ) -> Vec<Revision3QuestTranscriptBindingV1> {
     let localization_id = id(0x70);
     let line_id = id(0x71);
@@ -359,7 +359,7 @@ fn v4_edit_preserves_everything_except_plan_contract_and_three_revisions() {
         vec!["Enter the arena", "Defeat the guard", "Report to Asghan"],
     ] {
         let (mut project, basis_head) = project_with_quest(&objective_titles);
-        let transcript = attach_transcript(&mut project, None);
+        let transcript = attach_transcript(&mut project, 1);
         let before = project.clone();
         let old_quest = quest(&before).clone();
         let old_module_entity = before.entities[&id(0x22)].clone();
