@@ -1991,38 +1991,110 @@ abstract class AppLocalizations {
   /// No description provided for @managedDashboardContentCounts.
   ///
   /// In en, this message translates to:
-  /// **'Project content'**
+  /// **'My mod / Changes'**
   String get managedDashboardContentCounts;
+
+  /// No description provided for @managedDashboardChangesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Everything currently saved in this exact project, grouped by what you can work on. Generated helpers stay attached only when their relationship is proven.'**
+  String get managedDashboardChangesDescription;
 
   /// No description provided for @managedDashboardNpcDrafts.
   ///
   /// In en, this message translates to:
-  /// **'NPC drafts'**
+  /// **'Characters'**
   String get managedDashboardNpcDrafts;
 
   /// No description provided for @managedDashboardQuestDrafts.
   ///
   /// In en, this message translates to:
-  /// **'Quest drafts'**
+  /// **'Quests'**
   String get managedDashboardQuestDrafts;
 
   /// No description provided for @managedDashboardDialogLines.
   ///
   /// In en, this message translates to:
-  /// **'Dialog lines'**
+  /// **'Dialog'**
   String get managedDashboardDialogLines;
 
   /// No description provided for @managedDashboardVoiceTakes.
   ///
   /// In en, this message translates to:
-  /// **'Voice takes'**
+  /// **'Voice'**
   String get managedDashboardVoiceTakes;
 
   /// No description provided for @managedDashboardAssets.
   ///
   /// In en, this message translates to:
-  /// **'Assets'**
+  /// **'DataAssets'**
   String get managedDashboardAssets;
+
+  /// No description provided for @managedDashboardItemPatches.
+  ///
+  /// In en, this message translates to:
+  /// **'Items'**
+  String get managedDashboardItemPatches;
+
+  /// No description provided for @managedDashboardLocalizationEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'Project text'**
+  String get managedDashboardLocalizationEntries;
+
+  /// No description provided for @managedDashboardVoiceSlots.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice target'**
+  String get managedDashboardVoiceSlots;
+
+  /// No description provided for @managedDashboardGeneratedScripts.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated script'**
+  String get managedDashboardGeneratedScripts;
+
+  /// No description provided for @managedDashboardSelectedVoiceTake.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected take'**
+  String get managedDashboardSelectedVoiceTake;
+
+  /// No description provided for @managedDashboardTechnicalContent.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical content'**
+  String get managedDashboardTechnicalContent;
+
+  /// No description provided for @managedDashboardTechnicalContentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated or problematic helpers that cannot be safely assigned to an author-facing change.'**
+  String get managedDashboardTechnicalContentDescription;
+
+  /// No description provided for @managedDashboardEmptyChangesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No changes yet'**
+  String get managedDashboardEmptyChangesTitle;
+
+  /// No description provided for @managedDashboardEmptyChangesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Create, Content, or Story to add the first project change. Nothing has been written to the game or a save.'**
+  String get managedDashboardEmptyChangesDescription;
+
+  /// No description provided for @managedDashboardOpenChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Open this exact project change'**
+  String get managedDashboardOpenChange;
+
+  /// No description provided for @managedDashboardChangeActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This project change is no longer current. Reload the project overview and try again.'**
+  String get managedDashboardChangeActionFailed;
 
   /// No description provided for @managedDashboardUnresolvedReferences.
   ///

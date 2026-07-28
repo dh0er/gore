@@ -90,8 +90,11 @@ const _homeCreatedNpcModuleId = '39393939393939393939393939393939';
 const _homeCreatedNpcUniqueName = 'GORE_NORTH_GATE_GUARD';
 const _homeCreatedNpcModuleNamespace = 'GoreMods.Npcs.NorthGateGuard';
 const _homeItemPatchProjectId = '16161616161616161616161616161616';
+const _homeDashboardItemPatchEntityId = '17171717171717171717171717171717';
 const _homeItemPatchVanillaClass = 'ItFo_Apple';
 const _homeItemPatchCatalogLayer = 'base-game.items.g1r.bundled.v1';
+const _homeDashboardLocalizationId = '18181818181818181818181818181818';
+const _homeDashboardLocalizationLocId = 'GORE_DASHBOARD_WARNING';
 
 void main() {
   test(
@@ -1136,7 +1139,11 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('Support is checked'), findsOneWidget);
-      expect(managed.dataAssetListCalls, 1);
+      expect(
+        managed.dataAssetListCalls,
+        2,
+        reason: 'Home and the lazy DataAsset registry each load one snapshot',
+      );
 
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
       await tester.tap(find.byKey(const Key('managed-open-settings')));
@@ -3163,7 +3170,11 @@ void main() {
       expect(find.byKey(const Key('managed-review-problems')), findsNothing);
 
       await _navigateManagedDataAssets(tester);
-      expect(managed.dataAssetListCalls, 1);
+      expect(
+        managed.dataAssetListCalls,
+        2,
+        reason: 'Home and the lazy DataAsset registry each load one snapshot',
+      );
       await _navigateManagedWorkspace(
         tester,
         const Key('revision3-project-workspace-tab-story'),
@@ -3236,7 +3247,7 @@ void main() {
         findsOneWidget,
         reason: 'Content remembers its last secondary route',
       );
-      expect(managed.dataAssetListCalls, 1);
+      expect(managed.dataAssetListCalls, 2);
 
       await _navigateManagedWorkspace(
         tester,
@@ -3380,6 +3391,456 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'Home ItemPatch change lazily opens the exact managed Item class',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeItemPatchManagedLease(
+        root: Directory(r'C:\mods\dashboard-item-patch'),
+        projectId: _homeItemPatchProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _homeDashboardItemPatchContentIndex(
+          lease as _FakeItemPatchManagedLease,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      expect(managed.itemCatalogReadCalls, 0);
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-items')),
+        findsNothing,
+        reason: 'Items remains lazy until the exact change is opened',
+      );
+      await _tapDashboardChange(tester, _homeDashboardItemPatchEntityId);
+
+      expect(managed.itemCatalogReadCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-items')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-items-details-$_homeItemPatchVanillaClass'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-items-authoring-boundary')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Home Quest change opens its exact Story Overview', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = Revision3QuestOutlineFixture();
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-quest'),
+      projectId: revision3QuestOutlineProjectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex(),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+
+    await _tapDashboardChange(tester, revision3QuestOutlineQuestId);
+
+    final selected = find.byKey(
+      const Key(
+        'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+      ),
+    );
+    expect(selected, findsOneWidget);
+    expect(tester.widget<ListTile>(selected).selected, isTrue);
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-story-workbench-section-overview-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              const Key(
+                'revision3-story-workbench-tab-overview-'
+                '$revision3QuestOutlineQuestId',
+              ),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home NPC change opens its exact Story Profile', (tester) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = _npcManagedCompilerFixture();
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-npc'),
+      projectId: revision3NpcInspectionProjectId,
+      projectRevision: 7,
+      head: fixture.head,
+      canonicalProjectJsonValue: fixture.projectJson,
+      contentIndexBuilder: (_) => fixture.contentIndex,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+
+    await _tapDashboardChange(tester, revision3NpcInspectionNpcId);
+
+    final selected = find.byKey(
+      const Key(
+        'revision3-story-workspace-entity-$revision3NpcInspectionNpcId',
+      ),
+    );
+    expect(selected, findsOneWidget);
+    expect(tester.widget<ListTile>(selected).selected, isTrue);
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-story-workbench-section-profile-'
+          '$revision3NpcInspectionNpcId',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              const Key(
+                'revision3-story-workbench-tab-profile-'
+                '$revision3NpcInspectionNpcId',
+              ),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+    expect(
+      find.text(
+        AppLocalizations.of(
+          tester.element(selected),
+        ).managedDashboardChangeActionFailed,
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home DataAsset change opens and expands the exact stage', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = revision3DataAssetNativeGoldenFixture();
+    final stage = AuthoringRevision3DataAssetStageListResult.fromJson(
+      fixture.listResponse(),
+      expectedHead: fixture.stagedHead,
+    ).stages.single;
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-dataasset'),
+      projectId: stage.projectId,
+      projectRevision: stage.stagedProjectRevision,
+      head: fixture.stagedHead,
+      canonicalProjectJsonValue: fixture.stagedProjectJson,
+      contentIndexBuilder: (_) => _homeDashboardDataAssetContentIndex(stage),
+      onDataAssetList: (_) => <AuthoringRevision3DataAssetStage>[stage],
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(managed.dataAssetListCalls, 1);
+    expect(
+      find.byKey(const Key('revision3-dataasset-stage-panel')),
+      findsNothing,
+      reason: 'the registry remains lazy until the exact change is opened',
+    );
+
+    await _tapDashboardChange(tester, stage.targetPath);
+
+    expect(managed.dataAssetListCalls, 3);
+    expect(
+      find.byKey(const Key('revision3-content-workspace-page-data-assets')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const Key('revision3-dataasset-stage-search')),
+          )
+          .controller
+          ?.text,
+      stage.targetPath,
+    );
+    expect(
+      tester
+          .widget<ExpansionTile>(
+            find.byKey(
+              ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
+            ),
+          )
+          .controller
+          ?.isExpanded,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home non-Story change opens the exact Content entity', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    const projectId = '19191919191919191919191919191919';
+    const projectRevision = 3;
+    final index = _dialogLocalizationEditIndex(
+      projectId: projectId,
+      projectRevision: projectRevision,
+      localizationId: _homeDashboardLocalizationId,
+      localizationRevision: 2,
+      locId: _homeDashboardLocalizationLocId,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-content'),
+      projectId: projectId,
+      projectRevision: projectRevision,
+      head: _head(projectRevision),
+      contentIndexBuilder: (_) => index,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-content-workspace-page-library')),
+      findsNothing,
+    );
+
+    await _tapDashboardChange(tester, _homeDashboardLocalizationId);
+
+    expect(
+      find.byKey(const Key('revision3-content-workspace-page-library')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-content-entity-details-$_homeDashboardLocalizationId',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'stale Home change callbacks fail closed across head drift and project switch',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = '20202020202020202020202020202020';
+      const replacementProjectId = '21212121212121212121212121212121';
+      const projectRevision = 3;
+      final index = _dialogLocalizationEditIndex(
+        projectId: projectId,
+        projectRevision: projectRevision,
+        localizationId: _homeDashboardLocalizationId,
+        localizationRevision: 2,
+        locId: _homeDashboardLocalizationLocId,
+      );
+      final actionRead = Completer<Revision3ContentIndex>();
+      var oldReads = 0;
+      final replacementIndex = _contentIndex(
+        projectId: replacementProjectId,
+        revision: projectRevision,
+        projectName: 'Replacement dashboard project',
+      );
+      final oldProject = _FakeManagedLease(
+        root: Directory(r'C:\mods\dashboard-stale-old'),
+        projectId: projectId,
+        projectRevision: projectRevision,
+        head: _head(projectRevision),
+        onContentIndexRead: (_) {
+          oldReads++;
+          return switch (oldReads) {
+            1 => Future.value(index),
+            2 => actionRead.future,
+            _ => Future.value(replacementIndex),
+          };
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => oldProject,
+      );
+      await coordinator.openManagedRevision3(oldProject.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final row = await _revealDashboardChange(
+        tester,
+        _homeDashboardLocalizationId,
+      );
+      final sanitizedMessage = AppLocalizations.of(
+        tester.element(row),
+      ).managedDashboardChangeActionFailed;
+      await tester.tap(row);
+      await tester.pump();
+      expect(oldReads, 2);
+
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: Directory(r'C:\mods\dashboard-stale-new'),
+        projectId: replacementProjectId,
+        projectRevision: projectRevision,
+        head: _head(projectRevision),
+        requiresReopen: false,
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState).projectId,
+        replacementProjectId,
+      );
+      await tester.pump();
+      actionRead.complete(index);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-library')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+      expect(find.textContaining('exact project change'), findsNothing);
+      expect(find.text(sanitizedMessage), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('rendered Home change sanitizes same-revision head drift', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    const projectId = '22222222222222222222222222222222';
+    const projectRevision = 3;
+    final index = _dialogLocalizationEditIndex(
+      projectId: projectId,
+      projectRevision: projectRevision,
+      localizationId: _homeDashboardLocalizationId,
+      localizationRevision: 2,
+      locId: _homeDashboardLocalizationLocId,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-head-drift'),
+      projectId: projectId,
+      projectRevision: projectRevision,
+      head: _head(projectRevision),
+      contentIndexBuilder: (_) => index,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    final row = await _revealDashboardChange(
+      tester,
+      _homeDashboardLocalizationId,
+    );
+    final action = tester.widget<ListTile>(row).onTap;
+    final sanitizedMessage = AppLocalizations.of(
+      tester.element(row),
+    ).managedDashboardChangeActionFailed;
+    expect(action, isNotNull);
+
+    final replacementHead = _head(projectRevision + 1);
+    managed.head = replacementHead;
+    (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+      root: managed.root,
+      projectId: managed.projectId,
+      projectRevision: managed.projectRevision,
+      head: replacementHead,
+      requiresReopen: false,
+    );
+    action!();
+    await tester.pumpAndSettle();
+
+    expect(find.text(sanitizedMessage), findsOneWidget);
+    expect(find.textContaining('exact project change'), findsNothing);
+    expect(
+      find.byKey(const Key('revision3-content-workspace-page-library')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'Test and Release runs the project compiler through the coordinator only',
@@ -10806,7 +11267,11 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedDataAssets(tester);
-      expect(managed.dataAssetListCalls, 1);
+      expect(
+        managed.dataAssetListCalls,
+        2,
+        reason: 'Home and the lazy DataAsset registry each load one snapshot',
+      );
       expect(
         find.byKey(const Key('revision3-dataasset-stage-empty')),
         findsOneWidget,
@@ -10820,7 +11285,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(pickerCalls, 1);
       expect(managed.dataAssetPublishCalls, 1);
-      expect(managed.dataAssetListCalls, 2);
+      expect(
+        managed.dataAssetListCalls,
+        4,
+        reason: 'the checkpoint refreshes Home and the visible registry',
+      );
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -10871,7 +11340,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(managed.dataAssetRemoveCalls, 1);
-      expect(managed.dataAssetListCalls, 3);
+      expect(
+        managed.dataAssetListCalls,
+        6,
+        reason: 'each checkpoint refreshes Home and the visible registry',
+      );
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 6);
       expect(state.head.canonicalJson, fixture.removedHead.canonicalJson);
@@ -11004,7 +11477,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(managed.dataAssetSemanticPublishCalls, 1);
-      expect(managed.dataAssetListCalls, 2);
+      expect(
+        managed.dataAssetListCalls,
+        4,
+        reason: 'the checkpoint refreshes Home and the visible registry',
+      );
       expect(
         publishedIntent?.toNativeFields()['extract_receipt_path'],
         r'C:\proof\extract-receipt.v2.json',
@@ -12207,6 +12684,27 @@ void _expectExactCreatedNpcStoryDialogVoice(WidgetTester tester) {
     expect(find.text(technicalIdentity), findsNothing);
   }
   expect(tester.takeException(), isNull);
+}
+
+Future<Finder> _revealDashboardChange(
+  WidgetTester tester,
+  String stableId,
+) async {
+  final change = find.byKey(
+    Key('revision3-project-dashboard-change-$stableId'),
+  );
+  expect(change, findsOneWidget);
+  await tester.ensureVisible(change);
+  await tester.pumpAndSettle();
+  expect(change.hitTestable(), findsOneWidget);
+  return change;
+}
+
+Future<void> _tapDashboardChange(WidgetTester tester, String stableId) async {
+  final change = await _revealDashboardChange(tester, stableId);
+  expect(tester.widget<ListTile>(change).onTap, isNotNull);
+  await tester.tap(change);
+  await tester.pumpAndSettle();
 }
 
 Future<void> _navigateManagedHome(WidgetTester tester) =>
@@ -14267,6 +14765,70 @@ Revision3ContentIndex _homeItemPatchContentIndex(
     'assets': <Object?>[],
   });
 }
+
+Revision3ContentIndex _homeDashboardItemPatchContentIndex(
+  _FakeItemPatchManagedLease lease,
+) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': lease.projectId,
+  'project_revision': lease.projectRevision,
+  'project_name': 'Dashboard ItemPatch project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': _homeItemPatchTarget(),
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{'item_patch': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': _homeDashboardItemPatchEntityId,
+      'kind': 'item_patch',
+      'display_name': 'Apple',
+      'revision': 2,
+      'origin': <String, Object?>{
+        'type': 'vanilla',
+        'generation': _homeItemPatchTarget(),
+        'catalog_layer': _homeItemPatchCatalogLayer,
+        'canonical_selector': _homeItemPatchVanillaClass,
+        'source_seal': _homeItemPatchSeal('d', 500),
+      },
+      'summary': <String, Object?>{
+        'kind': 'item_patch',
+        'data': <String, Object?>{
+          'vanilla_class': _homeItemPatchVanillaClass,
+          'field_count': 1,
+          'field_types': <String, Object?>{'m_Value': 'integer'},
+          'fields': <String, Object?>{
+            'm_Value': <String, Object?>{'type': 'integer', 'data': 9},
+          },
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[],
+});
+
+Revision3ContentIndex _homeDashboardDataAssetContentIndex(
+  AuthoringRevision3DataAssetStage stage,
+) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': stage.projectId,
+  'project_revision': stage.stagedProjectRevision,
+  'project_name': 'Dashboard DataAsset project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': stage.projectTargetExecutable.byteLength,
+      'sha256': stage.projectTargetExecutable.sha256,
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{},
+  'entities': <Object?>[],
+  'assets': <Object?>[],
+});
 
 Revision3ContentIndex _homeItemPatchVoiceContentIndex(
   _FakeItemPatchManagedLease lease,

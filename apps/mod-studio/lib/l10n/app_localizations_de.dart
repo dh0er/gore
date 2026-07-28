@@ -1145,22 +1145,63 @@ class AppLocalizationsDe extends AppLocalizations {
   String get managedDashboardNotProvided => 'Nicht angegeben';
 
   @override
-  String get managedDashboardContentCounts => 'Projektinhalte';
+  String get managedDashboardContentCounts => 'Mein Mod / Änderungen';
 
   @override
-  String get managedDashboardNpcDrafts => 'NPC-Entwürfe';
+  String get managedDashboardChangesDescription =>
+      'Alles, was im exakten aktuellen Projekt gespeichert ist – gruppiert nach den Inhalten, an denen du arbeiten kannst. Generierte Helfer werden nur bei nachgewiesener Beziehung zugeordnet.';
 
   @override
-  String get managedDashboardQuestDrafts => 'Quest-Entwürfe';
+  String get managedDashboardNpcDrafts => 'Figuren';
 
   @override
-  String get managedDashboardDialogLines => 'Dialogzeilen';
+  String get managedDashboardQuestDrafts => 'Quests';
 
   @override
-  String get managedDashboardVoiceTakes => 'Sprachaufnahmen';
+  String get managedDashboardDialogLines => 'Dialog';
 
   @override
-  String get managedDashboardAssets => 'Assets';
+  String get managedDashboardVoiceTakes => 'Vertonung';
+
+  @override
+  String get managedDashboardAssets => 'DataAssets';
+
+  @override
+  String get managedDashboardItemPatches => 'Items';
+
+  @override
+  String get managedDashboardLocalizationEntries => 'Projekttexte';
+
+  @override
+  String get managedDashboardVoiceSlots => 'Vertonungsziel';
+
+  @override
+  String get managedDashboardGeneratedScripts => 'Generiertes Script';
+
+  @override
+  String get managedDashboardSelectedVoiceTake => 'Gewählte Aufnahme';
+
+  @override
+  String get managedDashboardTechnicalContent => 'Technische Inhalte';
+
+  @override
+  String get managedDashboardTechnicalContentDescription =>
+      'Generierte oder problematische Helfer, die keiner normalen Änderung sicher zugeordnet werden können.';
+
+  @override
+  String get managedDashboardEmptyChangesTitle => 'Noch keine Änderungen';
+
+  @override
+  String get managedDashboardEmptyChangesDescription =>
+      'Füge über Erstellen, Inhalte oder Story die erste Projektänderung hinzu. Das Spiel und deine Spielstände wurden nicht verändert.';
+
+  @override
+  String get managedDashboardOpenChange =>
+      'Diese exakte Projektänderung öffnen';
+
+  @override
+  String get managedDashboardChangeActionFailed =>
+      'Diese Projektänderung ist nicht mehr aktuell. Lade die Projektübersicht neu und versuche es erneut.';
 
   @override
   String get managedDashboardUnresolvedReferences => 'Ungelöste Referenzen';

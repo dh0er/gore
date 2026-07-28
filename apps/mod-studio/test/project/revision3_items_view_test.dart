@@ -1017,7 +1017,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('reverts an existing patch with its stored provenance', (
+  testWidgets('reverts a current exact patch with verified provenance', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1200, 760);
@@ -1061,12 +1061,432 @@ void main() {
     expect(captured.expectedSourceSeal.sha256, 'd' * 64);
     expect(captured.expectedCatalogSeal.sha256, 'c' * 64);
   });
+
+  testWidgets(
+    'controller opens only an existing patch at the exact wide checkpoint',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = Revision3ItemsViewController();
+      addTearDown(controller.dispose);
+      final service = _authoringService(
+        includeSecond: true,
+        loadContent: () async => _authoringContent(patched: true),
+        publish: (_) async => throw StateError('must not publish'),
+      );
+      await tester.pumpWidget(_app(authoring: service, controller: controller));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-items-search')),
+        'Bread',
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-items-result-$_authoringSecondClass')),
+      );
+      await tester.pump();
+
+      for (final mismatch in <Future<bool>>[
+        controller.openVanillaClassAtCheckpoint(
+          _authoringClass,
+          projectRoot: 'another-root',
+          projectId: _authoringProjectId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+        ),
+        controller.openVanillaClassAtCheckpoint(
+          _authoringClass,
+          projectRoot: 'test-project-root',
+          projectId: '33333333333333333333333333333333',
+          projectRevision: 7,
+          projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+        ),
+        controller.openVanillaClassAtCheckpoint(
+          _authoringClass,
+          projectRoot: 'test-project-root',
+          projectId: _authoringProjectId,
+          projectRevision: 8,
+          projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+        ),
+        controller.openVanillaClassAtCheckpoint(
+          _authoringClass,
+          projectRoot: 'test-project-root',
+          projectId: _authoringProjectId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: _authoringHead('e').canonicalJson,
+        ),
+      ]) {
+        expect(await mismatch, isFalse);
+      }
+      expect(
+        await controller.openVanillaClassAtCheckpoint(
+          _authoringSecondClass,
+          projectRoot: 'test-project-root',
+          projectId: _authoringProjectId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+        ),
+        isFalse,
+        reason: 'a vanilla catalog choice without an ItemPatch is not opened',
+      );
+      expect(
+        await controller.openVanillaClassAtCheckpoint(
+          _authoringClass.toLowerCase(),
+          projectRoot: 'test-project-root',
+          projectId: _authoringProjectId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+        ),
+        isFalse,
+        reason: 'vanilla class identity is exact, not case-folded or fuzzy',
+      );
+
+      final opening = controller.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: 'test-project-root',
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      );
+      await tester.pumpAndSettle();
+
+      expect(await opening, isTrue);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('revision3-items-search')))
+            .controller
+            ?.text,
+        isEmpty,
+      );
+      expect(
+        find.byKey(const Key('revision3-items-details-$_authoringClass')),
+        findsOneWidget,
+      );
+      expect(find.text('1 changed field'), findsWidgets);
+    },
+  );
+
+  testWidgets(
+    'controller buffers pre-mount and rejects unproven or bundled catalogs',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = Revision3ItemsViewController();
+      addTearDown(controller.dispose);
+      final opening = controller.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: 'test-project-root',
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      );
+      await tester.pumpWidget(
+        _app(
+          controller: controller,
+          authoring: _authoringService(
+            loadContent: () async => _authoringContent(patched: true),
+            publish: (_) async => throw StateError('must not publish'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(await opening, isTrue);
+      expect(
+        find.byKey(const Key('revision3-items-details-$_authoringClass')),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      final unprovenController = Revision3ItemsViewController();
+      addTearDown(unprovenController.dispose);
+      final unprovenOpening = unprovenController.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: 'test-project-root',
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      );
+      await tester.pumpWidget(
+        _app(
+          controller: unprovenController,
+          authoring: _authoringService(
+            loadContent: () async => _authoringContent(
+              patched: true,
+              catalogLayer: 'unproven.catalog.layer',
+            ),
+            publish: (_) async => throw StateError('must not publish'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(await unprovenOpening, isFalse);
+      expect(
+        find.byKey(const Key('revision3-items-load-error')),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      final bundledController = Revision3ItemsViewController();
+      addTearDown(bundledController.dispose);
+      final bundledOpening = bundledController.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: 'test-project-root',
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      );
+      await tester.pumpWidget(_app(controller: bundledController));
+      await tester.pumpAndSettle();
+
+      expect(await bundledOpening, isFalse);
+      expect(find.text('Bundled reference'), findsOneWidget);
+    },
+  );
+
+  testWidgets('project switch cancels a stale callback before it can select', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final controller = Revision3ItemsViewController();
+    addTearDown(controller.dispose);
+    final projectALoad = Completer<Revision3ContentIndex>();
+    final projectA = _authoringService(
+      projectScopeIdentity: r'C:\mods\root-a',
+      includeSecond: true,
+      loadContent: () => projectALoad.future,
+      publish: (_) async => throw StateError('must not publish'),
+    );
+    final projectB = _authoringService(
+      projectScopeIdentity: r'C:\mods\root-b',
+      includeSecond: true,
+      loadContent: () async => _authoringContent(patched: true),
+      publish: (_) async => throw StateError('must not publish'),
+    );
+    await tester.pumpWidget(_app(authoring: projectA, controller: controller));
+    await tester.pump();
+
+    final staleOpening = controller.openVanillaClassAtCheckpoint(
+      _authoringClass,
+      projectRoot: r'C:\mods\root-a',
+      projectId: _authoringProjectId,
+      projectRevision: 7,
+      projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+    );
+    await tester.pumpWidget(_app(authoring: projectB, controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(await staleOpening, isFalse);
+    await tester.enterText(
+      find.byKey(const Key('revision3-items-search')),
+      'Bread',
+    );
+    await tester.pump();
+    projectALoad.complete(_authoringContent(patched: true));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('revision3-items-search')))
+          .controller
+          ?.text,
+      'Bread',
+      reason: 'the late project-A result cannot mutate project B',
+    );
+    expect(
+      find.byKey(const Key('revision3-items-details-$_authoringSecondClass')),
+      findsOneWidget,
+    );
+
+    final currentOpening = controller.openVanillaClassAtCheckpoint(
+      _authoringClass,
+      projectRoot: r'C:\mods\root-b',
+      projectId: _authoringProjectId,
+      projectRevision: 7,
+      projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+    );
+    await tester.pumpAndSettle();
+    expect(await currentOpening, isTrue);
+    expect(
+      find.byKey(const Key('revision3-items-details-$_authoringClass')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('pending navigation cancels on every checkpoint dimension', (
+    tester,
+  ) async {
+    const originalRoot = r'C:\mods\root-a';
+    const changedProjectId = '33333333333333333333333333333333';
+    final variants =
+        <
+          ({
+            String root,
+            String projectId,
+            int projectRevision,
+            String headDigit,
+          })
+        >[
+          (
+            root: r'C:\mods\root-b',
+            projectId: _authoringProjectId,
+            projectRevision: 7,
+            headDigit: 'b',
+          ),
+          (
+            root: originalRoot,
+            projectId: changedProjectId,
+            projectRevision: 7,
+            headDigit: 'b',
+          ),
+          (
+            root: originalRoot,
+            projectId: _authoringProjectId,
+            projectRevision: 8,
+            headDigit: 'b',
+          ),
+          (
+            root: originalRoot,
+            projectId: _authoringProjectId,
+            projectRevision: 7,
+            headDigit: 'e',
+          ),
+        ];
+
+    for (final variant in variants) {
+      final controller = Revision3ItemsViewController();
+      final staleLoad = Completer<Revision3ContentIndex>();
+      await tester.pumpWidget(
+        _app(
+          controller: controller,
+          authoring: _authoringService(
+            projectScopeIdentity: originalRoot,
+            loadContent: () => staleLoad.future,
+            publish: (_) async => throw StateError('must not publish'),
+          ),
+        ),
+      );
+      await tester.pump();
+      final staleOpening = controller.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: originalRoot,
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      );
+
+      await tester.pumpWidget(
+        _app(
+          controller: controller,
+          authoring: _authoringService(
+            projectScopeIdentity: variant.root,
+            projectId: variant.projectId,
+            projectRevision: variant.projectRevision,
+            headDigit: variant.headDigit,
+            loadContent: () async => _authoringContent(
+              projectId: variant.projectId,
+              projectRevision: variant.projectRevision,
+            ),
+            publish: (_) async => throw StateError('must not publish'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(await staleOpening, isFalse);
+      staleLoad.complete(_authoringContent());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      controller.dispose();
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
+  testWidgets('controller and widget disposal reject pending item navigation', (
+    tester,
+  ) async {
+    final controller = Revision3ItemsViewController();
+    final controllerLoad = Completer<Revision3ContentIndex>();
+    await tester.pumpWidget(
+      _app(
+        controller: controller,
+        authoring: _authoringService(
+          loadContent: () => controllerLoad.future,
+          publish: (_) async => throw StateError('must not publish'),
+        ),
+      ),
+    );
+    await tester.pump();
+    final controllerOpening = controller.openVanillaClassAtCheckpoint(
+      _authoringClass,
+      projectRoot: 'test-project-root',
+      projectId: _authoringProjectId,
+      projectRevision: 7,
+      projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+    );
+
+    controller.dispose();
+    expect(await controllerOpening, isFalse);
+    expect(
+      await controller.openVanillaClassAtCheckpoint(
+        _authoringClass,
+        projectRoot: 'test-project-root',
+        projectId: _authoringProjectId,
+        projectRevision: 7,
+        projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+      ),
+      isFalse,
+    );
+    controllerLoad.complete(_authoringContent(patched: true));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    final widgetController = Revision3ItemsViewController();
+    addTearDown(widgetController.dispose);
+    final widgetLoad = Completer<Revision3ContentIndex>();
+    await tester.pumpWidget(
+      _app(
+        controller: widgetController,
+        authoring: _authoringService(
+          loadContent: () => widgetLoad.future,
+          publish: (_) async => throw StateError('must not publish'),
+        ),
+      ),
+    );
+    await tester.pump();
+    final widgetOpening = widgetController.openVanillaClassAtCheckpoint(
+      _authoringClass,
+      projectRoot: 'test-project-root',
+      projectId: _authoringProjectId,
+      projectRevision: 7,
+      projectHeadCanonicalJson: _authoringHead('b').canonicalJson,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(await widgetOpening, isFalse);
+    widgetLoad.complete(_authoringContent(patched: true));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Widget _app({
   double textScale = 1,
   Future<Revision3ItemCatalog> Function()? load,
   Revision3ItemPatchAuthoringService? authoring,
+  Revision3ItemsViewController? controller,
   bool authoringRequiresReopen = false,
   VoidCallback? onRecoverAuthoring,
   ValueChanged<bool>? onDirtyChanged,
@@ -1093,6 +1513,7 @@ Widget _app({
       onRecoverAuthoring: onRecoverAuthoring,
       onDirtyChanged: onDirtyChanged,
       onSavingChanged: onSavingChanged,
+      controller: controller,
     ),
   ),
 );
@@ -1149,6 +1570,7 @@ Map<String, Object?> _authoringTarget() => <String, Object?>{
 };
 
 AuthoringRevision3ItemCatalogReadResult _authoringNativeCatalog({
+  String projectId = _authoringProjectId,
   int projectRevision = 7,
   String headDigit = 'b',
   bool includeSecond = false,
@@ -1187,7 +1609,7 @@ AuthoringRevision3ItemCatalogReadResult _authoringNativeCatalog({
   return AuthoringRevision3ItemCatalogReadResult.fromJson(<String, Object?>{
     'ok': true,
     'head_json': _authoringHead(headDigit).canonicalJson,
-    'project_id': _authoringProjectId,
+    'project_id': projectId,
     'project_revision': projectRevision,
     'catalog_json': catalogJson,
     'catalog_seal': _authoringSeal('c', 9000),
@@ -1200,6 +1622,7 @@ AuthoringRevision3ItemCatalogReadResult _authoringNativeCatalog({
 
 Revision3ContentIndex _authoringContent({
   bool patched = false,
+  String projectId = _authoringProjectId,
   int projectRevision = 7,
   int patchedValue = 4,
   int patchEntityRevision = 2,
@@ -1242,7 +1665,7 @@ Revision3ContentIndex _authoringContent({
   }
   return Revision3ContentIndex.fromJsonObject(<String, Object?>{
     'schema_revision': 1,
-    'project_id': _authoringProjectId,
+    'project_id': projectId,
     'project_revision': projectRevision,
     'project_name': 'Managed items',
     'project_version': '1.0.0',
@@ -1259,16 +1682,18 @@ Revision3ItemPatchAuthoringService _authoringService({
   required Future<Revision3ContentIndex> Function() loadContent,
   required Revision3ItemPatchTechnicalPublisher publish,
   String projectScopeIdentity = 'test-project-root',
+  String projectId = _authoringProjectId,
   int projectRevision = 7,
   String headDigit = 'b',
   bool includeSecond = false,
 }) => Revision3ItemPatchAuthoringService(
   projectScopeIdentity: projectScopeIdentity,
-  projectId: _authoringProjectId,
+  projectId: projectId,
   projectRevision: projectRevision,
   expectedHead: _authoringHead(headDigit),
   loadContentIndex: loadContent,
   loadNativeCatalog: () async => _authoringNativeCatalog(
+    projectId: projectId,
     projectRevision: projectRevision,
     headDigit: headDigit,
     includeSecond: includeSecond,

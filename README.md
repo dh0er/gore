@@ -572,6 +572,14 @@ Snapshot V2 is the separate backup/restore format. Auto-updates on launch
   Selected managed Quests and NPCs expose **Source/Profile & checks**, including
   an evidence-only game-compiler check with structured diagnostics, exact
   restoration/recovery handling, and no retained compiler artifact.
+- See the exact current project's saved work under **My mod / Changes**, grouped
+  as Quests, NPCs, Items, DataAssets, Dialog, Text, and Voice instead of a
+  count/readiness-card grid. Proven generated and related helpers stay nested
+  under their owning author content; unresolved or unproven helpers remain
+  visible in a collapsed Technical section. Rows continue into the exact
+  current Story, Items, DataAsset, or Content workspace. This projection reads
+  the managed-R3 content index and verified DataAsset stage registry; it grants
+  no build, deploy, publication, game/save-write, or runtime authority.
 - Preview the exact current managed project's build coverage across
   localization, dialog, Voice, NPCs, Quests, scripts, items, and verified
   DataAsset stages. This readiness inventory creates no files and does not

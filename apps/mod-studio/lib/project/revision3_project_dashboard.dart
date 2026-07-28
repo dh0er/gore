@@ -2,16 +2,41 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../core/mod_ffi.dart';
 import 'revision3_content_index.dart';
+import 'revision3_my_mod_changes.dart';
 
 typedef Revision3ProjectDashboardLoader =
     Future<Revision3ContentIndex> Function();
+typedef Revision3ProjectDashboardDataAssetLoader =
+    Future<List<AuthoringRevision3DataAssetStage>> Function();
 typedef Revision3ProjectDashboardActionTextBuilder =
     String Function(Revision3ContentIndex index);
+typedef Revision3ProjectDashboardOpenEntity =
+    FutureOr<void> Function(Revision3ContentEntity entity);
+typedef Revision3ProjectDashboardOpenItemPatch =
+    FutureOr<void> Function(String vanillaClass);
+typedef Revision3ProjectDashboardOpenDataAsset =
+    FutureOr<void> Function(AuthoringRevision3DataAssetStage stage);
 
-/// All author-facing framework, status, count, semantics, and error copy used
-/// by [Revision3ProjectDashboard]. Project metadata itself comes from the
-/// exact-current [Revision3ContentIndex].
+/// Read-only exact-target navigation for the accepted "My mod / Changes"
+/// snapshot. The dashboard never mutates project, game, build, or runtime state.
+@immutable
+final class Revision3ProjectDashboardChangeActions {
+  const Revision3ProjectDashboardChangeActions({
+    this.openEntity,
+    this.openItemPatch,
+    this.openDataAsset,
+  });
+
+  final Revision3ProjectDashboardOpenEntity? openEntity;
+  final Revision3ProjectDashboardOpenItemPatch? openItemPatch;
+  final Revision3ProjectDashboardOpenDataAsset? openDataAsset;
+}
+
+/// All author-facing framework, changes-list, semantics, and error copy used by
+/// [Revision3ProjectDashboard]. Project metadata and semantic entries come
+/// only from the exact-current accepted snapshot.
 @immutable
 final class Revision3ProjectDashboardCopy {
   const Revision3ProjectDashboardCopy({
@@ -21,21 +46,24 @@ final class Revision3ProjectDashboardCopy {
     required this.projectAuthorLabel,
     required this.notProvidedLabel,
     required this.contentCountsHeading,
+    required this.changesDescription,
     required this.npcDraftCountLabel,
     required this.questDraftCountLabel,
     required this.dialogLineCountLabel,
     required this.voiceTakeCountLabel,
     required this.assetCountLabel,
+    required this.itemPatchLabel,
+    required this.localizationEntryLabel,
+    required this.voiceSlotLabel,
+    required this.generatedScriptLabel,
+    required this.selectedVoiceTakeLabel,
+    required this.technicalContentLabel,
+    required this.technicalContentDescription,
+    required this.emptyChangesTitle,
+    required this.emptyChangesDescription,
+    required this.openChangeLabel,
+    required this.changeActionFailedMessage,
     required this.unresolvedReferenceCountLabel,
-    required this.readinessHeading,
-    required this.offlineAuthoringTitle,
-    required this.offlineAuthoringDescription,
-    required this.generalBuildBlockedTitle,
-    required this.generalBuildBlockedDescription,
-    required this.runtimeUnqualifiedTitle,
-    required this.runtimeUnqualifiedDescription,
-    required this.referenceIntegrityTitle,
-    required this.referenceIntegrityDescription,
     required this.missingGameTitle,
     required this.missingGameDescription,
     required this.continueHeading,
@@ -52,21 +80,24 @@ final class Revision3ProjectDashboardCopy {
   final String projectAuthorLabel;
   final String notProvidedLabel;
   final String contentCountsHeading;
+  final String changesDescription;
   final String npcDraftCountLabel;
   final String questDraftCountLabel;
   final String dialogLineCountLabel;
   final String voiceTakeCountLabel;
   final String assetCountLabel;
+  final String itemPatchLabel;
+  final String localizationEntryLabel;
+  final String voiceSlotLabel;
+  final String generatedScriptLabel;
+  final String selectedVoiceTakeLabel;
+  final String technicalContentLabel;
+  final String technicalContentDescription;
+  final String emptyChangesTitle;
+  final String emptyChangesDescription;
+  final String openChangeLabel;
+  final String changeActionFailedMessage;
   final String unresolvedReferenceCountLabel;
-  final String readinessHeading;
-  final String offlineAuthoringTitle;
-  final String offlineAuthoringDescription;
-  final String generalBuildBlockedTitle;
-  final String generalBuildBlockedDescription;
-  final String runtimeUnqualifiedTitle;
-  final String runtimeUnqualifiedDescription;
-  final String referenceIntegrityTitle;
-  final String referenceIntegrityDescription;
   final String missingGameTitle;
   final String missingGameDescription;
   final String continueHeading;
@@ -122,30 +153,40 @@ final class Revision3ProjectDashboardAction {
 
 /// Content-first overview for one exact managed revision-3 checkpoint.
 ///
-/// This surface reports only semantic project counts, exact reference
-/// integrity, and deliberately closed readiness boundaries. It owns no
+/// This surface shows the actual saved author-facing changes and keeps
+/// generated or unassigned helpers visible as technical content. It owns no
 /// mutation, build, deployment, runtime, game-path, or save authority.
 final class Revision3ProjectDashboard extends StatefulWidget {
   Revision3ProjectDashboard({
+    required this.projectRoot,
     required this.projectId,
     required this.projectRevision,
+    required this.projectHeadCanonicalJson,
     required this.load,
+    required this.loadDataAssetStages,
     required this.gameConfigured,
     required this.copy,
     required List<Revision3ProjectDashboardAction> tasks,
+    this.changeActions = const Revision3ProjectDashboardChangeActions(),
     this.settingsAction,
     super.key,
   }) : tasks = List.unmodifiable(tasks),
+       assert(projectRoot != ''),
        assert(projectId != ''),
        assert(projectRevision >= 0),
+       assert(projectHeadCanonicalJson != ''),
        assert(_actionIdsAreUnique(tasks, settingsAction));
 
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
+  final String projectHeadCanonicalJson;
   final Revision3ProjectDashboardLoader load;
+  final Revision3ProjectDashboardDataAssetLoader loadDataAssetStages;
   final bool gameConfigured;
   final Revision3ProjectDashboardCopy copy;
   final List<Revision3ProjectDashboardAction> tasks;
+  final Revision3ProjectDashboardChangeActions changeActions;
   final Revision3ProjectDashboardAction? settingsAction;
 
   @override
@@ -155,6 +196,8 @@ final class Revision3ProjectDashboard extends StatefulWidget {
 
 class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
   Revision3ContentIndex? _index;
+  Revision3MyModChanges? _changes;
+  _Revision3DashboardCheckpoint? _loadedCheckpoint;
   bool _loading = true;
   bool _loadFailed = false;
   int _loadGeneration = 0;
@@ -168,8 +211,10 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
   @override
   void didUpdateWidget(covariant Revision3ProjectDashboard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectId != widget.projectId ||
-        oldWidget.projectRevision != widget.projectRevision) {
+    if (oldWidget.projectRoot != widget.projectRoot ||
+        oldWidget.projectId != widget.projectId ||
+        oldWidget.projectRevision != widget.projectRevision ||
+        oldWidget.projectHeadCanonicalJson != widget.projectHeadCanonicalJson) {
       _startLoad(notify: false);
     }
   }
@@ -182,12 +227,14 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
 
   void _startLoad({required bool notify}) {
     final generation = ++_loadGeneration;
-    final expectedProjectId = widget.projectId;
-    final expectedProjectRevision = widget.projectRevision;
+    final checkpoint = _checkpoint;
     final loader = widget.load;
+    final dataAssetLoader = widget.loadDataAssetStages;
 
     void markLoading() {
       _index = null;
+      _changes = null;
+      _loadedCheckpoint = null;
       _loading = true;
       _loadFailed = false;
     }
@@ -201,29 +248,45 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
     unawaited(
       _finishLoad(
         generation: generation,
-        expectedProjectId: expectedProjectId,
-        expectedProjectRevision: expectedProjectRevision,
+        checkpoint: checkpoint,
         loader: loader,
+        dataAssetLoader: dataAssetLoader,
       ),
     );
   }
 
   Future<void> _finishLoad({
     required int generation,
-    required String expectedProjectId,
-    required int expectedProjectRevision,
+    required _Revision3DashboardCheckpoint checkpoint,
     required Revision3ProjectDashboardLoader loader,
+    required Revision3ProjectDashboardDataAssetLoader dataAssetLoader,
   }) async {
     try {
-      final index = await loader();
+      late Revision3ContentIndex index;
+      late List<AuthoringRevision3DataAssetStage> dataAssetStages;
+      await Future.wait<void>([
+        () async {
+          index = await loader();
+        }(),
+        () async {
+          dataAssetStages = await dataAssetLoader();
+        }(),
+      ]);
       if (!mounted || generation != _loadGeneration) return;
-      if (index.projectId != expectedProjectId ||
-          index.projectRevision != expectedProjectRevision) {
+      if (checkpoint != _checkpoint ||
+          index.projectId != checkpoint.projectId ||
+          index.projectRevision != checkpoint.projectRevision) {
         _showSanitizedLoadFailure(generation);
         return;
       }
+      final changes = Revision3MyModChanges.fromExactCurrent(
+        contentIndex: index,
+        dataAssetStages: dataAssetStages,
+      );
       setState(() {
         _index = index;
+        _changes = changes;
+        _loadedCheckpoint = checkpoint;
         _loading = false;
         _loadFailed = false;
       });
@@ -237,10 +300,20 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
     if (!mounted || generation != _loadGeneration) return;
     setState(() {
       _index = null;
+      _changes = null;
+      _loadedCheckpoint = null;
       _loading = false;
       _loadFailed = true;
     });
   }
+
+  _Revision3DashboardCheckpoint get _checkpoint =>
+      _Revision3DashboardCheckpoint(
+        projectRoot: widget.projectRoot,
+        projectId: widget.projectId,
+        projectRevision: widget.projectRevision,
+        projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -254,7 +327,10 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
         ),
       );
     }
-    if (_loadFailed || _index == null) {
+    if (_loadFailed ||
+        _index == null ||
+        _changes == null ||
+        _loadedCheckpoint != _checkpoint) {
       return _DashboardLoadError(
         copy: widget.copy,
         onRetry: () => _startLoad(notify: true),
@@ -262,27 +338,108 @@ class _Revision3ProjectDashboardState extends State<Revision3ProjectDashboard> {
     }
     return _DashboardContent(
       index: _index!,
+      changes: _changes!,
       gameConfigured: widget.gameConfigured,
       copy: widget.copy,
       tasks: widget.tasks,
+      changeActions: _changeActionsAtCheckpoint(_loadedCheckpoint!),
       settingsAction: widget.settingsAction,
     );
   }
+
+  Revision3ProjectDashboardChangeActions _changeActionsAtCheckpoint(
+    _Revision3DashboardCheckpoint checkpoint,
+  ) {
+    final actions = widget.changeActions;
+    return Revision3ProjectDashboardChangeActions(
+      openEntity: actions.openEntity == null
+          ? null
+          : (entity) => _invokeAtCheckpoint(
+              checkpoint,
+              () => actions.openEntity!(entity),
+            ),
+      openItemPatch: actions.openItemPatch == null
+          ? null
+          : (vanillaClass) => _invokeAtCheckpoint(
+              checkpoint,
+              () => actions.openItemPatch!(vanillaClass),
+            ),
+      openDataAsset: actions.openDataAsset == null
+          ? null
+          : (stage) => _invokeAtCheckpoint(
+              checkpoint,
+              () => actions.openDataAsset!(stage),
+            ),
+    );
+  }
+
+  Future<void> _invokeAtCheckpoint(
+    _Revision3DashboardCheckpoint checkpoint,
+    FutureOr<void> Function() action,
+  ) async {
+    _requireCurrentSnapshot(checkpoint);
+    await Future<void>.sync(action);
+    _requireCurrentSnapshot(checkpoint);
+  }
+
+  void _requireCurrentSnapshot(_Revision3DashboardCheckpoint checkpoint) {
+    if (!mounted ||
+        checkpoint != _checkpoint ||
+        _loadedCheckpoint != checkpoint ||
+        _changes == null) {
+      throw StateError('The exact project changes are no longer current.');
+    }
+  }
+}
+
+@immutable
+final class _Revision3DashboardCheckpoint {
+  const _Revision3DashboardCheckpoint({
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+  });
+
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _Revision3DashboardCheckpoint &&
+      other.projectRoot == projectRoot &&
+      other.projectId == projectId &&
+      other.projectRevision == projectRevision &&
+      other.projectHeadCanonicalJson == projectHeadCanonicalJson;
+
+  @override
+  int get hashCode => Object.hash(
+    projectRoot,
+    projectId,
+    projectRevision,
+    projectHeadCanonicalJson,
+  );
 }
 
 class _DashboardContent extends StatelessWidget {
   const _DashboardContent({
     required this.index,
+    required this.changes,
     required this.gameConfigured,
     required this.copy,
     required this.tasks,
+    required this.changeActions,
     required this.settingsAction,
   });
 
   final Revision3ContentIndex index;
+  final Revision3MyModChanges changes;
   final bool gameConfigured;
   final Revision3ProjectDashboardCopy copy;
   final List<Revision3ProjectDashboardAction> tasks;
+  final Revision3ProjectDashboardChangeActions changeActions;
   final Revision3ProjectDashboardAction? settingsAction;
 
   @override
@@ -292,9 +449,6 @@ class _DashboardContent extends StatelessWidget {
           ? constraints.maxWidth
           : 1200.0;
       final edgePadding = width < 520 ? 12.0 : 20.0;
-      final contentWidth = width > edgePadding * 2
-          ? width - edgePadding * 2
-          : width;
       return SingleChildScrollView(
         key: const Key('revision3-project-dashboard-scroll'),
         padding: EdgeInsets.all(edgePadding),
@@ -313,14 +467,16 @@ class _DashboardContent extends StatelessWidget {
               const SizedBox(height: 10),
               _TaskList(index: index, tasks: tasks),
             ],
-            const SizedBox(height: 20),
-            _SectionHeading(copy.contentCountsHeading),
-            const SizedBox(height: 10),
-            _CountGrid(index: index, copy: copy, availableWidth: contentWidth),
             const SizedBox(height: 24),
-            _SectionHeading(copy.readinessHeading),
-            const SizedBox(height: 10),
-            _StatusGrid(index: index, copy: copy, availableWidth: contentWidth),
+            _SectionHeading(copy.contentCountsHeading),
+            const SizedBox(height: 4),
+            Text(copy.changesDescription),
+            const SizedBox(height: 12),
+            _MyModChangesList(
+              changes: changes,
+              copy: copy,
+              actions: changeActions,
+            ),
           ],
         ),
       );
@@ -516,202 +672,418 @@ class _SectionHeading extends StatelessWidget {
   );
 }
 
-class _CountGrid extends StatelessWidget {
-  const _CountGrid({
-    required this.index,
+class _MyModChangesList extends StatelessWidget {
+  const _MyModChangesList({
+    required this.changes,
     required this.copy,
-    required this.availableWidth,
+    required this.actions,
   });
 
-  final Revision3ContentIndex index;
+  final Revision3MyModChanges changes;
   final Revision3ProjectDashboardCopy copy;
-  final double availableWidth;
+  final Revision3ProjectDashboardChangeActions actions;
 
   @override
   Widget build(BuildContext context) {
-    final counts = <({String id, String label, int value, IconData icon})>[
-      (
-        id: 'npc-drafts',
-        label: copy.npcDraftCountLabel,
-        value: _entityCount(index, Revision3ContentEntityKind.npcDraft),
-        icon: Icons.person_outline,
+    final groups = <_MyModGroup, List<Revision3MyModEntry>>{};
+    for (final entry in changes.changes) {
+      groups
+          .putIfAbsent(_groupFor(entry.kind), () => <Revision3MyModEntry>[])
+          .add(entry);
+    }
+    return Column(
+      key: const Key('revision3-project-dashboard-changes'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (groups.isEmpty)
+          _EmptyChanges(copy: copy)
+        else
+          for (final group in _MyModGroup.values)
+            if (groups[group] case final entries?)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: _MyModGroupList(
+                  group: group,
+                  entries: entries,
+                  copy: copy,
+                  actions: actions,
+                ),
+              ),
+        if (changes.technical.isNotEmpty)
+          _TechnicalChanges(
+            entries: changes.technical,
+            copy: copy,
+            actions: actions,
+          ),
+      ],
+    );
+  }
+}
+
+enum _MyModGroup { quests, npcs, items, dataAssets, dialog, text, voice }
+
+_MyModGroup _groupFor(Revision3MyModContentKind kind) => switch (kind) {
+  Revision3MyModContentKind.quest => _MyModGroup.quests,
+  Revision3MyModContentKind.npc => _MyModGroup.npcs,
+  Revision3MyModContentKind.itemPatch => _MyModGroup.items,
+  Revision3MyModContentKind.dataAsset => _MyModGroup.dataAssets,
+  Revision3MyModContentKind.dialogLine => _MyModGroup.dialog,
+  Revision3MyModContentKind.localization => _MyModGroup.text,
+  Revision3MyModContentKind.voiceSlot ||
+  Revision3MyModContentKind.voiceTake ||
+  Revision3MyModContentKind.generatedScript => _MyModGroup.voice,
+};
+
+class _EmptyChanges extends StatelessWidget {
+  const _EmptyChanges({required this.copy});
+
+  final Revision3ProjectDashboardCopy copy;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    key: const Key('revision3-project-dashboard-changes-empty'),
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.add_circle_outline),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy.emptyChangesTitle,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 4),
+                Text(copy.emptyChangesDescription),
+              ],
+            ),
+          ),
+        ],
       ),
-      (
-        id: 'quest-drafts',
-        label: copy.questDraftCountLabel,
-        value: _entityCount(index, Revision3ContentEntityKind.questDraft),
-        icon: Icons.assignment_outlined,
+    ),
+  );
+}
+
+class _MyModGroupList extends StatelessWidget {
+  const _MyModGroupList({
+    required this.group,
+    required this.entries,
+    required this.copy,
+    required this.actions,
+  });
+
+  final _MyModGroup group;
+  final List<Revision3MyModEntry> entries;
+  final Revision3ProjectDashboardCopy copy;
+  final Revision3ProjectDashboardChangeActions actions;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    key: Key('revision3-project-dashboard-change-group-${group.name}'),
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Padding(
+        padding: const EdgeInsets.only(left: 4, bottom: 6),
+        child: Semantics(
+          header: true,
+          child: Text(
+            '${_groupLabel(group, copy)} (${entries.length})',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
       ),
-      (
-        id: 'dialog-lines',
-        label: copy.dialogLineCountLabel,
-        value: _entityCount(index, Revision3ContentEntityKind.dialogLine),
-        icon: Icons.chat_bubble_outline,
+      Material(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var index = 0; index < entries.length; index++) ...[
+              if (index > 0) const Divider(height: 1),
+              _MyModEntryTree(
+                entry: entries[index],
+                copy: copy,
+                actions: actions,
+              ),
+            ],
+          ],
+        ),
       ),
-      (
-        id: 'voice-takes',
-        label: copy.voiceTakeCountLabel,
-        value: _entityCount(index, Revision3ContentEntityKind.voiceTake),
-        icon: Icons.graphic_eq_outlined,
+    ],
+  );
+}
+
+class _TechnicalChanges extends StatelessWidget {
+  const _TechnicalChanges({
+    required this.entries,
+    required this.copy,
+    required this.actions,
+  });
+
+  final List<Revision3MyModEntry> entries;
+  final Revision3ProjectDashboardCopy copy;
+  final Revision3ProjectDashboardChangeActions actions;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    key: const Key('revision3-project-dashboard-technical'),
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+    ),
+    clipBehavior: Clip.antiAlias,
+    child: ExpansionTile(
+      key: const Key('revision3-project-dashboard-technical-expansion'),
+      initiallyExpanded: false,
+      leading: const Icon(Icons.code_outlined),
+      title: Text('${copy.technicalContentLabel} (${entries.length})'),
+      subtitle: Text(copy.technicalContentDescription),
+      children: [
+        for (var index = 0; index < entries.length; index++) ...[
+          if (index > 0) const Divider(height: 1),
+          _MyModEntryTree(entry: entries[index], copy: copy, actions: actions),
+        ],
+      ],
+    ),
+  );
+}
+
+class _MyModEntryTree extends StatelessWidget {
+  const _MyModEntryTree({
+    required this.entry,
+    required this.copy,
+    required this.actions,
+    this.depth = 0,
+  });
+
+  final Revision3MyModEntry entry;
+  final Revision3ProjectDashboardCopy copy;
+  final Revision3ProjectDashboardChangeActions actions;
+  final int depth;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Padding(
+        padding: EdgeInsets.only(left: depth * 18.0),
+        child: _MyModEntryTile(entry: entry, copy: copy, actions: actions),
       ),
-      (
-        id: 'assets',
-        label: copy.assetCountLabel,
-        value: index.assets.length,
-        icon: Icons.inventory_2_outlined,
-      ),
-      (
-        id: 'unresolved-references',
-        label: copy.unresolvedReferenceCountLabel,
-        value: index.problemCount,
-        icon: Icons.account_tree_outlined,
-      ),
+      for (final child in entry.children)
+        DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+          ),
+          child: _MyModEntryTree(
+            entry: child,
+            copy: copy,
+            actions: actions,
+            depth: depth + 1,
+          ),
+        ),
+    ],
+  );
+}
+
+class _MyModEntryTile extends StatefulWidget {
+  const _MyModEntryTile({
+    required this.entry,
+    required this.copy,
+    required this.actions,
+  });
+
+  final Revision3MyModEntry entry;
+  final Revision3ProjectDashboardCopy copy;
+  final Revision3ProjectDashboardChangeActions actions;
+
+  @override
+  State<_MyModEntryTile> createState() => _MyModEntryTileState();
+}
+
+class _MyModEntryTileState extends State<_MyModEntryTile> {
+  bool _opening = false;
+
+  FutureOr<void> Function()? get _action {
+    final entry = widget.entry;
+    switch (entry.kind) {
+      case Revision3MyModContentKind.itemPatch:
+        final open = widget.actions.openItemPatch;
+        final vanillaClass = entry.entity?.summary.itemPatch?.vanillaClass;
+        return open == null || vanillaClass == null
+            ? null
+            : () => open(vanillaClass);
+      case Revision3MyModContentKind.dataAsset:
+        final open = widget.actions.openDataAsset;
+        final stage = entry.dataAssetStage;
+        return open == null || stage == null ? null : () => open(stage);
+      case Revision3MyModContentKind.quest ||
+          Revision3MyModContentKind.npc ||
+          Revision3MyModContentKind.dialogLine ||
+          Revision3MyModContentKind.localization ||
+          Revision3MyModContentKind.voiceSlot ||
+          Revision3MyModContentKind.voiceTake ||
+          Revision3MyModContentKind.generatedScript:
+        final open = widget.actions.openEntity;
+        final entity = entry.entity;
+        return open == null || entity == null ? null : () => open(entity);
+    }
+  }
+
+  Future<void> _open() async {
+    final action = _action;
+    if (_opening || action == null) return;
+    setState(() => _opening = true);
+    try {
+      await Future<void>.sync(action);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.copy.changeActionFailedMessage)),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entry = widget.entry;
+    final action = _action;
+    final kindLabel = _kindLabel(entry.kind, widget.copy);
+    final title = _friendlyEntryName(entry, kindLabel);
+    final problemCount = _recursiveProblemCount(entry);
+    final semanticsLabel = <String>[
+      title,
+      kindLabel,
+      if (entry.kind == Revision3MyModContentKind.dataAsset &&
+          entry.displayName != title)
+        entry.displayName,
+      if (entry.selected) widget.copy.selectedVoiceTakeLabel,
+      if (problemCount > 0)
+        '$problemCount ${widget.copy.unresolvedReferenceCountLabel}',
+    ].join('. ');
+    final details = <Widget>[
+      Text(kindLabel),
+      if (entry.kind == Revision3MyModContentKind.dataAsset &&
+          entry.displayName != title)
+        Text(entry.displayName),
+      if (entry.selected) Text(widget.copy.selectedVoiceTakeLabel),
+      if (problemCount > 0)
+        Chip(
+          key: Key(
+            'revision3-project-dashboard-change-problems-${entry.stableId}',
+          ),
+          avatar: const Icon(Icons.warning_amber_rounded, size: 18),
+          label: Text(
+            '$problemCount ${widget.copy.unresolvedReferenceCountLabel}',
+          ),
+          visualDensity: VisualDensity.compact,
+        ),
     ];
-    final tileWidth = _responsiveTileWidth(
-      availableWidth,
-      wideColumns: 6,
-      mediumColumns: 3,
-    );
-    return Wrap(
-      key: const Key('revision3-project-dashboard-counts'),
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        for (final count in counts)
-          SizedBox(
-            width: tileWidth,
-            child: Card(
-              key: Key('revision3-project-dashboard-count-${count.id}'),
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  children: [
-                    Icon(count.icon),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${count.value}',
-                            key: Key(
-                              'revision3-project-dashboard-count-${count.id}-value',
-                            ),
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                          Text(count.label),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-      ],
+    return Semantics(
+      container: true,
+      button: action != null,
+      enabled: action != null && !_opening,
+      label: semanticsLabel,
+      hint: action == null ? kindLabel : widget.copy.openChangeLabel,
+      excludeSemantics: true,
+      child: ListTile(
+        key: Key('revision3-project-dashboard-change-${entry.stableId}'),
+        enabled: action != null && !_opening,
+        onTap: action == null || _opening ? null : _open,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: Icon(_kindIcon(entry.kind)),
+        title: Text(title),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Wrap(spacing: 8, runSpacing: 6, children: details),
+        ),
+        trailing: _opening
+            ? const SizedBox.square(
+                dimension: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : action == null
+            ? null
+            : const Icon(Icons.chevron_right),
+      ),
     );
   }
 }
 
-class _StatusGrid extends StatelessWidget {
-  const _StatusGrid({
-    required this.index,
-    required this.copy,
-    required this.availableWidth,
-  });
+String _groupLabel(_MyModGroup group, Revision3ProjectDashboardCopy copy) =>
+    switch (group) {
+      _MyModGroup.quests => copy.questDraftCountLabel,
+      _MyModGroup.npcs => copy.npcDraftCountLabel,
+      _MyModGroup.items => copy.itemPatchLabel,
+      _MyModGroup.dataAssets => copy.assetCountLabel,
+      _MyModGroup.dialog => copy.dialogLineCountLabel,
+      _MyModGroup.text => copy.localizationEntryLabel,
+      _MyModGroup.voice => copy.voiceTakeCountLabel,
+    };
 
-  final Revision3ContentIndex index;
-  final Revision3ProjectDashboardCopy copy;
-  final double availableWidth;
+String _kindLabel(
+  Revision3MyModContentKind kind,
+  Revision3ProjectDashboardCopy copy,
+) => switch (kind) {
+  Revision3MyModContentKind.quest => copy.questDraftCountLabel,
+  Revision3MyModContentKind.npc => copy.npcDraftCountLabel,
+  Revision3MyModContentKind.itemPatch => copy.itemPatchLabel,
+  Revision3MyModContentKind.dataAsset => copy.assetCountLabel,
+  Revision3MyModContentKind.dialogLine => copy.dialogLineCountLabel,
+  Revision3MyModContentKind.localization => copy.localizationEntryLabel,
+  Revision3MyModContentKind.voiceSlot => copy.voiceSlotLabel,
+  Revision3MyModContentKind.voiceTake => copy.voiceTakeCountLabel,
+  Revision3MyModContentKind.generatedScript => copy.generatedScriptLabel,
+};
 
-  @override
-  Widget build(BuildContext context) {
-    final statuses =
-        <({String id, String title, String description, IconData icon})>[
-          (
-            id: 'offline-authoring',
-            title: copy.offlineAuthoringTitle,
-            description: copy.offlineAuthoringDescription,
-            icon: Icons.edit_note_outlined,
-          ),
-          (
-            id: 'general-build-blocked',
-            title: copy.generalBuildBlockedTitle,
-            description: copy.generalBuildBlockedDescription,
-            icon: Icons.block_outlined,
-          ),
-          (
-            id: 'runtime-unqualified',
-            title: copy.runtimeUnqualifiedTitle,
-            description: copy.runtimeUnqualifiedDescription,
-            icon: Icons.science_outlined,
-          ),
-          (
-            id: 'reference-integrity',
-            title: copy.referenceIntegrityTitle,
-            description: copy.referenceIntegrityDescription,
-            icon: index.problemCount == 0
-                ? Icons.account_tree_outlined
-                : Icons.warning_amber_rounded,
-          ),
-        ];
-    final tileWidth = _responsiveTileWidth(
-      availableWidth,
-      wideColumns: 4,
-      mediumColumns: 2,
-    );
-    return Wrap(
-      key: const Key('revision3-project-dashboard-statuses'),
-      spacing: 12,
-      runSpacing: 12,
-      children: [
-        for (final status in statuses)
-          SizedBox(
-            width: tileWidth,
-            child: Card(
-              key: Key('revision3-project-dashboard-status-${status.id}'),
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(status.icon),
-                    const SizedBox(height: 10),
-                    Text(
-                      status.title,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(status.description),
-                    if (status.id == 'reference-integrity') ...[
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Text(
-                            '${index.problemCount}',
-                            key: const Key(
-                              'revision3-project-dashboard-reference-status-count',
-                            ),
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(copy.unresolvedReferenceCountLabel),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
+IconData _kindIcon(Revision3MyModContentKind kind) => switch (kind) {
+  Revision3MyModContentKind.quest => Icons.assignment_outlined,
+  Revision3MyModContentKind.npc => Icons.person_outline,
+  Revision3MyModContentKind.itemPatch => Icons.tune_outlined,
+  Revision3MyModContentKind.dataAsset => Icons.inventory_2_outlined,
+  Revision3MyModContentKind.dialogLine => Icons.chat_bubble_outline,
+  Revision3MyModContentKind.localization => Icons.translate_outlined,
+  Revision3MyModContentKind.voiceSlot => Icons.mic_none_outlined,
+  Revision3MyModContentKind.voiceTake => Icons.graphic_eq_outlined,
+  Revision3MyModContentKind.generatedScript => Icons.code_outlined,
+};
+
+String _friendlyEntryName(Revision3MyModEntry entry, String fallback) {
+  final displayName = entry.displayName.trim();
+  if (entry.kind != Revision3MyModContentKind.dataAsset) {
+    return displayName.isEmpty ? fallback : displayName;
   }
+  final segments = displayName.split('/');
+  final leaf = segments.isEmpty ? displayName : segments.last;
+  return leaf.isEmpty ? fallback : leaf;
 }
+
+int _recursiveProblemCount(Revision3MyModEntry entry) =>
+    entry.problemCount +
+    entry.children.fold<int>(
+      0,
+      (sum, child) => sum + _recursiveProblemCount(child),
+    );
 
 class _TaskList extends StatelessWidget {
   const _TaskList({required this.index, required this.tasks});
@@ -846,24 +1218,6 @@ class _DashboardLoadError extends StatelessWidget {
       ),
     ),
   );
-}
-
-int _entityCount(
-  Revision3ContentIndex index,
-  Revision3ContentEntityKind kind,
-) => index.entities.where((entity) => entity.kind == kind).length;
-
-double _responsiveTileWidth(
-  double availableWidth, {
-  required int wideColumns,
-  required int mediumColumns,
-}) {
-  final columns = switch (availableWidth) {
-    >= 1100 => wideColumns,
-    >= 620 => mediumColumns,
-    _ => 1,
-  };
-  return (availableWidth - ((columns - 1) * 12)) / columns;
 }
 
 bool _actionIdsAreUnique(

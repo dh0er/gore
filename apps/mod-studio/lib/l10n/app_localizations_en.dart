@@ -1124,22 +1124,62 @@ class AppLocalizationsEn extends AppLocalizations {
   String get managedDashboardNotProvided => 'Not provided';
 
   @override
-  String get managedDashboardContentCounts => 'Project content';
+  String get managedDashboardContentCounts => 'My mod / Changes';
 
   @override
-  String get managedDashboardNpcDrafts => 'NPC drafts';
+  String get managedDashboardChangesDescription =>
+      'Everything currently saved in this exact project, grouped by what you can work on. Generated helpers stay attached only when their relationship is proven.';
 
   @override
-  String get managedDashboardQuestDrafts => 'Quest drafts';
+  String get managedDashboardNpcDrafts => 'Characters';
 
   @override
-  String get managedDashboardDialogLines => 'Dialog lines';
+  String get managedDashboardQuestDrafts => 'Quests';
 
   @override
-  String get managedDashboardVoiceTakes => 'Voice takes';
+  String get managedDashboardDialogLines => 'Dialog';
 
   @override
-  String get managedDashboardAssets => 'Assets';
+  String get managedDashboardVoiceTakes => 'Voice';
+
+  @override
+  String get managedDashboardAssets => 'DataAssets';
+
+  @override
+  String get managedDashboardItemPatches => 'Items';
+
+  @override
+  String get managedDashboardLocalizationEntries => 'Project text';
+
+  @override
+  String get managedDashboardVoiceSlots => 'Voice target';
+
+  @override
+  String get managedDashboardGeneratedScripts => 'Generated script';
+
+  @override
+  String get managedDashboardSelectedVoiceTake => 'Selected take';
+
+  @override
+  String get managedDashboardTechnicalContent => 'Technical content';
+
+  @override
+  String get managedDashboardTechnicalContentDescription =>
+      'Generated or problematic helpers that cannot be safely assigned to an author-facing change.';
+
+  @override
+  String get managedDashboardEmptyChangesTitle => 'No changes yet';
+
+  @override
+  String get managedDashboardEmptyChangesDescription =>
+      'Use Create, Content, or Story to add the first project change. Nothing has been written to the game or a save.';
+
+  @override
+  String get managedDashboardOpenChange => 'Open this exact project change';
+
+  @override
+  String get managedDashboardChangeActionFailed =>
+      'This project change is no longer current. Reload the project overview and try again.';
 
   @override
   String get managedDashboardUnresolvedReferences => 'Unresolved references';

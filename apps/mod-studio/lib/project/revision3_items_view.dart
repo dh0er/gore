@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../catalog/domain/field_schema.dart';
@@ -5,6 +7,246 @@ import '../core/mod_ffi.dart';
 import '../l10n/app_localizations.dart';
 import 'revision3_item_catalog.dart';
 import 'revision3_item_patch_authoring.dart';
+
+/// Programmatic navigation to one existing managed ItemPatch at an exact
+/// project checkpoint.
+///
+/// Requests may be buffered while the matching Items surface and its current
+/// native catalog proof are loading. The result is `true` only after the
+/// requested vanilla class is proven to have an ItemPatch in that exact
+/// project root, project ID, revision, and canonical head. A base-game catalog
+/// entry without an existing patch is never treated as a match.
+final class Revision3ItemsViewController {
+  Object? _attachment;
+  Object? _unavailableAttachment;
+  String? _projectRoot;
+  String? _projectId;
+  int? _projectRevision;
+  String? _projectHeadCanonicalJson;
+  Future<bool> Function(
+    String vanillaClass, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  })?
+  _openVanillaClass;
+  _PendingItemsNavigation? _bufferedNavigation;
+  final Set<_PendingItemsNavigation> _forwardedNavigations = {};
+  bool _disposed = false;
+
+  /// Opens [vanillaClass] only when it is an existing ItemPatch at the exact
+  /// supplied managed-project checkpoint.
+  Future<bool> openVanillaClassAtCheckpoint(
+    String vanillaClass, {
+    required String projectRoot,
+    required String projectId,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+  }) {
+    final navigation = _PendingItemsNavigation(
+      vanillaClass: vanillaClass,
+      projectRoot: projectRoot,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      projectHeadCanonicalJson: projectHeadCanonicalJson,
+    );
+    if (_disposed || !navigation.isValid) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    if (_attachment != null) return _forward(navigation);
+    if (_unavailableAttachment != null) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    final superseded = _bufferedNavigation;
+    _bufferedNavigation = navigation;
+    if (superseded != null && !superseded.result.isCompleted) {
+      superseded.result.complete(false);
+    }
+    return navigation.result.future;
+  }
+
+  /// Permanently releases the controller and fails all outstanding requests.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _unavailableAttachment = null;
+    _projectRoot = null;
+    _projectId = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
+    _openVanillaClass = null;
+    _cancelNavigations();
+  }
+
+  Future<bool> _forward(_PendingItemsNavigation navigation) {
+    final open = _openVanillaClass;
+    if (open == null || !_matches(navigation)) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    _forwardedNavigations.add(navigation);
+    Future<bool>.sync(
+      () => open(
+        navigation.vanillaClass,
+        expectedProjectRoot: navigation.projectRoot,
+        expectedProjectId: navigation.projectId,
+        expectedProjectRevision: navigation.projectRevision,
+        expectedProjectHeadCanonicalJson: navigation.projectHeadCanonicalJson,
+      ),
+    ).then(
+      (resolved) => _completeForwarded(navigation, resolved),
+      onError: (_, _) => _completeForwarded(navigation, false),
+    );
+    return navigation.result.future;
+  }
+
+  void _completeForwarded(_PendingItemsNavigation navigation, bool resolved) {
+    _forwardedNavigations.remove(navigation);
+    if (!navigation.result.isCompleted) {
+      navigation.result.complete(resolved && _matches(navigation));
+    }
+  }
+
+  bool _matches(_PendingItemsNavigation navigation) =>
+      navigation.projectRoot == _projectRoot &&
+      navigation.projectId == _projectId &&
+      navigation.projectRevision == _projectRevision &&
+      navigation.projectHeadCanonicalJson == _projectHeadCanonicalJson;
+
+  bool _attach(
+    Object attachment, {
+    required String projectRoot,
+    required String projectId,
+    required int projectRevision,
+    required String projectHeadCanonicalJson,
+    required Future<bool> Function(
+      String vanillaClass, {
+      required String expectedProjectRoot,
+      required String expectedProjectId,
+      required int expectedProjectRevision,
+      required String expectedProjectHeadCanonicalJson,
+    })
+    openVanillaClass,
+  }) {
+    final bindingValid =
+        projectRoot.isNotEmpty &&
+        projectId.isNotEmpty &&
+        projectRevision >= 0 &&
+        projectHeadCanonicalJson.isNotEmpty;
+    if (_disposed ||
+        !bindingValid ||
+        (_attachment != null && !identical(_attachment, attachment))) {
+      _rejectBufferedNavigation();
+      return false;
+    }
+    _attachment = attachment;
+    _unavailableAttachment = null;
+    _projectRoot = projectRoot;
+    _projectId = projectId;
+    _projectRevision = projectRevision;
+    _projectHeadCanonicalJson = projectHeadCanonicalJson;
+    _openVanillaClass = openVanillaClass;
+    _cancelMismatchedForwardedNavigations();
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null) _forward(buffered);
+    return true;
+  }
+
+  void _markUnavailable(Object attachment) {
+    if (_disposed) return;
+    if (_attachment != null && !identical(_attachment, attachment)) return;
+    if (identical(_attachment, attachment)) {
+      _attachment = null;
+      _projectRoot = null;
+      _projectId = null;
+      _projectRevision = null;
+      _projectHeadCanonicalJson = null;
+      _openVanillaClass = null;
+      _cancelForwardedNavigations();
+    }
+    _unavailableAttachment = attachment;
+    _rejectBufferedNavigation();
+  }
+
+  void _detach(Object attachment) {
+    if (identical(_unavailableAttachment, attachment)) {
+      _unavailableAttachment = null;
+    }
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _projectRoot = null;
+    _projectId = null;
+    _projectRevision = null;
+    _projectHeadCanonicalJson = null;
+    _openVanillaClass = null;
+    _cancelForwardedNavigations();
+  }
+
+  bool _isAttachedTo(Object attachment) =>
+      !_disposed && identical(_attachment, attachment);
+
+  void _cancelMismatchedForwardedNavigations() {
+    final stale = _forwardedNavigations
+        .where((navigation) => !_matches(navigation))
+        .toList(growable: false);
+    _forwardedNavigations.removeAll(stale);
+    for (final navigation in stale) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
+  }
+
+  void _rejectBufferedNavigation() {
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null && !buffered.result.isCompleted) {
+      buffered.result.complete(false);
+    }
+  }
+
+  void _cancelForwardedNavigations() {
+    final forwarded = _forwardedNavigations.toList(growable: false);
+    _forwardedNavigations.clear();
+    for (final navigation in forwarded) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
+  }
+
+  void _cancelNavigations() {
+    _rejectBufferedNavigation();
+    _cancelForwardedNavigations();
+  }
+}
+
+final class _PendingItemsNavigation {
+  _PendingItemsNavigation({
+    required this.vanillaClass,
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+  });
+
+  final String vanillaClass;
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+  final Completer<bool> result = Completer<bool>();
+
+  bool get isValid =>
+      vanillaClass.isNotEmpty &&
+      vanillaClass.trim() == vanillaClass &&
+      projectRoot.isNotEmpty &&
+      projectId.isNotEmpty &&
+      projectId.trim() == projectId &&
+      projectRevision >= 0 &&
+      projectHeadCanonicalJson.isNotEmpty;
+}
 
 /// Familiar item browser with an exact managed-R3 authoring mode.
 ///
@@ -20,6 +262,7 @@ class Revision3ItemsView extends StatefulWidget {
     this.onDirtyChanged,
     this.onSavingChanged,
     this.mutationsEnabled = true,
+    this.controller,
     super.key,
   });
 
@@ -30,6 +273,7 @@ class Revision3ItemsView extends StatefulWidget {
   final ValueChanged<bool>? onDirtyChanged;
   final ValueChanged<bool>? onSavingChanged;
   final bool mutationsEnabled;
+  final Revision3ItemsViewController? controller;
 
   @override
   State<Revision3ItemsView> createState() => _Revision3ItemsViewState();
@@ -49,11 +293,14 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
   bool _saveInFlight = false;
   Object? _activeSaveOwner;
   int _authoringScopeEpoch = 0;
+  int _itemsNavigationEpoch = 0;
+  int _itemsNavigationRequestGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _loadCurrentMode();
+    _attachController(widget.controller);
   }
 
   @override
@@ -80,6 +327,11 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
         oldAuthoring == null &&
         newAuthoring == null &&
         oldWidget.load != widget.load;
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    if (controllerChanged) oldWidget.controller?._detach(this);
     if (authoringModeChanged ||
         authoringProjectScopeChanged ||
         bundledLoaderChanged ||
@@ -87,6 +339,8 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
       _resetAndReload();
     } else if (authoringCheckpointChanged) {
       _reloadAuthoringCheckpoint();
+    } else {
+      _attachController(widget.controller);
     }
     if (!identical(oldWidget.onDirtyChanged, widget.onDirtyChanged)) {
       oldWidget.onDirtyChanged?.call(false);
@@ -100,6 +354,9 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
 
   @override
   void dispose() {
+    _itemsNavigationEpoch++;
+    _itemsNavigationRequestGeneration++;
+    widget.controller?._detach(this);
     _search.dispose();
     _lastReportedDirty = false;
     widget.onDirtyChanged?.call(false);
@@ -109,6 +366,9 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
 
   void _resetAndReload() {
     _authoringScopeEpoch++;
+    _itemsNavigationEpoch++;
+    _itemsNavigationRequestGeneration++;
+    widget.controller?._detach(this);
     _search.clear();
     _query = '';
     _category = null;
@@ -121,6 +381,7 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
     _reportDirty();
     if (wasSaving) widget.onSavingChanged?.call(false);
     _loadCurrentMode();
+    _attachController(widget.controller);
   }
 
   void _loadCurrentMode() {
@@ -142,8 +403,143 @@ class _Revision3ItemsViewState extends State<Revision3ItemsView> {
   void _reloadAuthoringCheckpoint() {
     final authoring = widget.authoring;
     if (authoring == null) return;
+    _itemsNavigationEpoch++;
+    _itemsNavigationRequestGeneration++;
+    widget.controller?._detach(this);
     _catalog = null;
     _authoringCatalog = _itemCatalogObservedLoad(authoring.loadCatalog);
+    _attachController(widget.controller);
+  }
+
+  void _attachController(Revision3ItemsViewController? controller) {
+    if (controller == null) return;
+    final authoring = widget.authoring;
+    final catalogFuture = _authoringCatalog;
+    if (widget.authoringRequiresReopen ||
+        authoring == null ||
+        catalogFuture == null) {
+      controller._markUnavailable(this);
+      return;
+    }
+    controller._attach(
+      this,
+      projectRoot: authoring.projectScopeIdentity,
+      projectId: authoring.projectId,
+      projectRevision: authoring.projectRevision,
+      projectHeadCanonicalJson: authoring.expectedHead.canonicalJson,
+      openVanillaClass:
+          (
+            vanillaClass, {
+            required expectedProjectRoot,
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required expectedProjectHeadCanonicalJson,
+          }) => _openVanillaClassAtCheckpoint(
+            controller,
+            catalogFuture,
+            vanillaClass,
+            expectedProjectRoot: expectedProjectRoot,
+            expectedProjectId: expectedProjectId,
+            expectedProjectRevision: expectedProjectRevision,
+            expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+          ),
+    );
+  }
+
+  Future<bool> _openVanillaClassAtCheckpoint(
+    Revision3ItemsViewController controller,
+    Future<Revision3ItemPatchCatalog> catalogFuture,
+    String vanillaClass, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    final navigationEpoch = _itemsNavigationEpoch;
+    final requestGeneration = ++_itemsNavigationRequestGeneration;
+    if (!_matchesItemsCheckpoint(
+      controller,
+      catalogFuture,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    )) {
+      return false;
+    }
+    late final Revision3ItemPatchCatalog catalog;
+    try {
+      catalog = await catalogFuture;
+    } catch (_) {
+      return false;
+    }
+    if (navigationEpoch != _itemsNavigationEpoch ||
+        requestGeneration != _itemsNavigationRequestGeneration ||
+        !_matchesItemsCheckpoint(
+          controller,
+          catalogFuture,
+          expectedProjectRoot: expectedProjectRoot,
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+        ) ||
+        catalog.projectId != expectedProjectId ||
+        catalog.projectRevision != expectedProjectRevision ||
+        catalog.head.canonicalJson != expectedProjectHeadCanonicalJson) {
+      return false;
+    }
+    Revision3ItemPatchChoice? choice;
+    for (final candidate in catalog.choices) {
+      if (candidate.vanillaClass == vanillaClass) {
+        choice = candidate;
+        break;
+      }
+    }
+    if (choice == null || !choice.hasPatch) return false;
+    await WidgetsBinding.instance.endOfFrame;
+    if (navigationEpoch != _itemsNavigationEpoch ||
+        requestGeneration != _itemsNavigationRequestGeneration ||
+        !_matchesItemsCheckpoint(
+          controller,
+          catalogFuture,
+          expectedProjectRoot: expectedProjectRoot,
+          expectedProjectId: expectedProjectId,
+          expectedProjectRevision: expectedProjectRevision,
+          expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+        ) ||
+        _saveInFlight) {
+      return false;
+    }
+    setState(() {
+      _search.clear();
+      _query = '';
+      _category = null;
+      _selectedId = choice!.vanillaClass;
+      _compactDetailVisible = true;
+    });
+    return true;
+  }
+
+  bool _matchesItemsCheckpoint(
+    Revision3ItemsViewController controller,
+    Future<Revision3ItemPatchCatalog> catalogFuture, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) {
+    final authoring = widget.authoring;
+    return mounted &&
+        identical(widget.controller, controller) &&
+        controller._isAttachedTo(this) &&
+        !widget.authoringRequiresReopen &&
+        authoring != null &&
+        identical(_authoringCatalog, catalogFuture) &&
+        authoring.projectScopeIdentity == expectedProjectRoot &&
+        authoring.projectId == expectedProjectId &&
+        authoring.projectRevision == expectedProjectRevision &&
+        authoring.expectedHead.canonicalJson ==
+            expectedProjectHeadCanonicalJson;
   }
 
   void _retry() => setState(_resetAndReload);

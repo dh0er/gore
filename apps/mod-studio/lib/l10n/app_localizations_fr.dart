@@ -1134,6 +1134,10 @@ class AppLocalizationsFr extends AppLocalizations {
   String get managedDashboardContentCounts => 'Contenu du projet';
 
   @override
+  String get managedDashboardChangesDescription =>
+      'Everything currently saved in this exact project, grouped by what you can work on. Generated helpers stay attached only when their relationship is proven.';
+
+  @override
   String get managedDashboardNpcDrafts => 'Brouillons de PNJ';
 
   @override
@@ -1147,6 +1151,42 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get managedDashboardAssets => 'Ressources';
+
+  @override
+  String get managedDashboardItemPatches => 'Items';
+
+  @override
+  String get managedDashboardLocalizationEntries => 'Project text';
+
+  @override
+  String get managedDashboardVoiceSlots => 'Voice target';
+
+  @override
+  String get managedDashboardGeneratedScripts => 'Generated script';
+
+  @override
+  String get managedDashboardSelectedVoiceTake => 'Selected take';
+
+  @override
+  String get managedDashboardTechnicalContent => 'Technical content';
+
+  @override
+  String get managedDashboardTechnicalContentDescription =>
+      'Generated or problematic helpers that cannot be safely assigned to an author-facing change.';
+
+  @override
+  String get managedDashboardEmptyChangesTitle => 'No changes yet';
+
+  @override
+  String get managedDashboardEmptyChangesDescription =>
+      'Use Create, Content, or Story to add the first project change. Nothing has been written to the game or a save.';
+
+  @override
+  String get managedDashboardOpenChange => 'Open this exact project change';
+
+  @override
+  String get managedDashboardChangeActionFailed =>
+      'This project change is no longer current. Reload the project overview and try again.';
 
   @override
   String get managedDashboardUnresolvedReferences => 'Références non résolues';

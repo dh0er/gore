@@ -18,7 +18,7 @@ Related evidence and operating boundaries:
 - [Managed project snapshot export](managed-project-export.md)
 - [Managed project snapshot import V2](managed-project-import.md)
 
-### Current implementation delta (2026-07-18)
+### Current implementation delta (2026-07-28)
 
 **Unreleased format policy:** Mod Studio has never been released. Managed
 revision 3 is the sole product project and session model, and Snapshot V2 is the
@@ -42,6 +42,23 @@ been consolidated:
   History and Settings are secondary command-bar actions that open focused
   dialogs instead of competing primary destinations. This is presentation only
   and grants no format, mutation, build, deployment, or runtime authority.
+- Home now replaces its count/readiness-card overview with exact-current
+  **My mod / Changes**. One pure projection groups saved Quest, NPC, ItemPatch,
+  Dialog, Localization, and Voice entities from the current managed-R3 content
+  index and adds DataAssets only from the independently loaded exact stage
+  registry. A related or generated helper is nested only when resolved
+  same-project typed references and reciprocal ownership evidence prove one
+  unique owner; unresolved or unproven generated helpers remain visible once
+  under an initially collapsed Technical section. Authored entries with
+  problems stay in their normal group with a problem cue. Quest and NPC rows
+  open Story, ItemPatch rows open the exact current vanilla class in Items,
+  verified DataAsset rows reopen their exact stage, and other entity rows
+  continue into Content until a dedicated typed handoff exists. Loading and
+  every action stay bound to root, project ID, revision, and canonical head;
+  project switches, same-revision head drift, stale reads, and late callbacks
+  fail closed. This is a saved-content and navigation projection only: it
+  creates no project mutation and grants no build, deployment, publication,
+  game/save-write, or runtime authority.
 - **Test & Release** now presents six independently truthful areas: project
   structure, scripts, Voice, DataAssets, playable build, and deployment. It
   embeds the existing Problems surface and the current Voice readiness/build
@@ -380,30 +397,35 @@ until its separately approved implementation begins. The workspace lazily
 mounts pages, preserves the selected primary job and mounted page state across
 revisions of the same project, and resets to Home when project identity changes.
 
-This shell remains an evolving product surface, but Home now follows the compact
-task-router direction. The compact standalone tools remain the minimum
-discoverability and task-efficiency baseline for workflows that already work
-there. Rehost each useful workflow directly on managed R3 before retiring its
-standalone presentation. The jobs above define stable product
-responsibilities; related responsibilities may be presented together in one
-productive workspace through progressive disclosure instead of multiplying
-dashboards, cards, and modal launchers. Major changes to that presentation
-require user review before they become the product direction.
+This shell remains an evolving product surface, but Home now follows a compact
+content-first orientation rather than a count/readiness dashboard. The compact
+standalone tools remain the minimum discoverability and task-efficiency
+baseline for workflows that already work there. Rehost each useful workflow
+directly on managed R3 before retiring its standalone presentation. The jobs
+above define stable product responsibilities; related responsibilities may be
+presented together in one productive workspace through progressive disclosure
+instead of multiplying dashboards, cards, and modal launchers. Major changes
+to that presentation require user review before they become the product
+direction.
 
-Home loads the exact-current `Revision3ContentIndex` and leads with **Story**,
-**Text & Voice**, **Problems**, **Content**, and **Test & Release** before
-compact counts and readiness. It no longer duplicates low-level authoring,
-import, build, or export launchers: Story owns NPC/Quest creation, the domain
-workspaces own their operations, and Project owns export. Story opens a direct
-exact-current NPC/Quest search, filter, list, creation, and Workbench surface;
-Text & Voice exposes the bounded take, selection, and target actions. Test &
-Release combines honest project checks with the bounded Voice continuation but
-does not infer project-wide readiness. History and Settings remain available
-from the command bar. World authoring, runtime testing, and full managed
-build/deploy remain unavailable. Root, project ID, revision,
-and head stay collapsed as technical details, while the `requiresReopen`
-recovery gate remains outside the workspace. This shell grants no new game/save
-writes, deployment, project-wide build, or runtime authority.
+Home loads the exact-current `Revision3ContentIndex` and exact verified
+DataAsset stage registry for **My mod / Changes**. It groups saved author
+content, nests only uniquely proven helpers, keeps unresolved or unproven
+generated helpers under Technical, and routes exact rows to their current
+owning workspace. The existing **Story**, **Text & Voice**, **Problems**,
+**Content**, and **Test & Release** task rows remain temporarily but no longer
+precede a compact count/readiness grid. Home does not duplicate low-level
+authoring, import, build, or export launchers: Story owns NPC/Quest creation,
+the domain workspaces own their operations, and Project owns export. Story
+opens a direct exact-current NPC/Quest search, filter, list, creation, and
+Workbench surface; Text & Voice exposes the bounded take, selection, and target
+actions. Test & Release combines honest project checks with the bounded Voice
+continuation but does not infer project-wide readiness. History and Settings
+remain available from the command bar. World authoring, runtime testing, and
+full managed build/deploy remain unavailable. Root, project ID, revision, and
+head stay collapsed as technical details, while the `requiresReopen` recovery
+gate remains outside the workspace. This shell grants no new game/save writes,
+deployment, project-wide build, or runtime authority.
 
 The Content Library now exposes explicit `This mod`, `Base game`, `Installed`,
 and `Search all` scopes and does not render a fake `Dependencies` scope before
@@ -554,19 +576,41 @@ V2](managed-project-import.md).
 
 ### 4.1 Project dashboard
 
-The implemented managed-project Home is a compact task router, not a second
-editor or a collection of modal launch cards. It has exactly five continuations:
-**Story**, **Text & Voice**, **Problems**, **Content**, and **Test & Release**.
-Each opens the canonical workspace that owns the job. Story owns the recommended
-**Character + first greeting** and **Quest + opening line** flows plus the
-advanced NPC-only and Quest-only Drafts. Text & Voice owns project text,
-dialog-line, and Voice actions;
-Test & Release owns Problems and output checks; Content owns discovery and
-DataAsset work. Export stays in the Project menu. Normal chrome
-calls this a **Mod Studio project** and keeps schema/head vocabulary in technical
-details. The five stable primary jobs use direct, horizontally scrollable tabs.
-The useful standalone layout remains a UX reference only and grants no project
-or session authority.
+The implemented managed-project Home is a compact current-project orientation
+and continuation surface, not a second editor or a collection of modal launch
+cards. Its **My mod / Changes** section replaces the former count/readiness
+cards with the actual saved author-facing work from the exact current
+managed-R3 content index plus the exact verified DataAsset stage registry. It
+groups top-level entries as Quests, NPCs, Items, DataAssets, Dialog, Text, and
+Voice. Every entity appears once. Related dialog, localization, Voice, and
+generated-script helpers are nested only when resolved same-project typed
+references and reciprocal ownership evidence prove one unique owner. Unresolved
+or unproven generated helpers remain visible in an initially collapsed
+Technical section, while authored entries with problems stay in their normal
+group with a problem cue. DataAssets come only from the stage registry, never
+from an inferred content-index asset entry.
+
+Quest and NPC rows continue into Story, ItemPatch rows select the exact current
+vanilla class in Items, verified DataAsset rows reopen the exact current stage,
+and the remaining entity rows open Content until their dedicated typed
+workspace handoffs exist. The host and every continuation remain bound to the
+same root, project ID, revision, and canonical head and revalidate the
+action-specific evidence before acting. Same-revision head drift, project
+switch, stale completion, detach, and disposal fail closed. The projection
+owns no mutation, build, deployment, publication, game/save-write, or runtime
+authority.
+
+Home also retains the five current workspace continuations **Story**, **Text &
+Voice**, **Problems**, **Content**, and **Test & Release**. Each opens the
+canonical workspace that owns the job. Story owns the recommended **Character +
+first greeting** and **Quest + opening line** flows plus the advanced NPC-only
+and Quest-only Drafts. Text & Voice owns project text, dialog-line, and Voice
+actions; Test & Release owns Problems and output checks; Content owns discovery
+and DataAsset work. Export stays in the Project menu. Normal chrome calls this a
+**Mod Studio project** and keeps schema/head vocabulary in technical details.
+The five stable primary jobs use direct, horizontally scrollable tabs. The
+useful standalone layout remains a UX reference only and grants no project or
+session authority.
 
 Project Work Bar V1 is the persistent project-level chrome shared by all five
 primary jobs. It keeps the index-derived friendly project name (using only
@@ -617,14 +661,17 @@ Creating a project is a guided, resumable onboarding flow:
 5. Index the sealed base-game and dependency catalogs, then open a useful first
    task rather than an empty backend tab.
 
-The dashboard shows the game version, languages, entity and change counts,
-unresolved diagnostics, readiness summary, build status, test-deploy state, and
-dependency/loadout status. If a deployment is active, it shows a human-readable
-ownership/recovery summary; the exact installation receipt is available in its
-Advanced details. It also offers recent projects, crash recovery, tutorials,
-and the next useful action. “Build” never means “Deploy.” A hotfix that changes
-a sealed source invalidates affected derived artifacts and opens the rebase
-workflow; it does not silently rebuild against a different version.
+Home intentionally does not recreate entity-count or readiness dashboards. It
+keeps friendly project context, exact semantic changes, unresolved problem
+cues, and the next useful author continuation close together. Complete
+readiness, build status, dependency/loadout review, active test-deploy state,
+and any human-readable deployment ownership/recovery summary belong to **Test
+& Release**; exact receipts remain Advanced details there. Recent projects,
+crash recovery, and onboarding guidance belong to their focused no-project or
+recovery states rather than a second current-project dashboard. “Build” never
+means “Deploy.” A hotfix that changes a sealed source invalidates affected
+derived artifacts and opens the rebase workflow; it does not silently rebuild
+against a different version.
 
 ### 4.2 Unified content browser
 

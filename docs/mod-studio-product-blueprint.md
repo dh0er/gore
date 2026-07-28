@@ -90,18 +90,29 @@ This is also a status-reporting rule: every project capability is described
 against managed R3 alone. Useful standalone jobs move directly to R3 without an
 intermediate project mode or second authority surface.
 
-The implemented managed-project Home follows that rule: it is one compact
-five-task router for **Story**, **Text & Voice**, **Problems**, **Content**,
-and **Test & Release**. It does not duplicate low-level create/import/build
-dialogs. NPC and Quest creation—including the recommended Quest plus opening
-line—belongs to Story; dialog and Voice work belongs to Text & Voice;
-DataAssets belong to Content; export remains in the Project menu. Normal chrome
-uses “Mod Studio project” rather than schema-revision terminology. Exactly five
-primary jobs appear as direct, horizontally scrollable tabs: Home, Content,
-Story, Text & Voice, and Test & Release. Lazy mounting and per-project state
-remain intact. World stays hidden until its separately approved work begins.
-The classic standalone layout remains the usability floor while owning no
-project or session state.
+The implemented managed-project Home follows that rule: **My mod / Changes**
+shows the exact current saved work instead of count/readiness cards. It groups
+Quest, NPC, Item, verified DataAsset, Dialog, Text, and Voice changes by author
+concept; uniquely proven related/generated helpers stay below their owner,
+while unresolved or unproven generated helpers remain visible once in a
+collapsed Technical section. Authored entries with problems stay in their
+normal group with a problem cue. Every row stays bound to the exact root,
+project ID, revision, and canonical head and continues into its current owning
+workspace. DataAssets come only from the exact verified stage registry, not
+from inferred asset entries. This projection is orientation and navigation,
+not another project state, readiness result, build plan, or runtime claim.
+
+Home currently also retains compact continuations for **Story**, **Text &
+Voice**, **Problems**, **Content**, and **Test & Release** without duplicating
+their low-level create/import/build dialogs. NPC and Quest creation—including
+the recommended Quest plus opening line—belongs to Story; dialog and Voice work
+belongs to Text & Voice; DataAssets belong to Content; export remains in the
+Project menu. Normal chrome uses “Mod Studio project” rather than schema-
+revision terminology. Exactly five primary jobs appear as direct, horizontally
+scrollable tabs: Home, Content, Story, Text & Voice, and Test & Release. Lazy
+mounting and per-project state remain intact. World stays hidden until its
+separately approved work begins. The classic standalone layout remains the
+usability floor while owning no project or session state.
 The persistent **Project Work Bar V1** now keeps the friendly project name and
 current area visible above every primary job and exposes the common
 continuations **Undo**, **Search**, **Create**, and **Problems**. Undo reuses the
@@ -564,18 +575,23 @@ command-bar dialogs. World is absent until its approved implementation begins.
 Pages lazy-mount and retain primary selection and mounted state across
 same-project revision refreshes; a
 different project identity resets to Home. Home reads the exact-current
-`Revision3ContentIndex` and leads with five task routes—**Story**, **Text &
-Voice**, **Problems**, **Content**, and **Test & Release**—before compact counts
-and readiness. It no longer hosts duplicate low-level authoring, import, build,
-or export actions: Story owns creation, domain workspaces own their operations,
-and Project owns export. Durable root/ID/revision/head identity remains
-available under collapsed technical details, and managed Save verifies the
-exact head. The persistent Project Work Bar now keeps the friendly project name
-and selected area visible above those lazy pages. Its Search/Create/Problems
-continuations route into the existing Content, Story, Text & Voice, and Test &
-Release owners; they do not duplicate their state or permissions. Creation
-uses the same absent-head publication, full reopen, recovery, and single-owner
-adoption rules rather than introducing another project format.
+`Revision3ContentIndex` plus exact verified DataAsset stage registry and shows
+the saved work as **My mod / Changes** instead of compact count/readiness
+cards. Author content is grouped, only uniquely proven helpers are nested,
+unresolved or unproven generated helpers remain under Technical, and exact
+rows continue into their current owning workspace. The five **Story**, **Text &
+Voice**, **Problems**, **Content**, and **Test & Release** task routes remain
+temporarily, but Home no longer hosts duplicate low-level authoring, import,
+build, or export actions: Story owns creation, domain workspaces own their
+operations, and Project owns export. Durable root/ID/revision/head identity
+remains available under collapsed technical details, and managed Save verifies
+the exact head. The persistent Project Work Bar now keeps the friendly project
+name and selected area visible above those lazy pages. Its
+Search/Create/Problems continuations route into the existing Content, Story,
+Text & Voice, and Test & Release owners; they do not duplicate their state or
+permissions. Creation uses the same absent-head publication, full reopen,
+recovery, and single-owner adoption rules rather than introducing another
+project format.
 Dirty transitions, failed candidate preservation, `requiresReopen`, and terminal
 cleanup diagnostics are handled outside the workspace at the shell boundary.
 Classic editors, Build/Deploy, Save As, and Story actions cannot act on obsolete

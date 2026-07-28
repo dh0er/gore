@@ -2155,6 +2155,7 @@ class _ManagedRevision3ProjectViewState
   late Revision3StoryWorkspaceController _storyWorkspaceController;
   late Revision3LocalizationVoiceWorkspaceController
   _localizationVoiceWorkspaceController;
+  late Revision3ItemsViewController _itemsViewController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   late Revision3ProjectCompilerCheckController _projectCompilerController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
@@ -2650,6 +2651,7 @@ class _ManagedRevision3ProjectViewState
     _storyWorkspaceController = Revision3StoryWorkspaceController();
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
+    _itemsViewController = Revision3ItemsViewController();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
     _projectCompilerController = Revision3ProjectCompilerCheckController(
       checkpoint: _projectCompilerCheckpoint,
@@ -2712,6 +2714,8 @@ class _ManagedRevision3ProjectViewState
     _localizationVoiceWorkspaceController.dispose();
     _localizationVoiceWorkspaceController =
         Revision3LocalizationVoiceWorkspaceController();
+    _itemsViewController.dispose();
+    _itemsViewController = Revision3ItemsViewController();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
@@ -2821,6 +2825,7 @@ class _ManagedRevision3ProjectViewState
     _contentLibraryController.dispose();
     _storyWorkspaceController.dispose();
     _localizationVoiceWorkspaceController.dispose();
+    _itemsViewController.dispose();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
     _scopedContentBrowserController.dispose();
@@ -3859,6 +3864,7 @@ class _ManagedRevision3ProjectViewState
           ),
     ),
     items: Revision3ItemsView(
+      controller: _itemsViewController,
       authoringRequiresReopen: project.requiresReopen,
       onRecoverAuthoring:
           project.requiresReopen &&
@@ -4758,6 +4764,10 @@ class _ManagedRevision3ProjectViewState
 
   Widget _buildDashboard(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
+    final dashboardProjectRoot = project.root.path;
+    final dashboardProjectId = project.projectId;
+    final dashboardProjectRevision = project.projectRevision;
+    final dashboardProjectHeadCanonicalJson = project.head.canonicalJson;
     bool hasStoryDraft(Revision3ContentIndex index) => index.entities.any(
       (entity) =>
           entity.kind == Revision3ContentEntityKind.npcDraft ||
@@ -4772,9 +4782,12 @@ class _ManagedRevision3ProjectViewState
     );
 
     return Revision3ProjectDashboard(
+      projectRoot: dashboardProjectRoot,
       projectId: project.projectId,
       projectRevision: project.projectRevision,
+      projectHeadCanonicalJson: dashboardProjectHeadCanonicalJson,
       load: loadContentIndex,
+      loadDataAssetStages: loadDataAssetStages,
       gameConfigured: gameConfigured,
       copy: Revision3ProjectDashboardCopy(
         untitledProjectLabel: l10n.managedDashboardUntitledProject,
@@ -4783,26 +4796,26 @@ class _ManagedRevision3ProjectViewState
         projectAuthorLabel: l10n.managedDashboardProjectAuthor,
         notProvidedLabel: l10n.managedDashboardNotProvided,
         contentCountsHeading: l10n.managedDashboardContentCounts,
+        changesDescription: l10n.managedDashboardChangesDescription,
         npcDraftCountLabel: l10n.managedDashboardNpcDrafts,
         questDraftCountLabel: l10n.managedDashboardQuestDrafts,
         dialogLineCountLabel: l10n.managedDashboardDialogLines,
         voiceTakeCountLabel: l10n.managedDashboardVoiceTakes,
         assetCountLabel: l10n.managedDashboardAssets,
+        itemPatchLabel: l10n.managedDashboardItemPatches,
+        localizationEntryLabel: l10n.managedDashboardLocalizationEntries,
+        voiceSlotLabel: l10n.managedDashboardVoiceSlots,
+        generatedScriptLabel: l10n.managedDashboardGeneratedScripts,
+        selectedVoiceTakeLabel: l10n.managedDashboardSelectedVoiceTake,
+        technicalContentLabel: l10n.managedDashboardTechnicalContent,
+        technicalContentDescription:
+            l10n.managedDashboardTechnicalContentDescription,
+        emptyChangesTitle: l10n.managedDashboardEmptyChangesTitle,
+        emptyChangesDescription: l10n.managedDashboardEmptyChangesDescription,
+        openChangeLabel: l10n.managedDashboardOpenChange,
+        changeActionFailedMessage: l10n.managedDashboardChangeActionFailed,
         unresolvedReferenceCountLabel:
             l10n.managedDashboardUnresolvedReferences,
-        readinessHeading: l10n.managedDashboardReadiness,
-        offlineAuthoringTitle: l10n.managedDashboardOfflineAuthoringTitle,
-        offlineAuthoringDescription:
-            l10n.managedDashboardOfflineAuthoringDescription,
-        generalBuildBlockedTitle: l10n.managedDashboardGeneralBuildBlockedTitle,
-        generalBuildBlockedDescription:
-            l10n.managedDashboardGeneralBuildBlockedDescription,
-        runtimeUnqualifiedTitle: l10n.managedDashboardRuntimeUnqualifiedTitle,
-        runtimeUnqualifiedDescription:
-            l10n.managedDashboardRuntimeUnqualifiedDescription,
-        referenceIntegrityTitle: l10n.managedDashboardReferenceIntegrityTitle,
-        referenceIntegrityDescription:
-            l10n.managedDashboardReferenceIntegrityDescription,
         missingGameTitle: l10n.managedDashboardMissingGameTitle,
         missingGameDescription: l10n.managedDashboardMissingGameDescription,
         continueHeading: l10n.managedDashboardContinueHeading,
@@ -4811,6 +4824,32 @@ class _ManagedRevision3ProjectViewState
         loadErrorTitle: l10n.managedDashboardLoadError,
         loadErrorDescription: l10n.managedDashboardLoadErrorDescription,
         retryLabel: l10n.managedDashboardRetry,
+      ),
+      changeActions: Revision3ProjectDashboardChangeActions(
+        openEntity: (entity) => _openDashboardEntity(
+          context,
+          entity: entity,
+          expectedProjectRoot: dashboardProjectRoot,
+          expectedProjectId: dashboardProjectId,
+          expectedProjectRevision: dashboardProjectRevision,
+          expectedProjectHeadCanonicalJson: dashboardProjectHeadCanonicalJson,
+        ),
+        openItemPatch: (vanillaClass) => _openDashboardItemPatch(
+          context,
+          vanillaClass: vanillaClass,
+          expectedProjectRoot: dashboardProjectRoot,
+          expectedProjectId: dashboardProjectId,
+          expectedProjectRevision: dashboardProjectRevision,
+          expectedProjectHeadCanonicalJson: dashboardProjectHeadCanonicalJson,
+        ),
+        openDataAsset: (stage) => _openDashboardDataAsset(
+          context,
+          stage: stage,
+          expectedProjectRoot: dashboardProjectRoot,
+          expectedProjectId: dashboardProjectId,
+          expectedProjectRevision: dashboardProjectRevision,
+          expectedProjectHeadCanonicalJson: dashboardProjectHeadCanonicalJson,
+        ),
       ),
       tasks: [
         Revision3ProjectDashboardAction(
@@ -6697,6 +6736,161 @@ class _ManagedRevision3ProjectViewState
           ),
         );
       }),
+    );
+  }
+
+  bool _isExactCurrentDashboardProject(
+    BuildContext context, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) {
+    final current = currentManagedProject;
+    return context.mounted &&
+        current != null &&
+        !current.requiresReopen &&
+        current.root.path == expectedProjectRoot &&
+        current.projectId == expectedProjectId &&
+        current.projectRevision == expectedProjectRevision &&
+        current.head.canonicalJson == expectedProjectHeadCanonicalJson;
+  }
+
+  Future<void> _openDashboardEntity(
+    BuildContext context, {
+    required Revision3ContentEntity entity,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isCurrent() => _isExactCurrentDashboardProject(
+      context,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    if (!isCurrent()) {
+      throw StateError('The exact project change is no longer available.');
+    }
+    final index = await loadContentIndex();
+    if (!context.mounted ||
+        !isCurrent() ||
+        index.projectId != expectedProjectId ||
+        index.projectRevision != expectedProjectRevision) {
+      throw StateError('The exact project change is no longer available.');
+    }
+    final currentEntity = index.entityById(entity.id);
+    if (currentEntity == null ||
+        currentEntity.kind != entity.kind ||
+        currentEntity.revision != entity.revision) {
+      throw StateError('The exact project change is no longer available.');
+    }
+    if (currentEntity.kind == Revision3ContentEntityKind.questDraft ||
+        currentEntity.kind == Revision3ContentEntityKind.npcDraft) {
+      final outcome = await _tryOpenDraftInStory(
+        context,
+        index,
+        currentEntity,
+        section: Revision3StoryEntityWorkbench.defaultSectionFor(currentEntity),
+      );
+      if (outcome == _StoryDraftHandoffOutcome.opened && isCurrent()) return;
+      throw StateError('The exact project change is no longer available.');
+    }
+
+    final open = _contentLibraryController.openEntityByIdAtCheckpoint(
+      currentEntity.id,
+      projectRevision: expectedProjectRevision,
+      projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+      ),
+    );
+    if (await open && isCurrent()) return;
+    throw StateError('The exact project change is no longer available.');
+  }
+
+  Future<void> _openDashboardItemPatch(
+    BuildContext context, {
+    required String vanillaClass,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isCurrent() => _isExactCurrentDashboardProject(
+      context,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    if (!isCurrent()) {
+      throw StateError('The exact Item change is no longer available.');
+    }
+    final open = _itemsViewController.openVanillaClassAtCheckpoint(
+      vanillaClass,
+      projectRoot: expectedProjectRoot,
+      projectId: expectedProjectId,
+      projectRevision: expectedProjectRevision,
+      projectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    Revision3ProjectWorkspace.navigate(
+      context,
+      Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+        secondary: Revision3ContentWorkspaceView.items.secondaryRoute,
+      ),
+    );
+    if (await open && isCurrent()) return;
+    throw StateError('The exact Item change is no longer available.');
+  }
+
+  Future<void> _openDashboardDataAsset(
+    BuildContext context, {
+    required AuthoringRevision3DataAssetStage stage,
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isCurrent() => _isExactCurrentDashboardProject(
+      context,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    if (!isCurrent() ||
+        stage.projectId != expectedProjectId ||
+        stage.stagedProjectRevision > expectedProjectRevision) {
+      throw StateError('The exact DataAsset edit is no longer available.');
+    }
+    final stages = await loadDataAssetStages();
+    if (!context.mounted || !isCurrent()) {
+      throw StateError('The exact DataAsset edit is no longer available.');
+    }
+    final exactStage = stages.where(
+      (candidate) =>
+          candidate.targetPath == stage.targetPath &&
+          candidate.stagedProjectRevision == stage.stagedProjectRevision &&
+          candidate.manifestAsset.sha256 == stage.manifestAsset.sha256 &&
+          candidate.manifestAsset.byteLength == stage.manifestAsset.byteLength,
+    );
+    if (exactStage.length != 1) {
+      throw StateError('The exact DataAsset edit is no longer available.');
+    }
+    await _openProblemDataAssetStage(
+      context,
+      targetPath: stage.targetPath,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
     );
   }
 
