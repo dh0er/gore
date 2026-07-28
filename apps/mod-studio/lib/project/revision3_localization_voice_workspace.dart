@@ -20,55 +20,155 @@ typedef Revision3LocalizationPublished =
 typedef Revision3LocalizationVoiceCatalogLoader =
     Future<Revision3VoiceCatalog> Function();
 
-/// Opaque, exact-current handoff into one project-text / dialog-line / locale.
+/// Opaque, exact-current handoff into one project-text and optional Voice
+/// context.
 ///
-/// The stable key and line identity are orchestration authority only. They are
-/// never rendered by this workspace. Callers must bind the request to the
-/// exact checkpoint that produced their friendly transcript projection.
+/// A Story surface can reuse its exact catalog [localizationStableKey]. A Home
+/// entity surface instead supplies [localizationEntityId], which the workspace
+/// resolves through the freshly loaded catalog. Optional line, locale, slot,
+/// and take identities form a strict hierarchy and are orchestration authority
+/// only; this workspace never renders them.
 @immutable
 final class Revision3LocalizationVoiceTarget {
-  const Revision3LocalizationVoiceTarget({
+  const Revision3LocalizationVoiceTarget.storyCatalogKey({
     required this.projectId,
     required this.projectRevision,
     required this.projectCheckpointIdentity,
-    required this.localizationStableKey,
-    required this.lineId,
-    required this.locale,
-  }) : assert(projectId != ''),
+    required String localizationStableKey,
+    this.lineId,
+    this.locale,
+    this.voiceSlotId,
+    this.voiceTakeId,
+  }) : localizationStableKey = localizationStableKey,
+       localizationEntityId = null,
+       assert(projectId != ''),
        assert(projectRevision >= 1),
        assert(localizationStableKey != ''),
-       assert(lineId != ''),
-       assert(locale != '');
+       assert(
+         localizationStableKey.length <= 256,
+         'localizationStableKey must stay bounded',
+       ),
+       assert(
+         lineId == null || lineId.length == 32,
+         'lineId must be one exact entity ID',
+       ),
+       assert(
+         locale == null || (lineId != null && locale != ''),
+         'locale requires one exact DialogLine',
+       ),
+       assert(
+         voiceSlotId == null ||
+             (lineId != null && locale != null && voiceSlotId.length == 32),
+         'voiceSlotId requires one exact DialogLine and locale',
+       ),
+       assert(
+         voiceTakeId == null ||
+             (voiceTakeId.length == 32 && voiceSlotId != null),
+         'voiceTakeId requires one exact VoiceSlot',
+       );
+
+  const Revision3LocalizationVoiceTarget.localizationEntity({
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectCheckpointIdentity,
+    required String localizationEntityId,
+    this.lineId,
+    this.locale,
+    this.voiceSlotId,
+    this.voiceTakeId,
+  }) : localizationStableKey = null,
+       localizationEntityId = localizationEntityId,
+       assert(projectId != ''),
+       assert(projectRevision >= 1),
+       assert(
+         localizationEntityId.length == 32,
+         'localizationEntityId must be one exact entity ID',
+       ),
+       assert(
+         lineId == null || lineId.length == 32,
+         'lineId must be one exact entity ID',
+       ),
+       assert(
+         locale == null || (lineId != null && locale != ''),
+         'locale requires one exact DialogLine',
+       ),
+       assert(
+         voiceSlotId == null ||
+             (lineId != null && locale != null && voiceSlotId.length == 32),
+         'voiceSlotId requires one exact DialogLine and locale',
+       ),
+       assert(
+         voiceTakeId == null ||
+             (voiceTakeId.length == 32 && voiceSlotId != null),
+         'voiceTakeId requires one exact VoiceSlot',
+       );
 
   final String projectId;
   final int projectRevision;
   final Object projectCheckpointIdentity;
-  final String localizationStableKey;
-  final String lineId;
-  final String locale;
+  final String? localizationStableKey;
+  final String? localizationEntityId;
+  final String? lineId;
+  final String? locale;
+  final String? voiceSlotId;
+  final String? voiceTakeId;
+
+  bool get requiresVoiceCatalog => voiceSlotId != null || voiceTakeId != null;
 }
 
-/// Lifecycle-safe controller for exact Story-to-Localization handoffs.
+/// Result of one exact Text & Voice handoff.
+///
+/// [declined] is reserved for an author who explicitly keeps an unsaved draft.
+/// Every stale, invalid, failed, superseded, or lifecycle-cancelled request is
+/// [rejected].
+enum Revision3LocalizationVoiceOpenOutcome { opened, declined, rejected }
+
+/// Lifecycle-safe controller for exact Story/Home-to-Localization handoffs.
 ///
 /// One controller attaches to at most one workspace. A newer request
 /// supersedes an older request, project switches cancel pending work, and a
-/// request resolves `true` only after the exact choice, line backlink, and
-/// locale have all been re-read from the matching project checkpoint.
+/// request is [Revision3LocalizationVoiceOpenOutcome.opened] only after the
+/// exact choice, line backlink, and locale have all been re-read from the
+/// matching project checkpoint.
 final class Revision3LocalizationVoiceWorkspaceController {
   Object? _attachment;
-  Future<bool> Function(Revision3LocalizationVoiceTarget target)? _openTarget;
+  Future<Revision3LocalizationVoiceOpenOutcome> Function(
+    Revision3LocalizationVoiceTarget target,
+  )?
+  _openTarget;
   VoidCallback? _cancelPendingTarget;
+  _PendingLocalizationVoiceTarget? _bufferedTarget;
   bool _disposed = false;
 
-  Future<bool> openExactTarget(Revision3LocalizationVoiceTarget target) {
+  Future<Revision3LocalizationVoiceOpenOutcome> openExactTarget(
+    Revision3LocalizationVoiceTarget target,
+  ) {
+    if (_disposed || !_localizationVoiceTargetShapeIsValid(target)) {
+      return Future<Revision3LocalizationVoiceOpenOutcome>.value(
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+    }
     final open = _openTarget;
-    if (_disposed || open == null) return Future<bool>.value(false);
-    return open(target);
+    if (open != null) return open(target);
+    final pending = _PendingLocalizationVoiceTarget(target);
+    final superseded = _bufferedTarget;
+    _bufferedTarget = pending;
+    if (superseded != null && !superseded.result.isCompleted) {
+      superseded.result.complete(
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+    }
+    return pending.result.future;
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    final buffered = _bufferedTarget;
+    _bufferedTarget = null;
+    if (buffered != null && !buffered.result.isCompleted) {
+      buffered.result.complete(Revision3LocalizationVoiceOpenOutcome.rejected);
+    }
     _cancelPendingTarget?.call();
     _attachment = null;
     _openTarget = null;
@@ -77,7 +177,10 @@ final class Revision3LocalizationVoiceWorkspaceController {
 
   bool _attach(
     Object attachment,
-    Future<bool> Function(Revision3LocalizationVoiceTarget target) openTarget,
+    Future<Revision3LocalizationVoiceOpenOutcome> Function(
+      Revision3LocalizationVoiceTarget target,
+    )
+    openTarget,
     VoidCallback cancelPendingTarget,
   ) {
     if (_disposed ||
@@ -87,11 +190,40 @@ final class Revision3LocalizationVoiceWorkspaceController {
     _attachment = attachment;
     _openTarget = openTarget;
     _cancelPendingTarget = cancelPendingTarget;
+    final buffered = _bufferedTarget;
+    if (buffered != null) {
+      _bufferedTarget = null;
+      unawaited(_forwardBufferedTarget(attachment, buffered, openTarget));
+    }
     return true;
+  }
+
+  Future<void> _forwardBufferedTarget(
+    Object attachment,
+    _PendingLocalizationVoiceTarget pending,
+    Future<Revision3LocalizationVoiceOpenOutcome> Function(
+      Revision3LocalizationVoiceTarget target,
+    )
+    openTarget,
+  ) async {
+    var outcome = Revision3LocalizationVoiceOpenOutcome.rejected;
+    try {
+      outcome = await openTarget(pending.target);
+    } catch (_) {
+      outcome = Revision3LocalizationVoiceOpenOutcome.rejected;
+    }
+    if (!pending.result.isCompleted) {
+      pending.result.complete(
+        !_disposed && identical(_attachment, attachment)
+            ? outcome
+            : Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+    }
   }
 
   void _detach(Object attachment) {
     if (!identical(_attachment, attachment)) return;
+    _cancelPendingTarget?.call();
     _attachment = null;
     _openTarget = null;
     _cancelPendingTarget = null;
@@ -102,7 +234,8 @@ final class _PendingLocalizationVoiceTarget {
   _PendingLocalizationVoiceTarget(this.target);
 
   final Revision3LocalizationVoiceTarget target;
-  final Completer<bool> result = Completer<bool>();
+  final Completer<Revision3LocalizationVoiceOpenOutcome> result =
+      Completer<Revision3LocalizationVoiceOpenOutcome>();
 }
 
 enum _UnsavedExternalActionDecision {
@@ -110,6 +243,8 @@ enum _UnsavedExternalActionDecision {
   discardAndContinue,
   saveAndContinue,
 }
+
+enum _ExactTargetDiscardDecision { discard, keepEditing, dismissed }
 
 enum _VoiceContextActionKind {
   addTake,
@@ -434,7 +569,12 @@ class _Revision3LocalizationVoiceWorkspaceState
   Future<void>? _voiceCatalogReloadFuture;
   _PendingLocalizationVoiceTarget? _pendingTarget;
   bool _resolvingPendingTarget = false;
+  int? _targetSeedLoadOwner;
+  int? _targetConfirmOwner;
+  DialogRoute<_ExactTargetDiscardDecision>? _targetConfirmRoute;
+  NavigatorState? _targetConfirmNavigator;
   int _targetEpoch = 0;
+  bool _disposing = false;
 
   @override
   void initState() {
@@ -477,11 +617,10 @@ class _Revision3LocalizationVoiceWorkspaceState
       final pending = _pendingTarget?.target;
       if (pending != null &&
           (pending.projectId != widget.projectId ||
-              pending.projectRevision < widget.projectRevision ||
-              (pending.projectRevision == widget.projectRevision &&
-                  pending.projectCheckpointIdentity !=
-                      widget.projectCheckpointIdentity))) {
-        _completePendingTarget(false);
+              pending.projectRevision != widget.projectRevision ||
+              pending.projectCheckpointIdentity !=
+                  widget.projectCheckpointIdentity)) {
+        _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
       }
       _invalidateVoiceCatalog();
       if (_saving) {
@@ -507,6 +646,7 @@ class _Revision3LocalizationVoiceWorkspaceState
 
   @override
   void dispose() {
+    _disposing = true;
     _catalogEpoch++;
     _voiceCatalogEpoch++;
     _seedEpoch++;
@@ -531,16 +671,21 @@ class _Revision3LocalizationVoiceWorkspaceState
     controller?._attach(this, _requestExactTarget, _cancelPendingTarget);
   }
 
-  Future<bool> _requestExactTarget(Revision3LocalizationVoiceTarget target) {
+  Future<Revision3LocalizationVoiceOpenOutcome> _requestExactTarget(
+    Revision3LocalizationVoiceTarget target,
+  ) {
     if (!mounted ||
+        !_localizationVoiceTargetShapeIsValid(target) ||
         target.projectId != widget.projectId ||
-        target.projectRevision < widget.projectRevision ||
-        (target.projectRevision == widget.projectRevision &&
-            target.projectCheckpointIdentity !=
-                widget.projectCheckpointIdentity)) {
-      return Future<bool>.value(false);
+        target.projectRevision != widget.projectRevision ||
+        target.projectCheckpointIdentity != widget.projectCheckpointIdentity ||
+        _saving ||
+        _runningExternalAction) {
+      return Future<Revision3LocalizationVoiceOpenOutcome>.value(
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
     }
-    _completePendingTarget(false);
+    _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
     final pending = _PendingLocalizationVoiceTarget(target);
     _pendingTarget = pending;
     unawaited(_resolvePendingTarget());
@@ -553,36 +698,107 @@ class _Revision3LocalizationVoiceWorkspaceState
     if (pending == null) return;
     final target = pending.target;
     if (target.projectId != widget.projectId ||
-        target.projectRevision < widget.projectRevision) {
-      _completePendingTarget(false);
+        target.projectRevision != widget.projectRevision ||
+        target.projectCheckpointIdentity != widget.projectCheckpointIdentity) {
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
       return;
     }
-    if (target.projectRevision != widget.projectRevision ||
-        target.projectCheckpointIdentity != widget.projectCheckpointIdentity ||
-        _loadingCatalog ||
-        _catalog == null) {
+    if (_saving || _runningExternalAction) {
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+      return;
+    }
+    if (_catalogError != null) {
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+      return;
+    }
+    if (_loadingCatalog || _loadingSeed || _catalog == null) {
       return;
     }
 
     final catalog = _catalog!;
+    final stableKey = target.localizationStableKey;
+    final localizationEntityId = target.localizationEntityId;
+    final choice = stableKey != null
+        ? catalog.choiceByStableKey(stableKey)
+        : catalog.choiceForLocalizationId(localizationEntityId!);
     if (catalog.projectId != target.projectId ||
         catalog.projectRevision != target.projectRevision ||
-        catalog.choiceByStableKey(target.localizationStableKey) == null) {
-      _completePendingTarget(false);
+        choice == null) {
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
       return;
+    }
+    if (target.requiresVoiceCatalog) {
+      if (_loadingVoiceCatalog) return;
+      final voiceCatalog = _voiceCatalog;
+      if (_voiceCatalogError != null ||
+          widget.loadVoiceCatalog == null ||
+          voiceCatalog == null ||
+          !_voiceCatalogConfirmsTarget(voiceCatalog, target)) {
+        _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+        return;
+      }
     }
 
     final epoch = ++_targetEpoch;
     _resolvingPendingTarget = true;
     try {
-      if (_dirty && !await _confirmDiscard()) {
-        if (mounted && identical(_pendingTarget, pending)) {
-          _completePendingTarget(false);
+      if (_dirty) {
+        final decision = await _confirmExactTargetDiscard(epoch);
+        if (!mounted ||
+            epoch != _targetEpoch ||
+            !identical(_pendingTarget, pending)) {
+          return;
+        }
+        switch (decision) {
+          case _ExactTargetDiscardDecision.keepEditing:
+            _completePendingTarget(
+              Revision3LocalizationVoiceOpenOutcome.declined,
+            );
+            return;
+          case _ExactTargetDiscardDecision.dismissed:
+            _completePendingTarget(
+              Revision3LocalizationVoiceOpenOutcome.rejected,
+            );
+            return;
+          case _ExactTargetDiscardDecision.discard:
+            break;
+        }
+      }
+      if (!mounted ||
+          epoch != _targetEpoch ||
+          !identical(_pendingTarget, pending) ||
+          target.projectId != widget.projectId ||
+          target.projectRevision != widget.projectRevision ||
+          target.projectCheckpointIdentity !=
+              widget.projectCheckpointIdentity) {
+        return;
+      }
+      if (_saving || _runningExternalAction) {
+        _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+        return;
+      }
+
+      final targetSeedEpoch = ++_seedEpoch;
+      _setTargetSeedLoadOwner(epoch);
+      late final Revision3DialogLocalizationEditSeed exactSeed;
+      try {
+        exactSeed = await widget.service.loadSeed(
+          catalog: catalog,
+          choice: choice,
+        );
+      } catch (_) {
+        if (mounted &&
+            epoch == _targetEpoch &&
+            identical(_pendingTarget, pending)) {
+          _completePendingTarget(
+            Revision3LocalizationVoiceOpenOutcome.rejected,
+          );
         }
         return;
       }
       if (!mounted ||
           epoch != _targetEpoch ||
+          targetSeedEpoch != _seedEpoch ||
           !identical(_pendingTarget, pending) ||
           target.projectId != widget.projectId ||
           target.projectRevision != widget.projectRevision ||
@@ -590,58 +806,159 @@ class _Revision3LocalizationVoiceWorkspaceState
               widget.projectCheckpointIdentity) {
         return;
       }
-
+      final targetLineId = target.lineId;
+      final exactLine = targetLineId == null
+          ? null
+          : exactSeed.lineBacklinks
+                .where((line) => line.lineId == targetLineId)
+                .firstOrNull;
+      final targetLocale = target.locale;
+      final hasLocale =
+          targetLocale == null ||
+          exactSeed.locales.any((locale) => locale.locale == targetLocale);
+      if (exactSeed.choice.stableKey != choice.stableKey ||
+          (targetLineId != null && exactLine == null) ||
+          !hasLocale) {
+        _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+        return;
+      }
+      if (target.requiresVoiceCatalog) {
+        if (_loadingVoiceCatalog) return;
+        final voiceCatalog = _voiceCatalog;
+        if (_voiceCatalogError != null ||
+            voiceCatalog == null ||
+            !_voiceCatalogConfirmsTarget(voiceCatalog, target)) {
+          _completePendingTarget(
+            Revision3LocalizationVoiceOpenOutcome.rejected,
+          );
+          return;
+        }
+      }
+      final locales = exactSeed.locales
+          .map((locale) => locale.locale)
+          .toList(growable: false);
       setState(() {
-        _selectedKey = target.localizationStableKey;
+        _selectedKey = choice.stableKey;
+        _seedError = null;
+        _checkpointChangedWhileDirty = false;
+        _replaceSeed(exactSeed);
         _showEditorOnCompact = true;
         _showProductionQueue = false;
+        if (exactLine != null) {
+          final retainedLocale = locales.contains(_voiceLocale)
+              ? _voiceLocale
+              : null;
+          final slottedLocale = exactLine.voiceSlotLocales
+              .where(locales.contains)
+              .firstOrNull;
+          _voiceLineId = exactLine.lineId;
+          _voiceLocale =
+              targetLocale ??
+              retainedLocale ??
+              slottedLocale ??
+              locales.firstOrNull;
+        }
       });
-      await _loadSeed(catalog, target.localizationStableKey);
-      if (!mounted ||
-          epoch != _targetEpoch ||
-          !identical(_pendingTarget, pending) ||
-          target.projectId != widget.projectId ||
-          target.projectRevision != widget.projectRevision ||
-          target.projectCheckpointIdentity !=
-              widget.projectCheckpointIdentity) {
-        return;
-      }
-      final seed = _seed;
-      final exactLine = seed?.lineBacklinks
-          .where((line) => line.lineId == target.lineId)
-          .firstOrNull;
-      final hasLocale = seed?.locales.any(
-        (locale) => locale.locale == target.locale,
-      );
-      if (seed == null ||
-          seed.choice.stableKey != target.localizationStableKey ||
-          exactLine == null ||
-          hasLocale != true) {
-        _completePendingTarget(false);
-        return;
-      }
-      setState(() {
-        _voiceLineId = target.lineId;
-        _voiceLocale = target.locale;
-        _showEditorOnCompact = true;
-      });
-      _completePendingTarget(true);
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.opened);
     } finally {
+      if (_targetSeedLoadOwner == epoch) {
+        _setTargetSeedLoadOwner(null);
+      }
       if (epoch == _targetEpoch) _resolvingPendingTarget = false;
     }
   }
 
-  void _completePendingTarget(bool resolved) {
+  void _completePendingTarget(Revision3LocalizationVoiceOpenOutcome outcome) {
     final pending = _pendingTarget;
     _pendingTarget = null;
     _targetEpoch++;
+    _cancelExactTargetConfirmation();
     _resolvingPendingTarget = false;
+    _setTargetSeedLoadOwner(null);
     if (pending != null && !pending.result.isCompleted) {
-      pending.result.complete(resolved);
+      pending.result.complete(outcome);
     }
   }
 
-  void _cancelPendingTarget() => _completePendingTarget(false);
+  Future<_ExactTargetDiscardDecision> _confirmExactTargetDiscard(
+    int owner,
+  ) async {
+    if (!_dirty) return _ExactTargetDiscardDecision.discard;
+    if (_saving ||
+        !mounted ||
+        owner != _targetEpoch ||
+        _targetConfirmRoute != null) {
+      return _ExactTargetDiscardDecision.dismissed;
+    }
+    final navigator = Navigator.of(context, rootNavigator: true);
+    late final DialogRoute<_ExactTargetDiscardDecision> route;
+    route = DialogRoute<_ExactTargetDiscardDecision>(
+      context: context,
+      themes: InheritedTheme.capture(from: context, to: navigator.context),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(widget.copy.unsavedTitle),
+        content: Text(widget.copy.unsavedDescription),
+        actions: [
+          TextButton(
+            onPressed: () =>
+                navigator.pop(_ExactTargetDiscardDecision.keepEditing),
+            child: Text(widget.copy.keepEditingLabel),
+          ),
+          FilledButton(
+            onPressed: () => navigator.pop(_ExactTargetDiscardDecision.discard),
+            child: Text(widget.copy.discardLabel),
+          ),
+        ],
+      ),
+    );
+    _targetConfirmOwner = owner;
+    _targetConfirmRoute = route;
+    _targetConfirmNavigator = navigator;
+    try {
+      return await navigator.push(route) ??
+          _ExactTargetDiscardDecision.dismissed;
+    } finally {
+      if (_targetConfirmOwner == owner &&
+          identical(_targetConfirmRoute, route)) {
+        _targetConfirmOwner = null;
+        _targetConfirmRoute = null;
+        _targetConfirmNavigator = null;
+      }
+    }
+  }
+
+  void _cancelExactTargetConfirmation() {
+    final route = _targetConfirmRoute;
+    final navigator = _targetConfirmNavigator;
+    _targetConfirmOwner = null;
+    _targetConfirmRoute = null;
+    _targetConfirmNavigator = null;
+    if (route != null &&
+        navigator != null &&
+        navigator.mounted &&
+        route.isActive &&
+        identical(route.navigator, navigator)) {
+      navigator.removeRoute(route, _ExactTargetDiscardDecision.dismissed);
+    }
+  }
+
+  void _cancelPendingTarget() =>
+      _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
+
+  void _setTargetSeedLoadOwner(int? owner) {
+    if (_targetSeedLoadOwner == owner) return;
+    if (mounted && !_disposing) {
+      setState(() => _targetSeedLoadOwner = owner);
+    } else {
+      _targetSeedLoadOwner = owner;
+    }
+  }
+
+  void _schedulePendingTargetResolution() {
+    scheduleMicrotask(() {
+      if (mounted) unawaited(_resolvePendingTarget());
+    });
+  }
 
   bool get _runningExternalAction => _runningExternalActionOwner != null;
 
@@ -649,6 +966,7 @@ class _Revision3LocalizationVoiceWorkspaceState
       !widget.mutationsEnabled ||
       _saving ||
       _loadingCatalog ||
+      _targetSeedLoadOwner != null ||
       _runningExternalAction;
 
   int? _beginExternalAction() {
@@ -742,7 +1060,7 @@ class _Revision3LocalizationVoiceWorkspaceState
           pending.projectRevision == widget.projectRevision &&
           pending.projectCheckpointIdentity ==
               widget.projectCheckpointIdentity) {
-        _completePendingTarget(false);
+        _completePendingTarget(Revision3LocalizationVoiceOpenOutcome.rejected);
       }
     }
   }
@@ -763,6 +1081,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         _voiceCatalogError = null;
         _loadingVoiceCatalog = false;
       });
+      _schedulePendingTargetResolution();
       return;
     }
     setState(() {
@@ -781,6 +1100,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         _voiceCatalog = catalog;
         _loadingVoiceCatalog = false;
       });
+      _schedulePendingTargetResolution();
     } catch (error) {
       if (!mounted || epoch != _voiceCatalogEpoch) return;
       setState(() {
@@ -788,6 +1108,7 @@ class _Revision3LocalizationVoiceWorkspaceState
         _voiceCatalogError = error;
         _loadingVoiceCatalog = false;
       });
+      _schedulePendingTargetResolution();
     }
   }
 
@@ -816,12 +1137,14 @@ class _Revision3LocalizationVoiceWorkspaceState
         _loadingSeed = false;
         _checkpointChangedWhileDirty = false;
       });
+      _schedulePendingTargetResolution();
     } catch (error) {
       if (!mounted || epoch != _seedEpoch || _selectedKey != stableKey) return;
       setState(() {
         _seedError = error;
         _loadingSeed = false;
       });
+      _schedulePendingTargetResolution();
     }
   }
 
@@ -2629,12 +2952,7 @@ class _Revision3LocalizationVoiceWorkspaceState
     final save = FilledButton.icon(
       key: const Key('revision3-localization-save'),
       onPressed:
-          _dirty &&
-              widget.mutationsEnabled &&
-              !_saving &&
-              !_loadingCatalog &&
-              !_runningExternalAction &&
-              !_checkpointChangedWhileDirty
+          _dirty && !_contextMutationBlocked && !_checkpointChangedWhileDirty
           ? _save
           : null,
       icon: _saving
@@ -3283,6 +3601,72 @@ class _WorkspaceEmpty extends StatelessWidget {
       ),
     ),
   );
+}
+
+final _localizationVoiceTargetEntityId = RegExp(r'^[0-9a-f]{32}$');
+final _localizationVoiceTargetStableKey = RegExp(r'^[0-9a-f]{24}$');
+
+bool _localizationVoiceTargetShapeIsValid(
+  Revision3LocalizationVoiceTarget target,
+) {
+  final stableKey = target.localizationStableKey;
+  final localizationEntityId = target.localizationEntityId;
+  if (!_localizationVoiceTargetEntityId.hasMatch(target.projectId) ||
+      target.projectId == '00000000000000000000000000000000' ||
+      target.projectRevision < 1 ||
+      (stableKey == null) == (localizationEntityId == null)) {
+    return false;
+  }
+  if (stableKey != null &&
+      !_localizationVoiceTargetStableKey.hasMatch(stableKey)) {
+    return false;
+  }
+  if (localizationEntityId != null &&
+      !_localizationVoiceTargetEntityId.hasMatch(localizationEntityId)) {
+    return false;
+  }
+  final lineId = target.lineId;
+  final locale = target.locale;
+  final slotId = target.voiceSlotId;
+  final takeId = target.voiceTakeId;
+  if (lineId != null && !_localizationVoiceTargetEntityId.hasMatch(lineId)) {
+    return false;
+  }
+  if (locale != null &&
+      (lineId == null || !revision3VoiceLocaleIsCanonical(locale))) {
+    return false;
+  }
+  if (slotId != null &&
+      (lineId == null ||
+          locale == null ||
+          !_localizationVoiceTargetEntityId.hasMatch(slotId))) {
+    return false;
+  }
+  return takeId == null ||
+      (slotId != null && _localizationVoiceTargetEntityId.hasMatch(takeId));
+}
+
+bool _voiceCatalogConfirmsTarget(
+  Revision3VoiceCatalog catalog,
+  Revision3LocalizationVoiceTarget target,
+) {
+  if (catalog.projectId != target.projectId ||
+      catalog.projectRevision != target.projectRevision) {
+    return false;
+  }
+  final lineId = target.lineId;
+  final locale = target.locale;
+  final slotId = target.voiceSlotId;
+  if (lineId == null || locale == null || slotId == null) return false;
+  final line = catalog.line(lineId);
+  final summary = line?.slotSummaryForLocale(locale);
+  if (line == null ||
+      line.slotIdForLocale(locale) != slotId ||
+      summary == null) {
+    return false;
+  }
+  final takeId = target.voiceTakeId;
+  return takeId == null || summary.candidate(takeId) != null;
 }
 
 bool _sameTexts(Map<String, String> left, Map<String, String> right) {

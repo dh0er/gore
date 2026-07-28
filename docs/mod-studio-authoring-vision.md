@@ -52,9 +52,14 @@ been consolidated:
   under an initially collapsed Technical section. Authored entries with
   problems stay in their normal group with a problem cue. Quest and NPC rows
   open Story, ItemPatch rows open the exact current vanilla class in Items,
-  verified DataAsset rows reopen their exact stage, and other entity rows
-  continue into Content until a dedicated typed handoff exists. Loading and
-  every action stay bound to root, project ID, revision, and canonical head;
+  verified DataAsset rows reopen their exact stage, and LocalizationEntry,
+  DialogLine, VoiceSlot, and VoiceTake rows reopen their uniquely proven owner
+  in Text & Voice. VoiceSlot and VoiceTake handoffs require the exact structured
+  line/locale/slot graph; a VoiceTake is revealed without changing the slot's
+  saved selection. Ambiguous or incomplete graphs fail closed instead of
+  guessing from display text. Generated scripts and other entities without a
+  dedicated typed owner continue into Content. Loading and every action stay
+  bound to root, project ID, revision, and canonical head;
   project switches, same-revision head drift, stale reads, and late callbacks
   fail closed. This is a saved-content and navigation projection only: it
   creates no project mutation and grants no build, deployment, publication,
@@ -386,10 +391,10 @@ Persistent workspace
   Bottom drawer: Changes | Diagnostics | Build log | Test log
 ```
 
-No-project startup shows a localized managed-project entry banner with direct
-Create/Open actions beside the standalone tools. Those tools own no project or
-session state; only adoption of a managed-R3 project opens the canonical
-workspace. Managed Studio Shell v1 implements exactly five primary jobs:
+No-project startup exposes only the managed-R3 entry actions, Snapshot V2
+restore, and Settings. It retains no Classic or standalone project/session
+backend; only adoption of a managed-R3 project opens the canonical workspace.
+Managed Studio Shell v1 implements exactly five primary jobs:
 **Home**, **Content**, **Story**, **Text & Voice**, and **Test & Release**.
 **DataAssets** is a secondary view inside Content. History and Settings open as
 focused command-bar dialogs. World has no primary placeholder and stays hidden
@@ -560,8 +565,8 @@ does not adopt a new working path. Snapshot V2 is the sole backup/restore
 format; every other manifest is invalid input.
 
 **Restore project backup** is visible from the Project menu in every managed-R3
-project state and on the no-project landing surface beside the classic
-standalone tools. One dialog owns exact V2
+project state and on the no-project landing surface beside the managed-R3
+project entry and Settings. One dialog owns exact V2
 inspection, a real existing parent plus new absent-folder choice, and one
 single-flight native materialization. It displays bounded labels rather than
 source parent paths. Only confirmed success or cleanup warning yields a receipt;
@@ -596,8 +601,11 @@ from an inferred content-index asset entry.
 
 Quest and NPC rows continue into Story, ItemPatch rows select the exact current
 vanilla class in Items, verified DataAsset rows reopen the exact current stage,
-and the remaining entity rows open Content until their dedicated typed
-workspace handoffs exist. The host and every continuation remain bound to the
+and LocalizationEntry, DialogLine, VoiceSlot, and VoiceTake rows reopen their
+uniquely proven Text & Voice context. Exact Voice takes are revealed without
+changing the saved selection; ambiguous or incomplete graphs fail closed.
+Generated scripts and other entities without a typed owner open Content. The
+host and every continuation remain bound to the
 same root, project ID, revision, and canonical head and revalidate the
 action-specific evidence before acting. Same-revision head drift, project
 switch, stale completion, detach, and disposal fail closed. The projection

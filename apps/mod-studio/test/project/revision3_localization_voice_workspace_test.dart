@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
@@ -3411,6 +3412,8 @@ void main() {
     (tester) async {
       await _setSurface(tester, width: 360, height: 900);
       final pendingAction = Completer<void>();
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
       var catalogLoads = 0;
       var actionCalls = 0;
       final index = _contentIndex(
@@ -3427,6 +3430,7 @@ void main() {
       await _pumpWorkspace(
         tester,
         service: service,
+        controller: controller,
         onCreateDialogLine: () async {
           actionCalls++;
           if (actionCalls == 1) {
@@ -3442,6 +3446,23 @@ void main() {
       );
       expect(retry, findsOneWidget);
       expect(tester.widget<FilledButton>(retry).onPressed, isNotNull);
+      Revision3LocalizationVoiceOpenOutcome? failedTargetOutcome;
+      controller
+          .openExactTarget(
+            const Revision3LocalizationVoiceTarget.localizationEntity(
+              projectId: _projectId,
+              projectRevision: 7,
+              projectCheckpointIdentity: 7,
+              localizationEntityId: _localizationId,
+            ),
+          )
+          .then((outcome) => failedTargetOutcome = outcome);
+      await tester.pump();
+      expect(
+        failedTargetOutcome,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+        reason: 'a completed catalog failure must not strand a later target',
+      );
       final newLine = find.byKey(const Key('revision3-localization-new-line'));
       await tester.tap(newLine);
       await _pumpUntil(tester, () => actionCalls == 1);
@@ -4298,7 +4319,7 @@ void main() {
       );
 
       final opened = controller.openExactTarget(
-        Revision3LocalizationVoiceTarget(
+        Revision3LocalizationVoiceTarget.storyCatalogKey(
           projectId: _projectId,
           projectRevision: 7,
           projectCheckpointIdentity: 'head-7',
@@ -4309,7 +4330,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(await opened, isTrue);
+      expect(await opened, Revision3LocalizationVoiceOpenOutcome.opened);
       expect(
         find.byKey(const Key('revision3-localization-voice-work-list')),
         findsNothing,
@@ -4359,7 +4380,7 @@ void main() {
 
       expect(
         await controller.openExactTarget(
-          Revision3LocalizationVoiceTarget(
+          Revision3LocalizationVoiceTarget.storyCatalogKey(
             projectId: _projectId,
             projectRevision: 6,
             projectCheckpointIdentity: 'head-6',
@@ -4368,10 +4389,10 @@ void main() {
             locale: 'en',
           ),
         ),
-        isFalse,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
       );
       final futureCheckpoint = controller.openExactTarget(
-        Revision3LocalizationVoiceTarget(
+        Revision3LocalizationVoiceTarget.storyCatalogKey(
           projectId: _projectId,
           projectRevision: 8,
           projectCheckpointIdentity: 'head-8',
@@ -4380,8 +4401,13 @@ void main() {
           locale: 'en',
         ),
       );
+      expect(
+        await futureCheckpoint,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+        reason: 'an exact-current controller must not await a future revision',
+      );
       final wrongLine = controller.openExactTarget(
-        Revision3LocalizationVoiceTarget(
+        Revision3LocalizationVoiceTarget.storyCatalogKey(
           projectId: _projectId,
           projectRevision: 7,
           projectCheckpointIdentity: 'head-7',
@@ -4391,11 +4417,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(await futureCheckpoint, isFalse);
-      expect(await wrongLine, isFalse);
+      expect(await wrongLine, Revision3LocalizationVoiceOpenOutcome.rejected);
 
       final wrongHead = controller.openExactTarget(
-        Revision3LocalizationVoiceTarget(
+        Revision3LocalizationVoiceTarget.storyCatalogKey(
           projectId: _projectId,
           projectRevision: 7,
           projectCheckpointIdentity: 'wrong-head',
@@ -4405,7 +4430,7 @@ void main() {
         ),
       );
       final exact = controller.openExactTarget(
-        Revision3LocalizationVoiceTarget(
+        Revision3LocalizationVoiceTarget.storyCatalogKey(
           projectId: _projectId,
           projectRevision: 7,
           projectCheckpointIdentity: 'head-7',
@@ -4415,10 +4440,737 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(await wrongHead, isFalse);
-      expect(await exact, isTrue);
+      expect(await wrongHead, Revision3LocalizationVoiceOpenOutcome.rejected);
+      expect(await exact, Revision3LocalizationVoiceOpenOutcome.opened);
     },
   );
+
+  testWidgets(
+    'entity handoff opens a text-only Localization without a Voice loader',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+
+      final opened = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(await opened, Revision3LocalizationVoiceOpenOutcome.opened);
+      expect(_textField(tester, 'de').controller!.text, 'Bleib stehen!');
+    },
+  );
+
+  testWidgets(
+    'entity handoff confirms exact DialogLine, VoiceSlot, and VoiceTake',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        existingSlotCandidateCount: 1,
+      );
+      final voiceCatalog = Revision3VoiceCatalog.fromContentIndex(index);
+      final takeId = voiceCatalog
+          .line(_lineId)!
+          .slotSummaryForLocale('de')!
+          .candidates
+          .single
+          .id;
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+        loadVoiceCatalog: () async => voiceCatalog,
+      );
+
+      final line = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await line, Revision3LocalizationVoiceOpenOutcome.opened);
+
+      final slot = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: revision3VoiceContentSlotId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await slot, Revision3LocalizationVoiceOpenOutcome.opened);
+
+      final take = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: revision3VoiceContentSlotId,
+          voiceTakeId: takeId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await take, Revision3LocalizationVoiceOpenOutcome.opened);
+      expect(
+        tester
+            .widget<ListTile>(
+              find.byKey(
+                const ValueKey('revision3-localization-voice-line-$_lineId'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                const ValueKey('revision3-localization-voice-locale-de'),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+    },
+  );
+
+  testWidgets(
+    'wrong entity, slot, or take fails without replacing the valid selection',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        duplicateLine: true,
+        secondDisplayName: 'Viper greeting',
+        existingSlotCandidateCount: 1,
+      );
+      final service = _serviceForIndex(
+        index,
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              texts: <String, String>{
+                'de': localizationId == _secondLocalizationId
+                    ? 'Zweite Auswahl.'
+                    : 'Erste Auswahl.',
+                'en': localizationId == _secondLocalizationId
+                    ? 'Second selection.'
+                    : 'First selection.',
+              },
+              voiceSlots: localizationId == _secondLocalizationId
+                  ? const <String>{}
+                  : const <String>{'de'},
+              backlinks: localizationId == _secondLocalizationId
+                  ? const <Map<String, Object?>>[]
+                  : null,
+            ),
+      );
+      final catalog = await service.loadCatalog();
+      final secondChoice = catalog.choiceForLocalizationId(
+        _secondLocalizationId,
+      )!;
+      final voiceCatalog = Revision3VoiceCatalog.fromContentIndex(index);
+      final actualTakeId = voiceCatalog
+          .line(_lineId)!
+          .slotSummaryForLocale('de')!
+          .candidates
+          .single
+          .id;
+      const missingEntityId = '88888888888888888888888888888888';
+      const missingSlotId = '99999999999999999999999999999999';
+      const missingTakeId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      expect(actualTakeId, isNot(missingTakeId));
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+        loadVoiceCatalog: () async => voiceCatalog,
+      );
+
+      final selected = controller.openExactTarget(
+        Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _secondLocalizationId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await selected, Revision3LocalizationVoiceOpenOutcome.opened);
+      expect(_textField(tester, 'en').controller!.text, 'Second selection.');
+
+      for (final target in <Revision3LocalizationVoiceTarget>[
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: missingEntityId,
+        ),
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: missingSlotId,
+        ),
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: revision3VoiceContentSlotId,
+          voiceTakeId: missingTakeId,
+        ),
+      ]) {
+        final rejected = controller.openExactTarget(target);
+        await tester.pumpAndSettle();
+        expect(await rejected, Revision3LocalizationVoiceOpenOutcome.rejected);
+        expect(_textField(tester, 'en').controller!.text, 'Second selection.');
+        expect(
+          tester
+              .widget<ListTile>(
+                find.byKey(
+                  ValueKey(
+                    'revision3-localization-choice-${secondChoice.stableKey}',
+                  ),
+                ),
+              )
+              .selected,
+          isTrue,
+        );
+      }
+    },
+  );
+
+  testWidgets('VoiceCatalog load failure rejects an exact Voice target', (
+    tester,
+  ) async {
+    await _setSurface(tester, width: 1200);
+    final controller = Revision3LocalizationVoiceWorkspaceController();
+    addTearDown(controller.dispose);
+    final index = _contentIndex(
+      displayName: 'Mine warning',
+      locales: const <String>['de', 'en'],
+    );
+    final voiceCatalog = Completer<Revision3VoiceCatalog>();
+    await _pumpWorkspace(
+      tester,
+      service: _serviceForIndex(index),
+      controller: controller,
+      projectCheckpointIdentity: 'head-7',
+      loadVoiceCatalog: () => voiceCatalog.future,
+      settle: false,
+    );
+
+    final opened = controller.openExactTarget(
+      const Revision3LocalizationVoiceTarget.localizationEntity(
+        projectId: _projectId,
+        projectRevision: 7,
+        projectCheckpointIdentity: 'head-7',
+        localizationEntityId: _localizationId,
+        lineId: _lineId,
+        locale: 'de',
+        voiceSlotId: revision3VoiceContentSlotId,
+      ),
+    );
+    voiceCatalog.completeError(StateError('voice catalog failed'));
+    await tester.pumpAndSettle();
+
+    expect(await opened, Revision3LocalizationVoiceOpenOutcome.rejected);
+  });
+
+  testWidgets(
+    'discarded draft interlocks exact seed load and keep editing is declined',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        secondDisplayName: 'Viper greeting',
+      );
+      final delayedSecondSeed =
+          Completer<AuthoringRevision3DialogLocalizationEditSeed>();
+      final pendingPublication =
+          Completer<Revision3DialogLocalizationEditPublication>();
+      var delaySecond = false;
+      var publishCalls = 0;
+      final service = Revision3DialogLocalizationEditAuthoringService(
+        loadContentIndex: () async => index,
+        loadExactSeed:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required localizationId,
+              required expectedLocalizationRevision,
+              required expectedLocId,
+            }) async {
+              if (delaySecond && localizationId == _secondLocalizationId) {
+                return delayedSecondSeed.future;
+              }
+              return _exactSeed(
+                projectId: expectedProjectId,
+                projectRevision: expectedProjectRevision,
+                localizationId: localizationId,
+                localizationRevision: expectedLocalizationRevision,
+                locId: expectedLocId,
+                voiceSlots: localizationId == _secondLocalizationId
+                    ? const <String>{}
+                    : const <String>{'de'},
+                backlinks: localizationId == _secondLocalizationId
+                    ? const <Map<String, Object?>>[]
+                    : null,
+              );
+            },
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) {
+              publishCalls++;
+              return pendingPublication.future;
+            },
+      );
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-de')),
+        'Ungespeicherter Entwurf',
+      );
+      await tester.pump();
+      delaySecond = true;
+
+      final opened = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _secondLocalizationId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, _copy.discardLabel));
+      await tester.pump();
+
+      expect(_textField(tester, 'de').readOnly, isTrue);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-localization-save')),
+            )
+            .onPressed,
+        isNull,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-de')),
+        'Darf den laufenden Handoff nicht überschreiben',
+      );
+      await tester.pump();
+      expect(
+        _textField(tester, 'de').controller!.text,
+        'Ungespeicherter Entwurf',
+      );
+
+      delayedSecondSeed.complete(
+        _exactSeed(
+          localizationId: _secondLocalizationId,
+          locId: _secondLocId,
+          texts: const <String, String>{
+            'de': 'Zweite Auswahl.',
+            'en': 'Second selection.',
+          },
+          voiceSlots: const <String>{},
+          backlinks: const <Map<String, Object?>>[],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(await opened, Revision3LocalizationVoiceOpenOutcome.opened);
+      expect(_textField(tester, 'de').readOnly, isFalse);
+      expect(_textField(tester, 'de').controller!.text, 'Zweite Auswahl.');
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-de')),
+        'Diesen Entwurf behalten',
+      );
+      await tester.pump();
+      final declined = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, _copy.keepEditingLabel));
+      await tester.pumpAndSettle();
+
+      expect(await declined, Revision3LocalizationVoiceOpenOutcome.declined);
+      expect(
+        _textField(tester, 'de').controller!.text,
+        'Diesen Entwurf behalten',
+      );
+
+      await tester.tap(find.byKey(const Key('revision3-localization-save')));
+      await _pumpUntil(tester, () => publishCalls == 1);
+      final savingRejected = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      );
+      expect(
+        await savingRejected,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+        reason: 'a busy save is authority conflict, not author decline',
+      );
+      pendingPublication.completeError(StateError('finish pending test save'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'exact target confirmation is owned, dismissible, and lifecycle-cancelled',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        secondDisplayName: 'Viper greeting',
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-localization-text-de')),
+        'Diesen Entwurf behalten',
+      );
+      await tester.pump();
+
+      Revision3LocalizationVoiceTarget target() =>
+          const Revision3LocalizationVoiceTarget.localizationEntity(
+            projectId: _projectId,
+            projectRevision: 7,
+            projectCheckpointIdentity: 'head-7',
+            localizationEntityId: _secondLocalizationId,
+          );
+
+      final superseded = controller.openExactTarget(target());
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+
+      final newest = controller.openExactTarget(target());
+      await tester.pumpAndSettle();
+      expect(await superseded, Revision3LocalizationVoiceOpenOutcome.rejected);
+      expect(
+        find.byType(AlertDialog),
+        findsOneWidget,
+        reason: 'supersede must replace, not stack, the owned confirmation',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(
+        await newest,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+        reason: 'Escape is lifecycle dismissal, not explicit Keep Editing',
+      );
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        _textField(tester, 'de').controller!.text,
+        'Diesen Entwurf behalten',
+      );
+
+      final projectSwitchPending = controller.openExactTarget(target());
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      const otherProjectId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final otherIndex = _contentIndex(
+        projectId: otherProjectId,
+        displayName: 'Other warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        projectId: otherProjectId,
+        service: _serviceForIndex(otherIndex),
+        controller: controller,
+        projectCheckpointIdentity: 'other-head-7',
+      );
+
+      expect(
+        await projectSwitchPending,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
+
+  testWidgets('exact handoff rejects a running external Voice action', (
+    tester,
+  ) async {
+    await _setSurface(tester, width: 1200);
+    final controller = Revision3LocalizationVoiceWorkspaceController();
+    addTearDown(controller.dispose);
+    final externalAction = Completer<void>();
+    var externalCalls = 0;
+    final index = _contentIndex(
+      displayName: 'Mine warning',
+      locales: const <String>['de', 'en'],
+    );
+    await _pumpWorkspace(
+      tester,
+      service: _serviceForIndex(index),
+      controller: controller,
+      projectCheckpointIdentity: 'head-7',
+      onAddVoiceTake: () {
+        externalCalls++;
+        return externalAction.future;
+      },
+    );
+
+    final addVoice = find.descendant(
+      of: find.byKey(const Key('revision3-localization-add-voice')),
+      matching: find.byType(OutlinedButton),
+    );
+    await tester.tap(addVoice);
+    await _pumpUntil(tester, () => externalCalls == 1);
+
+    expect(
+      await controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      ),
+      Revision3LocalizationVoiceOpenOutcome.rejected,
+    );
+
+    externalAction.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+    'controller buffers newest pre-attach target and cancels every lifecycle',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final disposedController =
+          Revision3LocalizationVoiceWorkspaceController();
+      final disposedPending = disposedController.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      );
+      disposedController.dispose();
+      expect(
+        await disposedPending,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+
+      final controller = Revision3LocalizationVoiceWorkspaceController();
+      addTearDown(controller.dispose);
+      final first = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+        ),
+      );
+      final newest = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _secondLocalizationId,
+        ),
+      );
+      expect(await first, Revision3LocalizationVoiceOpenOutcome.rejected);
+
+      final index = _contentIndex(
+        displayName: 'Mine warning',
+        locales: const <String>['de', 'en'],
+        secondDisplayName: 'Viper greeting',
+      );
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+      );
+      expect(await newest, Revision3LocalizationVoiceOpenOutcome.opened);
+
+      final projectSwitchVoiceCatalog = Completer<Revision3VoiceCatalog>();
+      await _pumpWorkspace(
+        tester,
+        service: _serviceForIndex(index),
+        controller: controller,
+        projectCheckpointIdentity: 'head-7',
+        loadVoiceCatalog: () => projectSwitchVoiceCatalog.future,
+        settle: false,
+      );
+      final projectSwitchPending = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: _projectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: revision3VoiceContentSlotId,
+        ),
+      );
+      const otherProjectId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+      final otherIndex = _contentIndex(
+        projectId: otherProjectId,
+        displayName: 'Other warning',
+        locales: const <String>['de', 'en'],
+      );
+      await _pumpWorkspace(
+        tester,
+        projectId: otherProjectId,
+        service: _serviceForIndex(otherIndex),
+        controller: controller,
+        projectCheckpointIdentity: 'other-head-7',
+      );
+      expect(
+        await projectSwitchPending,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+
+      final detachVoiceCatalog = Completer<Revision3VoiceCatalog>();
+      await _pumpWorkspace(
+        tester,
+        projectId: otherProjectId,
+        service: _serviceForIndex(otherIndex),
+        controller: controller,
+        projectCheckpointIdentity: 'other-head-7',
+        loadVoiceCatalog: () => detachVoiceCatalog.future,
+        settle: false,
+      );
+      final detachPending = controller.openExactTarget(
+        const Revision3LocalizationVoiceTarget.localizationEntity(
+          projectId: otherProjectId,
+          projectRevision: 7,
+          projectCheckpointIdentity: 'other-head-7',
+          localizationEntityId: _localizationId,
+          lineId: _lineId,
+          locale: 'de',
+          voiceSlotId: revision3VoiceContentSlotId,
+        ),
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(
+        await detachPending,
+        Revision3LocalizationVoiceOpenOutcome.rejected,
+      );
+    },
+  );
+
+  test('exact target constructors assert their optional hierarchy', () {
+    expect(
+      () => Revision3LocalizationVoiceTarget.localizationEntity(
+        projectId: _projectId,
+        projectRevision: 7,
+        projectCheckpointIdentity: 'head-7',
+        localizationEntityId: _localizationId,
+        locale: 'de',
+      ),
+      throwsA(isA<AssertionError>()),
+    );
+    expect(
+      () => Revision3LocalizationVoiceTarget.localizationEntity(
+        projectId: _projectId,
+        projectRevision: 7,
+        projectCheckpointIdentity: 'head-7',
+        localizationEntityId: _localizationId,
+        lineId: _lineId,
+        voiceSlotId: revision3VoiceContentSlotId,
+      ),
+      throwsA(isA<AssertionError>()),
+    );
+    expect(
+      () => Revision3LocalizationVoiceTarget.localizationEntity(
+        projectId: _projectId,
+        projectRevision: 7,
+        projectCheckpointIdentity: 'head-7',
+        localizationEntityId: _localizationId,
+        lineId: _lineId,
+        locale: 'de',
+        voiceTakeId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      ),
+      throwsA(isA<AssertionError>()),
+    );
+  });
 }
 
 final class _PendingVoiceReloadFixture {

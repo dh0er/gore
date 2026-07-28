@@ -39,6 +39,7 @@ import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_project_build_plan_panel.dart';
 import 'package:gore_mod/project/revision3_project_command_bar.dart';
 import 'package:gore_mod/project/revision3_project_compiler_check_panel.dart';
+import 'package:gore_mod/project/revision3_project_dashboard.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
 import 'package:gore_mod/project/revision3_test_release_workspace.dart';
@@ -55,6 +56,7 @@ import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_folder_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_production_card.dart';
 import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -3655,7 +3657,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Home non-Story change opens the exact Content entity', (
+  testWidgets('Home LocalizationEntry opens its exact project text', (
     tester,
   ) async {
     await _setDesktopTestSurface(tester);
@@ -3668,12 +3670,14 @@ void main() {
       localizationRevision: 2,
       locId: _homeDashboardLocalizationLocId,
     );
-    final managed = _FakeManagedLease(
+    final managed = _homeDashboardTextVoiceLease(
       root: Directory(r'C:\mods\dashboard-content'),
       projectId: projectId,
       projectRevision: projectRevision,
-      head: _head(projectRevision),
       contentIndexBuilder: (_) => index,
+      localizationId: _homeDashboardLocalizationId,
+      localizationRevision: 2,
+      locId: _homeDashboardLocalizationLocId,
     );
     final coordinator = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => managed,
@@ -3687,12 +3691,992 @@ void main() {
 
     await _pumpApp(tester, container);
     await tester.pumpAndSettle();
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsNothing);
+
+    await _tapDashboardChange(tester, _homeDashboardLocalizationId);
+
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+    expect(find.byKey(const Key('revision3-localization-text-de')), findsOne);
+    expect(find.text('Exact dashboard text'), findsOneWidget);
     expect(
       find.byKey(const Key('revision3-content-workspace-page-library')),
       findsNothing,
     );
+    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+    expect(find.text(_homeDashboardLocalizationId), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
-    await _tapDashboardChange(tester, _homeDashboardLocalizationId);
+  testWidgets('Home DialogLine opens its exact Text and Voice line', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _homeDashboardTextVoiceLease(
+      root: Directory(r'C:\mods\dashboard-dialog-line'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+        revision: lease.projectRevision,
+        localizationRevision: 0,
+      ),
+      localizationId: revision3VoiceContentLocalizationId,
+      localizationRevision: 0,
+      locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      lineId: revision3VoiceContentLineId,
+      voiceSlotLocales: const <String>{'de'},
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _tapDashboardChange(tester, revision3VoiceContentLineId);
+
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+    final line = find.byKey(
+      const ValueKey(
+        'revision3-localization-voice-line-$revision3VoiceContentLineId',
+      ),
+    );
+    expect(line, findsOneWidget);
+    expect(tester.widget<ListTile>(line).selected, isTrue);
+    expect(
+      find.byKey(const Key('revision3-content-workspace-page-library')),
+      findsNothing,
+    );
+    expect(find.text(revision3VoiceContentLineId), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home VoiceSlot opens its exact line and locale', (tester) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _homeDashboardTextVoiceLease(
+      root: Directory(r'C:\mods\dashboard-voice-slot'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+        revision: lease.projectRevision,
+        localizationRevision: 0,
+      ),
+      localizationId: revision3VoiceContentLocalizationId,
+      localizationRevision: 0,
+      locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      lineId: revision3VoiceContentLineId,
+      voiceSlotLocales: const <String>{'de'},
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _tapDashboardChange(tester, revision3VoiceContentSlotId);
+
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+    final line = find.byKey(
+      const ValueKey(
+        'revision3-localization-voice-line-$revision3VoiceContentLineId',
+      ),
+    );
+    final locale = find.byKey(
+      const ValueKey('revision3-localization-voice-locale-de'),
+    );
+    expect(tester.widget<ListTile>(line).selected, isTrue);
+    expect(tester.widget<ChoiceChip>(locale).selected, isTrue);
+    expect(find.text(revision3VoiceContentSlotId), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'broken Home Text and Voice target fails sanitized without Content fallback',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final json = revision3VoiceContentIndexJsonFixture();
+      final entities = (json['entities']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      final line = entities.singleWhere(
+        (entity) => entity['id'] == revision3VoiceContentLineId,
+      );
+      final references = (line['references']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      final localization = references.singleWhere(
+        (reference) => reference['role'] == 'dialog_localization',
+      );
+      localization['resolution'] = 'missing_entity';
+      (localization['target']! as Map<String, Object?>)['entity_id'] =
+          '99999999999999999999999999999999';
+      final index = Revision3ContentIndex.fromJsonObject(json);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dashboard-broken-text-voice'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) => index,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final row = await _revealDashboardChange(
+        tester,
+        revision3VoiceContentLineId,
+      );
+      final failure = AppLocalizations.of(
+        tester.element(row),
+      ).managedDashboardChangeActionFailed;
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+
+      expect(find.text(failure), findsOneWidget);
+      expect(find.byType(Revision3LocalizationVoiceWorkspace), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-library')),
+        findsNothing,
+      );
+      expect(find.textContaining('missing_entity'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Home VoiceTake focuses its exact fixed-context candidate', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _homeDashboardTextVoiceLease(
+      root: Directory(r'C:\mods\dashboard-voice-take'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+        revision: lease.projectRevision,
+        localizationRevision: 0,
+        existingSlotCandidateCount: 1,
+      ),
+      localizationId: revision3VoiceContentLocalizationId,
+      localizationRevision: 0,
+      locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      lineId: revision3VoiceContentLineId,
+      voiceSlotLocales: const <String>{'de'},
+    );
+    final takeId = managed.contentIndexBuilder!(managed).entities
+        .singleWhere(
+          (entity) => entity.kind == Revision3ContentEntityKind.voiceTake,
+        )
+        .id;
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    final row = await _revealDashboardChange(tester, takeId);
+    await tester.tap(row);
+    await _pumpUntilFound(
+      tester,
+      find.byType(Revision3VoiceTakeSelectionDialog),
+    );
+
+    final dialog = find.byType(Revision3VoiceTakeSelectionDialog);
+    expect(dialog, findsOneWidget);
+    final selection = tester.widget<Revision3VoiceTakeSelectionDialog>(dialog);
+    expect(selection.fixedContext, isTrue);
+    expect(selection.initialLineId, revision3VoiceContentLineId);
+    expect(selection.initialLocale, 'de');
+    expect(selection.initialTakeId, takeId);
+    expect(find.byKey(const Key('voice-selection-line-search')), findsNothing);
+    expect(find.text(takeId), findsNothing);
+    await tester.tap(find.byKey(const Key('voice-selection-cancel')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('newer Home entity click wins over an older delayed load', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final index = _voiceLocalizationWorkspaceIndex(
+      revision: 7,
+      localizationRevision: 0,
+      existingSlotCandidateCount: 1,
+    );
+    final takeId = index.entities
+        .singleWhere(
+          (entity) => entity.kind == Revision3ContentEntityKind.voiceTake,
+        )
+        .id;
+    final delayedOldLoad = Completer<Revision3ContentIndex>();
+    var delayNextRead = false;
+    var delayedReads = 0;
+    final managed = _homeDashboardTextVoiceLease(
+      root: Directory(r'C:\mods\dashboard-newest-entity'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      contentIndexBuilder: (_) => index,
+      onContentIndexRead: (_) {
+        if (delayNextRead) {
+          delayNextRead = false;
+          delayedReads++;
+          return delayedOldLoad.future;
+        }
+        return Future<Revision3ContentIndex>.value(index);
+      },
+      localizationId: revision3VoiceContentLocalizationId,
+      localizationRevision: 0,
+      locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      lineId: revision3VoiceContentLineId,
+      voiceSlotLocales: const <String>{'de'},
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    final dashboard = tester.widget<Revision3ProjectDashboard>(
+      find.byType(Revision3ProjectDashboard),
+    );
+    final openEntity = dashboard.changeActions.openEntity!;
+    final oldEntity = index.entityById(takeId)!;
+    final newEntity = index.entityById(revision3VoiceContentLocalizationId)!;
+    Object? oldError;
+    Object? newError;
+    var newFinished = false;
+
+    delayNextRead = true;
+    unawaited(
+      Future<void>.sync(() => openEntity(oldEntity)).catchError((error) {
+        oldError = error;
+      }),
+    );
+    await tester.pump();
+    expect(delayedReads, 1);
+    unawaited(
+      Future<void>.sync(() => openEntity(newEntity))
+          .catchError((error) {
+            newError = error;
+          })
+          .whenComplete(() => newFinished = true),
+    );
+    await tester.pump();
+    delayedOldLoad.complete(index);
+    await tester.pumpAndSettle();
+
+    expect(newFinished, isTrue);
+    expect(newError, isNull);
+    expect(oldError, isNull);
+    expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home exact-target Keep Editing is a silent decline', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    const draft = 'Keep this exact Home draft';
+    final managed = _homeDashboardTextVoiceLease(
+      root: Directory(r'C:\mods\dashboard-dirty-decline'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+        revision: lease.projectRevision,
+        localizationRevision: 0,
+      ),
+      localizationId: revision3VoiceContentLocalizationId,
+      localizationRevision: 0,
+      locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      lineId: revision3VoiceContentLineId,
+      voiceSlotLocales: const <String>{'de'},
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedLocalizationVoice(tester);
+    final textField = find.byKey(const Key('revision3-localization-text-de'));
+    await tester.enterText(textField, draft);
+    await tester.pump();
+    final l10n = AppLocalizations.of(tester.element(textField));
+
+    await _navigateManagedHome(tester);
+    final row = await _revealDashboardChange(
+      tester,
+      revision3VoiceContentLocalizationId,
+    );
+    final failure = l10n.managedDashboardChangeActionFailed;
+    await tester.tap(row);
+    await _pumpUntilFound(
+      tester,
+      find.text(l10n.managedLocalizationUnsavedTitle),
+    );
+    await tester.tap(
+      find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(failure), findsNothing);
+    await _navigateManagedLocalizationVoice(tester);
+    expect(tester.widget<TextField>(textField).controller!.text, draft);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home exact-target rejection is reported with sanitized copy', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final index = _voiceLocalizationWorkspaceIndex(
+      revision: 7,
+      localizationRevision: 0,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-target-rejected'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (_) => index,
+      onDialogLocalizationEditSeed: (_, _, _, _) =>
+          throw StateError('private exact seed failure'),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    final row = await _revealDashboardChange(
+      tester,
+      revision3VoiceContentLocalizationId,
+    );
+    final failure = AppLocalizations.of(
+      tester.element(row),
+    ).managedDashboardChangeActionFailed;
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    expect(find.text(failure), findsOneWidget);
+    expect(find.textContaining('private exact seed failure'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Home VoiceTake rejects a foreign dirty Item draft', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeItemPatchManagedLease(
+      root: Directory(r'C:\mods\dashboard-voice-item-dirty'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) {
+        final json = revision3VoiceContentIndexJsonFixture(
+          revision: lease.projectRevision,
+          existingSlotCandidateCount: 1,
+        );
+        json['target'] = _homeItemPatchTarget();
+        return Revision3ContentIndex.fromJsonObject(json);
+      },
+      onDialogLocalizationEditSeed:
+          (lease, localizationId, localizationRevision, locId) =>
+              _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: locId,
+                lineId: revision3VoiceContentLineId,
+                voiceSlotLocales: const <String>{'de'},
+              ),
+    );
+    final takeId = managed.contentIndexBuilder!(managed).entities
+        .singleWhere(
+          (entity) => entity.kind == Revision3ContentEntityKind.voiceTake,
+        )
+        .id;
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedItems(tester);
+    await tester.tap(find.byKey(const Key('revision3-items-add-m_Value')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('revision3-items-value-m_Value')),
+      '9',
+    );
+    await tester.pump();
+    await _navigateManagedHome(tester);
+    final row = await _revealDashboardChange(tester, takeId);
+    final failure = AppLocalizations.of(
+      tester.element(row),
+    ).managedDashboardChangeActionFailed;
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
+    expect(find.text(failure), findsOneWidget);
+    expect(managed.voiceSelectionPublishCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Home busy VoiceTake dialog closes on foreign same-revision head drift',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final delayedStatus = Completer<Revision3VoiceTakeStatusPublication>();
+      final managed = _homeDashboardTextVoiceLease(
+        root: Directory(r'C:\mods\dashboard-voice-head-drift'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        contentIndexBuilder: (lease) => _voiceLocalizationWorkspaceIndex(
+          revision: lease.projectRevision,
+          localizationRevision: 0,
+          existingSlotCandidateCount: 1,
+        ),
+        localizationId: revision3VoiceContentLocalizationId,
+        localizationRevision: 0,
+        locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        lineId: revision3VoiceContentLineId,
+        voiceSlotLocales: const <String>{'de'},
+        onVoiceStatusPublish: (_, _) => delayedStatus.future,
+      );
+      final takeId = managed.contentIndexBuilder!(managed).entities
+          .singleWhere(
+            (entity) => entity.kind == Revision3ContentEntityKind.voiceTake,
+          )
+          .id;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final row = await _revealDashboardChange(tester, takeId);
+      await tester.tap(row);
+      await _pumpUntilFound(
+        tester,
+        find.byType(Revision3VoiceTakeSelectionDialog),
+      );
+      final statusAction = find.byKey(const Key('voice-status-change-0'));
+      await _pumpUntilFound(tester, statusAction);
+      tester
+          .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+            statusAction,
+          )
+          .onSelected!(AuthoringRevision3VoiceTakeStatus.approved);
+      for (
+        var pump = 0;
+        pump < 20 && managed.voiceStatusPublishCalls == 0;
+        pump++
+      ) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(managed.voiceStatusPublishCalls, 1);
+
+      final driftedHead = _head(8);
+      managed.head = driftedHead;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: driftedHead,
+        requiresReopen: false,
+      );
+      for (
+        var pump = 0;
+        pump < 20 &&
+            find
+                .byType(Revision3VoiceTakeSelectionDialog)
+                .evaluate()
+                .isNotEmpty;
+        pump++
+      ) {
+        await tester.pump();
+      }
+
+      expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
+      final workspace = tester.widget<Revision3LocalizationVoiceWorkspace>(
+        find.byType(Revision3LocalizationVoiceWorkspace),
+      );
+      expect(workspace.projectCheckpointIdentity, driftedHead.canonicalJson);
+      delayedStatus.completeError(StateError('status cancelled by head drift'));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Home VoiceTake dialog adopts its own status and selection revisions',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      tester.view.physicalSize = const Size(1600, 1200);
+      const firstTakeId = '55000000000000000000000000000000';
+      const secondTakeId = '55000000000000000000000000000001';
+      var currentIndex = _voiceSelectionIndex(
+        revision: 7,
+        selectedTakeId: firstTakeId,
+        alternateStatus: 'recorded',
+        authorableLocalization: true,
+      );
+      String? statusTakeId;
+      int? statusBasisRevision;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dashboard-voice-owned-revisions'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) => currentIndex,
+        onDialogLocalizationEditSeed:
+            (lease, localizationId, localizationRevision, locId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: localizationId,
+                  localizationRevision: localizationRevision,
+                  locId: locId,
+                  lineId: revision3VoiceContentLineId,
+                  voiceSlotLocales: const <String>{'de'},
+                ),
+        onVoiceStatusPublish: (lease, plan) {
+          statusBasisRevision = lease.projectRevision;
+          statusTakeId = plan.takeId;
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          currentIndex = _voiceSelectionIndex(
+            revision: 8,
+            selectedTakeId: firstTakeId,
+            alternateStatus: 'approved',
+            alternateRevision: 1,
+            authorableLocalization: true,
+          );
+          return Revision3VoiceTakeStatusPublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            head: lease.head,
+            lineId: plan.lineId,
+            localizationId: plan.localizationId,
+            slotId: plan.slotId,
+            slotRevision: plan.expectedSlotRevision,
+            locale: plan.locale,
+            locId: plan.locId,
+            takeId: plan.takeId,
+            takeRevision: plan.expectedTakeRevision + 1,
+            previousStatus: plan.expectedStatus,
+            status: plan.desiredStatus,
+          );
+        },
+        onVoiceSelectionPublish: (lease, plan) {
+          expect(lease.projectRevision, 8);
+          expect(plan.selectedTakeId, secondTakeId);
+          lease.projectRevision = 9;
+          lease.head = _head(9);
+          currentIndex = _voiceSelectionIndex(
+            revision: 9,
+            selectedTakeId: secondTakeId,
+            slotRevision: plan.expectedSlotRevision + 1,
+            selectedRevision: 1,
+            authorableLocalization: true,
+          );
+          return Revision3VoiceTakeSelectionPublication(
+            projectId: lease.projectId,
+            projectRevision: 9,
+            head: lease.head,
+            lineId: plan.lineId,
+            slotId: plan.slotId,
+            slotRevision: plan.expectedSlotRevision + 1,
+            locale: plan.locale,
+            locId: plan.locId,
+            previousSelectedTakeId: plan.expectedSelectedTakeId,
+            selectedTakeId: plan.selectedTakeId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final row = await _revealDashboardChange(tester, secondTakeId);
+      final failure = AppLocalizations.of(
+        tester.element(row),
+      ).managedDashboardChangeActionFailed;
+      await tester.tap(row);
+      await _pumpUntilFound(
+        tester,
+        find.byType(Revision3VoiceTakeSelectionDialog),
+      );
+
+      final statusAction = find.byKey(const Key('voice-status-change-1'));
+      await _pumpUntilFound(tester, statusAction);
+      await tester.ensureVisible(statusAction);
+      tester
+          .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+            statusAction,
+          )
+          .onSelected!(AuthoringRevision3VoiceTakeStatus.approved);
+      await tester.pump();
+      for (
+        var pump = 0;
+        pump < 80 &&
+            (coordinator.state is! ManagedRevision3CurrentProjectState ||
+                (coordinator.state as ManagedRevision3CurrentProjectState)
+                        .projectRevision !=
+                    8);
+        pump++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(managed.voiceStatusPublishCalls, 1);
+      expect(statusBasisRevision, 7);
+      expect(statusTakeId, secondTakeId);
+      expect(managed.projectRevision, 8);
+      expect(find.byType(Revision3VoiceTakeSelectionDialog), findsOneWidget);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+
+      await tester.tap(find.byKey(const Key('voice-selection-take-1')));
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('voice-selection-save')));
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      for (
+        var pump = 0;
+        pump < 80 &&
+            find
+                .byType(Revision3VoiceTakeSelectionDialog)
+                .evaluate()
+                .isNotEmpty;
+        pump++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        9,
+      );
+      expect(find.text(failure), findsNothing);
+      expect(
+        find.textContaining(
+          'Approved Voice take selected in project revision 9',
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Home VoiceTake dialog adopts removal head and remains bound', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    tester.view.physicalSize = const Size(1600, 1200);
+    const removedTakeId = '55000000000000000000000000000000';
+    const remainingTakeId = '55000000000000000000000000000001';
+    var currentIndex = _voiceSelectionIndex(
+      revision: 7,
+      selectedTakeId: removedTakeId,
+      alternateStatus: 'recorded',
+      authorableLocalization: true,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-voice-owned-removal'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (_) => currentIndex,
+      onDialogLocalizationEditSeed:
+          (lease, localizationId, localizationRevision, locId) =>
+              _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: locId,
+                lineId: revision3VoiceContentLineId,
+                voiceSlotLocales: const <String>{'de'},
+              ),
+      onVoiceTakeRemoval: (lease, plan) {
+        expect(lease.projectRevision, 7);
+        expect(plan.takeId, removedTakeId);
+        expect(plan.expectedSelectedTakeId, removedTakeId);
+        expect(plan.expectsSelectionCleared, isTrue);
+        lease.projectRevision = 8;
+        lease.head = _head(8);
+        currentIndex = _voiceIndexAfterSelectedTakeRemoval(
+          revision: 8,
+          slotRevision: plan.expectedSlotRevision + 1,
+        );
+        return Revision3VoiceTakeRemovalPublication(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          lineId: plan.lineId,
+          localizationId: plan.localizationId,
+          slotId: plan.slotId,
+          slotRevision: plan.expectedSlotRevision + 1,
+          locale: plan.locale,
+          locId: plan.locId,
+          takeId: plan.takeId,
+          takeRevision: plan.expectedTakeRevision,
+          previousSelectedTakeId: plan.expectedSelectedTakeId,
+          selectionCleared: plan.expectsSelectionCleared,
+          takeEntityRemoved: plan.expectedTakeEntityRemoved,
+          remainingCandidateCount: plan.expectedRemainingCandidateCount,
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    final row = await _revealDashboardChange(tester, remainingTakeId);
+    final failure = AppLocalizations.of(
+      tester.element(row),
+    ).managedDashboardChangeActionFailed;
+    await tester.tap(row);
+    await _pumpUntilFound(
+      tester,
+      find.byType(Revision3VoiceTakeSelectionDialog),
+    );
+
+    final remove = find.byKey(const Key('voice-take-remove-0'));
+    await _pumpUntilFound(tester, remove);
+    await tester.ensureVisible(remove);
+    await tester.tap(remove);
+    final confirm = find.byKey(const Key('voice-take-remove-confirm'));
+    await _pumpUntilFound(tester, confirm);
+    await tester.tap(confirm);
+    for (
+      var pump = 0;
+      pump < 80 &&
+          (coordinator.state is! ManagedRevision3CurrentProjectState ||
+              (coordinator.state as ManagedRevision3CurrentProjectState)
+                      .projectRevision !=
+                  8);
+      pump++
+    ) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    expect(managed.voiceTakeRemovalCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState)
+          .projectRevision,
+      8,
+    );
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState)
+          .head
+          .canonicalJson,
+      _head(8).canonicalJson,
+    );
+    expect(
+      tester
+          .widget<Revision3LocalizationVoiceWorkspace>(
+            find.byType(Revision3LocalizationVoiceWorkspace),
+          )
+          .projectCheckpointIdentity,
+      _head(8).canonicalJson,
+    );
+    expect(find.byType(Revision3VoiceTakeSelectionDialog), findsOneWidget);
+    await _pumpUntilFound(
+      tester,
+      find.byKey(const Key('voice-selection-take-0')),
+      maxPumps: 80,
+    );
+    expect(find.byKey(const Key('voice-selection-take-1')), findsNothing);
+
+    final statusAction = find.byKey(const Key('voice-status-change-0'));
+    await _pumpUntilFound(tester, statusAction);
+    expect(
+      tester
+          .widget<PopupMenuButton<AuthoringRevision3VoiceTakeStatus>>(
+            statusAction,
+          )
+          .enabled,
+      isTrue,
+    );
+    expect(find.byType(Revision3VoiceTakeSelectionDialog), findsOneWidget);
+    expect(find.text(failure), findsNothing);
+    expect(managed.requiresReopen, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Home VoiceTake dialog cannot survive an away-back project switch',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const selectedTakeId = '55000000000000000000000000000000';
+      final managed = _homeDashboardTextVoiceLease(
+        root: Directory(r'C:\mods\dashboard-voice-aba'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        contentIndexBuilder: (_) => _voiceSelectionIndex(
+          revision: 7,
+          selectedTakeId: selectedTakeId,
+          authorableLocalization: true,
+        ),
+        localizationId: revision3VoiceContentLocalizationId,
+        localizationRevision: 0,
+        locId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        lineId: revision3VoiceContentLineId,
+        voiceSlotLocales: const <String>{'de'},
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final row = await _revealDashboardChange(tester, selectedTakeId);
+      await tester.tap(row);
+      await _pumpUntilFound(
+        tester,
+        find.byType(Revision3VoiceTakeSelectionDialog),
+      );
+      final remove = find.byKey(const Key('voice-take-remove-0'));
+      await _pumpUntilFound(tester, remove);
+      await tester.ensureVisible(remove);
+      await tester.tap(remove);
+      final confirmDialog = find.byKey(
+        const Key('voice-take-remove-confirm-dialog'),
+      );
+      await _pumpUntilFound(tester, confirmDialog);
+      expect(confirmDialog, findsOneWidget);
+
+      final opening = coordinator.state as ManagedRevision3CurrentProjectState;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        (coordinator as dynamic).state = opening;
+      });
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: Directory(r'C:\mods\dashboard-voice-foreign'),
+        projectId: '99999999999999999999999999999999',
+        projectRevision: opening.projectRevision,
+        head: opening.head,
+        requiresReopen: false,
+      );
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      final restored = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(restored.root.path, opening.root.path);
+      expect(restored.projectId, opening.projectId);
+      expect(restored.projectRevision, opening.projectRevision);
+      expect(restored.head.canonicalJson, opening.head.canonicalJson);
+      expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
+      expect(confirmDialog, findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Home GeneratedScript remains an exact Content handoff', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = Revision3QuestOutlineFixture();
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\dashboard-generated-script'),
+      projectId: revision3QuestOutlineProjectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex(),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _tapDashboardChange(tester, revision3QuestOutlineModuleId);
 
     expect(
       find.byKey(const Key('revision3-content-workspace-page-library')),
@@ -3701,14 +4685,87 @@ void main() {
     expect(
       find.byKey(
         const Key(
-          'revision3-content-entity-details-$_homeDashboardLocalizationId',
+          'revision3-content-entity-details-$revision3QuestOutlineModuleId',
         ),
       ),
       findsOneWidget,
     );
-    expect(find.byKey(const Key('revision3-story-workspace')), findsNothing);
+    expect(find.byType(Revision3LocalizationVoiceWorkspace), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  for (final drift in <String>['head', 'project', 'reopen']) {
+    testWidgets(
+      'Home Text and Voice handoff sanitizes $drift drift at lazy mount',
+      (tester) async {
+        await _setDesktopTestSurface(tester);
+        const projectId = '29292929292929292929292929292929';
+        const replacementProjectId = '30303030303030303030303030303030';
+        const projectRevision = 3;
+        final index = _dialogLocalizationEditIndex(
+          projectId: projectId,
+          projectRevision: projectRevision,
+          localizationId: _homeDashboardLocalizationId,
+          localizationRevision: 2,
+          locId: _homeDashboardLocalizationLocId,
+        );
+        final managed = _homeDashboardTextVoiceLease(
+          root: Directory(r'C:\mods\dashboard-lazy-drift'),
+          projectId: projectId,
+          projectRevision: projectRevision,
+          contentIndexBuilder: (_) => index,
+          localizationId: _homeDashboardLocalizationId,
+          localizationRevision: 2,
+          locId: _homeDashboardLocalizationLocId,
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        await coordinator.openManagedRevision3(managed.root);
+        final container = _container(
+          coordinator: coordinator,
+          pickManaged: (_) async => null,
+        );
+        addTearDown(container.dispose);
+
+        await _pumpApp(tester, container);
+        await tester.pumpAndSettle();
+        final row = await _revealDashboardChange(
+          tester,
+          _homeDashboardLocalizationId,
+        );
+        final failure = AppLocalizations.of(
+          tester.element(row),
+        ).managedDashboardChangeActionFailed;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final nextHead = drift == 'head'
+              ? _head(projectRevision + 1)
+              : managed.head;
+          if (drift == 'head') managed.head = nextHead;
+          (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+            root: managed.root,
+            projectId: drift == 'project'
+                ? replacementProjectId
+                : managed.projectId,
+            projectRevision: managed.projectRevision,
+            head: nextHead,
+            requiresReopen: drift == 'reopen',
+          );
+        });
+
+        await tester.tap(row);
+        await tester.pumpAndSettle();
+
+        expect(find.text(failure), findsOneWidget);
+        expect(
+          find.byKey(const Key('revision3-content-workspace-page-library')),
+          findsNothing,
+        );
+        expect(find.textContaining('exact project change'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets(
     'stale Home change callbacks fail closed across head drift and project switch',
@@ -10515,6 +11572,7 @@ void main() {
           return Revision3VoiceTakeSelectionPublication(
             projectId: lease.projectId,
             projectRevision: 8,
+            head: lease.head,
             lineId: plan.lineId,
             slotId: plan.slotId,
             slotRevision: plan.expectedSlotRevision + 1,
@@ -10660,6 +11718,7 @@ void main() {
           return Revision3VoiceTakeStatusPublication(
             projectId: lease.projectId,
             projectRevision: 8,
+            head: lease.head,
             lineId: plan.lineId,
             localizationId: plan.localizationId,
             slotId: plan.slotId,
@@ -10692,6 +11751,7 @@ void main() {
           return Revision3VoiceTakeSelectionPublication(
             projectId: lease.projectId,
             projectRevision: 9,
+            head: lease.head,
             lineId: plan.lineId,
             slotId: plan.slotId,
             slotRevision: plan.expectedSlotRevision + 1,
@@ -13140,6 +14200,11 @@ typedef _DialogLocalizationEditPublishCallback =
       _FakeManagedLease lease,
       Revision3DialogLocalizationEditTechnicalPlan plan,
     );
+typedef _VoiceTakeRemovalCallback =
+    FutureOr<Revision3VoiceTakeRemovalPublication> Function(
+      _FakeManagedLease lease,
+      Revision3VoiceTakeRemovalTechnicalPlan plan,
+    );
 typedef _InstalledDataAssetInspectCallback =
     FutureOr<AuthoringRevision3InstalledDataAssetInspectionResult> Function(
       _FakeManagedLease lease,
@@ -13187,7 +14252,8 @@ class _FakeManagedLease
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
-        ManagedRevision3VoiceTakeStatusLease {
+        ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3VoiceTakeRemovalLease {
   _FakeManagedLease({
     required this.root,
     required this.projectId,
@@ -13213,6 +14279,7 @@ class _FakeManagedLease
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
     this.onVoiceStatusPublish,
+    this.onVoiceTakeRemoval,
     this.onVoiceTargetPublish,
     this.onVoicePlan,
     this.onVoiceBuild,
@@ -13332,11 +14399,12 @@ class _FakeManagedLease
     Revision3VoiceTakeSelectionTechnicalPlan plan,
   )?
   onVoiceSelectionPublish;
-  final Revision3VoiceTakeStatusPublication Function(
+  final FutureOr<Revision3VoiceTakeStatusPublication> Function(
     _FakeManagedLease lease,
     Revision3VoiceTakeStatusTechnicalPlan plan,
   )?
   onVoiceStatusPublish;
+  final _VoiceTakeRemovalCallback? onVoiceTakeRemoval;
   final Revision3VoiceTargetPublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -13406,6 +14474,7 @@ class _FakeManagedLease
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
   int voiceStatusPublishCalls = 0;
+  int voiceTakeRemovalCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voicePlanCalls = 0;
   int voiceBuildCalls = 0;
@@ -13487,7 +14556,7 @@ class _FakeManagedLease
     if (publish == null) {
       throw StateError('fake managed lease has no localization-edit publisher');
     }
-    return publish(this, plan);
+    return await publish(this, plan);
   }
 
   @override
@@ -13769,6 +14838,27 @@ class _FakeManagedLease
       throw StateError('fake managed lease has no Voice status publisher');
     }
     return publish(this, plan);
+  }
+
+  @override
+  bool get supportsVoiceTakeRemoval => onVoiceTakeRemoval != null;
+
+  @override
+  Future<Revision3VoiceTakeRemovalPublication>
+  prepareAndPublishVoiceTakeRemovalV1({
+    required Revision3VoiceTakeRemovalTechnicalPlan plan,
+  }) async {
+    voiceTakeRemovalCalls++;
+    final publish = onVoiceTakeRemoval;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice take remover');
+    }
+    return publish(this, plan);
+  }
+
+  @override
+  void markRequiresReopenAfterVoiceTakeRemovalUncertainty() {
+    requiresReopenValue = true;
   }
 
   @override
@@ -15489,6 +16579,54 @@ Revision3ContentIndex _dialogLocalizationEditIndex({
   'assets': <Object?>[],
 });
 
+_FakeManagedLease _homeDashboardTextVoiceLease({
+  required Directory root,
+  required String projectId,
+  required int projectRevision,
+  required Revision3ContentIndex Function(_FakeManagedLease lease)
+  contentIndexBuilder,
+  Future<Revision3ContentIndex> Function(_FakeManagedLease lease)?
+  onContentIndexRead,
+  FutureOr<Revision3VoiceTakeStatusPublication> Function(
+    _FakeManagedLease lease,
+    Revision3VoiceTakeStatusTechnicalPlan plan,
+  )?
+  onVoiceStatusPublish,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+  String? lineId,
+  Set<String> voiceSlotLocales = const <String>{},
+}) => _FakeManagedLease(
+  root: root,
+  projectId: projectId,
+  projectRevision: projectRevision,
+  head: _head(projectRevision),
+  onContentIndexRead: onContentIndexRead,
+  onVoiceStatusPublish: onVoiceStatusPublish,
+  contentIndexBuilder: contentIndexBuilder,
+  onDialogLocalizationEditSeed:
+      (lease, requestedId, requestedRevision, requestedLocId) {
+        if (requestedId != localizationId ||
+            requestedRevision != localizationRevision ||
+            requestedLocId != locId) {
+          throw StateError('The dashboard requested a different exact text.');
+        }
+        return _dialogLocalizationEditSeed(
+          lease: lease,
+          localizationId: requestedId,
+          localizationRevision: requestedRevision,
+          locId: requestedLocId,
+          lineId: lineId,
+          lineDisplayName: 'Visible labels do not select dashboard targets',
+          speaker: 'Display-only speaker',
+          voiceSlotLocales: voiceSlotLocales,
+          germanText: 'Exact dashboard text',
+          englishText: 'Exact dashboard text in English',
+        );
+      },
+);
+
 AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
   required _FakeManagedLease lease,
   required String localizationId,
@@ -16903,6 +18041,7 @@ Revision3ContentIndex _voiceSelectionIndex({
   String alternateStatus = 'approved',
   int alternateRevision = 0,
   int selectedRevision = 0,
+  bool authorableLocalization = false,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
@@ -16911,6 +18050,12 @@ Revision3ContentIndex _voiceSelectionIndex({
   );
   final entities = (json['entities']! as List).cast<Map<String, Object?>>();
   for (final entity in entities) {
+    if (authorableLocalization &&
+        entity['id'] == revision3VoiceContentLocalizationId) {
+      final summary = (entity['summary']! as Map).cast<String, Object?>();
+      final data = (summary['data']! as Map).cast<String, Object?>();
+      data['locales'] = <Object?>['de', 'en'];
+    }
     if (entity['id'] == revision3VoiceContentSlotId) {
       entity['revision'] = slotRevision;
       final references = (entity['references']! as List)
@@ -16932,6 +18077,61 @@ Revision3ContentIndex _voiceSelectionIndex({
       entity['revision'] = selected ? selectedRevision : alternateRevision;
     }
   }
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Revision3ContentIndex _voiceIndexAfterSelectedTakeRemoval({
+  required int revision,
+  required int slotRevision,
+  String remainingStatus = 'recorded',
+  int remainingRevision = 0,
+}) {
+  const removedTakeId = '55000000000000000000000000000000';
+  const remainingTakeId = '55000000000000000000000000000001';
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingSlotCandidateCount: 2,
+    existingSlotHasSelectedTake: true,
+  );
+  final entities = (json['entities']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  entities.removeWhere((entity) => entity['id'] == removedTakeId);
+  final counts = (json['entity_counts']! as Map).cast<String, Object?>();
+  counts['voice_take'] = 1;
+
+  final localization = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLocalizationId,
+  );
+  final localizationSummary = (localization['summary']! as Map)
+      .cast<String, Object?>();
+  final localizationData = (localizationSummary['data']! as Map)
+      .cast<String, Object?>();
+  localizationData['locales'] = <Object?>['de', 'en'];
+
+  final slot = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentSlotId,
+  );
+  slot['revision'] = slotRevision;
+  final slotSummary = (slot['summary']! as Map).cast<String, Object?>();
+  final slotData = (slotSummary['data']! as Map).cast<String, Object?>();
+  slotData['candidate_count'] = 1;
+  slotData['has_selected_take'] = false;
+  final slotReferences = (slot['references']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  slotReferences.removeWhere((reference) {
+    final target = (reference['target']! as Map).cast<String, Object?>();
+    return target['entity_id'] == removedTakeId ||
+        reference['role'] == 'voice_selected';
+  });
+
+  final remainingTake = entities.singleWhere(
+    (entity) => entity['id'] == remainingTakeId,
+  );
+  remainingTake['revision'] = remainingRevision;
+  final takeSummary = (remainingTake['summary']! as Map)
+      .cast<String, Object?>();
+  final takeData = (takeSummary['data']! as Map).cast<String, Object?>();
+  takeData['status'] = remainingStatus;
   return Revision3ContentIndex.fromJsonObject(json);
 }
 

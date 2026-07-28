@@ -82,6 +82,7 @@ final class Revision3VoiceTakeSelectionTechnicalPlan {
 
 final class Revision3VoiceTakeSelectionPublication {
   Revision3VoiceTakeSelectionPublication({
+    required this.head,
     required this.projectId,
     required this.projectRevision,
     required this.lineId,
@@ -115,6 +116,7 @@ final class Revision3VoiceTakeSelectionPublication {
     }
   }
 
+  final AuthoringWorkingHead head;
   final String projectId;
   final int projectRevision;
   final String lineId;

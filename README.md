@@ -576,8 +576,11 @@ Snapshot V2 is the separate backup/restore format. Auto-updates on launch
   as Quests, NPCs, Items, DataAssets, Dialog, Text, and Voice instead of a
   count/readiness-card grid. Proven generated and related helpers stay nested
   under their owning author content; unresolved or unproven helpers remain
-  visible in a collapsed Technical section. Rows continue into the exact
-  current Story, Items, DataAsset, or Content workspace. Home does not repeat
+  visible in a collapsed Technical section. Dialog, Localization, and Voice
+  rows reopen their uniquely proven context directly in **Text & Voice**;
+  opening a Voice take reveals it without changing the saved selection, and
+  ambiguous graphs fail closed. Other rows continue into the exact current
+  Story, Items, DataAsset, or Content workspace. Home does not repeat
   five large workspace task rows; one existing **Create** flow remains for an
   empty mutable project. Wider layouts keep direct tabs for all five jobs, while
   narrow/high-scale layouts expose the same canonical navigation through one
@@ -606,10 +609,6 @@ Snapshot V2 is the separate backup/restore format. Auto-updates on launch
 - Replace **textures** — pick an asset, preview, drop in a PNG.
 - Edit **AngelScript** — stage a module, compile, and splice it into the game's
   script cache (experimental).
-- Use the standalone tools to **build a bundle** and **deploy/undeploy** it to your game install
-  (overrides + loc + audio + textures + scripts + dialog topics, with backups), or **export a
-  standalone Lua override mod** to share. These tools are not a second managed
-  project/session path.
 
 **It can not:**
 - Build, deploy, spawn, or runtime-qualify managed revision-3 NPC/Quest Drafts;

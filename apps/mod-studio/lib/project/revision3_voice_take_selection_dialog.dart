@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/mod_ffi.dart';
 import 'revision3_dialog_voice_slot_removal_authoring.dart';
@@ -246,6 +247,15 @@ final class Revision3VoiceTakeSelectionDialogCopy {
       _german ? 'Kein Take ausgewählt' : 'No take selected';
   String get currentSelection =>
       _german ? 'Aktuelle Auswahl' : 'Current selection';
+  String takeNavigationTargetSemantics({
+    required String displayLabel,
+    required String subtitle,
+  }) => _german
+      ? 'Geöffneter Voice-Take: $displayLabel. $subtitle'
+      : 'Opened Voice take: $displayLabel. $subtitle';
+  String get takeNavigationTargetActivateHint => _german
+      ? 'Drücke Eingabe oder Leertaste, um diesen freigegebenen Take auszuwählen.'
+      : 'Press Enter or Space to choose this Approved take.';
   String get clearActiveChoice => _german
       ? 'Aufnahmen behalten, aber aktive Auswahl leeren'
       : 'Keep the recordings, but clear the active choice';
@@ -381,10 +391,15 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     this.mediaQaInspect,
     this.initialLineId,
     this.initialLocale,
+    this.initialTakeId,
     this.fixedContext = false,
   }) : assert(
          (previewMaterialize == null) == (previewPlayback == null),
          'Preview authoring and playback must be supplied together.',
+       ),
+       assert(
+         initialTakeId == null || (fixedContext && initialTakeId != ''),
+         'An initial Voice take requires one non-empty fixed context.',
        );
 
   final Revision3VoiceTakeSelectionAuthoringService service;
@@ -396,6 +411,12 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
   final Revision3VoiceTakeMediaQaDialogInspector? mediaQaInspect;
   final String? initialLineId;
   final String? initialLocale;
+
+  /// Optional exact candidate to reveal and focus inside [fixedContext].
+  ///
+  /// This is navigation only. The radio-group value remains the slot's
+  /// current selection until the author explicitly changes it.
+  final String? initialTakeId;
   final Revision3VoiceTakeSelectionDialogCopy copy;
 
   /// Keeps an in-workspace line/locale handoff fixed. The freshly loaded
@@ -410,10 +431,16 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
 class _Revision3VoiceTakeSelectionDialogState
     extends State<Revision3VoiceTakeSelectionDialog> {
   final _searchController = TextEditingController();
+  final _initialTakeFocusNode = FocusNode(
+    debugLabel: 'initial Voice take navigation target',
+    skipTraversal: true,
+  );
+  final _initialTakeTargetKey = GlobalKey();
   Revision3VoiceCatalog? _catalog;
   String? _lineId;
   String? _locale;
   String? _selectionValue;
+  String? _initialTakeFocusId;
   String? _error;
   String? _notice;
   String? _statusBusyTakeId;
@@ -473,7 +500,8 @@ class _Revision3VoiceTakeSelectionDialogState
         !identical(oldWidget.mediaQaInspect, widget.mediaQaInspect) ||
         oldWidget.fixedContext != widget.fixedContext ||
         oldWidget.initialLineId != widget.initialLineId ||
-        oldWidget.initialLocale != widget.initialLocale) {
+        oldWidget.initialLocale != widget.initialLocale ||
+        oldWidget.initialTakeId != widget.initialTakeId) {
       _initialSelectionConsumed = false;
       unawaited(oldWidget.previewPlayback?.stop());
       _load(resetRecovery: true);
@@ -488,6 +516,7 @@ class _Revision3VoiceTakeSelectionDialogState
     _searchController
       ..removeListener(_searchChanged)
       ..dispose();
+    _initialTakeFocusNode.dispose();
     super.dispose();
   }
 
@@ -637,6 +666,7 @@ class _Revision3VoiceTakeSelectionDialogState
   Future<void> _load({bool resetRecovery = false}) async {
     if (_catalog != null) unawaited(widget.previewPlayback?.stop());
     final generation = ++_loadGeneration;
+    _initialTakeFocusNode.unfocus();
     setState(() {
       _invalidateMediaQa();
       if (resetRecovery) {
@@ -652,6 +682,7 @@ class _Revision3VoiceTakeSelectionDialogState
       _lineId = null;
       _locale = null;
       _selectionValue = null;
+      _initialTakeFocusId = null;
       _fixedContextInvalid = false;
       _error = null;
       _notice = null;
@@ -661,15 +692,25 @@ class _Revision3VoiceTakeSelectionDialogState
       if (!mounted || generation != _loadGeneration) return;
       Revision3VoiceDialogLineChoice? initialLine;
       String? initialLocale;
+      String? initialTakeFocusId;
       var fixedContextInvalid = false;
       if (widget.fixedContext) {
         final requestedLine = catalog.line(widget.initialLineId ?? '');
         final requestedLocale = widget.initialLocale;
+        final requestedTakeId = widget.initialTakeId;
+        final requestedSummary =
+            requestedLine == null || requestedLocale == null
+            ? null
+            : requestedLine.slotSummaryForLocale(requestedLocale);
         if (requestedLine != null &&
             requestedLocale != null &&
-            _intactLocalesFor(requestedLine).contains(requestedLocale)) {
+            requestedSummary != null &&
+            _intactLocalesFor(requestedLine).contains(requestedLocale) &&
+            (requestedTakeId == null ||
+                requestedSummary.candidate(requestedTakeId) != null)) {
           initialLine = requestedLine;
           initialLocale = requestedLocale;
+          initialTakeFocusId = requestedTakeId;
         } else {
           fixedContextInvalid = true;
         }
@@ -694,6 +735,7 @@ class _Revision3VoiceTakeSelectionDialogState
             : _selectionValueFor(
                 initialLine.slotSummaryForLocale(initialLocale)!,
               );
+        _initialTakeFocusId = initialTakeFocusId;
         _fixedContextInvalid = fixedContextInvalid;
         _catalogLoadFailed = false;
         if (fixedContextInvalid) {
@@ -701,6 +743,7 @@ class _Revision3VoiceTakeSelectionDialogState
         }
         _loading = false;
       });
+      _scheduleInitialTakeFocus(generation);
     } on Revision3VoiceTakeSelectionRequiresReopenException {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
@@ -756,13 +799,46 @@ class _Revision3VoiceTakeSelectionDialogState
     if (!widget.fixedContext) return true;
     final line = _selectedLine;
     final locale = _locale;
+    final summary = line == null || locale == null
+        ? null
+        : line.slotSummaryForLocale(locale);
+    final initialTakeId = widget.initialTakeId;
     return !_fixedContextInvalid &&
         line != null &&
         line.lineId == widget.initialLineId &&
         locale != null &&
         locale == widget.initialLocale &&
-        line.slotSummaryForLocale(locale) != null &&
+        summary != null &&
+        (initialTakeId == null || summary.candidate(initialTakeId) != null) &&
         _intactLocalesFor(line).contains(locale);
+  }
+
+  void _scheduleInitialTakeFocus(int generation) {
+    final takeId = _initialTakeFocusId;
+    if (takeId == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final targetContext = _initialTakeTargetKey.currentContext;
+      if (!mounted ||
+          generation != _loadGeneration ||
+          _initialTakeFocusId != takeId ||
+          widget.initialTakeId != takeId ||
+          targetContext == null) {
+        return;
+      }
+      await Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.5,
+        duration: Duration.zero,
+      );
+      if (!mounted ||
+          generation != _loadGeneration ||
+          _initialTakeFocusId != takeId ||
+          widget.initialTakeId != takeId ||
+          !_initialTakeFocusNode.canRequestFocus) {
+        return;
+      }
+      _initialTakeFocusNode.requestFocus();
+    });
   }
 
   void _chooseLine(Revision3VoiceDialogLineChoice line) {
@@ -1507,6 +1583,7 @@ class _Revision3VoiceTakeSelectionDialogState
     final fixedContext = widget.fixedContext;
     final initialLineId = widget.initialLineId;
     final initialLocale = widget.initialLocale;
+    final initialTakeId = widget.initialTakeId;
     bool recoveryIsCurrent() =>
         mounted &&
         generation == _loadGeneration &&
@@ -1516,7 +1593,8 @@ class _Revision3VoiceTakeSelectionDialogState
         identical(widget.slotRemovalService, slotRemovalService) &&
         widget.fixedContext == fixedContext &&
         widget.initialLineId == initialLineId &&
-        widget.initialLocale == initialLocale;
+        widget.initialLocale == initialLocale &&
+        widget.initialTakeId == initialTakeId;
     final previous = _catalog;
     final pending = _pendingStatusPublication;
     final pendingRemoval = _pendingRemovalPublication;
@@ -1559,15 +1637,19 @@ class _Revision3VoiceTakeSelectionDialogState
             line != null &&
             requestedLocale != null &&
             summary != null &&
+            (initialTakeId == null ||
+                summary.candidate(initialTakeId) != null) &&
             _intactLocalesFor(line).contains(requestedLocale);
         final confirmedRequestedSlotRemoval = pendingSlotRemoval != null;
         if (!exactContextIsCurrent && !confirmedRequestedSlotRemoval) {
           if (!recoveryIsCurrent()) return;
+          _initialTakeFocusNode.unfocus();
           setState(() {
             _catalog = refreshed;
             _lineId = null;
             _locale = null;
             _selectionValue = null;
+            _initialTakeFocusId = null;
             _pendingStatusPublication = null;
             _pendingRemovalPublication = null;
             _pendingSlotRemovalPublication = null;
@@ -1594,6 +1676,10 @@ class _Revision3VoiceTakeSelectionDialogState
         _lineId = locale == null ? null : line!.lineId;
         _locale = locale;
         _selectionValue = summary == null ? null : _selectionValueFor(summary);
+        _initialTakeFocusId =
+            fixedContext && summary?.candidate(initialTakeId ?? '') != null
+            ? initialTakeId
+            : null;
         _pendingStatusPublication = null;
         _pendingRemovalPublication = null;
         _pendingSlotRemovalPublication = null;
@@ -1610,6 +1696,7 @@ class _Revision3VoiceTakeSelectionDialogState
             ? widget.copy.latestTakesReloaded
             : widget.copy.savedStatusConfirmed;
       });
+      _scheduleInitialTakeFocus(generation);
     } on Revision3VoiceTakeRemovalRequiresReopenException {
       if (!recoveryIsCurrent()) return;
       setState(() {
@@ -1796,6 +1883,19 @@ class _Revision3VoiceTakeSelectionDialogState
                           _TakeChoiceTile(
                             index: index,
                             take: summary.candidates[index],
+                            navigationTarget:
+                                _initialTakeFocusId ==
+                                summary.candidates[index].id,
+                            navigationFocusNode:
+                                _initialTakeFocusId ==
+                                    summary.candidates[index].id
+                                ? _initialTakeFocusNode
+                                : null,
+                            navigationTargetKey:
+                                _initialTakeFocusId ==
+                                    summary.candidates[index].id
+                                ? _initialTakeTargetKey
+                                : null,
                             isCurrent:
                                 summary.selectedTakeId ==
                                 summary.candidates[index].id,
@@ -1826,6 +1926,10 @@ class _Revision3VoiceTakeSelectionDialogState
                             ),
                             onMediaQa: () =>
                                 _checkTakeMedia(summary.candidates[index]),
+                            onNavigationActivate: () => setState(() {
+                              _selectionValue = summary.candidates[index].id;
+                              _error = null;
+                            }),
                           ),
                       ],
                     ),
@@ -1989,6 +2093,10 @@ class _TakeChoiceTile extends StatelessWidget {
   const _TakeChoiceTile({
     required this.index,
     required this.take,
+    required this.navigationTarget,
+    required this.navigationFocusNode,
+    required this.navigationTargetKey,
+    required this.onNavigationActivate,
     required this.isCurrent,
     required this.busy,
     required this.statusDisabled,
@@ -2009,6 +2117,10 @@ class _TakeChoiceTile extends StatelessWidget {
 
   final int index;
   final Revision3VoiceCandidateTake take;
+  final bool navigationTarget;
+  final FocusNode? navigationFocusNode;
+  final GlobalKey? navigationTargetKey;
+  final VoidCallback onNavigationActivate;
   final bool isCurrent;
   final bool busy;
   final bool statusDisabled;
@@ -2027,57 +2139,105 @@ class _TakeChoiceTile extends StatelessWidget {
   final VoidCallback onMediaQa;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      RadioListTile<String>(
-        key: ValueKey('voice-selection-take-$index'),
-        value: take.id,
-        enabled: !busy && take.isApproved,
-        contentPadding: EdgeInsets.zero,
-        title: Text(take.displayLabel),
-        subtitle: Text(
-          copy.takeSubtitle(
-            statusName: take.status.name,
-            isCurrent: isCurrent,
-            isApproved: take.isApproved,
+  Widget build(BuildContext context) {
+    final subtitle = copy.takeSubtitle(
+      statusName: take.status.name,
+      isCurrent: isCurrent,
+      isApproved: take.isApproved,
+    );
+    final tile = Container(
+      decoration: navigationTarget
+          ? BoxDecoration(
+              border: Border.all(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+              borderRadius: BorderRadius.circular(8),
+            )
+          : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          RadioListTile<String>(
+            key: ValueKey('voice-selection-take-$index'),
+            value: take.id,
+            enabled: !busy && take.isApproved,
+            contentPadding: EdgeInsets.zero,
+            title: Text(take.displayLabel),
+            subtitle: Text(subtitle),
           ),
+          if (previewPlayback != null)
+            _TakePreviewControl(
+              index: index,
+              take: take,
+              playback: previewPlayback!,
+              enabled: previewEnabled,
+              stopEnabled: previewStopEnabled,
+              onPreview: onPreview,
+              onStop: onPreviewStop,
+              copy: copy,
+            ),
+          if (mediaQaAvailable)
+            _TakeMediaQaControl(
+              index: index,
+              take: take,
+              state: mediaQaState,
+              enabled: !busy,
+              onCheck: onMediaQa,
+              copy: copy,
+            ),
+          _TakeStatusControl(
+            index: index,
+            take: take,
+            isCurrent: isCurrent,
+            busy: busy,
+            statusDisabled: statusDisabled,
+            statusBusy: statusBusy,
+            onStatusChanged: onStatusChanged,
+            copy: copy,
+            removeBusy: removeBusy,
+            onRemove: onRemove,
+          ),
+        ],
+      ),
+    );
+    if (!navigationTarget) return tile;
+    final activate = !busy && take.isApproved ? onNavigationActivate : null;
+    return Focus(
+      key: navigationTargetKey,
+      focusNode: navigationFocusNode,
+      skipTraversal: true,
+      onKeyEvent: (_, event) {
+        if (activate == null || event is! KeyDownEvent) {
+          return KeyEventResult.ignored;
+        }
+        if (event.logicalKey != LogicalKeyboardKey.enter &&
+            event.logicalKey != LogicalKeyboardKey.numpadEnter &&
+            event.logicalKey != LogicalKeyboardKey.space) {
+          return KeyEventResult.ignored;
+        }
+        activate();
+        return KeyEventResult.handled;
+      },
+      child: Builder(
+        builder: (context) => Semantics(
+          key: ValueKey('voice-selection-take-navigation-target-$index'),
+          container: true,
+          explicitChildNodes: true,
+          focusable: true,
+          focused: Focus.of(context).hasFocus,
+          label: copy.takeNavigationTargetSemantics(
+            displayLabel: take.displayLabel,
+            subtitle: subtitle,
+          ),
+          hint: activate == null ? null : copy.takeNavigationTargetActivateHint,
+          button: activate != null,
+          onTap: activate,
+          child: tile,
         ),
       ),
-      if (previewPlayback != null)
-        _TakePreviewControl(
-          index: index,
-          take: take,
-          playback: previewPlayback!,
-          enabled: previewEnabled,
-          stopEnabled: previewStopEnabled,
-          onPreview: onPreview,
-          onStop: onPreviewStop,
-          copy: copy,
-        ),
-      if (mediaQaAvailable)
-        _TakeMediaQaControl(
-          index: index,
-          take: take,
-          state: mediaQaState,
-          enabled: !busy,
-          onCheck: onMediaQa,
-          copy: copy,
-        ),
-      _TakeStatusControl(
-        index: index,
-        take: take,
-        isCurrent: isCurrent,
-        busy: busy,
-        statusDisabled: statusDisabled,
-        statusBusy: statusBusy,
-        onStatusChanged: onStatusChanged,
-        copy: copy,
-        removeBusy: removeBusy,
-        onRemove: onRemove,
-      ),
-    ],
-  );
+    );
+  }
 }
 
 class _TakeMediaQaControl extends StatelessWidget {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -925,6 +926,175 @@ void main() {
   });
 
   testWidgets(
+    'fixed take handoff focuses a nonselected take without selecting it',
+    (tester) async {
+      final index = _index(secondApproved: true);
+      final takeIds = _candidateIds(index);
+      final targetTake = Revision3VoiceCatalog.fromContentIndex(index)
+          .line(revision3VoiceContentLineId)!
+          .slotSummaryForLocale('de')!
+          .candidates[1];
+      await _openDialog(
+        tester,
+        index: index,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        initialTakeId: takeIds[1],
+        fixedContext: true,
+      );
+
+      expect(
+        tester
+            .widget<RadioGroup<String>>(find.byType(RadioGroup<String>))
+            .groupValue,
+        takeIds.first,
+      );
+      expect(
+        find.byKey(const ValueKey('voice-selection-take-navigation-target-1')),
+        findsOneWidget,
+      );
+      final navigationTarget = find.byKey(
+        const ValueKey('voice-selection-take-navigation-target-1'),
+      );
+      final targetElement = tester.element(navigationTarget);
+      final navigationFocus = targetElement
+          .findAncestorWidgetOfExactType<Focus>()
+          ?.focusNode;
+      expect(navigationFocus?.hasFocus, isTrue);
+      expect(navigationFocus?.skipTraversal, isTrue);
+      final semantics = tester.getSemantics(navigationTarget);
+      expect(semantics.label, contains('Opened Voice take'));
+      expect(semantics.label, contains(targetTake.displayLabel));
+      expect(semantics.label, isNot(contains(takeIds[1])));
+      expect(
+        find.byKey(const Key('voice-status-selection-pending')),
+        findsNothing,
+      );
+      expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+      expect(find.textContaining(takeIds[1]), findsNothing);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<RadioGroup<String>>(find.byType(RadioGroup<String>))
+            .groupValue,
+        takeIds[1],
+      );
+      expect(_button(tester, 'voice-selection-save').onPressed, isNotNull);
+    },
+  );
+
+  testWidgets('fixed take handoff focuses the already selected take', (
+    tester,
+  ) async {
+    final index = _index();
+    final selectedTakeId = _candidateIds(index).first;
+    await _openDialog(
+      tester,
+      index: index,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      initialTakeId: selectedTakeId,
+      fixedContext: true,
+    );
+
+    expect(
+      tester
+          .widget<RadioGroup<String>>(find.byType(RadioGroup<String>))
+          .groupValue,
+      selectedTakeId,
+    );
+    final targetElement = tester.element(
+      find.byKey(const ValueKey('voice-selection-take-navigation-target-0')),
+    );
+    expect(
+      targetElement.findAncestorWidgetOfExactType<Focus>()?.focusNode?.hasFocus,
+      isTrue,
+    );
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    expect(find.textContaining(selectedTakeId), findsNothing);
+  });
+
+  testWidgets('missing fixed take fails closed without choosing a neighbor', (
+    tester,
+  ) async {
+    const missingTakeId = 'ffffffffffffffffffffffffffffffff';
+    await _openDialog(
+      tester,
+      index: _index(secondApproved: true),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      initialTakeId: missingTakeId,
+      fixedContext: true,
+    );
+
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(find.byType(RadioGroup<String>), findsNothing);
+    expect(
+      find.byKey(const ValueKey('voice-selection-take-navigation-target-0')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('voice-selection-take-navigation-target-1')),
+      findsNothing,
+    );
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    expect(find.textContaining(missingTakeId), findsNothing);
+  });
+
+  testWidgets('reload rejects a focused take reassigned to another slot', (
+    tester,
+  ) async {
+    final initial = _index(previewable: true);
+    final focusedTakeId = _candidateIds(initial).first;
+    var current = initial;
+    final playback = Revision3VoiceTakePreviewPlaybackController(
+      player: _DialogFakePreviewPlayer(<String>[]),
+    );
+    await _openDialog(
+      tester,
+      index: initial,
+      load: () async => current,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      initialTakeId: focusedTakeId,
+      fixedContext: true,
+      previewPlayback: playback,
+      previewMaterialize:
+          ({
+            required checkpoint,
+            required lineId,
+            required locale,
+            required takeId,
+          }) async =>
+              throw const Revision3VoiceTakePreviewStaleCheckpointException(),
+    );
+
+    await tester.tap(find.byKey(const Key('voice-preview-start-0')));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+
+    current = _removedIndex(
+      candidateCount: 2,
+      selected: true,
+      removedTakeId: focusedTakeId,
+      retainTakeEntity: true,
+      sharedTakeUse: true,
+    );
+    await tester.tap(find.byKey(const Key('voice-status-reload')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(find.byType(RadioGroup<String>), findsNothing);
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    expect(find.textContaining(focusedTakeId), findsNothing);
+    await playback.dispose();
+  });
+
+  testWidgets(
     'fixed context hides global navigation and publishes only its exact slot',
     (tester) async {
       Revision3VoiceTakeSelectionTechnicalPlan? received;
@@ -1043,8 +1213,13 @@ void main() {
     'older catalog completion cannot replace a newer fixed context load',
     (tester) async {
       final olderLoad = Completer<Revision3ContentIndex>();
+      final current = _index(secondApproved: true);
+      final takeIds = _candidateIds(current);
 
-      Widget app(Future<Revision3ContentIndex> Function() load) {
+      Widget app(
+        Future<Revision3ContentIndex> Function() load, {
+        required String initialTakeId,
+      }) {
         return MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
@@ -1069,15 +1244,20 @@ void main() {
             ),
             initialLineId: revision3VoiceContentLineId,
             initialLocale: 'de',
+            initialTakeId: initialTakeId,
             fixedContext: true,
           ),
         );
       }
 
-      await tester.pumpWidget(app(() => olderLoad.future));
+      await tester.pumpWidget(
+        app(() => olderLoad.future, initialTakeId: takeIds.first),
+      );
       await tester.pump();
 
-      await tester.pumpWidget(app(() async => _index()));
+      await tester.pumpWidget(
+        app(() async => current, initialTakeId: takeIds[1]),
+      );
       await tester.pump();
       await tester.pump();
 
@@ -1087,6 +1267,16 @@ void main() {
       );
       expect(find.text('Voice language: de'), findsOneWidget);
       expect(find.textContaining('no longer matches'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('voice-selection-take-navigation-target-1')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<RadioGroup<String>>(find.byType(RadioGroup<String>))
+            .groupValue,
+        takeIds.first,
+      );
 
       olderLoad.complete(
         revision3VoiceContentIndexFixture(existingDeSlot: false),
@@ -1100,6 +1290,11 @@ void main() {
       );
       expect(find.text('Voice language: de'), findsOneWidget);
       expect(find.textContaining('no longer matches'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('voice-selection-take-navigation-target-1')),
+        findsOneWidget,
+      );
+      expect(find.textContaining(takeIds[1]), findsNothing);
     },
   );
 
@@ -2726,6 +2921,7 @@ Future<void> _openDialog(
   Size surfaceSize = const Size(1200, 1000),
   String? initialLineId,
   String? initialLocale,
+  String? initialTakeId,
   bool fixedContext = false,
   ValueChanged<Revision3VoiceTakeSelectionPublication?>? onResult,
   Revision3VoiceTakeSelectionDialogCopy copy =
@@ -2771,6 +2967,7 @@ Future<void> _openDialog(
                     mediaQaInspect: mediaQaInspect,
                     initialLineId: initialLineId,
                     initialLocale: initialLocale,
+                    initialTakeId: initialTakeId,
                     fixedContext: fixedContext,
                     copy: copy,
                   ),
@@ -3185,6 +3382,7 @@ Revision3VoiceTakeSelectionPublication _publication({
   required int revision,
   required Revision3VoiceTakeSelectionTechnicalPlan plan,
 }) => Revision3VoiceTakeSelectionPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: revision,
   lineId: plan.lineId,
@@ -3201,6 +3399,7 @@ Revision3VoiceTakeStatusPublication _statusPublication({
   required int revision,
   required Revision3VoiceTakeStatusTechnicalPlan plan,
 }) => Revision3VoiceTakeStatusPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: revision,
   lineId: plan.lineId,
@@ -3223,6 +3422,7 @@ Revision3VoiceTakeRemovalPublication _removalPublication({
   required bool takeEntityRemoved,
   required int remainingCandidateCount,
 }) => Revision3VoiceTakeRemovalPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: revision,
   lineId: plan.lineId,
@@ -3244,6 +3444,7 @@ Revision3DialogVoiceSlotRemovalPublication _slotRemovalPublication({
   required int revision,
   required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
 }) => Revision3DialogVoiceSlotRemovalPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: revision,
   lineId: plan.lineId,
@@ -3255,6 +3456,17 @@ Revision3DialogVoiceSlotRemovalPublication _slotRemovalPublication({
   locId: plan.locId,
   removedTargetResolution: plan.targetResolution,
 );
+
+AuthoringWorkingHead _publicationHead() =>
+    AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );
 
 Future<Revision3VoiceTakeSelectionPublication> _unexpectedPublish({
   required String expectedProjectId,

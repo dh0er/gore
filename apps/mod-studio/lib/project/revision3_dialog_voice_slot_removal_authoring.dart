@@ -73,6 +73,7 @@ final class Revision3DialogVoiceSlotRemovalTechnicalPlan {
 /// It grants no game, build, runtime, deployment, save, or media authority.
 final class Revision3DialogVoiceSlotRemovalPublication {
   Revision3DialogVoiceSlotRemovalPublication({
+    required this.head,
     required this.projectId,
     required this.projectRevision,
     required this.lineId,
@@ -106,6 +107,7 @@ final class Revision3DialogVoiceSlotRemovalPublication {
     }
   }
 
+  final AuthoringWorkingHead head;
   final String projectId;
   final int projectRevision;
   final String lineId;

@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
@@ -278,6 +281,7 @@ Revision3VoiceTakeRemovalPublication _publication({
   required Revision3VoiceTakeRemovalTechnicalPlan plan,
   required bool takeEntityRemoved,
 }) => Revision3VoiceTakeRemovalPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: projectRevision,
   lineId: plan.lineId,
@@ -293,6 +297,17 @@ Revision3VoiceTakeRemovalPublication _publication({
   takeEntityRemoved: takeEntityRemoved,
   remainingCandidateCount: plan.expectedRemainingCandidateCount,
 );
+
+AuthoringWorkingHead _publicationHead() =>
+    AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );
 
 Map<String, Object?> _sharedTakeIndex() {
   final json = revision3VoiceContentIndexJsonFixture(

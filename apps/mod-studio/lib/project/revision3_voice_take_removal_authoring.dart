@@ -92,6 +92,7 @@ final class Revision3VoiceTakeRemovalTechnicalPlan {
 /// this grants no build, runtime, deployment, game, save, or artifact authority.
 final class Revision3VoiceTakeRemovalPublication {
   Revision3VoiceTakeRemovalPublication({
+    required this.head,
     required this.projectId,
     required this.projectRevision,
     required this.lineId,
@@ -133,6 +134,7 @@ final class Revision3VoiceTakeRemovalPublication {
     }
   }
 
+  final AuthoringWorkingHead head;
   final String projectId;
   final int projectRevision;
   final String lineId;

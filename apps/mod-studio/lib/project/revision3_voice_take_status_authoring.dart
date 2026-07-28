@@ -90,6 +90,7 @@ final class Revision3VoiceTakeStatusTechnicalPlan {
 /// authority.
 final class Revision3VoiceTakeStatusPublication {
   Revision3VoiceTakeStatusPublication({
+    required this.head,
     required this.projectId,
     required this.projectRevision,
     required this.lineId,
@@ -125,6 +126,7 @@ final class Revision3VoiceTakeStatusPublication {
     }
   }
 
+  final AuthoringWorkingHead head;
   final String projectId;
   final int projectRevision;
   final String lineId;

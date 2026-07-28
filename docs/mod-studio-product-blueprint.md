@@ -98,9 +98,14 @@ while unresolved or unproven generated helpers remain visible once in a
 collapsed Technical section. Authored entries with problems stay in their
 normal group with a problem cue. Every row stays bound to the exact root,
 project ID, revision, and canonical head and continues into its current owning
-workspace. DataAssets come only from the exact verified stage registry, not
-from inferred asset entries. This projection is orientation and navigation,
-not another project state, readiness result, build plan, or runtime claim.
+workspace. LocalizationEntry, DialogLine, VoiceSlot, and VoiceTake rows use a
+typed Text & Voice handoff: the current index must prove one exact
+localization/line/locale/slot/take graph, and opening a take reveals it without
+changing the saved radio selection. Ambiguous or incomplete graphs fail closed
+without a Content fallback or display-text inference. DataAssets come only from
+the exact verified stage registry, not from inferred asset entries. This
+projection is orientation and navigation, not another project state, readiness
+result, build plan, or runtime claim.
 
 Home does not repeat large continuations for **Story**, **Text & Voice**,
 **Problems**, **Content**, or **Test & Release**. Their canonical primary
@@ -567,9 +572,9 @@ authority.
 The typed current-project coordinator is now adopted by Home, the Project menu,
 and `Ctrl+S`: a friendly form plus empty-directory picker can create a canonical
 generation-bound R3 project, and existing R3 directories can become the visible
-current project. No-project startup shows a localized managed-project entry
-banner with direct Create/Open actions beside classic standalone tools that own
-no project or session state. The guarded transition/adoption flow opens the
+current project. No-project startup exposes only the managed-R3 entry actions,
+Snapshot V2 restore, and Settings. It retains no Classic or standalone
+project/session backend. The guarded transition/adoption flow opens the
 canonical five-job shell only after managed-R3 adoption.
 Managed Studio Shell v1 exposes exactly the localized, responsive **Home**,
 **Content**, **Story**, **Text & Voice**, and **Test & Release** primary jobs.
@@ -582,8 +587,11 @@ different project identity resets to Home. Home reads the exact-current
 the saved work as **My mod / Changes** instead of compact count/readiness
 cards. Author content is grouped, only uniquely proven helpers are nested,
 unresolved or unproven generated helpers remain under Technical, and exact
-rows continue into their current owning workspace. Home has removed the five
-large duplicate task routes; an empty exact-current project retains one
+rows continue into their current owning workspace. Dialog, Localization, and
+Voice rows now enter Text & Voice through a unique typed graph; exact takes are
+revealed without mutating selection, while ambiguous graphs and checkpoint
+drift fail closed. Home has removed the five large duplicate task routes; an
+empty exact-current project retains one
 existing-action **Create** continuation when mutation is allowed. Story owns
 creation, domain workspaces own their operations, and Project owns export.
 Durable root/ID/revision/head identity remains available under collapsed
@@ -615,8 +623,8 @@ deployment, general managed build, or runtime qualification.
 
 The remaining managed-authoring limits are:
 
-- classic tab widgets still need current managed-R3 adapters before the standalone
-  provider/session backend can disappear without losing their practical UX;
+- selected Classic UX patterns still need deliberate managed-R3 implementations;
+  no Classic provider/session backend is retained;
 - provider replacement is still not one rollback-capable all-domain
   transaction, even though all represented keyed deployment targets now receive
   one duplicate-validation pass before mutation or publication;

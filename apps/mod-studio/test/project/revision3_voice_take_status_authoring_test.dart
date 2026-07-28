@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
@@ -224,6 +226,7 @@ Revision3VoiceTakeStatusPublication _matchingPublication({
   required int projectRevision,
   required Revision3VoiceTakeStatusTechnicalPlan plan,
 }) => Revision3VoiceTakeStatusPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: projectRevision,
   lineId: plan.lineId,
@@ -237,6 +240,17 @@ Revision3VoiceTakeStatusPublication _matchingPublication({
   previousStatus: plan.expectedStatus,
   status: plan.desiredStatus,
 );
+
+AuthoringWorkingHead _publicationHead() =>
+    AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );
 
 Future<Revision3VoiceTakeStatusPublication> _unexpectedPublish({
   required String expectedProjectId,

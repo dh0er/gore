@@ -17,8 +17,11 @@ catalog provenance are invalid current input, not migration or compatibility
 cases. Home now presents the exact current saved work as **My mod / Changes**:
 author content is grouped by domain, uniquely proven helpers are nested under
 their owner, and unresolved or unproven helpers remain visible under collapsed
-Technical content. Exact rows continue into their current owning workspace;
-Home no longer repeats five large workspace task rows and retains one existing
+Technical content. Dialog, Localization, and Voice rows reopen their uniquely
+proven context directly in **Text & Voice**; an exact Voice take is revealed
+without changing selection, and ambiguous graphs fail closed. Other exact rows
+continue into their current owning workspace. Home no longer repeats five large
+workspace task rows and retains one existing
 **Create** flow for an empty mutable project. Wider layouts keep direct tabs for
 all five jobs; narrow/high-scale layouts use one accessible selector over the
 same canonical navigation and lazy-page state. The view creates no separate

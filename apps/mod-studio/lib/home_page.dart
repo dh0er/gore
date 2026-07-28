@@ -82,6 +82,7 @@ import 'project/revision3_items_view.dart';
 import 'project/revision3_texture_catalog.dart';
 import 'project/revision3_texture_catalog_native.dart';
 import 'project/revision3_texture_catalog_view.dart';
+import 'project/revision3_localization_voice_handoff.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_production_card.dart';
@@ -135,6 +136,21 @@ final class _ManagedStorySelectionOrigin {
 }
 
 enum _StoryDraftHandoffOutcome { opened, stale, selectionFailed }
+
+enum _VoiceTakeSelectionOpenOutcome { completed, published, rejected }
+
+final class _BoundDashboardVoiceTakeDialog {
+  _BoundDashboardVoiceTakeDialog({
+    required this.navigator,
+    required this.route,
+    required this.isCurrent,
+  });
+
+  final NavigatorState navigator;
+  final Route<dynamic> route;
+  final bool Function() isCurrent;
+  bool dismissalScheduled = false;
+}
 
 enum _ProjectQuickCreateAction {
   npcOpening,
@@ -2166,6 +2182,8 @@ class _ManagedRevision3ProjectViewState
   bool _recoveryTerminal = false;
   String? _recoveryError;
   int _storyAuthorityEpoch = 0;
+  int _dashboardEntityOpenEpoch = 0;
+  _BoundDashboardVoiceTakeDialog? _boundDashboardVoiceTakeDialog;
   final Revision3NpcOpeningRecipe _npcOpeningRecipe =
       Revision3NpcOpeningRecipe();
   final Revision3QuestOpeningRecipe _questOpeningRecipe =
@@ -2682,6 +2700,11 @@ class _ManagedRevision3ProjectViewState
     final checkpointChanged =
         oldWidget.project.projectRevision != project.projectRevision ||
         oldWidget.project.head.canonicalJson != project.head.canonicalJson;
+    if (identityChanged ||
+        checkpointChanged ||
+        oldWidget.project.requiresReopen != project.requiresReopen) {
+      _invalidateBoundDashboardVoiceTakeDialogIfStale();
+    }
     if (!identityChanged) {
       _projectCompilerController.synchronize(
         checkpoint: _projectCompilerCheckpoint,
@@ -2822,6 +2845,8 @@ class _ManagedRevision3ProjectViewState
 
   @override
   void dispose() {
+    _dashboardEntityOpenEpoch++;
+    _dismissBoundDashboardVoiceTakeDialog(force: true);
     _contentLibraryController.dispose();
     _storyWorkspaceController.dispose();
     _localizationVoiceWorkspaceController.dispose();
@@ -2832,6 +2857,61 @@ class _ManagedRevision3ProjectViewState
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
     super.dispose();
+  }
+
+  void _dismissBoundDashboardVoiceTakeDialogIfStale() {
+    final binding = _boundDashboardVoiceTakeDialog;
+    if (binding == null || binding.isCurrent()) return;
+    _dismissBoundDashboardVoiceTakeDialog(binding: binding);
+  }
+
+  void _invalidateBoundDashboardVoiceTakeDialogIfStale() {
+    final binding = _boundDashboardVoiceTakeDialog;
+    if (binding == null || binding.isCurrent()) return;
+    _dashboardEntityOpenEpoch++;
+    _dismissBoundDashboardVoiceTakeDialog(binding: binding);
+  }
+
+  int _beginDashboardOpenRequest() {
+    final requestEpoch = ++_dashboardEntityOpenEpoch;
+    _dismissBoundDashboardVoiceTakeDialogIfStale();
+    return requestEpoch;
+  }
+
+  void _dismissBoundDashboardVoiceTakeDialog({
+    _BoundDashboardVoiceTakeDialog? binding,
+    bool force = false,
+  }) {
+    final current = binding ?? _boundDashboardVoiceTakeDialog;
+    if (current == null ||
+        current.dismissalScheduled ||
+        (!force && current.isCurrent())) {
+      return;
+    }
+    current.dismissalScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navigator = current.navigator;
+      if (!force && current.isCurrent()) {
+        current.dismissalScheduled = false;
+        return;
+      }
+      if (!navigator.mounted || !current.route.isActive) {
+        if (identical(_boundDashboardVoiceTakeDialog, current)) {
+          _boundDashboardVoiceTakeDialog = null;
+        }
+        return;
+      }
+      navigator.popUntil((route) => identical(route, current.route));
+      navigator.removeRoute(current.route);
+      if (!current.route.isActive) {
+        if (identical(_boundDashboardVoiceTakeDialog, current)) {
+          _boundDashboardVoiceTakeDialog = null;
+        }
+        return;
+      }
+      current.dismissalScheduled = false;
+      _dismissBoundDashboardVoiceTakeDialog(binding: current, force: force);
+    });
   }
 
   @override
@@ -4959,8 +5039,8 @@ class _ManagedRevision3ProjectViewState
     if (!context.mounted || !_isCurrentQuestTranscriptProjection(projection)) {
       return false;
     }
-    return _localizationVoiceWorkspaceController.openExactTarget(
-      Revision3LocalizationVoiceTarget(
+    final outcome = await _localizationVoiceWorkspaceController.openExactTarget(
+      Revision3LocalizationVoiceTarget.storyCatalogKey(
         projectId: projection.projectId,
         projectRevision: projection.projectRevision,
         projectCheckpointIdentity: projection.checkpointIdentity,
@@ -4969,6 +5049,7 @@ class _ManagedRevision3ProjectViewState
         locale: locale,
       ),
     );
+    return outcome == Revision3LocalizationVoiceOpenOutcome.opened;
   }
 
   bool _isCurrentNpcGreetingProjection(
@@ -5065,8 +5146,8 @@ class _ManagedRevision3ProjectViewState
     if (!context.mounted || !_isCurrentNpcGreetingProjection(projection)) {
       return false;
     }
-    return _localizationVoiceWorkspaceController.openExactTarget(
-      Revision3LocalizationVoiceTarget(
+    final outcome = await _localizationVoiceWorkspaceController.openExactTarget(
+      Revision3LocalizationVoiceTarget.storyCatalogKey(
         projectId: projection.projectId,
         projectRevision: projection.projectRevision,
         projectCheckpointIdentity: projection.checkpointIdentity,
@@ -5075,6 +5156,7 @@ class _ManagedRevision3ProjectViewState
         locale: locale,
       ),
     );
+    return outcome == Revision3LocalizationVoiceOpenOutcome.opened;
   }
 
   Future<void> _openDialogLineEntry(BuildContext context) async {
@@ -5227,92 +5309,358 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
-  Future<void> _openVoiceTakeSelection(
+  Future<_VoiceTakeSelectionOpenOutcome> _openVoiceTakeSelection(
     BuildContext context, {
     String? initialLineId,
     String? initialLocale,
+    String? initialTakeId,
+    String? expectedVoiceSlotId,
+    int? dashboardRequestEpoch,
     bool fixedContext = false,
   }) async {
-    if (!_managedProjectMutationAllowed()) return;
+    final openingProjectRoot = project.root.path;
+    final openingProjectId = project.projectId;
+    final openingProjectRevision = project.projectRevision;
+    var boundProjectRevision = openingProjectRevision;
+    var boundProjectHeadCanonicalJson = project.head.canonicalJson;
+    var adoptedMutation = false;
+    final dashboardBound = dashboardRequestEpoch != null;
+    bool authorityIsCurrent() {
+      if (!context.mounted) return false;
+      if (!dashboardBound) return true;
+      final current = currentManagedProject;
+      return dashboardRequestEpoch == _dashboardEntityOpenEpoch &&
+          current != null &&
+          !current.requiresReopen &&
+          current.root.path == openingProjectRoot &&
+          current.projectId == openingProjectId &&
+          current.projectRevision == boundProjectRevision &&
+          current.head.canonicalJson == boundProjectHeadCanonicalJson;
+    }
+
+    Future<Revision3ContentIndex> dialogLoadContentIndex() async {
+      if (dashboardBound && !authorityIsCurrent()) {
+        throw StateError(
+          'The exact Voice take checkpoint is no longer available.',
+        );
+      }
+      final index = await loadContentIndex();
+      if (dashboardBound &&
+          (!authorityIsCurrent() ||
+              index.projectId != openingProjectId ||
+              index.projectRevision != boundProjectRevision)) {
+        throw StateError(
+          'The exact Voice take checkpoint is no longer available.',
+        );
+      }
+      return index;
+    }
+
+    if (!context.mounted ||
+        !authorityIsCurrent() ||
+        !_managedProjectMutationAllowed()) {
+      return _VoiceTakeSelectionOpenOutcome.rejected;
+    }
+    if (dashboardBound) {
+      if (initialLineId == null ||
+          initialLocale == null ||
+          initialTakeId == null ||
+          expectedVoiceSlotId == null) {
+        return _VoiceTakeSelectionOpenOutcome.rejected;
+      }
+      late final Revision3ContentIndex index;
+      late final Revision3VoiceCatalog catalog;
+      try {
+        index = await dialogLoadContentIndex();
+        if (!context.mounted ||
+            !authorityIsCurrent() ||
+            !_managedProjectMutationAllowed()) {
+          return _VoiceTakeSelectionOpenOutcome.rejected;
+        }
+        catalog = Revision3VoiceCatalog.fromContentIndex(index);
+      } on Object {
+        return _VoiceTakeSelectionOpenOutcome.rejected;
+      }
+      if (!context.mounted ||
+          !authorityIsCurrent() ||
+          !_managedProjectMutationAllowed() ||
+          index.projectId != openingProjectId ||
+          index.projectRevision != openingProjectRevision) {
+        return _VoiceTakeSelectionOpenOutcome.rejected;
+      }
+      final line = catalog.line(initialLineId);
+      final summary = line?.slotSummaryForLocale(initialLocale);
+      if (catalog.projectId != openingProjectId ||
+          catalog.projectRevision != openingProjectRevision ||
+          line?.slotIdForLocale(initialLocale) != expectedVoiceSlotId ||
+          summary?.candidate(initialTakeId) == null) {
+        return _VoiceTakeSelectionOpenOutcome.rejected;
+      }
+    }
+    if (!context.mounted ||
+        !authorityIsCurrent() ||
+        !_managedProjectMutationAllowed()) {
+      return _VoiceTakeSelectionOpenOutcome.rejected;
+    }
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final german = l10n.localeName.startsWith('de');
     final previewService = Revision3VoiceTakePreviewAuthoringService(
-      loadContentIndex: loadContentIndex,
+      loadContentIndex: dialogLoadContentIndex,
       materializeTechnicalPlan: materializeVoiceTakePreview,
     );
     final mediaQaService = Revision3VoiceTakeMediaQaAuthoringService(
-      loadContentIndex: loadContentIndex,
+      loadContentIndex: dialogLoadContentIndex,
       inspectTechnicalPlan: inspectVoiceTakeMediaQa,
     );
+    bool adoptDashboardPublication({
+      required String projectId,
+      required int projectRevision,
+      required String lineId,
+      required String slotId,
+      required String locale,
+      required String headCanonicalJson,
+    }) {
+      if (!dashboardBound) return true;
+      final current = currentManagedProject;
+      if (dashboardRequestEpoch != _dashboardEntityOpenEpoch ||
+          projectId != openingProjectId ||
+          projectRevision != boundProjectRevision + 1 ||
+          lineId != initialLineId ||
+          slotId != expectedVoiceSlotId ||
+          locale != initialLocale ||
+          current == null ||
+          current.requiresReopen ||
+          current.root.path != openingProjectRoot ||
+          current.projectId != projectId ||
+          current.projectRevision != projectRevision ||
+          current.head.canonicalJson != headCanonicalJson ||
+          headCanonicalJson == boundProjectHeadCanonicalJson) {
+        return false;
+      }
+      boundProjectRevision = projectRevision;
+      boundProjectHeadCanonicalJson = headCanonicalJson;
+      adoptedMutation = true;
+      return true;
+    }
+
+    final baseSelectionPublisher = publishVoiceTakeSelection;
+    final Revision3VoiceTakeSelectionTechnicalPublisher selectionPublisher =
+        dashboardBound
+        ? ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            if (!authorityIsCurrent() ||
+                expectedProjectId != openingProjectId ||
+                expectedProjectRevision != boundProjectRevision) {
+              throw StateError(
+                'The exact Voice take selection is no longer available.',
+              );
+            }
+            final publication = await baseSelectionPublisher(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              plan: plan,
+            );
+            if (!adoptDashboardPublication(
+              projectId: publication.projectId,
+              projectRevision: publication.projectRevision,
+              lineId: publication.lineId,
+              slotId: publication.slotId,
+              locale: publication.locale,
+              headCanonicalJson: publication.head.canonicalJson,
+            )) {
+              throw StateError(
+                'The exact Voice take selection is no longer available.',
+              );
+            }
+            return publication;
+          }
+        : baseSelectionPublisher;
+    final baseStatusPublisher = publishVoiceTakeStatus;
+    final Revision3VoiceTakeStatusTechnicalPublisher statusPublisher =
+        dashboardBound
+        ? ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            if (!authorityIsCurrent() ||
+                expectedProjectId != openingProjectId ||
+                expectedProjectRevision != boundProjectRevision) {
+              throw StateError(
+                'The exact Voice take status is no longer available.',
+              );
+            }
+            final publication = await baseStatusPublisher(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              plan: plan,
+            );
+            if (!adoptDashboardPublication(
+              projectId: publication.projectId,
+              projectRevision: publication.projectRevision,
+              lineId: publication.lineId,
+              slotId: publication.slotId,
+              locale: publication.locale,
+              headCanonicalJson: publication.head.canonicalJson,
+            )) {
+              throw StateError(
+                'The exact Voice take status is no longer available.',
+              );
+            }
+            return publication;
+          }
+        : baseStatusPublisher;
+    final baseRemovalPublisher = publishVoiceTakeRemoval;
+    final Revision3VoiceTakeRemovalTechnicalPublisher removalPublisher =
+        dashboardBound
+        ? ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            if (!authorityIsCurrent() ||
+                expectedProjectId != openingProjectId ||
+                expectedProjectRevision != boundProjectRevision) {
+              throw StateError(
+                'The exact Voice take removal is no longer available.',
+              );
+            }
+            final publication = await baseRemovalPublisher(
+              expectedProjectId: expectedProjectId,
+              expectedProjectRevision: expectedProjectRevision,
+              plan: plan,
+            );
+            if (!adoptDashboardPublication(
+              projectId: publication.projectId,
+              projectRevision: publication.projectRevision,
+              lineId: publication.lineId,
+              slotId: publication.slotId,
+              locale: publication.locale,
+              headCanonicalJson: publication.head.canonicalJson,
+            )) {
+              throw StateError(
+                'The exact Voice take removal is no longer available.',
+              );
+            }
+            return publication;
+          }
+        : baseRemovalPublisher;
     final previewPlayback =
         Revision3VoiceTakePreviewPlaybackController.standard();
+    _BoundDashboardVoiceTakeDialog? binding;
     try {
       final publication =
           await showDialog<Revision3VoiceTakeSelectionPublication>(
             context: context,
-            builder: (context) => Revision3VoiceTakeSelectionDialog(
-              service: Revision3VoiceTakeSelectionAuthoringService(
-                loadContentIndex: loadContentIndex,
-                publishTechnicalPlan: publishVoiceTakeSelection,
-              ),
-              statusService: Revision3VoiceTakeStatusAuthoringService(
-                loadContentIndex: loadContentIndex,
-                publishTechnicalPlan: publishVoiceTakeStatus,
-              ),
-              removalService: Revision3VoiceTakeRemovalAuthoringService(
-                loadContentIndex: loadContentIndex,
-                publishTechnicalPlan: publishVoiceTakeRemoval,
-              ),
-              slotRemovalService:
-                  Revision3DialogVoiceSlotRemovalAuthoringService(
-                    loadContentIndex: loadContentIndex,
-                    publishTechnicalPlan: publishDialogVoiceSlotRemoval,
-                  ),
-              previewPlayback: previewPlayback,
-              mediaQaInspect:
-                  ({
-                    required checkpoint,
-                    required lineId,
-                    required locale,
-                    required takeId,
-                  }) async =>
-                      Revision3VoiceTakeMediaQaDialogResult.fromAuthoring(
-                        await mediaQaService.inspect(
-                          checkpoint: checkpoint,
-                          lineId: lineId,
-                          locale: locale,
-                          takeId: takeId,
+            builder: (dialogContext) {
+              if (dashboardBound) {
+                final route = ModalRoute.of(dialogContext);
+                if (route != null && binding == null) {
+                  final nextBinding = _BoundDashboardVoiceTakeDialog(
+                    navigator: Navigator.of(dialogContext),
+                    route: route,
+                    isCurrent: authorityIsCurrent,
+                  );
+                  binding = nextBinding;
+                  _boundDashboardVoiceTakeDialog = nextBinding;
+                  if (!authorityIsCurrent()) {
+                    _dismissBoundDashboardVoiceTakeDialog(binding: nextBinding);
+                  }
+                }
+              }
+              return Revision3VoiceTakeSelectionDialog(
+                service: Revision3VoiceTakeSelectionAuthoringService(
+                  loadContentIndex: dialogLoadContentIndex,
+                  publishTechnicalPlan: selectionPublisher,
+                ),
+                statusService: Revision3VoiceTakeStatusAuthoringService(
+                  loadContentIndex: dialogLoadContentIndex,
+                  publishTechnicalPlan: statusPublisher,
+                ),
+                removalService: Revision3VoiceTakeRemovalAuthoringService(
+                  loadContentIndex: dialogLoadContentIndex,
+                  publishTechnicalPlan: removalPublisher,
+                ),
+                slotRemovalService:
+                    Revision3DialogVoiceSlotRemovalAuthoringService(
+                      loadContentIndex: dialogLoadContentIndex,
+                      publishTechnicalPlan: publishDialogVoiceSlotRemoval,
+                    ),
+                previewPlayback: previewPlayback,
+                mediaQaInspect:
+                    ({
+                      required checkpoint,
+                      required lineId,
+                      required locale,
+                      required takeId,
+                    }) async =>
+                        Revision3VoiceTakeMediaQaDialogResult.fromAuthoring(
+                          await mediaQaService.inspect(
+                            checkpoint: checkpoint,
+                            lineId: lineId,
+                            locale: locale,
+                            takeId: takeId,
+                          ),
                         ),
-                      ),
-              previewMaterialize:
-                  ({
-                    required checkpoint,
-                    required lineId,
-                    required locale,
-                    required takeId,
-                  }) async {
-                    final capability = await previewService.materialize(
-                      checkpoint: checkpoint,
-                      lineId: lineId,
-                      locale: locale,
-                      takeId: takeId,
-                    );
-                    return Revision3VoiceTakePreviewPlaybackLease(
-                      path: capability.path,
-                      isClosed: () => capability.isClosed,
-                      close: capability.close,
-                    );
-                  },
-              copy: german
-                  ? Revision3VoiceTakeSelectionDialogCopy.german
-                  : Revision3VoiceTakeSelectionDialogCopy.english,
-              initialLineId: initialLineId,
-              initialLocale: initialLocale,
-              fixedContext: fixedContext,
-            ),
+                previewMaterialize:
+                    ({
+                      required checkpoint,
+                      required lineId,
+                      required locale,
+                      required takeId,
+                    }) async {
+                      final capability = await previewService.materialize(
+                        checkpoint: checkpoint,
+                        lineId: lineId,
+                        locale: locale,
+                        takeId: takeId,
+                      );
+                      return Revision3VoiceTakePreviewPlaybackLease(
+                        path: capability.path,
+                        isClosed: () => capability.isClosed,
+                        close: capability.close,
+                      );
+                    },
+                copy: german
+                    ? Revision3VoiceTakeSelectionDialogCopy.german
+                    : Revision3VoiceTakeSelectionDialogCopy.english,
+                initialLineId: initialLineId,
+                initialLocale: initialLocale,
+                initialTakeId: initialTakeId,
+                fixedContext: fixedContext,
+              );
+            },
           );
-      if (!messenger.mounted || publication == null) return;
+      final currentBinding = binding;
+      if (currentBinding != null &&
+          identical(_boundDashboardVoiceTakeDialog, currentBinding)) {
+        _boundDashboardVoiceTakeDialog = null;
+      }
+      if (publication == null) {
+        if (!authorityIsCurrent()) {
+          return _VoiceTakeSelectionOpenOutcome.rejected;
+        }
+        return adoptedMutation
+            ? _VoiceTakeSelectionOpenOutcome.published
+            : _VoiceTakeSelectionOpenOutcome.completed;
+      }
+      final expectedPublication =
+          !dashboardBound ||
+          (authorityIsCurrent() &&
+              publication.projectId == openingProjectId &&
+              publication.projectRevision == boundProjectRevision &&
+              publication.head.canonicalJson == boundProjectHeadCanonicalJson &&
+              (initialLineId == null || publication.lineId == initialLineId) &&
+              (initialLocale == null || publication.locale == initialLocale) &&
+              (expectedVoiceSlotId == null ||
+                  publication.slotId == expectedVoiceSlotId));
+      if (!messenger.mounted || !expectedPublication) {
+        return _VoiceTakeSelectionOpenOutcome.rejected;
+      }
       messenger.showSnackBar(
         SnackBar(
           content: Text(
@@ -5324,7 +5672,13 @@ class _ManagedRevision3ProjectViewState
           ),
         ),
       );
+      return _VoiceTakeSelectionOpenOutcome.published;
     } finally {
+      final currentBinding = binding;
+      if (currentBinding != null &&
+          identical(_boundDashboardVoiceTakeDialog, currentBinding)) {
+        _boundDashboardVoiceTakeDialog = null;
+      }
       await previewPlayback.dispose();
     }
   }
@@ -6724,13 +7078,24 @@ class _ManagedRevision3ProjectViewState
       expectedProjectRevision: expectedProjectRevision,
       expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
     );
-    if (!isCurrent()) {
+    if (!context.mounted || !isCurrent()) {
       throw StateError('The exact project change is no longer available.');
     }
-    final index = await loadContentIndex();
-    if (!context.mounted ||
-        !isCurrent() ||
-        index.projectId != expectedProjectId ||
+    final requestEpoch = _beginDashboardOpenRequest();
+    bool isLatestRequest() => requestEpoch == _dashboardEntityOpenEpoch;
+
+    late final Revision3ContentIndex index;
+    try {
+      index = await loadContentIndex();
+    } on Object {
+      if (!isLatestRequest()) return;
+      rethrow;
+    }
+    if (!isLatestRequest()) return;
+    if (!context.mounted || !isCurrent()) {
+      throw StateError('The exact project change is no longer available.');
+    }
+    if (index.projectId != expectedProjectId ||
         index.projectRevision != expectedProjectRevision) {
       throw StateError('The exact project change is no longer available.');
     }
@@ -6748,8 +7113,86 @@ class _ManagedRevision3ProjectViewState
         currentEntity,
         section: Revision3StoryEntityWorkbench.defaultSectionFor(currentEntity),
       );
-      if (outcome == _StoryDraftHandoffOutcome.opened && isCurrent()) return;
+      if (!isLatestRequest()) return;
+      if (!context.mounted || !isCurrent()) {
+        throw StateError('The exact project change is no longer available.');
+      }
+      if (outcome == _StoryDraftHandoffOutcome.opened) return;
       throw StateError('The exact project change is no longer available.');
+    }
+
+    if (currentEntity.kind == Revision3ContentEntityKind.dialogLine ||
+        currentEntity.kind == Revision3ContentEntityKind.localizationEntry ||
+        currentEntity.kind == Revision3ContentEntityKind.voiceSlot ||
+        currentEntity.kind == Revision3ContentEntityKind.voiceTake) {
+      final handoff = resolveRevision3LocalizationVoiceEntityHandoff(
+        index: index,
+        entity: currentEntity,
+      );
+      if (handoff == null) {
+        throw StateError('The exact project change is no longer available.');
+      }
+      final target = Revision3LocalizationVoiceTarget.localizationEntity(
+        projectId: expectedProjectId,
+        projectRevision: expectedProjectRevision,
+        projectCheckpointIdentity: expectedProjectHeadCanonicalJson,
+        localizationEntityId: handoff.localizationEntityId,
+        lineId: handoff.dialogLineEntityId,
+        locale: handoff.locale,
+        voiceSlotId: handoff.voiceSlotEntityId,
+        voiceTakeId: handoff.voiceTakeEntityId,
+      );
+      Revision3ProjectWorkspace.navigate(
+        context,
+        const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.textVoice,
+        ),
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      if (!isLatestRequest()) return;
+      if (!context.mounted || !isCurrent()) {
+        throw StateError('The exact project change is no longer available.');
+      }
+      final outcome = await _localizationVoiceWorkspaceController
+          .openExactTarget(target);
+      if (!isLatestRequest()) return;
+      if (!context.mounted || !isCurrent()) {
+        throw StateError('The exact project change is no longer available.');
+      }
+      switch (outcome) {
+        case Revision3LocalizationVoiceOpenOutcome.opened:
+          break;
+        case Revision3LocalizationVoiceOpenOutcome.declined:
+          return;
+        case Revision3LocalizationVoiceOpenOutcome.rejected:
+          throw StateError('The exact project change is no longer available.');
+      }
+      if (handoff.voiceTakeEntityId case final takeId?) {
+        final lineId = handoff.dialogLineEntityId;
+        final locale = handoff.locale;
+        final slotId = handoff.voiceSlotEntityId;
+        if (lineId == null || locale == null || slotId == null) {
+          throw StateError('The exact project change is no longer available.');
+        }
+        final dialogOutcome = await _openVoiceTakeSelection(
+          context,
+          initialLineId: lineId,
+          initialLocale: locale,
+          initialTakeId: takeId,
+          expectedVoiceSlotId: slotId,
+          dashboardRequestEpoch: requestEpoch,
+          fixedContext: true,
+        );
+        if (dialogOutcome == _VoiceTakeSelectionOpenOutcome.published) return;
+        if (!isLatestRequest()) return;
+        if (!context.mounted || !isCurrent()) {
+          throw StateError('The exact project change is no longer available.');
+        }
+        if (dialogOutcome == _VoiceTakeSelectionOpenOutcome.rejected) {
+          throw StateError('The exact project change is no longer available.');
+        }
+      }
+      return;
     }
 
     final open = _contentLibraryController.openEntityByIdAtCheckpoint(
@@ -6763,7 +7206,12 @@ class _ManagedRevision3ProjectViewState
         Revision3ProjectWorkspaceSection.content,
       ),
     );
-    if (await open && isCurrent()) return;
+    final opened = await open;
+    if (!isLatestRequest()) return;
+    if (!context.mounted || !isCurrent()) {
+      throw StateError('The exact project change is no longer available.');
+    }
+    if (opened) return;
     throw StateError('The exact project change is no longer available.');
   }
 
@@ -6785,6 +7233,8 @@ class _ManagedRevision3ProjectViewState
     if (!isCurrent()) {
       throw StateError('The exact Item change is no longer available.');
     }
+    final requestEpoch = _beginDashboardOpenRequest();
+    bool isLatestRequest() => requestEpoch == _dashboardEntityOpenEpoch;
     final open = _itemsViewController.openVanillaClassAtCheckpoint(
       vanillaClass,
       projectRoot: expectedProjectRoot,
@@ -6799,7 +7249,9 @@ class _ManagedRevision3ProjectViewState
         secondary: Revision3ContentWorkspaceView.items.secondaryRoute,
       ),
     );
-    if (await open && isCurrent()) return;
+    final opened = await open;
+    if (!isLatestRequest()) return;
+    if (opened && isCurrent()) return;
     throw StateError('The exact Item change is no longer available.');
   }
 
@@ -6823,7 +7275,16 @@ class _ManagedRevision3ProjectViewState
         stage.stagedProjectRevision > expectedProjectRevision) {
       throw StateError('The exact DataAsset edit is no longer available.');
     }
-    final stages = await loadDataAssetStages();
+    final requestEpoch = _beginDashboardOpenRequest();
+    bool isLatestRequest() => requestEpoch == _dashboardEntityOpenEpoch;
+    late final List<AuthoringRevision3DataAssetStage> stages;
+    try {
+      stages = await loadDataAssetStages();
+    } on Object {
+      if (!isLatestRequest()) return;
+      rethrow;
+    }
+    if (!isLatestRequest()) return;
     if (!context.mounted || !isCurrent()) {
       throw StateError('The exact DataAsset edit is no longer available.');
     }
@@ -6837,14 +7298,23 @@ class _ManagedRevision3ProjectViewState
     if (exactStage.length != 1) {
       throw StateError('The exact DataAsset edit is no longer available.');
     }
-    await _openProblemDataAssetStage(
-      context,
-      targetPath: stage.targetPath,
-      expectedProjectRoot: expectedProjectRoot,
-      expectedProjectId: expectedProjectId,
-      expectedProjectRevision: expectedProjectRevision,
-      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
-    );
+    try {
+      await _openProblemDataAssetStage(
+        context,
+        targetPath: stage.targetPath,
+        expectedProjectRoot: expectedProjectRoot,
+        expectedProjectId: expectedProjectId,
+        expectedProjectRevision: expectedProjectRevision,
+        expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+      );
+    } on Object {
+      if (!isLatestRequest()) return;
+      rethrow;
+    }
+    if (!isLatestRequest()) return;
+    if (!context.mounted || !isCurrent()) {
+      throw StateError('The exact DataAsset edit is no longer available.');
+    }
   }
 
   Future<void> _openProblemEntity(

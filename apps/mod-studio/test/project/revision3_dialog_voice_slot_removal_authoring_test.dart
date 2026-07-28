@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
@@ -221,6 +224,7 @@ Revision3DialogVoiceSlotRemovalPublication _publication({
   required int projectRevision,
   required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
 }) => Revision3DialogVoiceSlotRemovalPublication(
+  head: _publicationHead(),
   projectId: projectId,
   projectRevision: projectRevision,
   lineId: plan.lineId,
@@ -232,3 +236,14 @@ Revision3DialogVoiceSlotRemovalPublication _publication({
   locId: plan.locId,
   removedTargetResolution: plan.targetResolution,
 );
+
+AuthoringWorkingHead _publicationHead() =>
+    AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );

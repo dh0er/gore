@@ -4776,6 +4776,7 @@ void main() {
           lease.projectRevision = 8;
           lease.head = _head(8);
           return Revision3VoiceTakeSelectionPublication(
+            head: lease.head,
             projectId: revision3VoiceContentProjectId,
             projectRevision: 8,
             lineId: received.lineId,
@@ -4824,10 +4825,77 @@ void main() {
         plan: plan,
       );
       expect(publication.selectedTakeId, isNull);
+      expect(publication.head.canonicalJson, _head(8).canonicalJson);
       expect(managed.voiceSelectionPublishCalls, 1);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test(
+    'reused Voice selection publication head requires reopen and refreshes state',
+    () async {
+      final plan = _voiceSelectionPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-selection-mismatched-head'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceSelectionPublish: (lease, received) {
+          lease.projectRevision = 8;
+          lease.head = _head(7);
+          return Revision3VoiceTakeSelectionPublication(
+            head: lease.head,
+            projectId: revision3VoiceContentProjectId,
+            projectRevision: 8,
+            lineId: received.lineId,
+            slotId: received.slotId,
+            slotRevision: received.expectedSlotRevision + 1,
+            locale: received.locale,
+            locId: received.locId,
+            previousSelectedTakeId: received.expectedSelectedTakeId,
+            selectedTakeId: received.selectedTakeId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.selectCurrentRevision3VoiceTake(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeSelectionRequiresReopenException>()),
+      );
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(managed.publicationUncertaintyLatchCalls, 1);
+      final refreshed =
+          coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(refreshed.projectRevision, 8);
+      expect(refreshed.head.canonicalJson, _head(7).canonicalJson);
+      expect(refreshed.requiresReopen, isTrue);
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeSelectionRequiresReopenException>()),
+      );
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(managed.publicationUncertaintyLatchCalls, 1);
     },
   );
 
@@ -4925,6 +4993,7 @@ void main() {
       expect(publication.takeRevision, plan.expectedTakeRevision);
       expect(publication.selectionCleared, plan.expectsSelectionCleared);
       expect(publication.takeEntityRemoved, plan.expectedTakeEntityRemoved);
+      expect(publication.head.canonicalJson, _head(8).canonicalJson);
       expect(
         publication.remainingCandidateCount,
         plan.expectedRemainingCandidateCount,
@@ -5045,6 +5114,40 @@ void main() {
       (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
       isTrue,
     );
+  });
+
+  test('Voice take removal rejects a reused publication head', () async {
+    final plan = _voiceTakeRemovalPlan();
+    final managed = _FakeVoiceTakeRemovalManagedLease(
+      root: Directory('managed-voice-take-removal-reused-head'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      reusePreviousHead: true,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.removeCurrentRevision3VoiceTake(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: plan,
+      ),
+      throwsA(isA<Revision3VoiceTakeRemovalRequiresReopenException>()),
+    );
+    expect(managed.projectRevision, 8);
+    expect(managed.head.canonicalJson, visible.head.canonicalJson);
+    expect(managed.requiresReopen, isTrue);
+    expect(managed.voiceTakeRemovalRelatchCalls, 1);
   });
 
   test(
@@ -5404,6 +5507,7 @@ void main() {
       expect(publication.lineRevision, plan.expectedLineRevision + 1);
       expect(publication.removedSlotRevision, plan.expectedSlotRevision);
       expect(publication.removedTargetResolution, plan.targetResolution);
+      expect(publication.head.canonicalJson, _head(8).canonicalJson);
       expect(managed.removalCalls, 1);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
@@ -5484,6 +5588,40 @@ void main() {
     expect(managed.relatchCalls, 1);
   });
 
+  test('dialog Voice slot removal rejects a reused publication head', () async {
+    final plan = _dialogVoiceSlotRemovalPlan();
+    final managed = _FakeDialogVoiceSlotRemovalManagedLease(
+      root: Directory('managed-dialog-voice-slot-removal-reused-head'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      reusePreviousHead: true,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.removeCurrentRevision3DialogVoiceSlot(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: plan,
+      ),
+      throwsA(isA<Revision3DialogVoiceSlotRemovalRequiresReopenException>()),
+    );
+    expect(managed.projectRevision, 8);
+    expect(managed.head.canonicalJson, visible.head.canonicalJson);
+    expect(managed.requiresReopen, isTrue);
+    expect(managed.relatchCalls, 1);
+  });
+
   test(
     'Voice take status is exact-visible-tuple bound and refreshes the published checkpoint',
     () async {
@@ -5498,6 +5636,7 @@ void main() {
           lease.projectRevision = 8;
           lease.head = _head(8);
           return Revision3VoiceTakeStatusPublication(
+            head: lease.head,
             projectId: revision3VoiceContentProjectId,
             projectRevision: 8,
             lineId: received.lineId,
@@ -5587,6 +5726,7 @@ void main() {
       expect(publication.takeRevision, plan.expectedTakeRevision + 1);
       expect(publication.previousStatus, plan.expectedStatus);
       expect(publication.status, plan.desiredStatus);
+      expect(publication.head.canonicalJson, _head(8).canonicalJson);
       expect(managed.voiceTakeStatusPublishCalls, 1);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
@@ -5594,7 +5734,7 @@ void main() {
     },
   );
 
-  test('Voice take status rejects a mismatched publication tuple', () async {
+  test('Voice take status rejects a reused publication head', () async {
     final plan = _voiceTakeStatusPlan();
     final managed = _FakeManagedLease(
       root: Directory('managed-voice-take-status-mismatch'),
@@ -5603,14 +5743,15 @@ void main() {
       head: _head(7),
       onVoiceTakeStatusPublish: (lease, received) {
         lease.projectRevision = 8;
-        lease.head = _head(8);
+        lease.head = _head(7);
         return Revision3VoiceTakeStatusPublication(
+          head: lease.head,
           projectId: revision3VoiceContentProjectId,
           projectRevision: 8,
           lineId: received.lineId,
           localizationId: received.localizationId,
           slotId: received.slotId,
-          slotRevision: received.expectedSlotRevision + 1,
+          slotRevision: received.expectedSlotRevision,
           locale: received.locale,
           locId: received.locId,
           takeId: received.takeId,
@@ -9594,6 +9735,7 @@ final class _FakeVoiceTakeRemovalManagedLease extends _FakeManagedLease
     required super.head,
     this.supportsRemoval = true,
     this.receiptMismatch = false,
+    this.reusePreviousHead = false,
     this.takeEntityFlagMismatch = false,
     this.nextError,
     this.postPublishError,
@@ -9601,6 +9743,7 @@ final class _FakeVoiceTakeRemovalManagedLease extends _FakeManagedLease
 
   final bool supportsRemoval;
   final bool receiptMismatch;
+  final bool reusePreviousHead;
   final bool takeEntityFlagMismatch;
   Object? nextError;
   Object? postPublishError;
@@ -9625,12 +9768,14 @@ final class _FakeVoiceTakeRemovalManagedLease extends _FakeManagedLease
     final injected = nextError;
     nextError = null;
     if (injected != null) throw injected;
+    final previousHead = head;
     projectRevision++;
-    head = _head(projectRevision);
+    head = reusePreviousHead ? previousHead : _head(projectRevision);
     final postPublish = postPublishError;
     postPublishError = null;
     if (postPublish != null) throw postPublish;
     return Revision3VoiceTakeRemovalPublication(
+      head: head,
       projectId: projectId,
       projectRevision: receiptMismatch ? projectRevision + 1 : projectRevision,
       lineId: plan.lineId,
@@ -9659,10 +9804,12 @@ final class _FakeDialogVoiceSlotRemovalManagedLease extends _FakeManagedLease
     required super.projectRevision,
     required super.head,
     this.receiptMismatch = false,
+    this.reusePreviousHead = false,
     this.nextError,
   });
 
   final bool receiptMismatch;
+  final bool reusePreviousHead;
   Object? nextError;
   int removalCalls = 0;
   int relatchCalls = 0;
@@ -9685,9 +9832,11 @@ final class _FakeDialogVoiceSlotRemovalManagedLease extends _FakeManagedLease
     final injected = nextError;
     nextError = null;
     if (injected != null) throw injected;
+    final previousHead = head;
     projectRevision++;
-    head = _head(projectRevision);
+    head = reusePreviousHead ? previousHead : _head(projectRevision);
     return Revision3DialogVoiceSlotRemovalPublication(
+      head: head,
       projectId: projectId,
       projectRevision: receiptMismatch ? projectRevision + 1 : projectRevision,
       lineId: plan.lineId,

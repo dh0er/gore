@@ -817,14 +817,19 @@ abstract interface class ManagedRevision3NpcGreetingLease {
   });
 }
 
-/// Optional exact-current capability for changing one retained VoiceTake's
-/// author-managed review status. Keeping it separate avoids widening unrelated
-/// current-project lease fakes with mutation authority.
-abstract interface class ManagedRevision3VoiceTakeStatusLease {
+/// Optional authority to permanently disable project mutations after a
+/// publication outcome cannot be bound to the requested checkpoint.
+abstract interface class ManagedRevision3PublicationUncertaintyLease {
   /// Permanently remove mutation authority from this lease after a publication
   /// returned a receipt that cannot be bound to the requested checkpoint.
   void markRequiresReopenAfterPublicationUncertainty();
+}
 
+/// Optional exact-current capability for changing one retained VoiceTake's
+/// author-managed review status. Keeping it separate avoids widening unrelated
+/// current-project lease fakes with mutation authority.
+abstract interface class ManagedRevision3VoiceTakeStatusLease
+    implements ManagedRevision3PublicationUncertaintyLease {
   Future<Revision3VoiceTakeStatusPublication>
   prepareAndPublishVoiceTakeStatusV1({
     required Revision3VoiceTakeStatusTechnicalPlan plan,
@@ -1687,6 +1692,7 @@ final class _ManagedRevision3SessionLease
       selectedTakeId: plan.selectedTakeId,
     );
     return Revision3VoiceTakeSelectionPublication(
+      head: checkpoint.head,
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       lineId: checkpoint.lineId,
@@ -1716,6 +1722,7 @@ final class _ManagedRevision3SessionLease
       expectedSelectedTakeId: plan.expectedSelectedTakeId,
     );
     return Revision3VoiceTakeRemovalPublication(
+      head: checkpoint.head,
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       lineId: checkpoint.lineId,
@@ -1778,6 +1785,7 @@ final class _ManagedRevision3SessionLease
       expectedLocId: plan.locId,
     );
     return Revision3DialogVoiceSlotRemovalPublication(
+      head: checkpoint.head,
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       lineId: checkpoint.lineId,
@@ -1809,6 +1817,7 @@ final class _ManagedRevision3SessionLease
       desiredStatus: plan.desiredStatus,
     );
     return Revision3VoiceTakeStatusPublication(
+      head: checkpoint.head,
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       lineId: checkpoint.lineId,
@@ -5116,6 +5125,12 @@ final class CurrentProjectCoordinator
         lease.head.canonicalJson != expectedHead.canonicalJson) {
       throw const Revision3VoiceTakeSelectionStaleCheckpointException();
     }
+    if (lease is! ManagedRevision3PublicationUncertaintyLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project lease cannot safely publish a Voice take selection',
+      );
+    }
+    final selector = lease as ManagedRevision3PublicationUncertaintyLease;
     try {
       final publication = await lease.prepareAndPublishVoiceTakeSelectionV1(
         plan: plan,
@@ -5124,6 +5139,8 @@ final class CurrentProjectCoordinator
           publication.projectId != lease.projectId ||
           publication.projectRevision != expectedProjectRevision + 1 ||
           publication.projectRevision != lease.projectRevision ||
+          publication.head.canonicalJson != lease.head.canonicalJson ||
+          publication.head.canonicalJson == expectedHead.canonicalJson ||
           publication.lineId != plan.lineId ||
           publication.slotId != plan.slotId ||
           publication.slotRevision != plan.expectedSlotRevision + 1 ||
@@ -5131,9 +5148,8 @@ final class CurrentProjectCoordinator
           publication.locId != plan.locId ||
           publication.previousSelectedTakeId != plan.expectedSelectedTakeId ||
           publication.selectedTakeId != plan.selectedTakeId) {
-        throw const CurrentProjectCoordinatorException(
-          'published Voice take selection disagrees with the current managed checkpoint',
-        );
+        selector.markRequiresReopenAfterPublicationUncertainty();
+        throw const Revision3VoiceTakeSelectionRequiresReopenException();
       }
       return publication;
     } catch (error, stackTrace) {
@@ -5194,6 +5210,8 @@ final class CurrentProjectCoordinator
           publication.projectId != lease.projectId ||
           publication.projectRevision != expectedProjectRevision + 1 ||
           publication.projectRevision != lease.projectRevision ||
+          publication.head.canonicalJson != lease.head.canonicalJson ||
+          publication.head.canonicalJson == expectedHead.canonicalJson ||
           publication.lineId != plan.lineId ||
           publication.localizationId != plan.localizationId ||
           publication.slotId != plan.slotId ||
@@ -5391,6 +5409,8 @@ final class CurrentProjectCoordinator
           publication.projectId != lease.projectId ||
           publication.projectRevision != expectedProjectRevision + 1 ||
           publication.projectRevision != lease.projectRevision ||
+          publication.head.canonicalJson != lease.head.canonicalJson ||
+          publication.head.canonicalJson == expectedHead.canonicalJson ||
           publication.lineId != plan.lineId ||
           publication.lineRevision != plan.expectedLineRevision + 1 ||
           publication.localizationId != plan.localizationId ||
@@ -5481,6 +5501,8 @@ final class CurrentProjectCoordinator
           publication.projectId != lease.projectId ||
           publication.projectRevision != expectedProjectRevision + 1 ||
           publication.projectRevision != lease.projectRevision ||
+          publication.head.canonicalJson != lease.head.canonicalJson ||
+          publication.head.canonicalJson == expectedHead.canonicalJson ||
           publication.lineId != plan.lineId ||
           publication.localizationId != plan.localizationId ||
           publication.slotId != plan.slotId ||

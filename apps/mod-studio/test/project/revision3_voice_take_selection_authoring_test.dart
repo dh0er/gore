@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -128,6 +129,7 @@ void main() {
           }) async {
             received = plan;
             return Revision3VoiceTakeSelectionPublication(
+              head: _publicationHead(),
               projectId: expectedProjectId,
               projectRevision: expectedProjectRevision + 1,
               lineId: plan.lineId,
@@ -187,6 +189,7 @@ void main() {
             required expectedProjectRevision,
             required plan,
           }) async => Revision3VoiceTakeSelectionPublication(
+            head: _publicationHead(),
             projectId: expectedProjectId,
             projectRevision: expectedProjectRevision + 2,
             lineId: plan.lineId,
@@ -215,6 +218,17 @@ Future<Revision3VoiceTakeSelectionPublication> _unexpectedPublish({
   required int expectedProjectRevision,
   required Revision3VoiceTakeSelectionTechnicalPlan plan,
 }) => throw StateError('publisher must not be called');
+
+AuthoringWorkingHead _publicationHead() =>
+    AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );
 
 Map<String, Object?> _twoApprovedIndex() {
   final json = revision3VoiceContentIndexJsonFixture(
