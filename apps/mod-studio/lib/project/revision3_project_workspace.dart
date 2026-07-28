@@ -225,53 +225,149 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace>
     final contentHeight = scaledLineHeight > 24.0 ? scaledLineHeight : 24.0;
     final tabHeight = contentHeight + 24.0 < 48.0 ? 48.0 : contentHeight + 24.0;
 
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (_tabsNeedOverflowSelector(
+          context,
+          constraints.maxWidth,
+          fontSize,
+        )) {
+          return _buildCompactSectionSelector(theme);
+        }
+        return _buildDirectTabs(theme, tabHeight);
+      },
+    );
+  }
+
+  bool _tabsNeedOverflowSelector(
+    BuildContext context,
+    double availableWidth,
+    double fontSize,
+  ) {
+    if (!availableWidth.isFinite) return false;
+    final scaledFontSize = MediaQuery.textScalerOf(context).scale(fontSize);
+    final effectiveScale = scaledFontSize > fontSize
+        ? scaledFontSize / fontSize
+        : 1.0;
+    return availableWidth / effectiveScale < 600;
+  }
+
+  Widget _buildCompactSectionSelector(ThemeData theme) {
+    final selectedDestination = widget.destinations[_selected.index];
+    final localizations = MaterialLocalizations.of(context);
     return Material(
       color: theme.colorScheme.surfaceContainerLow,
       child: SafeArea(
         bottom: false,
-        child: TabBar(
-          key: const Key('revision3-project-workspace-tabbar'),
-          controller: _tabController,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          padding: const EdgeInsetsDirectional.only(start: 4),
-          labelPadding: EdgeInsets.zero,
-          onTap: (index) => _selectSection(widget.destinations[index].section),
-          tabs: [
-            for (final destination in widget.destinations)
-              Tab(
-                key: _tabKey(destination.section),
-                height: tabHeight,
-                child: KeyedSubtree(
-                  key: _tabVisibilityKeys[destination.section],
-                  child: Tooltip(
-                    message: destination.label,
-                    child: SizedBox(
-                      height: tabHeight,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              destination.section == _selected
-                                  ? destination.selectedIcon
-                                  : destination.icon,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(destination.label, softWrap: false),
-                          ],
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: PopupMenuButton<Revision3ProjectWorkspaceSection>(
+            key: const Key('revision3-project-workspace-section-selector'),
+            initialValue: _selected,
+            tooltip: localizations.showMenuTooltip,
+            position: PopupMenuPosition.under,
+            onSelected: _selectSection,
+            itemBuilder: (context) => [
+              for (final destination in widget.destinations)
+                PopupMenuItem(
+                  key: _sectionOptionKey(destination.section),
+                  value: destination.section,
+                  child: Row(
+                    children: [
+                      Icon(
+                        destination.section == _selected
+                            ? destination.selectedIcon
+                            : destination.icon,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text(destination.label, maxLines: 2)),
+                    ],
+                  ),
+                ),
+            ],
+            child: Semantics(
+              key: const Key(
+                'revision3-project-workspace-section-selector-semantics',
+              ),
+              button: true,
+              label: selectedDestination.label,
+              hint: localizations.showMenuTooltip,
+              child: ExcludeSemantics(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Icon(selectedDestination.selectedIcon),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            selectedDestination.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.arrow_drop_down),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDirectTabs(ThemeData theme, double tabHeight) => Material(
+    color: theme.colorScheme.surfaceContainerLow,
+    child: SafeArea(
+      bottom: false,
+      child: TabBar(
+        key: const Key('revision3-project-workspace-tabbar'),
+        controller: _tabController,
+        isScrollable: true,
+        tabAlignment: TabAlignment.start,
+        padding: const EdgeInsetsDirectional.only(start: 4),
+        labelPadding: EdgeInsets.zero,
+        onTap: (index) => _selectSection(widget.destinations[index].section),
+        tabs: [
+          for (final destination in widget.destinations)
+            Tab(
+              key: _tabKey(destination.section),
+              height: tabHeight,
+              child: KeyedSubtree(
+                key: _tabVisibilityKeys[destination.section],
+                child: Tooltip(
+                  message: destination.label,
+                  child: SizedBox(
+                    height: tabHeight,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            destination.section == _selected
+                                ? destination.selectedIcon
+                                : destination.icon,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(destination.label, softWrap: false),
+                        ],
                       ),
                     ),
                   ),
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
-    );
-  }
+    ),
+  );
 
   Widget _buildPageArea(Widget pages) {
     final chromeBuilder = widget.chromeBuilder;
@@ -375,6 +471,9 @@ Key _tabKey(Revision3ProjectWorkspaceSection section) =>
 
 Key _pageKey(Revision3ProjectWorkspaceSection section) =>
     Key('revision3-project-workspace-page-${_sectionKey(section)}');
+
+Key _sectionOptionKey(Revision3ProjectWorkspaceSection section) =>
+    Key('revision3-project-workspace-section-option-${_sectionKey(section)}');
 
 String _sectionKey(Revision3ProjectWorkspaceSection section) =>
     switch (section) {

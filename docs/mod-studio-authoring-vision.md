@@ -412,18 +412,22 @@ Home loads the exact-current `Revision3ContentIndex` and exact verified
 DataAsset stage registry for **My mod / Changes**. It groups saved author
 content, nests only uniquely proven helpers, keeps unresolved or unproven
 generated helpers under Technical, and routes exact rows to their current
-owning workspace. The existing **Story**, **Text & Voice**, **Problems**,
-**Content**, and **Test & Release** task rows remain temporarily but no longer
-precede a compact count/readiness grid. Home does not duplicate low-level
+owning workspace. The five large fixed workspace task rows are gone: canonical
+primary navigation and the Project Work Bar own those transitions. An empty,
+mutable exact-current project offers exactly one **Create** continuation through
+the existing checkpoint-bound chooser. Home does not duplicate low-level
 authoring, import, build, or export launchers: Story owns NPC/Quest creation,
 the domain workspaces own their operations, and Project owns export. Story
 opens a direct exact-current NPC/Quest search, filter, list, creation, and
 Workbench surface; Text & Voice exposes the bounded take, selection, and target
 actions. Test & Release combines honest project checks with the bounded Voice
-continuation but does not infer project-wide readiness. History and Settings
-remain available from the command bar. World authoring, runtime testing, and
-full managed build/deploy remain unavailable. Root, project ID, revision, and
-head stay collapsed as technical details, while the `requiresReopen` recovery
+continuation but does not infer project-wide readiness. At narrow effective
+width, including 200% text, one native accessible selector exposes all five
+canonical jobs through the same location and lazy-page state; wider layouts
+retain direct tabs. History and Settings remain available from the command bar.
+World authoring, runtime testing, and full managed build/deploy remain
+unavailable. Root, project ID, revision, and head stay collapsed as technical
+details, while the `requiresReopen` recovery
 gate remains outside the workspace. This shell grants no new game/save writes,
 deployment, project-wide build, or runtime authority.
 
@@ -600,15 +604,20 @@ switch, stale completion, detach, and disposal fail closed. The projection
 owns no mutation, build, deployment, publication, game/save-write, or runtime
 authority.
 
-Home also retains the five current workspace continuations **Story**, **Text &
-Voice**, **Problems**, **Content**, and **Test & Release**. Each opens the
-canonical workspace that owns the job. Story owns the recommended **Character +
-first greeting** and **Quest + opening line** flows plus the advanced NPC-only
-and Quest-only Drafts. Text & Voice owns project text, dialog-line, and Voice
-actions; Test & Release owns Problems and output checks; Content owns discovery
-and DataAsset work. Export stays in the Project menu. Normal chrome calls this a
-**Mod Studio project** and keeps schema/head vocabulary in technical details.
-The five stable primary jobs use direct, horizontally scrollable tabs. The
+Home no longer repeats five large workspace continuations. The canonical
+primary navigation and Project Work Bar already expose **Story**, **Text &
+Voice**, **Problems**, **Content**, and **Test & Release** through their owning
+jobs. Story owns the recommended **Character + first greeting** and **Quest +
+opening line** flows plus the advanced NPC-only and Quest-only Drafts. Text &
+Voice owns project text, dialog-line, and Voice actions; Test & Release owns
+Problems and output checks; Content owns discovery and DataAsset work. Export
+stays in the Project menu. An empty project exposes one **Create** button only
+when the existing exact-current mutation gate is open; it reuses the same
+chooser and gains no new authority. Normal chrome calls this a **Mod Studio
+project** and keeps schema/head vocabulary in technical details. Wider layouts
+use direct tabs for the five stable primary jobs. Narrow layouts and high text
+scales use one native, keyboard- and screen-reader-accessible all-jobs selector
+that drives the same canonical location, page memory, and project reset. The
 useful standalone layout remains a UX reference only and grants no project or
 session authority.
 

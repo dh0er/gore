@@ -4768,18 +4768,22 @@ class _ManagedRevision3ProjectViewState
     final dashboardProjectId = project.projectId;
     final dashboardProjectRevision = project.projectRevision;
     final dashboardProjectHeadCanonicalJson = project.head.canonicalJson;
-    bool hasStoryDraft(Revision3ContentIndex index) => index.entities.any(
-      (entity) =>
-          entity.kind == Revision3ContentEntityKind.npcDraft ||
-          entity.kind == Revision3ContentEntityKind.questDraft,
-    );
-    void navigate(
-      Revision3ProjectWorkspaceSection section, {
-      String? secondary,
-    }) => Revision3ProjectWorkspace.navigate(
-      context,
-      Revision3ProjectWorkspaceLocation(section, secondary: secondary),
-    );
+    final VoidCallback? createFirstChange =
+        _storyMutationDisabledReason(l10n) == null
+        ? () {
+            if (!_isExactCurrentDashboardProject(
+              context,
+              expectedProjectRoot: dashboardProjectRoot,
+              expectedProjectId: dashboardProjectId,
+              expectedProjectRevision: dashboardProjectRevision,
+              expectedProjectHeadCanonicalJson:
+                  dashboardProjectHeadCanonicalJson,
+            )) {
+              return;
+            }
+            unawaited(_openProjectQuickCreate(context, l10n));
+          }
+        : null;
 
     return Revision3ProjectDashboard(
       projectRoot: dashboardProjectRoot,
@@ -4812,13 +4816,13 @@ class _ManagedRevision3ProjectViewState
             l10n.managedDashboardTechnicalContentDescription,
         emptyChangesTitle: l10n.managedDashboardEmptyChangesTitle,
         emptyChangesDescription: l10n.managedDashboardEmptyChangesDescription,
+        emptyCreateLabel: l10n.managedProjectCommandBarCreateLabel,
         openChangeLabel: l10n.managedDashboardOpenChange,
         changeActionFailedMessage: l10n.managedDashboardChangeActionFailed,
         unresolvedReferenceCountLabel:
             l10n.managedDashboardUnresolvedReferences,
         missingGameTitle: l10n.managedDashboardMissingGameTitle,
         missingGameDescription: l10n.managedDashboardMissingGameDescription,
-        continueHeading: l10n.managedDashboardContinueHeading,
         loadingSemanticsLabel: l10n.managedDashboardLoading,
         loadErrorSemanticsLabel: l10n.managedDashboardLoadError,
         loadErrorTitle: l10n.managedDashboardLoadError,
@@ -4851,59 +4855,8 @@ class _ManagedRevision3ProjectViewState
           expectedProjectHeadCanonicalJson: dashboardProjectHeadCanonicalJson,
         ),
       ),
-      tasks: [
-        Revision3ProjectDashboardAction(
-          id: 'story',
-          controlKey: const Key('managed-home-story'),
-          icon: Icons.auto_stories_outlined,
-          title: l10n.managedHomeStoryContinueTitle,
-          titleBuilder: (index) => hasStoryDraft(index)
-              ? l10n.managedHomeStoryContinueTitle
-              : l10n.managedHomeStoryEmptyTitle,
-          description: l10n.managedHomeStoryDescription,
-          onPressed: () => navigate(Revision3ProjectWorkspaceSection.story),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'dialog-voice',
-          controlKey: const Key('managed-home-dialog-voice'),
-          icon: Icons.record_voice_over_outlined,
-          title: l10n.managedHomeDialogVoiceTitle,
-          description: l10n.managedHomeDialogVoiceDescription,
-          onPressed: () => navigate(Revision3ProjectWorkspaceSection.textVoice),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'problems',
-          controlKey: const Key('managed-home-problems'),
-          icon: Icons.rule_folder_outlined,
-          title: l10n.managedHomeProblemsTitle,
-          description: l10n.managedHomeProblemsDescription,
-          onPressed: () => navigate(
-            Revision3ProjectWorkspaceSection.testRelease,
-            secondary: 'problems',
-          ),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'content',
-          controlKey: const Key('managed-home-content'),
-          icon: Icons.account_tree_outlined,
-          title: l10n.managedHomeContentTitle,
-          description: l10n.managedHomeContentDescription,
-          onPressed: () => navigate(Revision3ProjectWorkspaceSection.content),
-        ),
-        Revision3ProjectDashboardAction(
-          id: 'build',
-          controlKey: const Key('managed-home-build'),
-          icon: Icons.inventory_2_outlined,
-          title: l10n.managedHomeBuildTitle,
-          description: l10n.managedHomeBuildDescription,
-          onPressed: () => navigate(
-            Revision3ProjectWorkspaceSection.testRelease,
-            secondary: 'build-preview',
-          ),
-        ),
-      ],
-      settingsAction: Revision3ProjectDashboardAction(
-        id: 'open-settings',
+      createFirstChange: createFirstChange,
+      settingsAction: Revision3ProjectDashboardSettingsAction(
         icon: Icons.settings_outlined,
         title: l10n.managedActionSettingsTitle,
         description: l10n.managedActionSettingsDescription,

@@ -1238,47 +1238,6 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedDashboardToolsHeading => 'Инструменты проекта';
 
   @override
-  String get managedDashboardContinueHeading => 'Continue working';
-
-  @override
-  String get managedHomeStoryEmptyTitle => 'Create a character or Quest';
-
-  @override
-  String get managedHomeStoryContinueTitle => 'Continue Story';
-
-  @override
-  String get managedHomeStoryDescription =>
-      'Create and develop NPC and Quest drafts in the complete Story workspace.';
-
-  @override
-  String get managedHomeDialogVoiceTitle => 'Dialog & Voice';
-
-  @override
-  String get managedHomeDialogVoiceDescription =>
-      'Write project text, create dialog lines, and manage Voice takes in one place.';
-
-  @override
-  String get managedHomeProblemsTitle => 'Review problems';
-
-  @override
-  String get managedHomeProblemsDescription =>
-      'Review exact project issues and verification without claiming a runtime test.';
-
-  @override
-  String get managedHomeContentTitle => 'Browse content';
-
-  @override
-  String get managedHomeContentDescription =>
-      'Find project, base-game, installed, and verified DataAsset content.';
-
-  @override
-  String get managedHomeBuildTitle => 'Check build readiness';
-
-  @override
-  String get managedHomeBuildDescription =>
-      'Open the honest build view. Voice bundles are available; a complete playable mod is still blocked.';
-
-  @override
   String get managedContentOpenInStory => 'Open in Story';
 
   @override

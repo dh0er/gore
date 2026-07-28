@@ -577,9 +577,13 @@ Snapshot V2 is the separate backup/restore format. Auto-updates on launch
   count/readiness-card grid. Proven generated and related helpers stay nested
   under their owning author content; unresolved or unproven helpers remain
   visible in a collapsed Technical section. Rows continue into the exact
-  current Story, Items, DataAsset, or Content workspace. This projection reads
-  the managed-R3 content index and verified DataAsset stage registry; it grants
-  no build, deploy, publication, game/save-write, or runtime authority.
+  current Story, Items, DataAsset, or Content workspace. Home does not repeat
+  five large workspace task rows; one existing **Create** flow remains for an
+  empty mutable project. Wider layouts keep direct tabs for all five jobs, while
+  narrow/high-scale layouts expose the same canonical navigation through one
+  accessible selector. This projection reads the managed-R3 content index and
+  verified DataAsset stage registry; it grants no build, deploy, publication,
+  game/save-write, or runtime authority.
 - Preview the exact current managed project's build coverage across
   localization, dialog, Voice, NPCs, Quests, scripts, items, and verified
   DataAsset stages. This readiness inventory creates no files and does not

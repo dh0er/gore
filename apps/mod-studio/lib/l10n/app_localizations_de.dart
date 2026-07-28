@@ -1255,47 +1255,6 @@ class AppLocalizationsDe extends AppLocalizations {
   String get managedDashboardToolsHeading => 'Projektwerkzeuge';
 
   @override
-  String get managedDashboardContinueHeading => 'Weiterarbeiten';
-
-  @override
-  String get managedHomeStoryEmptyTitle => 'Figur oder Quest erstellen';
-
-  @override
-  String get managedHomeStoryContinueTitle => 'Story weiterführen';
-
-  @override
-  String get managedHomeStoryDescription =>
-      'Erstelle und entwickle NPC- und Quest-Entwürfe im vollständigen Story-Arbeitsbereich.';
-
-  @override
-  String get managedHomeDialogVoiceTitle => 'Dialog & Vertonung';
-
-  @override
-  String get managedHomeDialogVoiceDescription =>
-      'Schreibe Projekttexte und Dialogzeilen und verwalte Sprachaufnahmen an einem Ort.';
-
-  @override
-  String get managedHomeProblemsTitle => 'Probleme prüfen';
-
-  @override
-  String get managedHomeProblemsDescription =>
-      'Prüfe exakte Projektprobleme und Verifikation, ohne einen Laufzeittest zu behaupten.';
-
-  @override
-  String get managedHomeContentTitle => 'Inhalte durchsuchen';
-
-  @override
-  String get managedHomeContentDescription =>
-      'Finde Projekt-, Basisspiel-, installierte und verifizierte DataAsset-Inhalte.';
-
-  @override
-  String get managedHomeBuildTitle => 'Baubereitschaft prüfen';
-
-  @override
-  String get managedHomeBuildDescription =>
-      'Öffne die ehrliche Build-Ansicht. Voice-Bundles sind verfügbar; eine vollständige spielbare Mod ist noch blockiert.';
-
-  @override
   String get managedContentOpenInStory => 'In Story öffnen';
 
   @override

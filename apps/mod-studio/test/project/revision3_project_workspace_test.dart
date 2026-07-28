@@ -1,4 +1,4 @@
-import 'dart:ui' show SemanticsRole, Tristate;
+import 'dart:ui' show SemanticsAction, SemanticsRole, Tristate;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -154,36 +154,61 @@ void main() {
     },
   );
 
-  testWidgets(
-    '200 percent text keeps tabs overflow-safe, semantic, focusable and '
-    'keyboard activatable',
-    (tester) async {
-      _setSurface(tester, const Size(640, 420));
-      final semantics = tester.ensureSemantics();
-      await _pumpWorkspace(tester, textScaler: const TextScaler.linear(2));
+  testWidgets('360x640 at 200 percent exposes every area through one semantic '
+      'keyboard and pointer selector', (tester) async {
+    _setSurface(tester, const Size(360, 640));
+    final semantics = tester.ensureSemantics();
+    await _pumpWorkspace(tester, textScaler: const TextScaler.linear(2));
 
-      for (final section in Revision3ProjectWorkspaceSection.values) {
-        expect(find.byKey(_tabKey(section)), findsOneWidget);
-      }
-      expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const Key('revision3-project-workspace-tabbar')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-workspace-section-selector')),
+      findsOneWidget,
+    );
+    for (final section in Revision3ProjectWorkspaceSection.values) {
+      expect(find.byKey(_tabKey(section)), findsNothing);
+    }
+    expect(tester.takeException(), isNull);
 
-      const target = Revision3ProjectWorkspaceSection.story;
-      expect(await _focusTab(tester, target), isTrue);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
+    final selectorSemantics = find.byKey(
+      const Key('revision3-project-workspace-section-selector-semantics'),
+    );
+    var node = tester.getSemantics(selectorSemantics);
+    expect(node.label, _label(Revision3ProjectWorkspaceSection.home));
+    expect(node.getSemanticsData().flagsCollection.isButton, isTrue);
+    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
 
-      expect(find.text('story page / secondary:none'), findsOneWidget);
-      expect(_selectedTabIndex(tester), target.index);
-      _expectTabSemantics(tester, target, selected: true);
-      _expectTabSemantics(
-        tester,
-        Revision3ProjectWorkspaceSection.home,
-        selected: false,
-      );
-      expect(tester.takeException(), isNull);
-      semantics.dispose();
-    },
-  );
+    expect(await _focusCompactSelector(tester), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    for (final section in Revision3ProjectWorkspaceSection.values) {
+      expect(find.byKey(_sectionOptionKey(section)), findsOneWidget);
+    }
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(await _focusCompactSelector(tester), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    for (final section in Revision3ProjectWorkspaceSection.values) {
+      expect(find.byKey(_sectionOptionKey(section)), findsOneWidget);
+    }
+
+    const target = Revision3ProjectWorkspaceSection.textVoice;
+    await tester.tap(find.byKey(_sectionOptionKey(target)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('textVoice page / secondary:none'), findsOneWidget);
+    expect(_selectedCompactSection(tester), target);
+    node = tester.getSemantics(selectorSemantics);
+    expect(node.label, _label(target));
+    expect(node.getSemanticsData().flagsCollection.isButton, isTrue);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
+  });
 
   testWidgets(
     'persistent chrome follows primary and secondary navigation above pages',
@@ -240,7 +265,7 @@ void main() {
     },
   );
 
-  testWidgets('persistent chrome follows compact horizontal tab navigation', (
+  testWidgets('persistent chrome follows compact area selection', (
     tester,
   ) async {
     _setSurface(tester, const Size(360, 480));
@@ -253,12 +278,15 @@ void main() {
     );
 
     expect(find.text('compact chrome:home'), findsOneWidget);
-    await _tapTab(tester, Revision3ProjectWorkspaceSection.testRelease);
+    await _selectCompactSection(
+      tester,
+      Revision3ProjectWorkspaceSection.testRelease,
+    );
 
     expect(find.text('compact chrome:testRelease'), findsOneWidget);
     expect(
-      _selectedTabIndex(tester),
-      Revision3ProjectWorkspaceSection.testRelease.index,
+      _selectedCompactSection(tester),
+      Revision3ProjectWorkspaceSection.testRelease,
     );
     expect(tester.takeException(), isNull);
   });
@@ -549,6 +577,25 @@ int _selectedTabIndex(WidgetTester tester) => tester
     .controller!
     .index;
 
+Revision3ProjectWorkspaceSection _selectedCompactSection(WidgetTester tester) =>
+    tester
+        .widget<PopupMenuButton<Revision3ProjectWorkspaceSection>>(
+          find.byKey(const Key('revision3-project-workspace-section-selector')),
+        )
+        .initialValue!;
+
+Future<void> _selectCompactSection(
+  WidgetTester tester,
+  Revision3ProjectWorkspaceSection section,
+) async {
+  await tester.tap(
+    find.byKey(const Key('revision3-project-workspace-section-selector')),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(_sectionOptionKey(section)));
+  await tester.pumpAndSettle();
+}
+
 void _expectTabSemantics(
   WidgetTester tester,
   Revision3ProjectWorkspaceSection section, {
@@ -564,13 +611,12 @@ void _expectTabSemantics(
   );
 }
 
-Future<bool> _focusTab(
-  WidgetTester tester,
-  Revision3ProjectWorkspaceSection section,
-) async {
-  final tab = find.byKey(_tabKey(section));
+Future<bool> _focusCompactSelector(WidgetTester tester) async {
+  final selector = find.byKey(
+    const Key('revision3-project-workspace-section-selector-semantics'),
+  );
   bool hasPrimaryFocus() =>
-      Focus.of(tester.element(tab), scopeOk: true).hasPrimaryFocus;
+      Focus.of(tester.element(selector), scopeOk: true).hasPrimaryFocus;
 
   for (var step = 0; step < 30 && !hasPrimaryFocus(); step++) {
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
@@ -588,6 +634,9 @@ double _chromeScrollOffset(WidgetTester tester, Finder chromeScroll) => tester
 
 Key _tabKey(Revision3ProjectWorkspaceSection section) =>
     Key('revision3-project-workspace-tab-${_sectionKey(section)}');
+
+Key _sectionOptionKey(Revision3ProjectWorkspaceSection section) =>
+    Key('revision3-project-workspace-section-option-${_sectionKey(section)}');
 
 String _sectionKey(Revision3ProjectWorkspaceSection section) =>
     switch (section) {

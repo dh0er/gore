@@ -18,13 +18,16 @@ cases. Home now presents the exact current saved work as **My mod / Changes**:
 author content is grouped by domain, uniquely proven helpers are nested under
 their owner, and unresolved or unproven helpers remain visible under collapsed
 Technical content. Exact rows continue into their current owning workspace;
-the view creates no separate project state and grants no build, deployment,
-publication, game/save-write, or runtime authority. General Audio/Script
-authoring, vanilla localization and runtime-topic patches, new-item identity,
-Texture mutation, and the complete Managed-R3 build/deploy path are still
-being implemented and must not be treated as released capabilities. See the
-[repo README](../../README.md#gore-mod-studio) for the detailed development
-status.
+Home no longer repeats five large workspace task rows and retains one existing
+**Create** flow for an empty mutable project. Wider layouts keep direct tabs for
+all five jobs; narrow/high-scale layouts use one accessible selector over the
+same canonical navigation and lazy-page state. The view creates no separate
+project state and grants no build, deployment, publication, game/save-write, or
+runtime authority. General Audio/Script authoring, vanilla localization and
+runtime-topic patches, new-item identity, Texture mutation, and the complete
+Managed-R3 build/deploy path are still being implemented and must not be
+treated as released capabilities. See the [repo
+README](../../README.md#gore-mod-studio) for the detailed development status.
 
 ## Bundled CLI
 

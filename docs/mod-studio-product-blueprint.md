@@ -102,17 +102,20 @@ workspace. DataAssets come only from the exact verified stage registry, not
 from inferred asset entries. This projection is orientation and navigation,
 not another project state, readiness result, build plan, or runtime claim.
 
-Home currently also retains compact continuations for **Story**, **Text &
-Voice**, **Problems**, **Content**, and **Test & Release** without duplicating
-their low-level create/import/build dialogs. NPC and Quest creation—including
-the recommended Quest plus opening line—belongs to Story; dialog and Voice work
-belongs to Text & Voice; DataAssets belong to Content; export remains in the
-Project menu. Normal chrome uses “Mod Studio project” rather than schema-
-revision terminology. Exactly five primary jobs appear as direct, horizontally
-scrollable tabs: Home, Content, Story, Text & Voice, and Test & Release. Lazy
-mounting and per-project state remain intact. World stays hidden until its
-separately approved work begins. The classic standalone layout remains the
-usability floor while owning no project or session state.
+Home does not repeat large continuations for **Story**, **Text & Voice**,
+**Problems**, **Content**, or **Test & Release**. Their canonical primary
+navigation and Project Work Bar routes already own those jobs. An empty,
+mutable exact-current project exposes one **Create** continuation through the
+existing chooser. NPC and Quest creation—including the recommended Quest plus
+opening line—belongs to Story; dialog and Voice work belongs to Text & Voice;
+DataAssets belong to Content; export remains in the Project menu. Normal chrome
+uses “Mod Studio project” rather than schema-revision terminology. Exactly five
+primary jobs remain: Home, Content, Story, Text & Voice, and Test & Release.
+Wider layouts show direct tabs; narrow effective widths, including 200% text,
+use one native accessible all-jobs selector. Both presentations drive the same
+canonical location, lazy mounting, and per-project state. World stays hidden
+until its separately approved work begins. The classic standalone layout
+remains the usability floor while owning no project or session state.
 The persistent **Project Work Bar V1** now keeps the friendly project name and
 current area visible above every primary job and exposes the common
 continuations **Undo**, **Search**, **Create**, and **Problems**. Undo reuses the
@@ -579,14 +582,16 @@ different project identity resets to Home. Home reads the exact-current
 the saved work as **My mod / Changes** instead of compact count/readiness
 cards. Author content is grouped, only uniquely proven helpers are nested,
 unresolved or unproven generated helpers remain under Technical, and exact
-rows continue into their current owning workspace. The five **Story**, **Text &
-Voice**, **Problems**, **Content**, and **Test & Release** task routes remain
-temporarily, but Home no longer hosts duplicate low-level authoring, import,
-build, or export actions: Story owns creation, domain workspaces own their
-operations, and Project owns export. Durable root/ID/revision/head identity
-remains available under collapsed technical details, and managed Save verifies
-the exact head. The persistent Project Work Bar now keeps the friendly project
-name and selected area visible above those lazy pages. Its
+rows continue into their current owning workspace. Home has removed the five
+large duplicate task routes; an empty exact-current project retains one
+existing-action **Create** continuation when mutation is allowed. Story owns
+creation, domain workspaces own their operations, and Project owns export.
+Durable root/ID/revision/head identity remains available under collapsed
+technical details, and managed Save verifies the exact head. Wider layouts keep
+the five direct primary tabs; narrow effective widths use one native accessible
+selector over the same canonical navigation and lazy-page state. The persistent
+Project Work Bar now keeps the friendly project name and selected area visible
+above those lazy pages. Its
 Search/Create/Problems continuations route into the existing Content, Story,
 Text & Voice, and Test & Release owners; they do not duplicate their state or
 permissions. Creation uses the same absent-head publication, full reopen,
