@@ -93,5 +93,3 @@ pass it.
   they are Ogg files in language ZIP archives.
 - [Bundling & deploying](bundles.md) — shipping audio replacements as part of a
   mod.
-- [FMOD audio modding plan](../internal/fmod-audio-modding-plan.md) — the
-  reverse-engineering notes behind this implementation.

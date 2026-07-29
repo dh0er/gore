@@ -181,6 +181,51 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::config::ConfigAction,
     },
+    /// Serve this toolkit over the Model Context Protocol (stdio JSON-RPC) for AI agents
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+    /// Render the built-in guide for offline reading
+    Guide {
+        #[command(subcommand)]
+        action: GuideAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum GuideAction {
+    /// Write the whole guide as one self-contained HTML file — sidebar, filter, no external assets
+    Html {
+        /// Output path
+        #[arg(short = 'o', long, default_value = "guide.html")]
+        out: PathBuf,
+        /// Commit or branch that links leaving the guide tree are pinned to
+        #[arg(long, default_value = cmd::guide::DEFAULT_REPO_REF, value_name = "REF")]
+        repo_ref: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Run the MCP server on stdin/stdout. Speaks JSON-RPC; it is not an interactive shell.
+    Serve {
+        /// Allow commands that modify the game installation or rewrite files in place
+        /// (deploy/undeploy, mgr apply/reset, in-place loc/audio edits)
+        #[arg(long)]
+        allow_write: bool,
+        /// Allow commands that launch the game executable (`as compile`, `as compile-module`)
+        #[arg(long)]
+        allow_game_launch: bool,
+        /// Override every per-command wall-clock cap, in seconds (0 keeps the defaults)
+        #[arg(long, default_value_t = 0, value_name = "SECS")]
+        timeout_secs: u64,
+        /// Cap on captured stdout per command, in KiB
+        #[arg(long, default_value_t = 256, value_name = "KIB")]
+        max_output_kib: usize,
+    },
+    /// Print the tool definitions the server would advertise, then exit
+    Tools,
 }
 
 #[derive(Subcommand)]
@@ -432,6 +477,18 @@ fn run_cli() {
         Commands::Texture { action } => cmd::texture::run(action),
         Commands::Mgr { action } => cmd::mgr::run(action),
         Commands::Config { action } => cmd::config::run(action),
+        Commands::Mcp { action } => match action {
+            McpAction::Serve {
+                allow_write,
+                allow_game_launch,
+                timeout_secs,
+                max_output_kib,
+            } => cmd::mcp::serve(allow_write, allow_game_launch, timeout_secs, max_output_kib),
+            McpAction::Tools => cmd::mcp::tools(),
+        },
+        Commands::Guide { action } => match action {
+            GuideAction::Html { out, repo_ref } => cmd::guide::html_file(out, &repo_ref),
+        },
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

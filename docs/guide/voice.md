@@ -141,4 +141,4 @@ runtime is still runtime-dependent — treat additions as experimental.
 
 - [Bundling & deploying](bundles.md) — how voice edits are packaged and
   transactionally deployed into the install.
-- [Managed Voice authoring](studio-voice.md) — the Mod Studio workflow.
+- [Mod Studio](mod-studio.md) — managing voice takes in the no-code GUI.

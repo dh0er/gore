@@ -2,8 +2,8 @@
 """Verify every relative Markdown link and anchor in the repository's docs.
 
 Checks the root README, everything under docs/ (except the gitignored
-docs/superpowers/ scratch area), and the component READMEs. External links
-(http, https, mailto) are ignored; relative targets must exist on disk, and
+docs/superpowers/ and docs/internal/ areas), and the component READMEs. External
+links (http, https, mailto) are ignored; relative targets must exist on disk, and
 `#anchor` fragments must match a heading in the target document.
 
 Run from anywhere:
@@ -32,8 +32,8 @@ GLOBS = (
     "crates/*/*.md",
 )
 
-# Skipped entirely: local scratch area, not part of the published docs.
-EXCLUDED_DIRS = ("docs/superpowers",)
+# Skipped entirely: local-only areas, not part of the published docs.
+EXCLUDED_DIRS = ("docs/superpowers", "docs/internal")
 
 MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HTML_SRC = re.compile(r"<img[^>]*\ssrc=\"([^\"]+)\"")

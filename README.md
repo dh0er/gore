@@ -51,6 +51,35 @@ gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 
 Full walkthrough: [Getting started](docs/guide/getting-started.md).
 
+## MCP server
+
+`gore mcp serve` exposes the whole CLI over the
+[Model Context Protocol](https://modelcontextprotocol.io), so an AI assistant can
+drive GORE for you. It is part of `gore.exe` — nothing extra to install.
+
+Claude Code:
+
+```powershell
+claude mcp add gore -- C:\path\to\gore.exe mcp serve
+```
+
+Claude Desktop, or any client with a JSON config:
+
+```json
+{
+  "mcpServers": {
+    "gore": {
+      "command": "C:\\path\\to\\gore.exe",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Reading and creating new files works out of the box. Changing the game
+installation needs `--allow-write`, and compiling AngelScript — which starts the
+game — needs `--allow-game-launch`. Details: [MCP server](docs/guide/mcp.md).
+
 ## Documentation
 
 Everything lives in [`docs/`](docs/README.md).
@@ -66,9 +95,17 @@ Everything lives in [`docs/`](docs/README.md).
 | [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
 | [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflicts |
 | [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
-| [Building](docs/guide/building.md) | Toolchain, `build.py`, repo layout, crates, versioning |
+| [MCP server](docs/guide/mcp.md) | Drive the whole CLI from an AI assistant |
+| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
-Engineering notes and product vision: [`docs/internal/`](docs/internal).
+The CLI release zip carries the same guide offline: `docs\guide.html` is one
+browsable file with a collapsible sidebar, and `docs\*.md` is the Markdown the
+MCP server serves. Regenerate the HTML any time with `gore guide html`.
+
+Implementation contracts behind the commands — receipt semantics, seal
+guarantees, why a patch is refused — live separately in
+[`docs/reference/`](docs/reference/README.md). They are not part of the guide.
 
 ## Build
 
@@ -90,7 +127,7 @@ python build.py <project> build|run|dist|installer|test
 python build.py all test
 ```
 
-Details, repo layout, and the crate table: [Building](docs/guide/building.md).
+Details, repo layout, and the crate table: [Building](docs/development.md).
 
 ## License
 

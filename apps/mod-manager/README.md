@@ -38,7 +38,7 @@ and loadout files. Auto-updates on launch (WinSparkle).
 
 ## Build / run
 
-Driven by the top-level orchestrator (see [Building](../../docs/guide/building.md)):
+Driven by the top-level orchestrator (see [Building](../../docs/development.md)):
 
 ```powershell
 python build.py gore-mod-manager run          # build (if needed) + launch

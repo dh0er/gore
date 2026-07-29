@@ -5,9 +5,10 @@ fields they have, what those fields are typed as, and what their real in-game
 default values are. That knowledge lives in generated JSON: **catalogs** (what
 exists) and **reflection models** (what shape it has).
 
-You only need these commands if you are regenerating the data — for example
-after a game update. For everyday modding, the catalogs bundled with the save
-editor (`apps/save-editor/assets/*_catalog.json`) are enough.
+**Most people never run any of this.** The catalogs bundled with the save editor
+(`apps/save-editor/assets/*_catalog.json`) already cover everyday modding. Reach
+for this page only when you are regenerating that data yourself — after a game
+update, or when you want `gore gen --model` to validate your overrides.
 
 ## Catalogs from a UE4SS object dump
 
@@ -36,8 +37,8 @@ generation — the executable, the shipping precompiled AngelScript cache, and
 the Binds cache. Mismatched or ambiguous evidence fails closed rather than
 producing a catalog that silently describes a different build.
 
-This is the catalog behind the managed NPC and Quest workflows
-([NPC authoring](studio-npc.md), [Quest authoring](studio-quest.md)).
+This is the catalog behind the managed NPC and Quest workflows in
+[Mod Studio](mod-studio.md).
 
 ## Reflection model from an SDK header dump
 

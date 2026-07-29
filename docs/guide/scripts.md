@@ -221,5 +221,5 @@ See [Bundling & deploying](bundles.md). Deploy splices the mini-cache into
   `default-sites`, `patch-default`, `tag-map-sites`, `patch-tag-map`: changing
   proven scalar and GameplayTag-map defaults directly in the cache, without
   recompiling.
-- [NPC authoring](studio-npc.md) and [Quest authoring](studio-quest.md) — the
-  managed workflows built on top of this.
+- [Mod Studio](mod-studio.md) — the no-code NPC and quest workflows built on top
+  of this.

@@ -73,10 +73,8 @@ bundle-relative, validated Ogg payloads.
 - `replace` requires that member's exact, case-sensitive stored path.
 - `add` requires that the path does **not** exist.
 
-Exact-path replacement is mechanically verified by archive and transactional
-deploy tests. `add` is archive-safe, but whether the game resolves a brand-new
-voice path is still runtime-dependent; replacements are the established
-deployment path.
+`add` is archive-safe, but whether the game resolves a brand-new voice path is
+still runtime-dependent; replacements are the established deployment path.
 
 Direct deploy and manager apply group edits into one verified rewrite per ZIP
 and always rebuild from the pristine or prior-backup archive. A referenced
@@ -84,16 +82,12 @@ archive missing from the install is a hard preflight error: deployment refuses
 to create a partial voice patch. All manifests, payload paths, files, and Oggs
 are validated before an active loadout is transactionally replaced.
 
-### Resource behavior
+### Disk space
 
-Each candidate ZIP is streamed to a private disk file and fully verified before
-the transaction publishes it. Memory is bounded by the retained source-Ogg
-budget (256 MiB for a direct bundle build/deploy) plus the ZIP index and
-streaming state — not by the combined output size of all language archives.
-Rollback snapshots and candidates are durable same-directory temporary files,
-so the game volume needs temporary free space comparable to the archives being
-replaced. Insufficient memory or disk space fails before a live archive is
-changed.
+Each candidate ZIP is written and verified beside the archive it replaces before
+anything is published, so the game volume needs temporary free space comparable
+to the archives being rewritten. Running out of space or memory fails before a
+live archive is changed.
 
 ## Running several mods at once
 

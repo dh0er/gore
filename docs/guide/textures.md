@@ -60,10 +60,8 @@ gore texture undeploy --game "$GAME" --name zzz_MyMod_P
 
 `pack --compress` Oodle-compresses the `.ucas` blocks. It is **opt-in and off by
 default**: uncompressed containers are the ones proven to load reliably in game.
-The compressed path follows the base game's writer conventions (raw
-`ContainerHeader`, 1 KiB admission threshold, 16-aligned blocks) and uses the
-pure-Rust Oodle implementation in `gore-oodle` — no proprietary `oo2core` DLL is
-required.
+The compressed path follows the base game's own writer conventions and uses a
+pure-Rust Oodle implementation — no proprietary `oo2core` DLL is required.
 
 ## Flag summary
 

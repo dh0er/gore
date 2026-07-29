@@ -1,11 +1,185 @@
-# Managed project snapshot import V2
+# Mod Studio project snapshot internals
+
+This page records the implementation contracts and invariants of the managed
+project snapshot pipeline: archive format, reachable closure, security model,
+closed limits, and stable failure semantics. It is not instructions: the
+user-facing backup and restore workflow lives in
+[Mod Studio](../guide/mod-studio.md).
+
+## Export
+
+A managed revision-3 export is a portable copy of one exact published project
+snapshot. It is project management, not a mod build, deployment, Save As,
+working-directory move, runtime qualification, or save-game operation.
+
+The current Studio **Create project backup** workflow emits the sole supported
+format, Snapshot V2: an exact restorable managed-project backup. No earlier
+snapshot format, compatibility reader, or migration path is retained.
+
+V2 exports the exact reachable closure with a closed restorable-copy manifest.
+The visible Windows workflow can inspect it, materialize it into one absent
+managed destination, fully open the receipt-bound candidate, and adopt it only
+after an exact identity/head comparison. See
+[Managed project snapshot import V2](#import).
+
+### Authority boundary
+
+The export command accepts only:
+
+- the managed Store root;
+- one exact canonical expected head; and
+- one absent absolute `.goremod` output path outside the Store root.
+
+It accepts no game root, save path, World input, project JSON, overwrite flag,
+build profile, deploy target, or runtime claim. The managed session calls it
+inside the serialized exact-basis lane. Export neither publishes a new project
+head nor changes the current project path.
+
+### Archive format
+
+The archive uses
+`gore.managed-project-snapshot.v2`, schema `2`,
+`portable_snapshot_restorable_copy`, and `restore_status: supported`.
+`supported` is the format property consumed by the separately reviewed Windows
+destination materializer. It does not by itself grant session adoption, build,
+deployment, game, save, or runtime authority; the visible restore workflow adds
+the separately reviewed receipt-bound session transition.
+
+The fixed layout is:
+
+```text
+gore-export.json
+project.json
+store/gore-project.json
+store/snapshots/sha256/<2>/<62>.json
+store/entities/<id2>/<id30>/<sha256>.json
+store/assets/sha256/<2>/<62>
+```
+
+`project.json` is the canonical materialized current-project copy. The
+`store/` members preserve the exact immutable Store layout consumed by the
+separately reviewed importer. Absolute paths, directory entries, lock files,
+publication-repair journals, staging files, caches and unreachable immutable
+orphans are excluded.
+
+### Reachable closure
+
+Collection starts at the expected current head and recursively walks exact
+schema-revision-3 snapshots. For every snapshot export includes and fully
+verifies:
+
+1. the canonical snapshot manifest;
+2. every entity shard named by that manifest;
+3. every asset named by that manifest's asset index; and
+4. every historical basis snapshot retained by a Quest Draft, recursively.
+
+The current snapshot may additionally authenticate a bounded, newest-first
+history vector of at most 255 prior checkpoints. Export includes each checkpoint
+named directly by that one current vector, together with its entity, asset, and
+Quest-basis closure. It deliberately does **not** follow a history vector found
+inside a retained checkpoint or a Quest-basis snapshot. This keeps the exported
+history closure bounded by the current authority instead of reviving older
+checkpoints that the current snapshot has already truncated. A current snapshot
+with no retained history adds no historical checkpoints.
+
+The history-free revision-3 Store manifest remains capped at 16 MiB. A separate
+1 MiB history-envelope reserve raises only the final revision-3 snapshot ceiling
+to 17 MiB.
+A stricter custom Store base limit also lowers the effective revision-3 total
+limit to that base plus the fixed reserve, so deliberately constrained stores
+may reject otherwise format-valid projects.
+
+Before the first release, project writer, reader, tests, and UI change together.
+Only the current managed-R3 schema is accepted; older Studio binaries and
+superseded internal project bytes are not a supported interchange contract.
+
+Objects are deduplicated by their derived Store path and content seal. The same
+digest with conflicting lengths, a path collision, cycle/resource overflow,
+missing object, non-canonical manifest/entity, embedded-identity mismatch,
+asset hash mismatch, or failed full project reopen rejects the export before
+publication.
+
+### Determinism and verification
+
+Archive members have a fixed order and path encoding, stored compression, fixed
+timestamps and permissions, no comments, and explicit large-file support. The
+writer streams bounded Store objects instead of buffering the complete archive.
+
+Before publication, native code strictly reopens the staged ZIP and checks the
+closed marker, exact member set/order/metadata, declared lengths and every
+payload seal. Two exports of the same head and closure to different absent
+paths must be byte-identical.
+
+### Publication lifecycle
+
+The output parent must already exist and have a safe link-free identity. Native
+code pins that directory and the Store root by stable handle identity, proves
+that the destination is outside the Store, and repeats the ambient-chain and
+pinned-ancestry checks at the final pre-publication gate. Moving the pinned
+directory, replacing its old name with a link, or moving it underneath the
+Store therefore cannot redirect a successful export.
+
+The archive is written, flushed and strictly reopened through a stage owned by
+its open handle rather than by a later path lookup. Linux uses an anonymous
+`O_TMPFILE` and publishes it with no-replace `linkat(AT_EMPTY_PATH)` through a
+separately pinned, syncable parent handle. Windows uses an exclusive
+share-locked hidden stage and an atomic, parent-handle-relative no-replace
+rename. Pre-publication cleanup acts only on that exact open handle; it never
+deletes a path that another process could have replaced. Existing or racing
+outputs are never read as authority, deleted, or overwritten.
+
+After the publication boundary there are three sealed response terminals:
+
+- **published**: the new archive was published and fully verified;
+- **published with cleanup warning**: the verified archive is complete, but
+  internal stage-handle cleanup or cleanup accounting was incomplete; and
+- **publication uncertain**: publication may have completed, but final
+  durability or verification could not be proved.
+
+Publication uncertainty is terminal. Studio tells the author to inspect the
+chosen destination and never retries, replaces, or deletes the same output
+automatically. Errors that are proven to occur before the publication boundary
+leave the output absent.
+
+### Required proof
+
+The Snapshot V2 gate requires native, FFI, session, coordinator and widget tests
+for:
+
+- byte-identical repeated exports;
+- recursive Quest-basis closure, bounded direct-history closure, truncation, and
+  orphan exclusion;
+- byte-exact ZIP64 local headers, central directory, footer and strict reopen;
+- stale-head, corrupted-object and resource-bound failures before publication;
+- bounded recursive fan-out and repeated full-verification work;
+- initial and racing no-clobber collisions, parent moves, link aliases and
+  moves underneath the Store;
+- cleanup-warning and publication-uncertain terminals;
+- exact DTO/head/project/output binding and serialized session behavior;
+- managed-only, game-independent UI with dirty/recovery/busy gates; and
+- proof that Store bytes, fixed head, current project path, game and saves are
+  unchanged.
+
+It also proves the closed V2 authority tuple, unchanged Store closure, strict
+rejection of every non-V2 tuple, exact reopen by the read-only inspector, and
+the same format-hard full-reopen work budget on producers and consumers even
+when their local Store limits differ. The companion import gate separately
+proves same-handle archive CAS, sealed streaming into retained no-clobber
+staging handles, fixed-head-last candidate verification, atomic
+absent-directory publication, and receipt-free
+uncertainty. The visible gate additionally proves V2-only UI wiring, sanitized
+inspection and terminal copy, dirty/busy lifecycle gates, cleanup-warning
+retention, and exact receipt-bound candidate adoption without displacing the
+current session on failure.
+
+## Import
 
 Status: implementation checkpoint, July 2026. This document defines the exact
 authority of the current managed revision-3 snapshot V2 inspection and
 destination materialization plus the visible receipt-bound Studio restore and
 session-adoption workflow.
 
-## Format boundary
+### Format boundary
 
 Snapshot V2 is the sole project backup/restore contract:
 `gore.managed-project-snapshot.v2`, schema `2`,
@@ -22,10 +196,10 @@ The visible workflow separately selects a destination and adopts only after an
 exact receipt-bound reopen. Neither layer makes the project build- or
 runtime-ready.
 
-See [Managed project snapshot export](studio-project-export.md) for the shared
+See [Managed project snapshot export](#export) for the shared
 closure, deterministic ZIP dialect, and export publication lifecycle.
 
-## Exact checkpoint authority
+### Exact checkpoint authority
 
 The inspection command accepts only one bounded source spelling. The source
 must be an absolute path to a `.goremod` file. A successful response is a sealed
@@ -102,7 +276,7 @@ adopted candidate stays current even if retiring the prior managed-R3 session
 reports a cleanup warning; native-import cleanup and prior-session cleanup are
 reported independently.
 
-## Platform boundary
+### Platform boundary
 
 Safe V2 inspection and destination materialization are currently implemented on
 Windows only.
@@ -123,7 +297,7 @@ snapshot boundary; hash bracketing alone is not treated as sufficient.
 This platform restriction applies to V2 inspection/import, not to the existing
 platform-specific safe publication paths of snapshot export.
 
-## Source and destination security model
+### Source and destination security model
 
 The V2 source is untrusted. Acceptance requires all of the following through the
 same retained Windows file handle:
@@ -182,7 +356,7 @@ revalidate the destination and rejects an alias or any other drift before
 adoption. Per-file oplocks or volume-journal accounting would be a separate,
 broader alias-linearization contract.
 
-## Closed limits
+### Closed limits
 
 The public bridge, native inspector, and native importer enforce these hard
 ceilings before a receipt can be accepted:
@@ -226,7 +400,7 @@ the fixed 17 MiB revision-3 format ceiling. A producer's or consumer's stricter
 local Store limits never lower this format charge, so an archive cannot become
 unreadable merely because it was exported under different conforming limits.
 
-## Stable failure semantics
+### Stable failure semantics
 
 Callers branch on the stable code, not on native error text:
 
@@ -265,24 +439,20 @@ Confirmed publication uses either no warning or
 and must never be retried or adopted automatically. These are successful wire
 terminals with `retry_safe: false`, not ordinary error responses.
 
-## Visible workflow and remaining recovery boundary
+### Remaining recovery boundary
 
-**Restore project backup** is visible from the Project menu in every managed-R3
-project state and on the no-project landing surface beside the classic
-standalone tools. Those tools own no project or session state. Unsaved visible
-managed-R3 editor drafts are confirmed before source selection. The whole
-dialog and candidate-adoption sequence occupies one global project-action lane,
-while native materialization additionally disables dialog close/back and
-duplicate submission. Read-only inspection can be cancelled safely; disposal
-invalidates late results.
+The classic standalone tools beside the landing-surface restore entry own no
+project or session state. The whole restore dialog and candidate-adoption
+sequence occupies one global project-action lane, while native
+materialization additionally disables dialog close/back and duplicate
+submission; read-only inspection disposal invalidates late results.
 
-Publication uncertainty and importer-owned staging cleanup still need a future
-deliberate inspection/recovery surface rather than path guessing. The current
-UI truthfully names the attempted destination, opens nothing, and forbids an
-automatic retry. It does not claim to clean or classify an uncertain final
-path.
+Publication uncertainty and importer-owned staging cleanup still need a
+future deliberate inspection/recovery surface rather than path guessing. The
+current UI truthfully names the attempted destination, opens nothing, and
+forbids an automatic retry. It does not claim to clean or classify an
+uncertain final path.
 
-The current operation preserves project identity and revision: it is Restore /
-Relocate, not Clone or Save As. Clone/fork identity policy remains separate.
-The landed workflow grants no Clone/Save As product claim, build, deployment,
-save/game mutation, or runtime claim.
+Clone/fork identity policy remains separate. The landed workflow grants no
+Clone/Save As product claim, build, deployment, save/game mutation, or
+runtime claim.

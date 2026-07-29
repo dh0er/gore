@@ -1,4 +1,11 @@
-# AngelScript NPC authoring
+# Mod Studio NPC and quest authoring internals
+
+This page records implementation contracts, invariants, retained proof, and
+native transaction behavior for Mod Studio's NPC and quest authoring. It is
+not instructions: the user-facing workflows live in
+[Mod Studio](../guide/mod-studio.md).
+
+## NPC authoring
 
 A candidate logical NPC identity can be expressed as a linked AngelScript class
 chain that leaves archetype and visual/actor defaults inherited from an existing
@@ -7,7 +14,7 @@ offline. Runtime class residence, effective visuals, spawning, independent
 dialog/quest state, persistence, and save behavior remain separate
 qualification steps.
 
-## Offline-proven logical clone
+### Offline-proven logical clone
 
 The bounded `NpcLogicalCloneV1` probe adds exactly one module with three new
 Asghan-derived classes:
@@ -76,7 +83,7 @@ record, compiler lock/journal/backup, loose script, development cache, probe
 UE4SS component, game/compiler process, or spawn edit remained. The probe did
 not start a playable session or perform a save operation.
 
-## What this changes
+### What this changes
 
 Cooked DataAsset creation is not proven to be a universal prerequisite for a
 new **logical** NPC identity. At the class/default level, the current chain
@@ -90,7 +97,7 @@ placed world actors, or another registry/package shape that the chosen content
 path actually uses. The offline class proof does not show that the game accepts
 or spawns the logical clone.
 
-## Remaining runtime gates
+### Remaining runtime gates
 
 The proof does not yet establish:
 
@@ -115,7 +122,7 @@ The next qualification order is:
 A second call to a vanilla spawn definition only creates another body sharing
 the vanilla identity; it is not a substitute for this new linked class chain.
 
-## Mod Studio boundary
+### Mod Studio boundary
 
 The closed Story/NPC authoring registry currently accepts exactly two reviewed
 Steam generation triples: the retained V1 seal set and Steam build `24169431`.
@@ -124,14 +131,6 @@ all match the same registered row; nearby hashes and cross-generation mixtures
 fail closed. This is hotfix support, not a promise that future or non-Steam
 builds are compatible without their own reviewed row.
 
-Managed revision-3 Home now provides the first Guided NPC Draft wizard. The
-author supplies only a display name and selects a qualified vanilla archetype
-through the searchable picker. The wizard rebuilds and joins the Story and broad
-NPC catalogs when it opens and refreshes them again immediately before
-publication. Entity IDs, module namespace, source path, generated class names,
-and unique runtime identity are derived from the exact project checkpoint and
-remain hidden in normal mode.
-
 Publication is bound to the exact project root, project ID, revision, and head.
 A changed checkpoint or a session that requires reopen locks the wizard rather
 than applying stale intent. On success the managed session publishes the
@@ -139,36 +138,7 @@ NPC/`ScriptModule` pair through guarded fixed-head byte CAS, fully reopens the
 published checkpoint, and refreshes the visible project revision and content
 library.
 
-The normal managed-R3 create routes now continue from that publication instead
-of leaving the author on the page that launched the wizard. Studio first
-rebinds the fully reopened root, project ID, revision, and canonical head, then
-mounts **Story**, selects the exact new NPC, and opens its existing **Dialog &
-Voice** greeting surface. Cancel publishes nothing and stays on the original
-page; project switches, head drift, or reopen-required state stop the handoff
-without selecting a same-ID entity from another checkpoint. The same
-continuation is used by the project Create command, Story creation, and the
-Base-game/search starters.
-
-All visible wizard, validation, picker, safety, and discard copy is injected;
-English and German production copy are complete. Its archetype row and dialog
-remain scrollable at 360 logical pixels and 200% text scaling. The selected
-NPC's Profile also offers one direct next step into the same owned **Dialog &
-Voice** panel. This is navigation and authoring UX only: it adds no second
-editor, mutation, compiler, spawn, build, deployment, game-write, or runtime
-authority.
-
-### Guided Character + first greeting Draft V1
-
-The recommended managed-R3 creation path is **Character + first greeting**.
-It composes the existing NPC Draft wizard and the existing NPC greeting-line
-authoring form without pretending that their two publications are atomic. Step
-1 publishes the project-only NPC/`ScriptModule` pair from revision N to N+1.
-Studio then fully reopens and verifies that exact root, project ID, revision,
-and canonical head, resolves the exact new NPC, and requires its intact greeting
-projection to still be empty before opening step 2. Saving step 2 creates one
-project-owned localized `DialogLine`, backed by newly authored text or one exact
-eligible managed localization, optionally creates one empty locale `VoiceSlot`,
-and inserts that line at greeting index zero from N+1 to N+2.
+#### Guided Character + first greeting Draft V1
 
 Both successful handoffs bind the returned publication to the exact reopened
 checkpoint and require one-revision, new-head progression. Completion opens the
@@ -176,26 +146,7 @@ exact NPC's **Story -> Dialog & Voice** surface at N+2 with the created line
 selected. The recipe is single-flight. Head or project drift locks it, and an
 uncertain publication requires reopening instead of an automatic retry.
 
-Cancellation before step 1 publishes nothing. If step 2 is cancelled or fails
-without an uncertain publication, the NPC-only N+1 result deliberately remains
-saved; Studio opens that exact NPC's empty **Dialog & Voice** surface so the
-author can continue later. There is no hidden rollback and no claim that both
-steps form one transaction.
-
-This recipe creates Draft authoring metadata only. It creates no AngelScript
-topic, player choice, condition, effect, Quest relationship, playable
-conversation, runtime NPC binding, spawn, production build, or deployment. It
-writes neither the game installation nor a save and does not make the NPC
-playable or runtime-qualified.
-
-This is deliberately a logical-clone **Draft** only. The wizard does not compile,
-build, deploy, spawn, write game files, change a save, or claim gameplay
-behavior. Visuals, faction, stats, inventory, routine, dialog, quests, and world
-placement are not authored by this step. The result remains build-blocked,
-runtime-unqualified, and not spawned; the UI must not describe it as a working
-new NPC.
-
-## Native read-only archetype catalog
+### Native read-only archetype catalog
 
 The native command
 `authoring_npc_archetype_catalog_v1_build_for_game_root` accepts exactly
@@ -216,7 +167,7 @@ revalidated around catalog serialization and bounded response construction.
 Errors never include native paths. The command performs no filesystem writes,
 game launch, build, deploy, publication, or runtime qualification.
 
-## Native revision-3 Draft transaction
+### Native revision-3 Draft transaction
 
 The revision-3 core now has a filesystem-free atomic transaction for one NPC
 Draft plus its owned deterministic `ScriptModule`. The closed request binds the
@@ -266,50 +217,7 @@ discovery, spawn support, or runtime qualification. The retained live FFI test
 remains environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI
 fixtures do not substitute for that pinned-game proof.
 
-## Mod Studio Story Workbench V1
-
-Selecting an exact-current managed `NpcDraft` in **Content → This mod** now
-opens one responsive workbench. Entity areas at least 900 logical pixels wide
-and 430 logical pixels high keep the content list and detail side by side;
-falling below either bound opens the same detail in a scrollable 78%-height
-sheet. Its tabs are **Profile**, **Story**, **Routine**, **Inventory**, **Dialog
-& Voice**,
-**References**, and **Problems & Checks**.
-
-Only authority that already exists is connected. **Profile** shows the friendly
-display name and exposes the bounded **Edit name & archetype** action described
-below; **Problems & Checks** owns the separate exact-current profile/source
-inspection. The Story, Routine, and Inventory tabs explicitly say that those
-relationships are not yet modeled for NPC Drafts. Dialog & Voice now owns the
-bounded greeting-line metadata workflow described below; it does not stage a
-topic or generate playable runtime source. References shows current-index
-outgoing entity/asset links and derived same-project incoming links. Its problem
-count means unresolved projected references only, not build, spawn, runtime, or
-save readiness. The workbench therefore shows **Draft only**, **Build blocked**,
-and **Runtime not verified** as three separate states.
-
-The selected NPC and its last supported tab survive an exact same-project
-revision refresh only while the entity still exists. Switching projects clears
-them, and removal of the entity removes its remembered tab state. The workbench
-itself adds no authority beyond the explicitly bounded actions below.
-
-## Managed revision-3 existing-NPC profile edit V1
-
-The direct **Edit name & archetype** dialog edits exactly two author-facing
-concepts for one exact-current managed `NpcDraft`:
-
-- `Entity.display_name`, shown as the friendly character name; and
-- one curated archetype selection whose meaning is the complete persisted
-  parent-provenance triple for `CharacterDefinition`, `AIAgentConfig`, and
-  `SpawnAIAgentDefinition`.
-
-The normal form never exposes or edits the NPC/entity ID, ScriptModule ID,
-`UniqueName`, module namespace/path, generator/owner/origin identities, or raw
-parent class names. Visuals, stats, faction, inventory, routine, AI, general
-conversation/Quest links, placement, and spawn remain separate unmodeled
-fields. Existing greeting bindings are preserved exactly by both name-only and
-archetype edits. Closing or navigating back with unsaved changes requires an explicit
-discard decision.
+### Managed revision-3 existing-NPC profile edit V1
 
 Studio loads an exact NPC/module seed and a fresh sealed Story+NPC catalog when
 the dialog opens, and refreshes that catalog immediately before save. Native
@@ -344,19 +252,7 @@ game or save mutation, class residence/discovery, spawn, runtime behavior, or
 qualification. A successful project edit therefore needs no game test and does
 not make the NPC playable.
 
-## Managed revision-3 NPC greeting lines V1
-
-The selected NPC's **Dialog & Voice** tab now exposes one responsive,
-plain-language greeting-line editor. It shows the authored order, friendly line
-and speaker labels, language coverage, exact lazy text previews, and Voice
-slot/take/selection coverage without rendering entity IDs, LocIDs, hashes, or
-paths. Authors can attach an existing intact project DialogLine, reorder or
-detach bindings, create a DialogLine plus localization and optional empty Voice
-slot atomically at the selected position, and open that exact line/language in
-the existing Localization & Voice workspace. The panel remains usable at 360
-logical pixels and 200% text scaling; its chrome and content scroll
-independently, mutations are single-flight, and stale/reopen-required authority
-fails closed.
+### Managed revision-3 NPC greeting lines V1
 
 `NpcDraft.greetings` is optional authoring metadata outside the deterministic
 NPC generator input. Empty greeting lists omit it. Nonempty lists contain at
@@ -384,20 +280,9 @@ registration, build output, deployment, or playable conversation. It writes
 only the managed project and does not touch the game installation or a save.
 Those runtime and lowering mechanisms remain separate research gates.
 
-## Managed revision-3 NPC Draft removal V1
+### Managed revision-3 NPC Draft removal V1
 
-The selected exact-current `NpcDraft` now exposes **Remove Draft...** directly
-from the responsive Workbench, including its compact details sheet. Studio
-derives the bound generated `ScriptModule` from the exact current content index
-and scans every projected reference before enabling confirmation. A local
-backlink, kind mismatch, unresolved or qualified ownership edge, or second
-owner blocks removal and can navigate to the exact source entity. A foreign-
-project reference that merely reuses the same 128-bit ID is not treated as a
-local backlink.
-
-Confirmation names the NPC and generated module, states that V1 has no undo,
-and explicitly leaves the game installation and saves unchanged. The pure
-`apply_revision3_story_draft_removal_transaction_v1` independently regenerates
+The pure `apply_revision3_story_draft_removal_transaction_v1` independently regenerates
 the NPC module, proves its generator/origin/payload owner and exact three-edge
 closure, advances the project once, removes exactly those two entities, and
 preserves every other entity plus the complete AssetStore. The strict
@@ -413,7 +298,7 @@ compiler/build/deploy work, game or save access, spawn change, or runtime
 qualification. Shared undo/history, restore, and general project deletion are
 still separate missing project fundamentals.
 
-## Managed source/readiness profile
+### Managed source/readiness profile
 
 `build_revision3_npc_source_inspection_plan_v1` is the pure, read-only native
 foundation for the existing-NPC profile. It
@@ -436,15 +321,6 @@ serialized exact-read lane and checks the published head on both sides.
 Local/content errors are retryable only while that head remains exact; Store or
 response integrity uncertainty requires reopen.
 
-For an already-authored managed NPC Draft, Mod Studio exposes the result from
-the workbench's **Profile** or **Problems & Checks** tab through **Open profile
-& compiler checks**. The normal view shows saved-source, persisted-parent, and
-exact-project checks plus the four remaining blockers. Advanced disclosure
-shows the generated AngelScript, module and entity IDs, parent classes, runtime
-name, and seals. The inspection works without a configured game installation
-because it verifies only persisted project evidence; it does not freshly
-qualify those parents against installed game files.
-
 The plan reports `compiler_status: not_run`, `build_status: blocked`,
 `runtime_qualification: runtime_unqualified`, and unsupported spawn/publication
 with four fixed readiness-blocker diagnostics. The outer result is likewise
@@ -455,7 +331,7 @@ route has no compiler, build, spawn, deployment, mutation, or publication entry
 point. Successful source regeneration is therefore not evidence of class
 residence, discovery, spawning, distinct runtime state, or save safety.
 
-## Exact-current compiler check
+### Exact-current compiler check
 
 When a configured installation is available, the opened **Profile & checks**
 dialog offers a separate evidence-only compiler action. The app submits
@@ -487,3 +363,57 @@ This closes only the selected generated-source compiler check. It still grants
 no production build, cache adoption, deployment, class residence, spawn,
 runtime, publication, or save authority. The remaining production, residence,
 and spawn blockers stay visible after compiler acceptance.
+
+## Quest authoring
+
+Quest authoring is a greenfield Revision-3 workflow. The only persisted
+generator contract is version 4.
+
+### Current model
+
+A Quest consists of one `quest_draft` entity and one generated
+`script_module` entity. Both entities use:
+
+- generator ID `gore-authoring.draft-quest-skeleton`
+- generator version `4`
+- an exact owner/reference pair
+- revisions that advance together for Quest edits
+
+The Quest input contains the runtime identity, resolved parent and giver,
+localized text literals, objective titles, collision-catalog evidence, and a
+required `transition_plan`.
+
+The transition plan owns stable positive objective slots. Slot `1` is always
+present, active slots are strictly ascending, the visible objective order is a
+complete permutation of those slots, and `next_slot_ordinal` never reuses a
+slot. New Quests receive the canonical default plan for their objective count.
+
+### Publication contract
+
+All edits use the managed project transaction lane:
+
+1. Read an exact-current private seed where the editor needs one.
+2. Build a bounded request carrying the expected head and entity revisions.
+3. Prepare one unpublished native candidate.
+4. Verify that only the permitted Quest/module delta occurred.
+5. Publish with compare-and-swap and fully reopen the resulting checkpoint.
+
+Head conflicts never overwrite a winner. Integrity uncertainty marks the
+session as requiring reopen. Correctable semantic conflicts remain retryable.
+
+### Runtime boundary
+
+Mod Studio can author, persist, inspect, and prepare generator-version-4 Quest
+content. Runtime qualification and game installation remain explicit status
+claims; the editor never presents an offline draft as proven playable. The
+managed compiler and runtime validation work must succeed before publication to
+the game can be claimed.
+
+### Invariants for new work
+
+- Add functionality to the single Revision-3/version-4 path.
+- Keep the transition plan required in every persisted Quest.
+- Preserve stable objective slots across outline, behavior, and transcript
+  edits.
+- Keep generated module source and seals derived from the exact Quest input.
+- Do not add alternate readers or duplicate editor APIs.

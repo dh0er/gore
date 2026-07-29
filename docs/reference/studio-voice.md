@@ -1,4 +1,9 @@
-# Managed revision-3 Voice authoring
+# Mod Studio voice authoring internals
+
+This page records the implementation contracts, invariants, and native
+transaction behavior behind Mod Studio's managed revision-3 Voice authoring.
+It is not instructions: each section records the binding contract of a
+workflow surface described in [Mod Studio](../guide/mod-studio.md).
 
 GORE Mod Studio has a bounded managed revision-3 workflow for importing Voice
 takes, resolving their exact installed archive targets, and building an
@@ -10,102 +15,7 @@ The older Voice browser and replacement UI may supply standalone browsing and
 preview tools while those jobs are rehosted. It is not another project path:
 all authored Voice state belongs to the managed-R3 project.
 
-## Visible Studio workflow
-
-With a managed revision-3 project open, **Localization & Voice** is a direct
-production workspace rather than a capability-card landing page. It opens on a
-bounded **Work list** and keeps a **Project texts** switch beside it. The two
-views share the existing project-text, guided-line, and Voice actions instead
-of creating another authoring backend. Text/line and take-selection flows are
-project-only. Import and installed-target resolution additionally need a
-Gothic 1 Remake installation configured in Settings. Bundle construction
-remains a separate **Build & Release** action and needs that installation too.
-
-1. **Work list** derives the next evidence-backed production decision for
-   missing project languages and existing Voice slots. Its exact limits are
-   described below.
-2. **Project texts** searches exact project-owned localization entries and opens
-   their complete multilingual text maps inline. Its bounded edit contract is
-   described below.
-3. The **guided dialog-line V1** flow lets a fresh project create the minimum
-   managed line/localization structure needed by the Voice tools. Its narrow
-   contract and limits are described below.
-4. **Plan recording** explicitly adds one empty unresolved Voice setup for an
-   existing dialog line and language that already has nonblank project text.
-   This records production intent and adds the line to the Work list without
-   importing audio or requiring a configured game installation.
-5. **Add Voice take** imports one real local Ogg for an existing dialog line and
-   locale. The search-first wizard hides technical identities, retains
-   alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
-   only an Approved take become selected.
-6. **Import recording folder** reviews and atomically imports up to 256 direct
-   `<LocID>.ogg` children for one canonical locale. It is the bounded production
-   path described below, not a recursive or partial file importer.
-7. **Manage Voice takes** searches existing dialog lines, lets the author move
-   a retained take through Draft/Recorded/Reviewed/Approved, and selects one
-   Approved candidate for an existing locale slot or explicitly clears the
-   current selection. The same dialog can remove one take from that exact
-   line/language. If it was selected, removal clears the selection atomically;
-   a take shared by another slot remains there. Status and selection are
-   separate saved changes. No operation rewrites or physically deletes media,
-   and the workflow needs no game path.
-8. **Resolve Voice target** inspects the exact installed locale archive for one
-   existing structurally intact Voice slot. It records zero, one, or multiple
-   matching members as unresolved, resolved, or ambiguous. It never chooses an
-   ambiguous match implicitly.
-9. Under **Build & Release**, **Build Voice bundle** evaluates every current
-   Voice slot and either shows all structured blockers without creating output,
-   or writes one sealed voice-only bundle into a brand-new folder selected by
-   the author. This is an offline build; the dialog has no deployment action.
-
-All authoring actions reload or bind the exact current project checkpoint. A
-stale dialog, changed project identity, changed canonical head, or session
-requiring reopen fails closed. After a successful authoring publication, Home
-refreshes to the new managed project revision and head.
-
-The normal UI never asks for entity IDs, archive paths, member names, hashes,
-CAS paths, or bundle internals. A full Voice slot remains eligible for target
-resolution even though its candidate-capacity limit correctly prevents adding
-another take.
-
 ## Voice production Work list V1
-
-The default **Work list** is a bounded projection over the exact project
-localization and Voice catalogs. It creates only two kinds of rows:
-
-- **Language not added** means one project authoring locale is absent from one
-  safely editable project-owned `LocalizationEntry`. It does not claim that an
-  existing translation is blank, wrong, or low quality because the catalog
-  does not contain evidence for those judgments.
-- **Voice production** means one intact, already-existing `VoiceSlot` for an
-  exact `DialogLine` and locale. The list never invents a missing-recording row
-  merely because a line has no `VoiceSlot`; absence of a slot is not recorded
-  authoring intent. An author can now record that intent explicitly through
-  **Plan recording**; only the resulting exact empty slot creates the row.
-
-For an existing slot, one pure rule selects exactly one next step in this
-precedence:
-
-1. zero candidate takes → **Add a recording**;
-2. candidates but no Approved take → **Review and approve a recording**;
-3. an Approved take exists but the selection is absent, invalid, or not
-   Approved → **Choose an approved recording**;
-4. an Approved take is selected but its target is unresolved or ambiguous →
-   **Resolve the Voice target**; and
-5. an Approved take is selected and its target is resolved → **Production
-   decisions complete**.
-
-Draft or Recorded alternatives remain visible as optional review backlog, but
-they do not regress a slot whose approved selection and target are already set.
-The final label deliberately does **not** mean Ready, buildable, deployed,
-audible, runtime-qualified, or project-wide valid. Its action opens **Validate
-& Test** so the separately bounded checks can be reviewed.
-
-Every actionable row reuses an existing exact workflow. **Add language** opens
-the matching project text and prefills the locale dialog; recording rows open
-the exact line/locale in Add take, Manage takes, or Resolve target. The Work
-list does not publish its own mutation format, choose a take, approve audio, or
-resolve a target implicitly.
 
 The projection retains at most 500 rows in the normal workspace, prioritizes
 actionable work before completed decisions, reports the exact omitted count,
@@ -123,14 +33,6 @@ an old row. Mutations are globally single-flight and expose a visible disabled
 reason while another action is unresolved.
 
 ## Project-text editor V1
-
-The managed workspace discovers only intact project-owned
-`LocalizationEntry` entities with `origin.type == new`. A friendly opaque list
-key keeps entity IDs and LocIDs out of normal presentation. Selecting a row
-performs a separate exact-current Store read and returns the complete bounded
-text for every locale, not the older 512-byte reuse preview. Shared
-`DialogLine` backlinks and speaker labels are shown so the author can see the
-scope of a text change before saving.
 
 One save replaces the complete locale/text map for that exact entry. The edit
 is bound to the fixed head, project identity/revision/target, entity identity
@@ -160,14 +62,6 @@ translation production, provenance/rebase, vanilla adoption, or a complete
 conversation graph editor.
 
 ## Fresh-project dialog-line prerequisite V1
-
-The guided V1 flow can create one new project-owned `LocalizationEntry` and one
-new `DialogLine`, with an optional empty unresolved `VoiceSlot` for one locale.
-Alternatively, it can bind the new line to one exact existing, currently unused
-managed `LocalizationEntry`. Reuse is tied to the exact entity ID, entity
-revision, localization identity, project revision, target, and fixed head; the
-existing localization is preserved byte-for-byte. This is deliberately a
-small prerequisite flow, not a complete dialog or localization editor.
 
 Before exact reuse can be saved, Studio reads only that exact current managed
 localization through a separate read-only Store route. The route fully reopens
@@ -205,15 +99,6 @@ effects, game registration, or playable conversation.
 
 ## Existing-line recording intent V1
 
-For an exact selected project `DialogLine` and canonical locale with nonblank
-localized text but no existing Voice edge, the same **Voice production** card
-offers **Plan recording** beside the existing direct **Add take** action. The
-action creates no recording. It adds exactly one generated, unresolved, empty,
-unselected `VoiceSlot`, binds it to that line/locale, increments only the line
-and project revisions, and then reloads the same line and language. The Work
-list can consequently show **Add a recording** from recorded project intent
-instead of guessing from every untranslated or unvoiced line.
-
 The pure native transaction is bound to the exact head, project identity,
 revision and target, line identity/revision, localization identity and LocID,
 locale, and a deterministic collision-probed slot identity. It rejects an
@@ -238,12 +123,6 @@ authority, and it does not claim the dialog is playable.
 
 ## Exact take import and Ogg safety
 
-Take import operates only on an existing exact-project `DialogLine` and its
-existing `LocalizationEntry`. It creates a locale `VoiceSlot` when necessary,
-or appends a new `VoiceTake` to the exact existing slot. It preserves dialog
-text, keeps alternate candidates, and changes the selection only when the new
-take is Approved and any replacement was explicitly confirmed.
-
 Native code performs semantic and capacity preflight before creating any Ogg
 CAS object. It then performs two complete bounded, non-publishing preparations
 of the source file. Only identical bytes and metadata allow the first accepted
@@ -258,20 +137,6 @@ Opus take produces an explicit `selected_take_codec_unqualified` build blocker
 instead of guessing compatibility.
 
 ## Atomic Voice folder import V1
-
-**Import recording folder** accepts one author-selected folder and one
-canonical locale. V1 scans direct children only, ignores non-Ogg children, and
-includes every case-insensitive `.ogg` name in the review. At most 256 Ogg
-entries are accepted. Each filename must have the exact `<LocID>.ogg` shape and
-resolve unambiguously to one intact project-owned dialog line/localization and
-that canonical locale; subfolders are never traversed.
-
-The plan is strictly all-or-nothing. Every included Ogg must be `ready` or
-`already_present`, and at least one must be `ready`, before import can start.
-There is no partial-success or override mode. An Ogg whose digest already exists
-in that exact line/locale slot is a read-only no-op. Every new take is created as
-`Recorded` and is never selected automatically, so approval and selection stay
-separate author decisions.
 
 Native code binds the source folder to retained no-follow directory identities,
 reads only direct regular members, detects unsafe aliases and source changes,
@@ -297,15 +162,6 @@ commands/codes, CAS paths, or raw native failures.
 
 ## Existing take review status
 
-The status shown beside each retained take is an author-managed workflow label,
-not evidence that the audio sounds correct or works in game. **Manage Voice
-takes** can change exactly one take between Draft, Recorded, Reviewed, and
-Approved. A newly Approved take becomes selectable immediately without closing
-and reopening the dialog. A selected take may only be changed to Approved; the
-author must first save an explicit selection change or clear before assigning
-any other status. This also safely repairs historical selected takes whose
-stored status was not Approved.
-
 The status transaction binds the exact head, project/target, dialog line and
 localization identity, locale, uniquely owned slot and unchanged slot revision,
 take identity/revision, and expected old status. Only the project revision, the
@@ -324,14 +180,6 @@ game installation nor a save, accepts no source path, creates no build output,
 and grants no media-quality, build, deployment, or runtime authority.
 
 ## Existing take selection
-
-Take selection is a project-only transaction over one exact existing
-`DialogLine`, locale, and uniquely owned `VoiceSlot`. The friendly dialog shows
-candidates in their authored order, distinguishes duplicate display names,
-marks the current choice, and disables non-Approved candidates. It never
-chooses the first take implicitly. Saving is available only for a real change;
-clearing an existing choice is explicit and warns that Voice bundle builds will
-remain blocked until another Approved take is selected.
 
 The native transaction binds the exact head, project, target, slot revision,
 localization identity, and expected current selection. Selecting requires an
@@ -355,13 +203,6 @@ publication `not_supported`; readiness is always re-derived later by the
 sealed build planner from the complete exact-current Voice graph.
 
 ## Remove a take from one line/language
-
-**Manage Voice takes** can remove one exact candidate from one exact
-`DialogLine`/locale slot. The confirmation names the take, line, and language.
-When the take is the active selection, the same transaction clears that
-selection and never guesses a replacement. The slot itself remains, including
-when its candidate list becomes empty, so target evidence and the line/locale
-relationship are not silently discarded.
 
 One `VoiceTake` may be shared by more than one slot. The transaction therefore
 removes only the requested slot edge. It retains a shared take byte-for-byte;
@@ -463,13 +304,6 @@ confirmed.
 
 ## Line-centered Studio workflow
 
-The direct **Localization & Voice** workspace now carries the author's visible
-dialog-line and language selection into **Add voice take**, **Manage takes**,
-and **Resolve target**. Shared text therefore requires an explicit line choice,
-while the receiving workflow rechecks that hidden identity against its fresh
-exact-current content catalog. Authors no longer need to repeat the same global
-line search in each dialog, and no technical entity ID or LocID is rendered.
-
 Before import, the take dialog can open the currently selected regular local
 `.ogg` file in the operating-system player. This is only an author preview of
 the still-local source path. It neither reads a managed CAS path nor changes
@@ -509,14 +343,6 @@ Store/head/receipt uncertainty instead requires a verified project reopen.
 Successful desktop playback does not qualify audible in-game behavior.
 
 ### Exact managed-take media QA V1
-
-The native core and FFI now also provide a separate on-demand, read-only media
-inspection for one exact-current managed take. It reuses the complete line ->
-localization -> locale slot -> take -> sealed asset binding, reads no caller-
-supplied media path, and reopens and rebinds the Store after deriving the
-result. The second pass rereads the selected CAS bytes and repeats media
-inspection, so head drift, graph drift, and same-path asset replacement fail
-closed.
 
 The pathless result reports codec metadata plus an integer duration as
 `sample_frames / timebase_hz`. For Vorbis, a complete packet-by-packet PCM decode
@@ -566,38 +392,3 @@ inspection of that output without claiming that the managed project changed.
 Every integer and response crossing the Dart boundary is bounded and checked
 against the expected project/head identity and the exact build-ready or blocked
 state derived from its caller-bound project graph.
-
-## Deliberate remaining boundaries
-
-The managed-R3 workflow still does not provide:
-
-- managed deployment, undeployment, load-order integration, or an isolated
-  playable test profile for the sealed bundle;
-- audible in-game qualification for the selected line, persistence, save/load,
-  or clean runtime removal;
-- explicit choice among ambiguous installed archive matches;
-- recording, trimming, normalization, transcoding, loudness comparison, actor
-  notes, or lineage. Exact managed-CAS take preview and the selected local
-  pre-import Ogg preview and on-demand exact media QA are integrated, but media
-  QA currently reports only duration and its codec-specific validation
-  assurance; none is an in-game proof;
-- recursive, partial, or multi-locale folder import, complete translation/Voice
-  coverage dashboards, CSV/XLIFF, or broader batch/team review queues. The
-  bounded Work list now covers only absent authoring locales and next decisions
-  for explicit, already-existing Voice slots; **Plan recording** can create one
-  such intent at a time but is not a coverage dashboard or batch planner;
-- qualified Opus output; or
-- new-member namespace/lookup proof or a sealed generation-bound path for
-  adopting vanilla dialog/localization identities;
-- topic registration, AngelScript generation, conditions/effects, or a
-  playable dialog path for a newly authored managed line; or
-- localization delete/clone, general line relinking/speaker/NPC relationships,
-  bulk language production, provenance/rebase workflows, or a complete
-  conversation graph editor. Empty generated line/locale slots can now be
-  created and removed safely, but this narrow pair is not a general
-  relationship editor.
-
-This closes the fresh-project project-local prerequisite, adds the first honest
-per-item production queue, and retains the managed existing-member target and
-offline build foundation. It does not complete the Voice production milestone,
-vanilla adoption, or any runtime dialog workflow.

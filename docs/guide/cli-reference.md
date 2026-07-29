@@ -14,6 +14,8 @@ gore --version
 | Command | Subcommands | Purpose | Guide |
 |---------|-------------|---------|-------|
 | `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. | [getting-started](getting-started.md#point-gore-at-the-game) |
+| `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
+| `guide` | `html` | Render this guide into one self-contained HTML file for offline reading. | [below](#guide) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, conflicts, composed deploy. | [mod-manager](mod-manager.md) |
@@ -193,6 +195,42 @@ fails closed.
 | `scaffold <MOD_NAME>` | `-o, --out <MODS_DIR>` |
 | `deploy-shared` | `--src <SRC>` · `--game <GAME>` |
 | `package <MOD_DIR>` | `-o, --out <ZIP>` |
+
+## `mcp`
+
+Serves the whole CLI to an AI assistant. See [MCP server](mcp.md) for client
+setup, the tool list, and how the guide is exposed.
+
+| Subcommand | Arguments and flags |
+|---|---|
+| `serve` | `--allow-write` · `--allow-game-launch` · `--timeout-secs <SECS>` · `--max-output-kib <KIB>` |
+| `tools` | — (prints the tool definitions as JSON and exits) |
+
+`serve` speaks JSON-RPC on stdin/stdout; it is not interactive. Without
+`--allow-write` every command that changes the installation or rewrites a file
+in place is refused, and `as compile` additionally needs `--allow-game-launch`.
+
+## `guide`
+
+The whole guide is compiled into `gore.exe`. `guide html` writes it out as a
+single browsable file — every page, its stylesheet and its script inlined, no
+external requests — so it can be opened by double-click from anywhere. Only the
+guide is rendered; the [reference](../reference/README.md) is embedded for the
+[MCP server](mcp.md) but is not part of the browsable document.
+
+| Subcommand | Arguments and flags |
+|---|---|
+| `html` | `-o, --out <PATH>` (default `guide.html`) · `--repo-ref <REF>` (default `main`) |
+
+```powershell
+gore guide html -o guide.html
+```
+
+The release zip already contains a rendered `docs\guide.html` beside the
+Markdown pages; regenerating is only needed after editing the guide yourself.
+`--repo-ref` pins the handful of links that leave the guide tree (component
+READMEs, crates) to a commit on GitHub; the release build passes the exact
+commit it was built from.
 
 ## Environment variables
 

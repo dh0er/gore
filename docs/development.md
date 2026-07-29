@@ -3,6 +3,9 @@
 How to build the CLI, the three Windows GUI apps, and how the repository is
 laid out.
 
+This page is for people working *on* GORE. If you only want to use it, you need
+nothing from here — start with [Getting started](guide/getting-started.md).
+
 ## Requirements
 
 - Windows 10 or newer.
@@ -40,20 +43,27 @@ python build.py <project> test       # run the project's test suite
 
 `python build.py all test` runs every project's suite — Rust `cargo test`,
 the Python tools, and Flutter `analyze` + `test`. CI runs the equivalent checks
-via [`apps/save-editor/test.py`](../../apps/save-editor/test.py) (invoked from
+via [`apps/save-editor/test.py`](../apps/save-editor/test.py) (invoked from
 that directory) plus the mod-studio and mod-manager `analyze` + `test` steps.
 
 Per-project build and run details live in each component's own README, e.g.
-[`apps/save-editor/README.md`](../../apps/save-editor/README.md).
+[`apps/save-editor/README.md`](../apps/save-editor/README.md).
 
-`python build.py gore-cli dist` also stages this guide into the CLI zip: every
-`docs/guide/*.md` is copied to `docs/` beside `gore.exe`, and links that leave
-the guide tree (component READMEs, crates, `docs/internal/`) are rewritten to
-absolute `github.com/dh0er/gore` URLs so they still work offline. Those URLs are
-pinned to the exact commit the zip was built from and use `/tree/` for
-directories and `/blob/` for files, so a shipped link keeps resolving to the
-tree it was written against. The staging is declared by the `doc_dirs` key in
+`python build.py gore-cli dist` also stages the user guide into the CLI zip:
+every `docs/guide/*.md` is copied to `docs/` beside `gore.exe`, and links that
+leave the guide tree (component READMEs, crates, `docs/reference/`) are rewritten
+to absolute `github.com/dh0er/gore` URLs so they still work offline. Those URLs
+are pinned to the exact commit the zip was built from and use `/tree/` for
+directories and `/blob/` for files, so a shipped link keeps resolving to the tree
+it was written against. The staging is declared by the `doc_dirs` key in
 `build.py` and runs in CI, which packages the release with the same command.
+
+The same step then runs `gore guide html` with the freshly built binary to write
+`docs/guide.html` into the zip — one self-contained browsable file, since Windows
+has no handler for `.md`. Only `docs/guide/` is shipped and rendered.
+`docs/reference/` and this page stay in the repository: `gore.exe` embeds the
+reference pages so the MCP server can serve them, but they are contracts rather
+than instructions and are not part of the user guide.
 
 ## Repository layout
 
@@ -63,6 +73,7 @@ gore/
 ├─ build.py                orchestrator: python build.py <project> build|run|dist|installer|test|release
 ├─ crates/
 │  ├─ gore/                THE unified CLI binary (gore.exe)
+│  ├─ gore-mcp/            MCP server (stdio JSON-RPC) + the embedded guide and reference
 │  ├─ gore-reflect/        UE reflection model + UE4SS SDK dump parser
 │  ├─ gore-catalog/        item/npc/knowledge catalog model + pipelines
 │  ├─ gore-loc/            AlkimiaLocalization .lcache crypto + game-dir discovery + shared paths
@@ -99,25 +110,26 @@ gore/
 
 | Crate | Kind | What it does |
 |-------|------|--------------|
-| [`gore`](../../crates/gore) | Rust CLI (`gore.exe`) | The unified binary — see the [CLI reference](cli-reference.md). |
-| [`gore-reflect`](../../crates/gore-reflect) | Rust lib | UE reflection model + UE4SS SDK dump parser. |
-| [`gore-catalog`](../../crates/gore-catalog) | Rust lib | Item/NPC/knowledge catalog model + generation pipelines. |
-| [`gore-loc`](../../crates/gore-loc) | Rust lib | AlkimiaLocalization `.lcache` crypto, game-dir discovery, shared paths. |
-| [`gore-modgen`](../../crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + field-level validation. |
-| [`gore-mod`](../../crates/gore-mod) | Rust lib | Unified bundle engine: `BuildSpec` → bundle (manifest + payloads) → deploy/undeploy. |
-| [`gore-fmod`](../../crates/gore-fmod) | Rust lib | FMOD `.bank` decrypt/parse + Vorbis decode (audio backend; pure Rust). |
-| [`gore-vo`](../../crates/gore-vo) | Rust lib | Safe voice ZIP indexing/extraction and verified copy-on-write Ogg add/replace. |
-| [`gore-asset`](../../crates/gore-asset) | Rust lib | USMAP flattening, bounded read-only complex-property spans, unversioned primitive codec, and verified `.uasset`/`.uexp` carrier. |
-| [`gore-tex`](../../crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](../../vendor/retoc) + `gore-oodle`. |
-| [`gore-authoring`](../../crates/gore-authoring) | Rust lib | Durable, deployment-independent authoring primitives for managed Mod Studio projects. |
-| [`gore-story-catalog`](../../crates/gore-story-catalog) | Rust lib | Strict, generation-sealed NPC and quest-parent catalogs (`story_catalog.v1`). |
-| [`gore-npc-catalog`](../../crates/gore-npc-catalog) | Rust lib | Generation-sealed NPC archetype catalogs and their structural linkage. |
-| [`gore-story-build`](../../crates/gore-story-build) | Rust lib | Deterministic, non-publishing build plans over revision-3 story content. |
-| [`gore-story-inventory`](../../crates/gore-story-inventory) | Rust lib | Sealed base-game AngelScript collision inventories bound to one game generation. |
-| [`gore-ffi`](../../crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for the GUI apps (`gore_ffi.dll`) over the full mod engine. |
-| [`gore-save`](../../crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
-| [`gore-oodle`](../../crates/gore-oodle) | Rust lib | Oodle/Kraken codec (pure Rust; no proprietary `oo2core` DLL). |
-| [`gore-as`](../../crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
+| [`gore`](../crates/gore) | Rust CLI (`gore.exe`) | The unified binary — see the [CLI reference](guide/cli-reference.md). |
+| [`gore-mcp`](../crates/gore-mcp) | Rust lib | Model Context Protocol server over stdio JSON-RPC, and the `include_str!`-embedded copy of `docs/guide/` + `docs/reference/`. See the [MCP server](guide/mcp.md) page. |
+| [`gore-reflect`](../crates/gore-reflect) | Rust lib | UE reflection model + UE4SS SDK dump parser. |
+| [`gore-catalog`](../crates/gore-catalog) | Rust lib | Item/NPC/knowledge catalog model + generation pipelines. |
+| [`gore-loc`](../crates/gore-loc) | Rust lib | AlkimiaLocalization `.lcache` crypto, game-dir discovery, shared paths. |
+| [`gore-modgen`](../crates/gore-modgen) | Rust lib | `overrides.toml` → UE4SS Lua mod generation + field-level validation. |
+| [`gore-mod`](../crates/gore-mod) | Rust lib | Unified bundle engine: `BuildSpec` → bundle (manifest + payloads) → deploy/undeploy. |
+| [`gore-fmod`](../crates/gore-fmod) | Rust lib | FMOD `.bank` decrypt/parse + Vorbis decode (audio backend; pure Rust). |
+| [`gore-vo`](../crates/gore-vo) | Rust lib | Safe voice ZIP indexing/extraction and verified copy-on-write Ogg add/replace. |
+| [`gore-asset`](../crates/gore-asset) | Rust lib | USMAP flattening, bounded read-only complex-property spans, unversioned primitive codec, and verified `.uasset`/`.uexp` carrier. |
+| [`gore-tex`](../crates/gore-tex) | Rust lib | IoStore texture extract/replace; cooks + packs a Zen triplet. Built on vendored [`retoc`](../vendor/retoc) + `gore-oodle`. |
+| [`gore-authoring`](../crates/gore-authoring) | Rust lib | Durable, deployment-independent authoring primitives for managed Mod Studio projects. |
+| [`gore-story-catalog`](../crates/gore-story-catalog) | Rust lib | Strict, generation-sealed NPC and quest-parent catalogs (`story_catalog.v1`). |
+| [`gore-npc-catalog`](../crates/gore-npc-catalog) | Rust lib | Generation-sealed NPC archetype catalogs and their structural linkage. |
+| [`gore-story-build`](../crates/gore-story-build) | Rust lib | Deterministic, non-publishing build plans over revision-3 story content. |
+| [`gore-story-inventory`](../crates/gore-story-inventory) | Rust lib | Sealed base-game AngelScript collision inventories bound to one game generation. |
+| [`gore-ffi`](../crates/gore-ffi) | Rust cdylib | `dart:ffi` bridge for the GUI apps (`gore_ffi.dll`) over the full mod engine. |
+| [`gore-save`](../crates/gore-save) | Rust lib + cdylib | GSAV savegame parse/edit core (`gore_save.dll`). |
+| [`gore-oodle`](../crates/gore-oodle) | Rust lib | Oodle/Kraken codec (pure Rust; no proprietary `oo2core` DLL). |
+| [`gore-as`](../crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
 The Flutter GUIs reuse the exact same Rust crates as the CLI through the
 `dart:ffi` bridge, so the CLI is always the most complete surface.

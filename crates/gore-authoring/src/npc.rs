@@ -1,6 +1,6 @@
 //! Offline-only source generation for the three-class logical NPC clone proven in
-//! `docs/guide/studio-npc.md`. This module deliberately has no compiler, package, filesystem, game,
-//! spawn, dialog, quest, or save integration.
+//! `docs/reference/studio-authoring.md`. This module deliberately has no compiler, package,
+//! filesystem, game, spawn, dialog, quest, or save integration.
 
 use std::fmt;
 
