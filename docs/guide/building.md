@@ -49,9 +49,11 @@ Per-project build and run details live in each component's own README, e.g.
 `python build.py gore-cli dist` also stages this guide into the CLI zip: every
 `docs/guide/*.md` is copied to `docs/` beside `gore.exe`, and links that leave
 the guide tree (component READMEs, crates, `docs/internal/`) are rewritten to
-absolute `github.com/dh0er/gore` URLs so they still work offline. That staging
-is declared by the `doc_dirs` key in `build.py` and runs in CI, which packages
-the release with the same command.
+absolute `github.com/dh0er/gore` URLs so they still work offline. Those URLs are
+pinned to the exact commit the zip was built from and use `/tree/` for
+directories and `/blob/` for files, so a shipped link keeps resolving to the
+tree it was written against. The staging is declared by the `doc_dirs` key in
+`build.py` and runs in CI, which packages the release with the same command.
 
 ## Repository layout
 

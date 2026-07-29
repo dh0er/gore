@@ -342,14 +342,37 @@ def pdir(project: str) -> Path:
 # Base for links the shipped guide inherits from the repo. A guide page links to
 # component READMEs, crates and the internal docs with `../…`; inside a release
 # zip those targets do not exist, so they are rewritten to absolute GitHub URLs.
-REPO_BLOB_BASE = "https://github.com/dh0er/gore/blob/main"
+# GitHub serves files under /blob/ and directories under /tree/ — it redirects
+# between the two, but emit the right one so the packaged links resolve in one
+# hop and do not depend on that redirect.
+REPO_WEB_BASE = "https://github.com/dh0er/gore"
+
+
+def repo_ref() -> str:
+    """The commit the docs are staged from, for pinning outbound links.
+
+    A branch name would rot: a link is only valid for the tree the guide was
+    built from, and a release zip outlives whatever `main` looks like later.
+    Falls back to `main` outside a git checkout.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "main"
+    return out.stdout.strip() or "main"
 
 # Any Markdown link whose target starts with `../` — one or more levels up.
 _OUTBOUND_LINK_RE = re.compile(r"\]\((\.\./[^)#]*?)(#[^)]*)?\)")
 
 
 def rewrite_outbound_links(
-    text: str, page_dir: str, base: str = REPO_BLOB_BASE
+    text: str, page_dir: str, ref: str, base: str = REPO_WEB_BASE
 ) -> str:
     """Point Markdown links that escape the doc tree at GitHub.
 
@@ -361,7 +384,8 @@ def rewrite_outbound_links(
 
     def repoint(m: re.Match) -> str:
         target = posixpath.normpath(posixpath.join(page_dir, m.group(1)))
-        return f"]({base}/{target}{m.group(2) or ''})"
+        route = "tree" if (ROOT / target).is_dir() else "blob"
+        return f"]({base}/{route}/{ref}/{target}{m.group(2) or ''})"
 
     return _OUTBOUND_LINK_RE.sub(repoint, text)
 
@@ -373,17 +397,18 @@ def stage_docs(src_dir: Path, dest_dir: Path) -> int:
     else in the doc tree stays in the repo.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
+    ref = repo_ref()
+    src_from_root = Path(os.path.relpath(src_dir.resolve(), ROOT)).as_posix()
     count = 0
     for md in sorted(src_dir.rglob("*.md")):
         rel = md.relative_to(src_dir)
         target = dest_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        src_from_root = Path(os.path.relpath(src_dir.resolve(), ROOT)).as_posix()
         page_dir = posixpath.normpath(
             posixpath.join(src_from_root, rel.parent.as_posix())
         )
         target.write_text(
-            rewrite_outbound_links(md.read_text(encoding="utf-8"), page_dir),
+            rewrite_outbound_links(md.read_text(encoding="utf-8"), page_dir, ref),
             encoding="utf-8",
             newline="\n",
         )
