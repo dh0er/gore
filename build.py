@@ -25,15 +25,17 @@ Release steps (additive; pass at least one, or --all):
     --all         = --bump --changelog --tag --push (CI builds remotely)
     --dry-run     print every action, change nothing
 
-Tags are per-project prefixed: gore-save-vX.Y.Z, gore-mod-vX.Y.Z,
-gore-manager-vX.Y.Z, gore-cli-vX.Y.Z (the gore CLI keeps the gore-cli- tag
-prefix). The Release workflow matches the prefix and builds only that project.
+Project names are the whole naming scheme. A project is its tag prefix and its
+artifact name: gore-cli, gore-save-editor, gore-mod-studio, gore-mod-manager
+produce tags <project>-vX.Y.Z, zips <project>-X.Y.Z-windows-x64.zip and
+installers <project>-X.Y.Z-setup.exe. The Release workflow matches the tag
+prefix and builds only that project.
 
 Examples:
     python build.py all test
-    python build.py gore-save dist
-    python build.py gore release 0.2.0 --all
-    python build.py gore-mod release 0.1.0 --bump --build --installer  # local only
+    python build.py gore-save-editor dist
+    python build.py gore-cli release 0.2.0 --all
+    python build.py gore-mod-studio release 0.1.0 --bump --build --installer
 
 Code signing (Azure Trusted / Artifact Signing):
     Off by default -- local dist/installer builds ship unsigned. Signing is
@@ -48,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -92,71 +95,83 @@ ISCC = _resolve_tool(
 # entry. A project may carry releasable=False so `all` skips it for
 # release/dist and `release <project>` rejects it.
 PROJECTS: dict[str, dict] = {
-    "gore-save": {  # save editor (Flutter, WinSparkle)
+    "gore-save-editor": {  # save editor (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/save-editor",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-save",
+        "tag_prefix": "gore-save-editor",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoresaveSetup",  # keep: shipped update feed expects this filename
         "exe": "goresave.exe",  # keep: CMake BINARY_NAME (Inno AppId-tied upgrade)
         "core_crate": "gore-save",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_save",  # was goresave_core; dll now gore_save.dll (cargo underscores it)
-        "dist_zip": "goresave-{version}-windows-x64",
         "releasable": True,
     },
-    "gore-mod": {  # mod studio (Flutter, WinSparkle)
+    "gore-mod-studio": {  # mod studio (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/mod-studio",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-mod",
+        "tag_prefix": "gore-mod-studio",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoreModSetup",
         "exe": "gore_mod.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_ffi",  # was gore_core; dll now gore_ffi.dll (cargo underscores it)
-        "dist_zip": "gore-mod-{version}-windows-x64",
         # Bundle the standalone `gore` CLI (gore.exe + its lua/shared SDK) beside
         # the app, so GUI users get the power tools Studio does not expose (gore
         # as disasm/decompile, catalog/dump/stubs, mgr) without a second download.
         # Staged into the Flutter Release dir, so both the installer
         # (SourceDir=Release) and the portable zip (copied from Release) ship it.
-        "companions": ["gore"],
+        "companions": ["gore-cli"],
         "releasable": True,
     },
-    "gore-manager": {  # mod manager (Flutter, WinSparkle)
+    "gore-mod-manager": {  # mod manager (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/mod-manager",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-manager",
+        "tag_prefix": "gore-mod-manager",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoreManagerSetup",
         "exe": "gore_manager.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
         "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
-        "dist_zip": "gore-manager-{version}-windows-x64",
         "releasable": True,
     },
-    "gore": {  # the unified CLI (was gore-cli)
+    "gore-cli": {  # the unified CLI
         "kind": "rust-bin",
         "dir": "crates/gore",
         "manifest": "Cargo.toml",
         "crate": "gore",
         "bin": "gore",  # produces gore.exe
-        "tag_prefix": "gore-cli",  # KEEP this tag prefix (release.yml trigger + habit)
+        "tag_prefix": "gore-cli",
         "changelog": "CHANGELOG.md",
-        "dist_zip": "gore-{version}-windows-x64",
         "releasable": True,
         # extra dirs staged beside the exe in the release zip: (src relative to ROOT, dest name).
         # `gore deploy-shared` resolves the SDK from `shared/` next to the binary.
         "bundle_dirs": [("lua/shared", "shared")],
+        # Markdown docs staged beside the exe. Links that point out of the guide
+        # tree are rewritten to absolute GitHub URLs (see stage_docs).
+        "doc_dirs": [("docs/guide", "docs")],
     },
 }
 
-RELEASE_ORDER = ["gore", "gore-save", "gore-mod", "gore-manager"]  # for `all`
+RELEASE_ORDER = [  # for `all`
+    "gore-cli",
+    "gore-save-editor",
+    "gore-mod-studio",
+    "gore-mod-manager",
+]
+
+
+# Every shipped artifact is named after its project, which is also its tag
+# prefix: `<project>-vX.Y.Z` tags produce `<project>-X.Y.Z-windows-x64.zip` and
+# `<project>-X.Y.Z-setup.exe`. Keep these three in lockstep.
+def zip_basename(project: str, version: str) -> str:
+    return f"{PROJECTS[project]['tag_prefix']}-{version}-windows-x64"
+
+
+def installer_basename(project: str, version: str) -> str:
+    return f"{PROJECTS[project]['tag_prefix']}-{version}-setup"
 
 
 def env() -> dict[str, str]:
@@ -319,6 +334,61 @@ def sign_dir(directory: Path, dry: bool) -> None:
 
 def pdir(project: str) -> Path:
     return ROOT / PROJECTS[project]["dir"]
+
+
+# --------------------------------------------------------------------------- #
+# Docs staging                                                                #
+# --------------------------------------------------------------------------- #
+# Base for links the shipped guide inherits from the repo. A guide page links to
+# component READMEs, crates and the internal docs with `../…`; inside a release
+# zip those targets do not exist, so they are rewritten to absolute GitHub URLs.
+REPO_BLOB_BASE = "https://github.com/dh0er/gore/blob/main"
+
+# Any Markdown link whose target starts with `../` — one or more levels up.
+_OUTBOUND_LINK_RE = re.compile(r"\]\((\.\./[^)#]*?)(#[^)]*)?\)")
+
+
+def rewrite_outbound_links(
+    text: str, page_dir: str, base: str = REPO_BLOB_BASE
+) -> str:
+    """Point Markdown links that escape the doc tree at GitHub.
+
+    `page_dir` is the containing directory of the page, relative to the repo
+    root (e.g. `docs/guide`), and is what the `../` hops are resolved against.
+    Links inside the tree (`items.md`, `items.md#flags`) are left untouched —
+    they still resolve next to the shipped file.
+    """
+
+    def repoint(m: re.Match) -> str:
+        target = posixpath.normpath(posixpath.join(page_dir, m.group(1)))
+        return f"]({base}/{target}{m.group(2) or ''})"
+
+    return _OUTBOUND_LINK_RE.sub(repoint, text)
+
+
+def stage_docs(src_dir: Path, dest_dir: Path) -> int:
+    """Copy the Markdown docs in `src_dir` to `dest_dir`, rewriting links.
+
+    Returns the number of files written. Only `.md` files are shipped; anything
+    else in the doc tree stays in the repo.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for md in sorted(src_dir.rglob("*.md")):
+        rel = md.relative_to(src_dir)
+        target = dest_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        src_from_root = Path(os.path.relpath(src_dir.resolve(), ROOT)).as_posix()
+        page_dir = posixpath.normpath(
+            posixpath.join(src_from_root, rel.parent.as_posix())
+        )
+        target.write_text(
+            rewrite_outbound_links(md.read_text(encoding="utf-8"), page_dir),
+            encoding="utf-8",
+            newline="\n",
+        )
+        count += 1
+    return count
 
 
 # --------------------------------------------------------------------------- #
@@ -551,7 +621,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
     dist = dist_dir(project)
     if not dry:
         dist.mkdir(parents=True, exist_ok=True)
-    base = dist / cfg["dist_zip"].format(version=version)
+    base = dist / zip_basename(project, version)
 
     if cfg["kind"] == "flutter":
         rel = flutter_release_dir(project)
@@ -613,6 +683,15 @@ def dist_project(project: str, dry: bool) -> Path | None:
         if not src_dir.is_dir():
             raise SystemExit(f"missing bundle dir: {src_dir}")
         shutil.copytree(src_dir, staging / dest_name)
+    # stage the Markdown guide beside the exe, with out-of-tree links absolutized
+    for src_rel, dest_name in cfg.get("doc_dirs", []):
+        src_dir = ROOT / src_rel
+        if not src_dir.is_dir():
+            raise SystemExit(f"missing doc dir: {src_dir}")
+        written = stage_docs(src_dir, staging / dest_name)
+        if not written:
+            raise SystemExit(f"no docs found in {src_dir}")
+        print(f"staged {written} doc file(s) from {src_rel} -> {dest_name}/")
     sign_dir(staging, dry=dry)
     if base.with_suffix(".zip").exists():
         base.with_suffix(".zip").unlink()
@@ -642,11 +721,14 @@ def installer_project(project: str, dry: bool) -> Path | None:
             f"/DAppVersion={version}",
             f"/DSourceDir={rel}",
             f"/DOutputDir={dist}",
+            # Passed in rather than hardcoded per .iss, so the produced file name
+            # and the path this function returns cannot drift apart.
+            f"/DOutputBaseName={installer_basename(project, version)}",
             iss,
         ],
         dry=dry,
     )
-    out = dist / f"{cfg['installer_name']}-{version}.exe"
+    out = dist / f"{installer_basename(project, version)}.exe"
     # Sign the installer itself. Must happen before the CI appcast step computes
     # its DSA signature over the final shipped bytes.
     sign_paths([out], dry=dry)

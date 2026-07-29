@@ -13,11 +13,11 @@ blueprint owns product priorities, author journeys, novice-facing behavior, and
 success metrics; it does not define a second project state or navigation model.
 If the documents differ on a technical contract, the architecture specification
 wins. The runtime boundaries for the most important new-content paths are
-recorded in [NPC authoring](npc-authoring.md) and
-[quest authoring](quest-authoring.md). The bounded managed-R3 Voice slice is
-recorded separately in [Voice authoring](voice-authoring.md). Snapshot project
-copy boundaries are recorded in [Managed project snapshot export](managed-project-export.md)
-and [Managed project snapshot import V2](managed-project-import.md).
+recorded in [NPC authoring](../guide/studio-npc.md) and
+[quest authoring](../guide/studio-quest.md). The bounded managed-R3 Voice slice is
+recorded separately in [Voice authoring](../guide/studio-voice.md). Snapshot project
+copy boundaries are recorded in [Managed project snapshot export](../guide/studio-project-export.md)
+and [Managed project snapshot import V2](../guide/studio-project-import.md).
 
 **Unreleased Greenfield policy:** Mod Studio has never shipped and has no
 active legacy projects. Managed R3 is therefore the only project/session model;
@@ -724,7 +724,7 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Managed working project** | The live editable source of truth | A Studio-owned directory with canonical managed-R3 shards, immutable AssetStore blobs, session/current-path ownership, a serialized operation lane, and one transaction history |
 | **Autosave/recovery** | Recover unsaved work after a crash | A bounded journal/recovery snapshot tied to the exact base revision; it is automatic and is not a portable project export or release |
 | **Save / checkpoint** | Durably acknowledge the current revision | Target contract: `Ctrl+S` flushes current transaction state and creates/advances a recoverable checkpoint; **Save As** creates a separately validated identity/path. Current R3 shell: semantic transactions publish independently, `Ctrl+S` only fully verifies the exact head, and managed Save As stays disabled until native clone/fork exists. |
-| **Backup / Restore** | Portable restorable project checkpoint | The current Studio workflow emits V2: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **restorable project backup**, while explicitly denying playable-mod, build, deployment, and runtime authority. On Windows the visible Restore flow verifies the complete V2 archive, asks for an existing parent plus one new absent folder, materializes through exact archive CAS and atomic no-clobber publication, and adopts only a fully opened candidate whose destination, identity, revision, and head match the native receipt. Unix inspection/import fails closed. V2 is the sole accepted and emitted backup/restore format; every other manifest is invalid input. Publication uncertainty carries no receipt, opens nothing, and is never retried automatically. The importer never edits ZIP members in place. Clone/Save As and deliberate uncertainty/staging recovery remain separate. See [Managed project snapshot export](managed-project-export.md) and [Managed project snapshot import V2](managed-project-import.md). |
+| **Backup / Restore** | Portable restorable project checkpoint | The current Studio workflow emits V2: one deterministic `.goremod` from an exact immutable snapshot without changing the working path, project head, game, or saves. Studio calls it a **restorable project backup**, while explicitly denying playable-mod, build, deployment, and runtime authority. On Windows the visible Restore flow verifies the complete V2 archive, asks for an existing parent plus one new absent folder, materializes through exact archive CAS and atomic no-clobber publication, and adopts only a fully opened candidate whose destination, identity, revision, and head match the native receipt. Unix inspection/import fails closed. V2 is the sole accepted and emitted backup/restore format; every other manifest is invalid input. Publication uncertainty carries no receipt, opens nothing, and is never retried automatically. The importer never edits ZIP members in place. Clone/Save As and deliberate uncertainty/staging recovery remain separate. See [Managed project snapshot export](../guide/studio-project-export.md) and [Managed project snapshot import V2](../guide/studio-project-import.md). |
 | **Build** | Produce an inspectable mod artifact | Derived from an immutable project revision and named build root/profile; it does not deploy and cannot become editable source state |
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""goresave test runner."""
+"""gore-save-editor test runner."""
 
 from __future__ import annotations
 

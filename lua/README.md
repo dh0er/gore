@@ -3,12 +3,31 @@
 Common helpers for Gothic 1 Remake UE4SS mods. This README is the API reference;
 `gore.help.list([filter])` returns the same registry programmatically.
 
+It is a thin convenience layer, not a full SDK: a handful of `pcall`-guarded
+wrappers over UE4SS reflection, for behavior the override generator cannot
+express (hooks, keybinds, console commands, live attribute tweaks). Override
+mods produced by [`gore gen`](../docs/guide/items.md) or Mod Studio do **not**
+use it — it is for hand-written mods.
+
 ## Use it
-Deploy with `gore-cli deploy-shared`, then in a mod:
+
+```powershell
+gore deploy-shared --game "$GAME"       # copy gore-lua into ue4ss\Mods\shared (once)
+gore scaffold MyMod -o "$GAME\...\Mods" # new mod with the loader wired in
+```
+
+Then, in a mod:
+
 ```lua
 local ok, gore = pcall(require, "gore-lua")
+
+gore.cheat.god(true)                        -- toggle god mode on the live CombatConfig + CDOs
+gore.gas.heal()                             -- set Health to MaxHealth
+gore.ui.text("hello from my mod")           -- on-screen message via the game's HUD
+gore.cmd.command("mycmd", function() end)   -- register a console command
 ```
-New mods scaffolded with `gore-cli scaffold <name>` get this loader wired in automatically.
+
+UE4SS loads any mod folder containing an `enabled.txt`.
 
 ## API reference
 

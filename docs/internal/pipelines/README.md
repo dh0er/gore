@@ -1,7 +1,7 @@
 # Catalog pipeline
 
 Catalog generation is handled by the `gore` CLI (`gore catalog`), backed by the
-[`gore-catalog`](../../crates/gore-catalog) crate. The Python scripts that
+[`gore-catalog`](../../../crates/gore-catalog) crate. The Python scripts that
 previously lived here (`build_item_catalog.py`, `build_npc_catalog.py`,
 `build_knowledge_catalog.py`) have been replaced by Rust in
 `gore_catalog::pipeline`.

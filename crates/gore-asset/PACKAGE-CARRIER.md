@@ -187,7 +187,7 @@ trusted local boundary and must have no concurrent writer, hostile or benign.
 
 The public `gore asset inspect` / `gore asset patch-fixed` workflow and its raw
 wire-value limits are documented in
-[`docs/dataasset-authoring.md`](../../docs/dataasset-authoring.md).
+[`docs/guide/dataassets.md`](../../docs/guide/dataassets.md).
 
 ## Still deliberately unknown
 

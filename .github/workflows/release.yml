@@ -1,32 +1,37 @@
 name: Release
 
 # Monorepo releases are per-project, triggered by prefixed tags:
-#   gore-save-vX.Y.Z     -> goresave (Flutter app, WinSparkle updater)
-#   gore-mod-vX.Y.Z      -> gore-mod (Flutter app, WinSparkle updater)
-#   gore-manager-vX.Y.Z  -> gore-manager (Flutter app, WinSparkle updater)
-#   gore-cli-vX.Y.Z      -> gore-cli (Rust binary)
+#   gore-save-editor-vX.Y.Z  -> gore-save-editor (Flutter app, WinSparkle updater)
+#   gore-mod-studio-vX.Y.Z   -> gore-mod-studio (Flutter app, WinSparkle updater)
+#   gore-mod-manager-vX.Y.Z  -> gore-mod-manager (Flutter app, WinSparkle updater)
+#   gore-cli-vX.Y.Z          -> gore-cli (Rust binary)
 # Each job gates on its tag prefix, so one tag builds exactly one product.
 #
-# IMPORTANT: only gore-save publishes with make_latest=true. Its app polls
-# releases/latest/download/appcast-windows.xml, so the repo's "latest"
-# pointer must always be the newest goresave release. gore-mod, gore-manager
-# and gore-cli publish with make_latest=false; gore-mod's and gore-manager's
-# updaters instead read fixed `gore-mod-appcast` / `gore-manager-appcast`
-# releases whose assets CI overwrites each release.
+# Every updater reads a fixed-tag feed release — `gore-save-editor-appcast`,
+# `gore-mod-studio-appcast`, `gore-mod-manager-appcast` — whose single
+# appcast-windows.xml asset CI overwrites on each release. Those tags are
+# compiled into the apps, so they must not be renamed without shipping a new
+# build of the affected app.
+#
+# make_latest=true on gore-save-editor is therefore only about which release
+# people land on at /releases/latest; no updater depends on it, so it can move
+# to another product when the flagship changes. One exception, until it ages
+# out: save-editor builds up to 1.2.0 poll releases/latest/download/ for their
+# appcast, so moving the flag before those are gone would strand them.
 
 on:
   push:
     tags:
-      - "gore-save-v*"
-      - "gore-mod-v*"
-      - "gore-manager-v*"
+      - "gore-save-editor-v*"
+      - "gore-mod-studio-v*"
+      - "gore-mod-manager-v*"
       - "gore-cli-v*"
   workflow_dispatch:
     inputs:
       project:
         description: "Smoke-build a project without publishing"
         type: choice
-        options: [gore-save, gore-mod, gore-manager, gore-cli]
+        options: [gore-save-editor, gore-mod-studio, gore-mod-manager, gore-cli]
 
 permissions:
   contents: write
@@ -50,8 +55,8 @@ env:
   AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
 jobs:
-  gore-save:
-    if: startsWith(github.ref_name, 'gore-save-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-save')
+  gore-save-editor:
+    if: startsWith(github.ref_name, 'gore-save-editor-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-save-editor')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +73,7 @@ jobs:
           $version = $Matches[1]
           if ('${{ github.ref_type }}' -eq 'tag') {
             $tag = $env:GITHUB_REF_NAME
-            if ($tag -ne "gore-save-v$version") {
+            if ($tag -ne "gore-save-editor-v$version") {
               Write-Error "tag $tag does not match pubspec version $version"
               exit 1
             }
@@ -92,7 +97,7 @@ jobs:
       # build.py builds the native DLL, the Flutter release, packages the zip,
       # and compiles the Inno installer.
       - name: Build installer
-        run: python build.py gore-save installer
+        run: python build.py gore-save-editor installer
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
@@ -107,44 +112,67 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force dist/gore-save | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-save/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-save-editor | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-save-editor/RELEASE_NOTES.md'), $notes)
 
       - name: Generate signed appcast
         env:
           WINSPARKLE_DSA_PRIV_KEY_B64: ${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}
         run: >-
           python scripts/appcast.py
-          --title goresave
+          --title gore-save-editor
           --version ${{ steps.version.outputs.version }}
-          --installer dist/gore-save/GoresaveSetup-${{ steps.version.outputs.version }}.exe
-          --notes dist/gore-save/RELEASE_NOTES.md
-          --release-tag gore-save-v${{ steps.version.outputs.version }}
-          --output dist/gore-save/appcast-windows.xml
+          --installer dist/gore-save-editor/gore-save-editor-${{ steps.version.outputs.version }}-setup.exe
+          --notes dist/gore-save-editor/RELEASE_NOTES.md
+          --release-tag gore-save-editor-v${{ steps.version.outputs.version }}
+          --output dist/gore-save-editor/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: goresave-windows-x64
+          name: gore-save-editor-windows-x64
           path: |
-            dist/gore-save/*.zip
-            dist/gore-save/*.exe
-            dist/gore-save/appcast-windows.xml
+            dist/gore-save-editor/*.zip
+            dist/gore-save-editor/*.exe
+            dist/gore-save-editor/appcast-windows.xml
 
-      # make_latest=true: the app's releases/latest/ feed must resolve here.
+      # make_latest=true purely so the repo's landing release is the flagship
+      # product. The updater no longer depends on it (see the feed step below),
+      # so this flag can move to another product without breaking any client.
       - name: Publish GitHub release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "true"
           files: |
-            dist/gore-save/*.zip
-            dist/gore-save/*.exe
-            dist/gore-save/appcast-windows.xml
-          body_path: dist/gore-save/RELEASE_NOTES.md
+            dist/gore-save-editor/*.zip
+            dist/gore-save-editor/*.exe
+            dist/gore-save-editor/appcast-windows.xml
+          body_path: dist/gore-save-editor/RELEASE_NOTES.md
 
-  gore-mod:
-    if: startsWith(github.ref_name, 'gore-mod-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod')
+      # Same fixed-tag feed the other two products use. Builds up to 1.2.0 read
+      # releases/latest/download/appcast-windows.xml instead; that keeps working
+      # as long as make_latest stays here, and the release above still publishes
+      # the identical asset. Drop that older path only once no supported build
+      # relies on it.
+      - name: Update gore-save-editor appcast feed
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view gore-save-editor-appcast 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create gore-save-editor-appcast `
+              --title "gore-save-editor update feed" `
+              --notes "Stable WinSparkle feed for gore-save-editor. Assets overwritten each release." `
+              --latest=false
+          }
+          gh release upload gore-save-editor-appcast `
+            dist/gore-save-editor/appcast-windows.xml --clobber
+
+  gore-mod-studio:
+    if: startsWith(github.ref_name, 'gore-mod-studio-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod-studio')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,7 +189,7 @@ jobs:
           $version = $Matches[1]
           if ('${{ github.ref_type }}' -eq 'tag') {
             $tag = $env:GITHUB_REF_NAME
-            if ($tag -ne "gore-mod-v$version") {
+            if ($tag -ne "gore-mod-studio-v$version") {
               Write-Error "tag $tag does not match pubspec version $version"
               exit 1
             }
@@ -182,7 +210,7 @@ jobs:
         run: choco install innosetup --no-progress -y
 
       - name: Build installer
-        run: python build.py gore-mod installer
+        run: python build.py gore-mod-studio installer
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
@@ -197,64 +225,64 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force dist/gore-mod | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-mod/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-mod-studio | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-mod-studio/RELEASE_NOTES.md'), $notes)
 
       - name: Generate signed appcast
         env:
           WINSPARKLE_DSA_PRIV_KEY_B64: ${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}
         run: >-
           python scripts/appcast.py
-          --title gore-mod
+          --title gore-mod-studio
           --version ${{ steps.version.outputs.version }}
-          --installer dist/gore-mod/GoreModSetup-${{ steps.version.outputs.version }}.exe
-          --notes dist/gore-mod/RELEASE_NOTES.md
-          --release-tag gore-mod-v${{ steps.version.outputs.version }}
-          --output dist/gore-mod/appcast-windows.xml
+          --installer dist/gore-mod-studio/gore-mod-studio-${{ steps.version.outputs.version }}-setup.exe
+          --notes dist/gore-mod-studio/RELEASE_NOTES.md
+          --release-tag gore-mod-studio-v${{ steps.version.outputs.version }}
+          --output dist/gore-mod-studio/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gore-mod-windows-x64
+          name: gore-mod-studio-windows-x64
           path: |
-            dist/gore-mod/*.zip
-            dist/gore-mod/*.exe
-            dist/gore-mod/appcast-windows.xml
+            dist/gore-mod-studio/*.zip
+            dist/gore-mod-studio/*.exe
+            dist/gore-mod-studio/appcast-windows.xml
 
       # Versioned release holds the installer the appcast enclosure points at.
-      # make_latest=false so it never steals goresave's releases/latest feed.
+      # make_latest=false so it never steals gore-save-editor's releases/latest feed.
       - name: Publish GitHub release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "false"
           files: |
-            dist/gore-mod/*.zip
-            dist/gore-mod/GoreModSetup-${{ steps.version.outputs.version }}.exe
-          body_path: dist/gore-mod/RELEASE_NOTES.md
+            dist/gore-mod-studio/*.zip
+            dist/gore-mod-studio/gore-mod-studio-${{ steps.version.outputs.version }}-setup.exe
+          body_path: dist/gore-mod-studio/RELEASE_NOTES.md
 
-      # gore-mod's updater polls this fixed-tag release. The asset name is the
+      # gore-mod-studio's updater polls this fixed-tag release. The asset name is
       # same every release, so use `gh release upload --clobber` to replace it
       # in place — a plain upload errors on the second release and the feed
       # would stay stuck on the first appcast.
-      - name: Update gore-mod appcast feed
+      - name: Update gore-mod-studio appcast feed
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view gore-mod-appcast 2>$null
+          gh release view gore-mod-studio-appcast 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create gore-mod-appcast `
-              --title "gore-mod update feed" `
-              --notes "Stable WinSparkle feed for gore-mod. Assets overwritten each release." `
+            gh release create gore-mod-studio-appcast `
+              --title "gore-mod-studio update feed" `
+              --notes "Stable WinSparkle feed for gore-mod-studio. Assets overwritten each release." `
               --latest=false
           }
-          gh release upload gore-mod-appcast `
-            dist/gore-mod/appcast-windows.xml --clobber
+          gh release upload gore-mod-studio-appcast `
+            dist/gore-mod-studio/appcast-windows.xml --clobber
 
-  gore-manager:
-    if: startsWith(github.ref_name, 'gore-manager-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-manager')
+  gore-mod-manager:
+    if: startsWith(github.ref_name, 'gore-mod-manager-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod-manager')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -271,7 +299,7 @@ jobs:
           $version = $Matches[1]
           if ('${{ github.ref_type }}' -eq 'tag') {
             $tag = $env:GITHUB_REF_NAME
-            if ($tag -ne "gore-manager-v$version") {
+            if ($tag -ne "gore-mod-manager-v$version") {
               Write-Error "tag $tag does not match pubspec version $version"
               exit 1
             }
@@ -292,7 +320,7 @@ jobs:
         run: choco install innosetup --no-progress -y
 
       - name: Build installer
-        run: python build.py gore-manager installer
+        run: python build.py gore-mod-manager installer
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
@@ -307,61 +335,61 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force dist/gore-manager | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-manager/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-mod-manager | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-mod-manager/RELEASE_NOTES.md'), $notes)
 
       - name: Generate signed appcast
         env:
           WINSPARKLE_DSA_PRIV_KEY_B64: ${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}
         run: >-
           python scripts/appcast.py
-          --title gore-manager
+          --title gore-mod-manager
           --version ${{ steps.version.outputs.version }}
-          --installer dist/gore-manager/GoreManagerSetup-${{ steps.version.outputs.version }}.exe
-          --notes dist/gore-manager/RELEASE_NOTES.md
-          --release-tag gore-manager-v${{ steps.version.outputs.version }}
-          --output dist/gore-manager/appcast-windows.xml
+          --installer dist/gore-mod-manager/gore-mod-studio-manager-${{ steps.version.outputs.version }}-setup.exe
+          --notes dist/gore-mod-manager/RELEASE_NOTES.md
+          --release-tag gore-mod-manager-v${{ steps.version.outputs.version }}
+          --output dist/gore-mod-manager/appcast-windows.xml
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gore-manager-windows-x64
+          name: gore-mod-manager-windows-x64
           path: |
-            dist/gore-manager/*.zip
-            dist/gore-manager/*.exe
-            dist/gore-manager/appcast-windows.xml
+            dist/gore-mod-manager/*.zip
+            dist/gore-mod-manager/*.exe
+            dist/gore-mod-manager/appcast-windows.xml
 
       # Versioned release holds the installer the appcast enclosure points at.
-      # make_latest=false so it never steals goresave's releases/latest feed.
+      # make_latest=false so it never steals gore-save-editor's releases/latest feed.
       - name: Publish GitHub release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "false"
           files: |
-            dist/gore-manager/*.zip
-            dist/gore-manager/GoreManagerSetup-${{ steps.version.outputs.version }}.exe
-          body_path: dist/gore-manager/RELEASE_NOTES.md
+            dist/gore-mod-manager/*.zip
+            dist/gore-mod-manager/gore-mod-studio-manager-${{ steps.version.outputs.version }}-setup.exe
+          body_path: dist/gore-mod-manager/RELEASE_NOTES.md
 
-      # gore-manager's updater polls this fixed-tag release. The asset name is
+      # gore-mod-manager's updater polls this fixed-tag release. The asset name is
       # the same every release, so use `gh release upload --clobber` to replace
       # it in place — a plain upload errors on the second release and the feed
       # would stay stuck on the first appcast.
-      - name: Update gore-manager appcast feed
+      - name: Update gore-mod-manager appcast feed
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view gore-manager-appcast 2>$null
+          gh release view gore-mod-manager-appcast 2>$null
           if ($LASTEXITCODE -ne 0) {
-            gh release create gore-manager-appcast `
-              --title "gore-manager update feed" `
-              --notes "Stable WinSparkle feed for gore-manager. Assets overwritten each release." `
+            gh release create gore-mod-manager-appcast `
+              --title "gore-mod-manager update feed" `
+              --notes "Stable WinSparkle feed for gore-mod-manager. Assets overwritten each release." `
               --latest=false
           }
-          gh release upload gore-manager-appcast `
-            dist/gore-manager/appcast-windows.xml --clobber
+          gh release upload gore-mod-manager-appcast `
+            dist/gore-mod-manager/appcast-windows.xml --clobber
 
   gore-cli:
     if: startsWith(github.ref_name, 'gore-cli-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-cli')
@@ -392,7 +420,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build distribution
-        run: python build.py gore dist
+        run: python build.py gore-cli dist
 
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
@@ -407,19 +435,19 @@ jobs:
             if ($isTag) { Write-Error "CHANGELOG.md has no non-empty section for $version"; exit 1 }
             $notes = "Development build $version"
           }
-          New-Item -ItemType Directory -Force dist/gore | Out-Null
-          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore/RELEASE_NOTES.md'), $notes)
+          New-Item -ItemType Directory -Force dist/gore-cli | Out-Null
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/gore-cli/RELEASE_NOTES.md'), $notes)
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: gore-cli-windows-x64
-          path: dist/gore/*.zip
+          path: dist/gore-cli/*.zip
 
       - name: Publish GitHub release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "false"
-          files: dist/gore/*.zip
-          body_path: dist/gore/RELEASE_NOTES.md
+          files: dist/gore-cli/*.zip
+          body_path: dist/gore-cli/RELEASE_NOTES.md

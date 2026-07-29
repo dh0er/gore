@@ -111,7 +111,7 @@ requires reconstructing its body manually or first extending the decompiler.
    `patch-tag-map` can inspect and copy-on-write patch only an already-present entry in the sealed
    native `GameplayTag`-to-`float32` map shape; they cannot add a key or map, resize bytecode, or
    author arbitrary map defaults. See
-   [`docs/angelscript-default-patching.md`](../../docs/angelscript-default-patching.md). A faithful
+   [`docs/guide/angelscript-defaults.md`](../../docs/guide/angelscript-defaults.md). A faithful
    source representation is still required before arbitrary class-default authoring can be
    claimed; new modules may continue to use explicit defaults through `--op add`.
 2. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from

@@ -12,7 +12,7 @@ V2 exports the exact reachable closure with a closed restorable-copy manifest.
 The visible Windows workflow can inspect it, materialize it into one absent
 managed destination, fully open the receipt-bound candidate, and adopt it only
 after an exact identity/head comparison. See
-[Managed project snapshot import V2](managed-project-import.md).
+[Managed project snapshot import V2](studio-project-import.md).
 
 ## Authority boundary
 
