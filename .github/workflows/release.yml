@@ -345,7 +345,7 @@ jobs:
           python scripts/appcast.py
           --title gore-mod-manager
           --version ${{ steps.version.outputs.version }}
-          --installer dist/gore-mod-manager/gore-mod-studio-manager-${{ steps.version.outputs.version }}-setup.exe
+          --installer dist/gore-mod-manager/gore-mod-manager-${{ steps.version.outputs.version }}-setup.exe
           --notes dist/gore-mod-manager/RELEASE_NOTES.md
           --release-tag gore-mod-manager-v${{ steps.version.outputs.version }}
           --output dist/gore-mod-manager/appcast-windows.xml
@@ -368,7 +368,7 @@ jobs:
           make_latest: "false"
           files: |
             dist/gore-mod-manager/*.zip
-            dist/gore-mod-manager/gore-mod-studio-manager-${{ steps.version.outputs.version }}-setup.exe
+            dist/gore-mod-manager/gore-mod-manager-${{ steps.version.outputs.version }}-setup.exe
           body_path: dist/gore-mod-manager/RELEASE_NOTES.md
 
       # gore-mod-manager's updater polls this fixed-tag release. The asset name is
