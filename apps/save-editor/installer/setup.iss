@@ -1,7 +1,8 @@
-; goresave Windows installer.
+; gore-save-editor Windows installer.
 ; Compiled by CI:
 ;   iscc /DAppVersion=<x.y.z> /DSourceDir=<abs path to Release dir> ^
-;        /DOutputDir=<abs path for the exe> installer\setup.iss
+;        /DOutputDir=<abs path for the exe> /DOutputBaseName=<file stem> ^
+;        installer\setup.iss
 ; The wizard shows a directory page, so users pick any install location.
 ; WinSparkle updates download this same installer and re-run it; Inno
 ; remembers the previous location and updates in place.
@@ -14,6 +15,9 @@
 #endif
 #ifndef OutputDir
   #error "Pass /DOutputDir=<path for installer exe>"
+#endif
+#ifndef OutputBaseName
+  #error "Pass /DOutputBaseName=<installer file stem>"
 #endif
 
 [Setup]
@@ -30,7 +34,7 @@ DefaultGroupName=GORE Save Editor
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir={#OutputDir}
-OutputBaseFilename=GoresaveSetup-{#AppVersion}
+OutputBaseFilename={#OutputBaseName}
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

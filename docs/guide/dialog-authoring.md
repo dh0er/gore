@@ -357,7 +357,7 @@ therefore be tested on a disposable save with semantic before/after inspection.
   launching the game compiler. Newly authored modules remain supported through
   `--op add`, including explicit `default` statements.
 - Existing vanilla defaults now also have a separate offline, copy-on-write
-  [`default-sites` / `patch-default` scalar path](angelscript-default-patching.md).
+  [`default-sites` / `patch-default` scalar path](angelscript-defaults.md).
   It re-resolves exact module/class/declaring-owner/field selectors, proves the
   target-to-owner ancestry, requires the complete current operand as a raw
   compare-and-swap guard, and changes no save or live runtime state. This does

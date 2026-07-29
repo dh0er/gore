@@ -22,7 +22,7 @@ The visible workflow separately selects a destination and adopts only after an
 exact receipt-bound reopen. Neither layer makes the project build- or
 runtime-ready.
 
-See [Managed project snapshot export](managed-project-export.md) for the shared
+See [Managed project snapshot export](studio-project-export.md) for the shared
 closure, deterministic ZIP dialect, and export publication lifecycle.
 
 ## Exact checkpoint authority

@@ -4,12 +4,12 @@ import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
-/// gore-mod cannot use releases/latest/ — goresave owns the repo's "latest"
-/// release pointer. Instead CI keeps a fixed `gore-mod-appcast` release whose
-/// appcast-windows.xml asset it overwrites on every gore-mod release, so this
-/// URL is stable regardless of which product released most recently.
+/// CI keeps a fixed `gore-mod-studio-appcast` release whose appcast-windows.xml
+/// asset it overwrites on every gore-mod-studio release, so this URL is stable
+/// regardless of which product released most recently. Every GORE app uses this
+/// same fixed-tag scheme; none of them depends on the repo's "latest" pointer.
 const _appcastUrl =
-    'https://github.com/dh0er/gore/releases/download/gore-mod-appcast/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/download/gore-mod-studio-appcast/appcast-windows.xml';
 
 const _checkIntervalSeconds = 3600;
 

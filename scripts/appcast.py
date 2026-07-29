@@ -4,13 +4,13 @@ Shared by every WinSparkle-updated app in the monorepo (gore-save, gore-mod).
 The appcast is uploaded as a GitHub release asset; the app polls a stable
 feed URL (gore-save uses releases/latest/download/, gore-mod uses its own
 fixed-tag release). The enclosure URL points at the versioned installer asset
-of the matching per-project release tag (e.g. gore-save-v1.2.3).
+of the matching per-project release tag (e.g. gore-save-editor-v1.2.3).
 
 Usage:
-    python scripts/appcast.py --title goresave --version 0.1.1 \
-        --installer dist/GoresaveSetup-0.1.1.exe \
+    python scripts/appcast.py --title gore-save-editor --version 0.1.1 \
+        --installer dist/gore-save-editor-0.1.1-setup.exe \
         --notes dist/RELEASE_NOTES.md \
-        --release-tag gore-save-v0.1.1 \
+        --release-tag gore-save-editor-v0.1.1 \
         --output dist/appcast-windows.xml
 
 Environment:
@@ -121,7 +121,7 @@ def build_appcast(*, title: str, version: str, installer: Path,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--title", default="goresave",
+    parser.add_argument("--title", default="gore-save-editor",
                         help="channel title (the product name)")
     parser.add_argument("--version", required=True)
     parser.add_argument("--installer", required=True, type=Path)
@@ -129,7 +129,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--release-tag", required=True,
                         help="git tag the installer asset lives under, "
-                        "e.g. gore-save-v1.2.3")
+                        "e.g. gore-save-editor-v1.2.3")
     args = parser.parse_args()
 
     if not args.installer.exists():
