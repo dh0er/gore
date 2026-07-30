@@ -126,21 +126,45 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
     }
 }
 
+/// Commands the CLI has but no tool wraps.
+///
+/// `mcp` is this server itself and `guide` renders documentation for a human to read, so neither is
+/// exposed as a namespace tool. They are still real commands that `gore --help` lists, and this
+/// tool promises the exact help for any command — refusing them would send a model looking for a
+/// typo in something it read correctly.
+const META_COMMANDS: &[(&str, &[&str])] = &[("mcp", &["serve", "tools"]), ("guide", &["html"])];
+
+fn meta_command(name: &str) -> Option<&'static [&'static str]> {
+    META_COMMANDS.iter().find(|(command, _)| *command == name).map(|(_, subs)| *subs)
+}
+
 /// Accept only paths that exist in the command table.
 fn validate(path: &[&str]) -> Result<(), String> {
     match path {
         [] => Ok(()),
         [first] => {
-            if spec::GROUPS.iter().any(|group| {
-                (group.shape == GroupShape::Nested && group.cli == *first)
-                    || (group.shape == GroupShape::Flat && group.command(first).is_some())
-            }) {
+            if meta_command(first).is_some()
+                || spec::GROUPS.iter().any(|group| {
+                    (group.shape == GroupShape::Nested && group.cli == *first)
+                        || (group.shape == GroupShape::Flat && group.command(first).is_some())
+                })
+            {
                 Ok(())
             } else {
                 Err(format!("`gore {first}` is not a command. {}", available()))
             }
         }
         [first, second] => {
+            if let Some(subcommands) = meta_command(first) {
+                return if subcommands.contains(second) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "`gore {first}` has no subcommand `{second}`. It accepts: {}.",
+                        subcommands.join(", ")
+                    ))
+                };
+            }
             let Some(group) =
                 spec::GROUPS.iter().find(|group| group.cli == *first && !group.cli.is_empty())
             else {
@@ -186,6 +210,7 @@ fn available() -> String {
             GroupShape::Flat => names.extend(group.subcommands()),
         }
     }
+    names.extend(META_COMMANDS.iter().map(|(command, _)| *command));
     names.sort_unstable();
     format!("Available commands: {}.", names.join(", "))
 }
@@ -310,6 +335,22 @@ mod tests {
 
         assert_eq!(result["structuredContent"]["truncated"], json!(false));
         assert!(!text_of(&result, 1).contains("truncated"));
+    }
+
+    #[test]
+    fn the_meta_commands_have_help_even_though_no_tool_wraps_them() {
+        // `gore --help` lists `mcp` and `guide`, and this tool promises the exact help for any
+        // command. Refusing them would send a model hunting for a typo in something it read right.
+        let spawn = FakeSpawn::new(Outcome::success("Usage: gore guide html"));
+        for path in ["mcp", "mcp serve", "mcp tools", "guide", "guide html"] {
+            let result = call_with(json!({ "command": path }), &spawn);
+            assert_eq!(result["isError"], json!(false), "`{path}` should resolve");
+        }
+
+        // A wrong subcommand under one of them still lists the real ones.
+        let result = call_with(json!({ "command": "guide pdf" }), &spawn);
+        assert_eq!(result["isError"], json!(true));
+        assert!(text_of(&result, 0).contains("html"), "{}", text_of(&result, 0));
     }
 
     #[test]

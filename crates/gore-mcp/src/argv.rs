@@ -384,7 +384,19 @@ fn installs_into_game_tree(
     let game =
         args.get("game").and_then(Value::as_str).map(|root| resolve(std::path::Path::new(root)));
 
-    command.safety.installs_via.iter().copied().find_map(|name| {
+    // Every declared output, not just the ones registered here. `installs_via` names the outputs
+    // whose destination is the *only* thing that matters; a truncating or derived output is just as
+    // much an installation change when it lands in the game tree, and enumerating those separately
+    // is how each of the last several rounds found one more command that had been missed.
+    let mut outputs = command
+        .safety
+        .installs_via
+        .iter()
+        .copied()
+        .chain(command.safety.truncates.iter().copied())
+        .chain(command.safety.derives.iter().map(|(name, _)| *name));
+
+    outputs.find_map(|name| {
         let given = args.get(name)?.as_str()?;
         // Resolved first, always. A relative output is resolved by the *child* against this
         // process's working directory, so comparing it lexically would miss `--out .` run from
@@ -815,6 +827,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_truncating_output_in_the_game_tree_is_an_installation_change() {
+        // `loc import --out` is copy-on-write, so a fresh path needs no flag — but the `.lcache`
+        // lives in the installation, and writing the edited cache back there is a deployment
+        // however new the path is. The check covers every declared output, not a hand-kept list.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = dir.path().join("edited.lcache");
+        let call = |out: String| {
+            json!({ "lcache": "in.lcache", "edits": "edits.json", "out": out })
+        };
+
+        assert!(build_with(
+            "gore_loc",
+            "import",
+            call(outside.to_string_lossy().into_owned()),
+            &options()
+        )
+        .is_ok());
+
+        assert!(
+            matches!(
+                build_with(
+                    "gore_loc",
+                    "import",
+                    call("D:/Games/G1R/G1R/Content/Localization/Alkimia.lcache".into()),
+                    &options()
+                ),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "writing the cache back into the installation is a deployment"
+        );
     }
 
     #[test]
