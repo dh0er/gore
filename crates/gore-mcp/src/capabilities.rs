@@ -92,8 +92,12 @@ pub fn instructions(opts: &Options) -> String {
 
     text.push_str("\nWHAT THIS SERVER MAY DO\n");
     text.push_str(
-        "Reading anything, and writing new files, always works. Two tiers are gated, and the gate \
-         is decided per subcommand, not per tool:\n",
+        "Reading anything always works. Writing works when the command can show it is creating \
+         something rather than replacing it: a fresh output path needs no flag, an occupied one \
+         does, and so does an output aimed inside the game installation. A few commands compute \
+         their targets from a file this server does not read (gen, mod build, texture replace) or \
+         write a whole tree of them (stubs, audio extract, as emit-all); those are gated whatever \
+         is on disk. Two tiers are gated, and the gate is decided per subcommand, not per tool:\n",
     );
     text.push_str(if opts.allow_write {
         "- Changing the game installation, or rewriting a file in place: ALLOWED (this server was \
@@ -212,6 +216,21 @@ mod tests {
         let allowed = instructions(&options(true, true));
         assert!(allowed.contains("ALLOWED"));
         assert!(!allowed.contains("BLOCKED"));
+    }
+
+    #[test]
+    fn the_primer_does_not_promise_that_every_write_is_free() {
+        // It used to open with "reading anything, and writing new files, always works", which
+        // stopped being true once commands whose targets cannot be checked became mutations. The
+        // primer is the one thing every client reads, so an overstatement there is the most
+        // expensive kind.
+        let text = instructions(&options(false, false));
+        assert!(!text.contains("writing new files, always works"), "{text}");
+        assert!(text.contains("Reading anything always works"));
+        assert!(
+            text.contains("gated whatever is on disk"),
+            "the primer must say that some writes are gated regardless"
+        );
     }
 
     #[test]

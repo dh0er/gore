@@ -118,7 +118,8 @@ impl fmt::Display for BuildError {
                  {flag}.\n\n\
                  Only the user can allow it, by restarting the server with that flag:\n\
                  \n    gore mcp serve {flag}\n\n\
-                 Read-only commands and commands that only write new files need no flag."
+                 Reading needs no flag, and neither does writing to a path that is free and \
+                 outside the game installation."
             ),
         }
     }
