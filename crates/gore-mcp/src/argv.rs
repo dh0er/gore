@@ -380,18 +380,49 @@ fn installs_into_game_tree(
     command: &CommandSpec,
     args: &Map<String, Value>,
 ) -> Option<(&'static str, String)> {
-    let game = args.get("game").and_then(Value::as_str).map(std::path::PathBuf::from);
+    let game =
+        args.get("game").and_then(Value::as_str).map(|root| resolve(std::path::Path::new(root)));
 
     command.safety.installs_via.iter().copied().find_map(|name| {
         let given = args.get(name)?.as_str()?;
-        let path = std::path::Path::new(given);
+        // Resolved first, always. A relative output is resolved by the *child* against this
+        // process's working directory, so comparing it lexically would miss `--out .` run from
+        // inside the installation — which is the same deployment by a shorter name.
+        let path = resolve(std::path::Path::new(given));
 
         let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
         let names_the_game_folder =
             path.components().any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
 
-        (under_game || names_the_game_folder).then(|| (name, given.to_string()))
+        (under_game || names_the_game_folder).then(|| (name, path.to_string_lossy().into_owned()))
     })
+}
+
+/// Make a path absolute, and resolve symlinks as far down as it already exists.
+///
+/// `canonicalize` alone is not enough: an output directory is usually the thing about to be
+/// created, so it does not exist yet and canonicalizing fails. Resolving the deepest existing
+/// ancestor and re-attaching the rest gets the symlinked parents — a junction pointing into the
+/// game folder is exactly how this check would otherwise be walked around.
+fn resolve(path: &std::path::Path) -> std::path::PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+
+    let mut existing = absolute.as_path();
+    let mut trailing: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            let mut resolved = real;
+            resolved.extend(trailing.iter().rev());
+            return resolved;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                trailing.push(name);
+                existing = parent;
+            }
+            _ => return absolute,
+        }
+    }
 }
 
 /// The first output path that is already occupied — named by an argument, or derived from one.
@@ -709,6 +740,36 @@ mod tests {
             &permissive()
         )
         .is_ok());
+    }
+
+    #[test]
+    fn a_relative_output_is_resolved_before_the_game_tree_is_judged() {
+        // The child resolves a relative path against this process's working directory, so judging
+        // it lexically would wave through `--out .` run from inside the installation.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inside = dir.path().join("G1R").join("Content").join("Paks").join("~mods");
+        std::fs::create_dir_all(&inside).expect("create install-like tree");
+
+        let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
+        let absolute = inside.to_string_lossy().into_owned();
+        assert!(
+            matches!(
+                build_with("gore_texture", "pack", call(&absolute), &options()),
+                Err(BuildError::Refused { .. })
+            ),
+            "the absolute form was already caught"
+        );
+
+        // The same directory named relatively, from a working directory inside it.
+        let previous = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&inside).expect("enter the install tree");
+        let relative = build_with("gore_texture", "pack", call("."), &options());
+        std::env::set_current_dir(previous).expect("restore cwd");
+
+        assert!(
+            matches!(relative, Err(BuildError::Refused { .. })),
+            "`--out .` inside the installation is the same deployment by a shorter name"
+        );
     }
 
     #[test]
