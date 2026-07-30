@@ -523,7 +523,12 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "list",
         "List library mods joined to their loadout state (enabled/order)",
         MGR_LIBRARY_ONLY_ARGS,
-        Safety::read(),
+        // Not `read()`, despite doing nothing but print. `import::list` runs
+        // `recover_interrupted_replacements` first, which finishes an import that was cut short:
+        // it either renames the backup back into place or calls `transaction.cleanup()`, which
+        // discards the superseded entry for good. It stays ungated — refusing to *list* a library
+        // would be absurd — but nothing may advertise it as read-only when it can delete.
+        Safety::write(),
         T_FAST,
     )
     .guide("mod-manager"),
@@ -567,7 +572,12 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "analyze",
         "Report conflicts among the enabled loadout mods",
         MGR_LIBRARY_ONLY_ARGS,
-        Safety::read(),
+        // Not `read()`, despite doing nothing but print. `import::list` runs
+        // `recover_interrupted_replacements` first, which finishes an import that was cut short:
+        // it either renames the backup back into place or calls `transaction.cleanup()`, which
+        // discards the superseded entry for good. It stays ungated — refusing to *list* a library
+        // would be absurd — but nothing may advertise it as read-only when it can delete.
+        Safety::write(),
         T_NORMAL,
     )
     .guide("mod-manager"),
@@ -620,6 +630,26 @@ mod tests {
         assert_eq!(ASSET.commands.len(), 4);
         assert_eq!(MOD.commands.len(), 3);
         assert_eq!(MGR.commands.len(), 10);
+    }
+
+    #[test]
+    fn no_manager_command_that_can_recover_a_transaction_claims_to_be_read_only() {
+        // `mgr list` and `mgr analyze` print and nothing else — but both go through
+        // `import::list`, which recovers an interrupted replacement before listing and may discard
+        // the superseded entry. Some clients auto-approve read-only tools; this must not be one.
+        for sub in ["list", "analyze"] {
+            let command = MGR.command(sub).expect("exists");
+            assert_ne!(
+                command.safety.worst_case(),
+                Class::Read,
+                "`mgr {sub}` recovers interrupted imports and cannot be advertised as read-only"
+            );
+            // Still ungated: refusing to list a library would be worse than the problem.
+            assert!(!command.safety.worst_case().needs_write_permission());
+        }
+
+        // `status` is genuinely read-only — it does not go through `import::list`.
+        assert_eq!(MGR.command("status").expect("exists").safety.worst_case(), Class::Read);
     }
 
     #[test]
