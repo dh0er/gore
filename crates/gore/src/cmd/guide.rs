@@ -232,14 +232,23 @@ fn rewrite_link(dest: &str, page_slug: &str, repo_ref: &str) -> String {
         return format!("{REPO_WEB_BASE}/{route}/{repo_ref}/{target}{fragment}");
     }
 
-    // A sibling guide page is a section of this document.
-    if let Some(slug) = path.strip_suffix(".md") {
-        if guide::page(slug).is_some() {
-            return match fragment {
-                Some(fragment) => format!("#{slug}--{fragment}"),
-                None => format!("#{slug}"),
-            };
-        }
+    // A sibling guide page is a section of this document. The kind has to be checked: reference
+    // pages are embedded in the binary too, so a bare `dataassets-internals.md` would otherwise
+    // resolve to `#dataassets-internals` — an anchor for a section this document never renders.
+    if let Some(page) = path.strip_suffix(".md").and_then(guide::page) {
+        return match page.kind {
+            Kind::Guide => match fragment {
+                Some(fragment) => format!("#{}--{fragment}", page.slug),
+                None => format!("#{}", page.slug),
+            },
+            // Not in the zip and not in this document, so it goes to GitHub like any other
+            // outbound link.
+            Kind::Reference => {
+                // `Page::file` is already docs-relative, e.g. `reference/dataassets-internals.md`.
+                let fragment = fragment.map(|f| format!("#{f}")).unwrap_or_default();
+                format!("{REPO_WEB_BASE}/blob/{repo_ref}/docs/{}{fragment}", page.file)
+            }
+        };
     }
 
     dest.to_string()
@@ -622,6 +631,27 @@ mod tests {
     fn an_external_link_is_left_alone() {
         let url = "https://modelcontextprotocol.io";
         assert_eq!(rewrite_link(url, "mcp", "abc"), url);
+    }
+
+    #[test]
+    fn a_sibling_link_to_a_reference_page_goes_to_github_not_a_dead_anchor() {
+        // Reference pages are embedded in the binary but never rendered into this document, so
+        // treating one as an in-document section would mint an anchor with nothing behind it.
+        let reference = guide::pages_of(Kind::Reference).next().expect("a reference page");
+        let sibling = format!("{}.md", reference.slug);
+
+        let rewritten = rewrite_link(&sibling, "dataassets", "abc123");
+        assert!(
+            rewritten.starts_with("https://github.com/dh0er/gore/blob/abc123/docs/reference/"),
+            "got {rewritten}"
+        );
+        assert!(!rewritten.starts_with('#'), "must not become an in-document anchor");
+
+        // The `../reference/…` spelling the guide actually uses keeps working too.
+        assert_eq!(
+            rewrite_link("../reference/dataassets-internals.md", "dataassets", "abc123"),
+            "https://github.com/dh0er/gore/blob/abc123/docs/reference/dataassets-internals.md"
+        );
     }
 
     #[test]
