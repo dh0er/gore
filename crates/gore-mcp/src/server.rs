@@ -588,6 +588,33 @@ mod tests {
     }
 
     #[test]
+    fn a_null_id_is_a_request_not_a_notification() {
+        // Only an omitted `id` denotes a notification. Treating `"id": null` as one would run the
+        // call — spawning a child, with whatever it does — and then swallow the reply, leaving the
+        // client to wait and very likely retry.
+        let input = Cursor::new(
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"ping\"}
+".as_bytes().to_vec(),
+        );
+        let mut output = Vec::new();
+        serve(options(), input, &mut output).expect("clean shutdown");
+
+        let text = String::from_utf8(output).expect("utf-8");
+        assert!(!text.trim().is_empty(), "a null-id request must be answered");
+        let reply: Value = serde_json::from_str(text.trim()).expect("json");
+        assert!(reply["id"].is_null(), "the answer echoes the null id: {reply}");
+        assert!(reply["result"].is_object());
+
+        // An omitted id is still a notification, and still silent.
+        let notification =
+            Cursor::new("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}
+".as_bytes().to_vec());
+        let mut silent = Vec::new();
+        serve(options(), notification, &mut silent).expect("clean shutdown");
+        assert!(silent.is_empty(), "an omitted id means no reply");
+    }
+
+    #[test]
     fn a_batch_is_answered_with_one_array_of_replies() {
         // MCP revisions before 2025-06-18 permit JSON-RPC batches, and this server still
         // negotiates them, so a client may legitimately send an array in one frame.

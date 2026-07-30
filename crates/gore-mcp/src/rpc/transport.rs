@@ -151,8 +151,14 @@ fn parse_frame(line: &[u8]) -> Frame {
 
 fn parse_object(value: Value) -> Frame {
     let id = value.get("id").cloned().unwrap_or(Value::Null);
+    // Read before deserializing: `Option<Value>` collapses an omitted `id` and `"id": null` into
+    // the same `None`, and only the first of those is a notification.
+    let id_present = value.get("id").is_some();
     match serde_json::from_value::<Request>(value) {
-        Ok(request) if request.version_ok() => Frame::Message(Box::new(request)),
+        Ok(mut request) if request.version_ok() => {
+            request.id_present = id_present;
+            Frame::Message(Box::new(request))
+        }
         Ok(_) => Frame::Invalid { id, reason: "`jsonrpc` must be \"2.0\"".into() },
         Err(error) => Frame::Invalid { id, reason: error.to_string() },
     }

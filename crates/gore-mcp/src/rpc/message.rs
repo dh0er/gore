@@ -27,12 +27,23 @@ pub struct Request {
     pub method: String,
     #[serde(default)]
     pub params: Value,
+    /// Whether the frame carried an `id` member at all.
+    ///
+    /// Not deserialized — `Option<Value>` cannot tell an omitted `id` from `"id": null`, and only
+    /// the first is a notification. The transport sets this from the raw object, because the
+    /// difference decides whether a request that has already run gets an answer.
+    #[serde(skip)]
+    pub id_present: bool,
 }
 
 impl Request {
-    /// A message with no `id` must never be answered.
+    /// A message with no `id` member must never be answered.
+    ///
+    /// Presence, not value. `"id": null` is a request with a null id — discouraged by JSON-RPC but
+    /// still a request — and treating it as a notification would run the call, swallow the reply,
+    /// and leave a client waiting on something it may then retry and run a second time.
     pub fn is_notification(&self) -> bool {
-        self.id.is_none()
+        !self.id_present
     }
 
     /// The id to echo back. JSON-RPC requires the member to be present even on errors, where the
