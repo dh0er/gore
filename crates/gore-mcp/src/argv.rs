@@ -338,6 +338,20 @@ fn gate(
         return Err(BuildError::Refused { path: path.to_string(), reason, flag: "--allow-write" });
     }
 
+    // Some outputs are only harmless because of where they usually point. Aim one at the game
+    // tree and the command has installed something, which is exactly what the gate is refusing.
+    if !opts.allow_write {
+        if let Some((name, target)) = installs_into_game_tree(command, args) {
+            return Err(BuildError::Refused {
+                path: path.to_string(),
+                reason: format!(
+                    "`{name}` points at `{target}`, inside the game installation — writing there                      installs the result rather than producing a file to deploy later"
+                ),
+                flag: "--allow-write",
+            });
+        }
+    }
+
     // A `Write` command is ungated because it creates new files. When its output is already there,
     // it does not create anything — it truncates — so the promise the gate rests on no longer
     // holds and the call has to be treated as a mutation.
@@ -354,6 +368,29 @@ fn gate(
         }
     }
     Ok(())
+}
+
+/// The first output argument aimed inside a game installation.
+///
+/// Recognised two ways, because the server never resolves the game path itself: the call passed an
+/// explicit `game` and the output sits under it, or the path simply contains a `G1R` component,
+/// which is the folder every Gothic 1 Remake install is identified by throughout this toolkit.
+fn installs_into_game_tree(
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Option<(&'static str, String)> {
+    let game = args.get("game").and_then(Value::as_str).map(std::path::PathBuf::from);
+
+    command.safety.installs_via.iter().copied().find_map(|name| {
+        let given = args.get(name)?.as_str()?;
+        let path = std::path::Path::new(given);
+
+        let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
+        let names_the_game_folder =
+            path.components().any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
+
+        (under_game || names_the_game_folder).then(|| (name, given.to_string()))
+    })
 }
 
 /// The first output path that is already occupied — named by an argument, or derived from one.
@@ -638,6 +675,39 @@ mod tests {
             "the sidecar exists and would be overwritten"
         );
         assert!(build_with("gore_texture", "extract", call, &permissive()).is_ok());
+    }
+
+    #[test]
+    fn packing_into_the_game_tree_is_a_deployment_and_is_gated() {
+        // `texture pack -o ./build` is an artifact; `texture pack -o <game>/G1R/Content/Paks/~mods`
+        // is the live override the game mounts, which is what `texture deploy` needs a flag for.
+        let call = |out: &str| {
+            json!({ "game": "D:/Games/G1R", "mod_dir": "mod", "name": "zzz_Mine_P", "out": out })
+        };
+
+        assert!(build_with("gore_texture", "pack", call("build/triplet"), &options()).is_ok());
+
+        for inside in [
+            "D:/Games/G1R/G1R/Content/Paks/~mods",
+            "D:/Games/G1R/anything",              // under the explicitly passed `game`
+            "E:/elsewhere/G1R/Content/Paks/~mods", // names the game folder outright
+        ] {
+            assert!(
+                matches!(
+                    build_with("gore_texture", "pack", call(inside), &options()),
+                    Err(BuildError::Refused { flag: "--allow-write", .. })
+                ),
+                "{inside} should be treated as an installation change"
+            );
+        }
+
+        assert!(build_with(
+            "gore_texture",
+            "pack",
+            call("D:/Games/G1R/G1R/Content/Paks/~mods"),
+            &permissive()
+        )
+        .is_ok());
     }
 
     #[test]

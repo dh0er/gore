@@ -231,23 +231,31 @@ pub struct Safety {
     /// cannot see the second — and a fresh PNG beside an existing sidecar would pass the gate and
     /// truncate it. Anything a command derives from an argument and then overwrites belongs here.
     pub derives: &'static [(&'static str, Derived)],
+    /// Arguments whose value turns this call into an installation change when it points inside the
+    /// game tree.
+    ///
+    /// Some commands are only a plain write because of *where* they are usually aimed. `texture
+    /// pack` writes `<out>/<name>.{utoc,ucas,pak}`, which is a scratch artifact next to a build --
+    /// unless `out` is the game's `~mods` folder, in which case those three files are the live
+    /// override the game mounts, and the call has quietly done what `texture deploy` is gated for.
+    pub installs_via: &'static [&'static str],
 }
 
 impl Safety {
     pub const fn read() -> Self {
-        Self { base: Class::Read, in_place_without: None, truncates: &[], derives: &[] }
+        Self { base: Class::Read, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
     }
     pub const fn write() -> Self {
-        Self { base: Class::Write, in_place_without: None, truncates: &[], derives: &[] }
+        Self { base: Class::Write, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
     }
     pub const fn mutate() -> Self {
-        Self { base: Class::Mutate, in_place_without: None, truncates: &[], derives: &[] }
+        Self { base: Class::Mutate, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
     }
     pub const fn destructive() -> Self {
-        Self { base: Class::Destructive, in_place_without: None, truncates: &[], derives: &[] }
+        Self { base: Class::Destructive, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
     }
     pub const fn game_launch() -> Self {
-        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[], derives: &[] }
+        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
     }
 
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
@@ -262,13 +270,27 @@ impl Safety {
             in_place_without: Some(out_arg[0]),
             truncates: out_arg,
             derives: &[],
+            installs_via: &[],
         }
     }
 
     /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
     /// they already exist. See [`Safety::truncates`].
     pub const fn write_truncating(outputs: &'static [&'static str]) -> Self {
-        Self { base: Class::Write, in_place_without: None, truncates: outputs, derives: &[] }
+        Self {
+            base: Class::Write,
+            in_place_without: None,
+            truncates: outputs,
+            derives: &[],
+            installs_via: &[],
+        }
+    }
+
+    /// Register arguments that make this an installation change when they point into the game
+    /// tree. See [`Safety::installs_via`].
+    pub const fn installs_via(mut self, args: &'static [&'static str]) -> Self {
+        self.installs_via = args;
+        self
     }
 
     /// Register paths the command derives from an argument and overwrites. See [`Safety::derives`].

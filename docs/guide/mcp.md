@@ -69,7 +69,7 @@ Many commands sidestep the gate entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` needs no flag;
 omitting `--out` overwrites the game's own file and does.
 
-Three rules are worth knowing because they have no equivalent on the command
+Four rules are worth knowing because they have no equivalent on the command
 line:
 
 - **An existing output file is an overwrite, not a creation.** Every command
@@ -102,6 +102,12 @@ line:
   and not a lock: a file created *while* a command runs is still overwritten.
   Closing that window would mean making these commands refuse to re-run at all,
   which is the one thing they exist to do.
+- **Where a file lands can matter more than what writes it.** `texture pack`
+  and `asset pack` normally produce an artifact you deploy later, so they need
+  no flag — but pointing `--out` inside the game tree writes straight into the
+  live `~mods` override, which is a deployment. That case needs
+  `--allow-write`, recognised either from an explicit `--game` or from a `G1R`
+  folder in the path.
 - **`loc extract` is gated even though it never touches the game.** On the
   command line it asks *Proceed? [y/N]* before replacing the shared
   `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP

@@ -166,7 +166,9 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         "pack",
         "Pack a mod dir of cooked files into a Zen triplet (.utoc/.ucas/.pak)",
         TEXTURE_PACK_ARGS,
-        Safety::write(),
+        // Producing a triplet in a scratch directory is a plain write; producing it in the
+        // game's `~mods` is a deployment, which is what `texture deploy` is gated for.
+        Safety::write().installs_via(&["out"]),
         T_LONG,
     )
     .guide("textures"),
@@ -366,7 +368,9 @@ const ASSET_COMMANDS: &[CommandSpec] = &[
         "pack",
         "Pack one legacy package as an additive, undeployed Zen triplet.",
         ASSET_PACK_ARGS,
-        Safety::write(),
+        // Same shape as `texture pack`: the triplet is an artifact to deploy later, unless it
+        // is written straight into the install.
+        Safety::write().installs_via(&["out"]),
         T_LONG,
     )
     .json(JsonSupport::Stdout)
