@@ -4,7 +4,8 @@
 //! Two things here are unlike anything else in the table:
 //!
 //! - `compile` and `compile-module` drive the game's own compiler by launching the game executable.
-//!   They are [`Safety::game_launch`] and unreachable without `--allow-game-launch`.
+//!   They are [`Safety::game_launch`], which requires `--allow-write` as well: compiling also
+//!   stages its result in the installation.
 //! - `bytediff` spells `--json` as a *path* to write a report to, not as a switch that changes
 //!   stdout. It is therefore an ordinary argument and is never passed implicitly; passing it
 //!   automatically would create a file nobody asked for.
@@ -69,7 +70,8 @@ const FIELD_FILTER: ArgSpec =
 ///
 /// The hook captures AngelScript compiler errors from the running game, which is the only way an
 /// agent gets to see why a compile failed — without it a failed compile returns no error text at
-/// all. It stays available; `--allow-game-launch` is the gate.
+/// all. It stays available; the command's own gate — `--allow-game-launch` plus `--allow-write` —
+/// is what decides whether it runs at all.
 const NO_DIAGNOSTICS: ArgSpec = ArgSpec::new(
     "no_diagnostics",
     Switch("no-diagnostics"),
@@ -683,8 +685,9 @@ pub const AS: GroupSpec = GroupSpec {
     cli: "as",
     summary: "AngelScript precompiled-cache tooling: inspect and decompile the shipped script \
               cache, patch scalar defaults in place, and compile authored modules back in. \
-              Inspection is free; `compile` and `compile-module` launch the game and need \
-              --allow-game-launch.",
+              Inspection is free; `compile` and `compile-module` launch the game and stage the \
+              result in the installation, so they need both --allow-game-launch and \
+              --allow-write.",
     shape: GroupShape::Nested,
     commands: AS_COMMANDS,
 };

@@ -750,6 +750,32 @@ mod tests {
     }
 
     #[test]
+    fn no_prose_names_the_launch_flag_without_the_write_flag() {
+        // The same fact has now been wrong in four places: the primer, the refusal message, the
+        // class label, and a group summary. Every one of them is prose a client reads, so check
+        // the prose itself rather than fixing them one review at a time.
+        let mut prose: Vec<(&str, &str)> = Vec::new();
+        for group in GROUPS {
+            prose.push((group.tool, group.summary));
+            for command in group.commands {
+                prose.push((command.sub, command.summary));
+                for arg in command.args {
+                    prose.push((arg.name, arg.help));
+                }
+            }
+        }
+
+        for (where_, text) in prose {
+            if text.contains("--allow-game-launch") {
+                assert!(
+                    text.contains("--allow-write"),
+                    "{where_} names --allow-game-launch without --allow-write: {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_surface_that_names_a_permission_agrees_with_the_gate() {
         // The same fact is stated in three places — this label, the instructions primer, and the
         // refusal message — and it has now been wrong in each of them once. A command that needs
