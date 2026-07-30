@@ -418,6 +418,13 @@ fn installs_into_game_tree(
 /// ancestor and re-attaching the rest gets the symlinked parents — a junction pointing into the
 /// game folder is exactly how this check would otherwise be walked around.
 fn resolve(path: &std::path::Path) -> std::path::PathBuf {
+    resolve_following_links(path, 0)
+}
+
+/// How many symlink hops to follow before giving up. Loops are the reason there is a limit at all.
+const MAX_LINK_HOPS: u8 = 8;
+
+fn resolve_following_links(path: &std::path::Path, hops: u8) -> std::path::PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut existing = absolute.as_path();
@@ -426,6 +433,26 @@ fn resolve(path: &std::path::Path) -> std::path::PathBuf {
         if let Ok(real) = existing.canonicalize() {
             let mut resolved = real;
             resolved.extend(trailing.iter().rev());
+
+            // The last component can be a symlink whose target does not exist *yet*. `canonicalize`
+            // refuses those, so the loop above stops at the parent and reattaches the link's own
+            // name — which is not where the write lands. `fs::write` follows the link, so a
+            // dangling link pointing into the installation would otherwise pass both this check
+            // and the existence check and then create the file the game reads.
+            if hops < MAX_LINK_HOPS {
+                if let Ok(metadata) = std::fs::symlink_metadata(&resolved) {
+                    if metadata.file_type().is_symlink() {
+                        if let Ok(target) = std::fs::read_link(&resolved) {
+                            let followed = if target.is_absolute() {
+                                target
+                            } else {
+                                resolved.parent().unwrap_or(std::path::Path::new("")).join(target)
+                            };
+                            return resolve_following_links(&followed, hops + 1);
+                        }
+                    }
+                }
+            }
             return resolved;
         }
         match (existing.parent(), existing.file_name()) {
@@ -892,6 +919,45 @@ mod tests {
                 "{sub} into the live Mods folder installs a mod"
             );
             assert!(build_with(tool, sub, call(live), &permissive()).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_dangling_output_symlink_is_followed_to_where_the_write_lands() {
+        // `canonicalize` refuses a link whose target does not exist yet, so an outside link aimed
+        // at an absent file under G1R looked like an ordinary outside path — and `fs::write`
+        // follows it, creating the file the game reads.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let install = dir.path().join("G1R").join("Content");
+        std::fs::create_dir_all(&install).expect("install-like tree");
+
+        let link = dir.path().join("innocent.json");
+        let target = install.join("not-there-yet.json");
+        if !symlink_file(&target, &link) {
+            eprintln!("skipping: this platform/user cannot create symlinks");
+            return;
+        }
+        assert!(!link.exists(), "the link must be dangling for this to mean anything");
+
+        let call = json!({ "sdk_dir": "SDK", "out": link.to_string_lossy() });
+        assert!(
+            matches!(
+                build_with("gore_catalog", "dump", call, &options()),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "the write lands inside the installation, whatever the link is called"
+        );
+    }
+
+    /// Create a file symlink, reporting whether the platform and user allow it.
+    fn symlink_file(target: &std::path::Path, link: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link).is_ok()
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
         }
     }
 
