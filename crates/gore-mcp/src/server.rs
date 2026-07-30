@@ -176,7 +176,12 @@ impl Session {
             return Response::ok(id, tools::guide::call(&arguments));
         }
         if name == tools::help::NAME {
-            return Response::ok(id, tools::help::call(&arguments, self.spawn.as_ref()));
+            return match tools::help::call(&arguments, self.spawn.as_ref()) {
+                Ok(result) => Response::ok(id, result),
+                // Same rule as below: a process that cannot be started is an internal error, not
+                // something the model can fix by calling differently.
+                Err(message) => Response::error(id, errors::INTERNAL_ERROR, message),
+            };
         }
         let group = spec::group(name).expect("checked above");
 

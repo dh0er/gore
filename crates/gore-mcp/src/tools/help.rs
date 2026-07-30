@@ -57,22 +57,22 @@ pub fn definition() -> Value {
     })
 }
 
-pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Value {
+pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, String> {
     for key in arguments.keys() {
         if key != "command" {
-            return to_error_result(format!("`{key}` is not an argument of {NAME}."));
+            return Ok(to_error_result(format!("`{key}` is not an argument of {NAME}.")));
         }
     }
 
     let Some(command) = arguments.get("command").and_then(Value::as_str) else {
-        return to_error_result(
+        return Ok(to_error_result(
             "`command` is required. Pass an empty string for the top-level command list.",
-        );
+        ));
     };
 
     let path: Vec<&str> = command.split_whitespace().collect();
     if let Err(message) = validate(&path) {
-        return to_error_result(message);
+        return Ok(to_error_result(message));
     }
 
     let display = if path.is_empty() {
@@ -110,16 +110,19 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Value {
                 truncated = true;
             }
 
-            json!({
+            Ok(json!({
                 "content": [
                     { "type": "text", "text": display },
                     { "type": "text", "text": text },
                 ],
                 "structuredContent": { "exit_code": outcome.status, "truncated": truncated },
                 "isError": !outcome.succeeded(),
-            })
+            }))
         }
-        Err(error) => to_error_result(format!("could not run `{display}`: {error}")),
+        // A process that will not start is this server's problem, not the model's — the same
+        // judgement `Session::call_tool` makes for every other tool. Returning it as a tool result
+        // here would have one broken binary look like two different failures.
+        Err(error) => Err(format!("could not run `{display}`: {error}")),
     }
 }
 
@@ -205,7 +208,19 @@ mod tests {
     use super::*;
     use crate::exec::{FakeSpawn, Outcome};
 
+    /// A runner that cannot start anything, standing in for a missing or unrunnable binary.
+    struct FailingSpawn;
+    impl Spawn for FailingSpawn {
+        fn run(&self, _: &Invocation) -> std::io::Result<crate::exec::Outcome> {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))
+        }
+    }
+
     fn call_with(arguments: Value, spawn: &dyn Spawn) -> Value {
+        try_call(arguments, spawn).expect("the spawn succeeded, so this is a tool result")
+    }
+
+    fn try_call(arguments: Value, spawn: &dyn Spawn) -> Result<Value, String> {
         let Value::Object(map) = arguments else { panic!("test arguments must be an object") };
         call(&map, spawn)
     }
@@ -254,6 +269,17 @@ mod tests {
         let message = text_of(&result, 0);
         assert!(message.contains("texture"), "{message}");
         assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn a_process_that_will_not_start_is_reported_as_an_internal_error() {
+        // Every other tool surfaces a failed spawn as a JSON-RPC INTERNAL_ERROR, because no change
+        // of arguments makes an unrunnable binary work. Returning it as a tool result here would
+        // make one broken binary look like two different failures depending on the tool used.
+        let spawn = FailingSpawn;
+        let outcome = try_call(json!({ "command": "mgr" }), &spawn);
+        let Err(message) = outcome else { panic!("a failed spawn must not be a tool result") };
+        assert!(message.contains("could not run"), "{message}");
     }
 
     #[test]

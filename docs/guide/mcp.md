@@ -56,7 +56,7 @@ is decided **per subcommand**, not per tool.
 | Flag | Unlocks | Examples |
 |---|---|---|
 | *(none)* | Reading, and commands writing to a free path outside the game installation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract` |
-| `--allow-write` | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mod build`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture replace`, `gen`, `stubs`, `audio extract`, `as emit-all`, `deploy-shared`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
+| `--allow-write` | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mod build`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture replace`, `texture index` without an output path, `gen`, `stubs`, `audio extract`, `as emit-all`, `deploy-shared`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
 | `--allow-game-launch` **and** `--allow-write` | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 ```powershell

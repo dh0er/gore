@@ -185,9 +185,11 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         "index",
         "Build the texture index (asset->package_id) and cache it to the shared dir",
         TEXTURE_INDEX_ARGS,
-        // Without `out` this publishes an immutable generation-specific cache; with one it calls
-        // `TextureIndex::save`, which is a plain `fs::write` over whatever is at that path.
-        Safety::write_truncating(&["out"]),
+        // With `out` this is a plain `TextureIndex::save`, an `fs::write` over that path. Without
+        // it, the index goes to the shared data directory and `pin_and_prune_managed_texture_cache`
+        // deletes the other cached generations there — shared state the GUI apps read, which is the
+        // same reason `loc extract` is gated. The existing in-place idiom says exactly that.
+        Safety::write_or_in_place(&["out"]),
         T_LONG,
     )
     .guide("textures"),
@@ -636,6 +638,8 @@ mod tests {
         // paths this layer cannot check: `remove` destroys library content, `import` replaces it
         // when the same mod is imported twice, `texture replace` rewrites cooked files under a
         // mount-mapped path, and `mod build` clears its bundle directory before rebuilding it.
+        // `texture index` is here only in its `out`-less form, where it publishes into the shared
+        // data directory and prunes the other cached generations; `worst_case` reports that shape.
         let gated: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
@@ -645,8 +649,8 @@ mod tests {
         assert_eq!(
             gated,
             vec![
-                "replace", "deploy", "undeploy", "build", "deploy", "undeploy", "import",
-                "remove", "apply", "reset"
+                "replace", "deploy", "index", "undeploy", "build", "deploy", "undeploy",
+                "import", "remove", "apply", "reset"
             ]
         );
     }
