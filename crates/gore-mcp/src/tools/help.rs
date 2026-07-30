@@ -125,7 +125,23 @@ fn validate(path: &[&str]) -> Result<(), String> {
             let Some(group) =
                 spec::GROUPS.iter().find(|group| group.cli == *first && !group.cli.is_empty())
             else {
-                return Err(format!("`gore {first}` has no subcommands. {}", available()));
+                // Two different mistakes end up here and they need different answers. `catalog`
+                // and `gen` are real top-level commands that simply take no subcommand. `project`
+                // is not a command at all — it only exists as the `gore_project` tool name, and an
+                // agent mapping tool names onto the CLI will write `project gen` and be told the
+                // command "has no subcommands", which implies it exists.
+                let is_flat_command = spec::GROUPS.iter().any(|group| {
+                    group.shape == GroupShape::Flat && group.command(first).is_some()
+                });
+                return Err(if is_flat_command {
+                    format!(
+                        "`gore {first}` takes no subcommand — ask for `{first}` on its own. \
+                         (`{second}` is a separate command; the tool groups them, the CLI does \
+                         not.)"
+                    )
+                } else {
+                    format!("`gore {first}` is not a command. {}", available())
+                });
             };
             if group.command(second).is_some() {
                 Ok(())
@@ -219,6 +235,35 @@ mod tests {
         assert_eq!(result["isError"], json!(true));
         let message = text_of(&result, 0);
         assert!(message.contains("texture"), "{message}");
+        assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn a_tool_name_used_as_a_cli_group_is_told_it_is_not_a_command() {
+        // `gore_catalog` and `gore_project` group top-level commands that the CLI keeps separate,
+        // so an agent reading tool names will try `project gen`. There is no `gore project`, and
+        // saying it "has no subcommands" would imply there is.
+        let spawn = FakeSpawn::new(Outcome::success(""));
+        let result = call_with(json!({ "command": "project gen" }), &spawn);
+
+        assert_eq!(result["isError"], json!(true));
+        let message = text_of(&result, 0);
+        assert!(message.contains("is not a command"), "{message}");
+        assert!(message.contains("gen"), "the real command list must be offered: {message}");
+        assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn a_flat_command_given_a_subcommand_is_pointed_back_at_itself() {
+        // `gore catalog` is real and takes no subcommand, which is a different mistake from the
+        // one above and deserves a different answer.
+        let spawn = FakeSpawn::new(Outcome::success(""));
+        let result = call_with(json!({ "command": "catalog dump" }), &spawn);
+
+        assert_eq!(result["isError"], json!(true));
+        let message = text_of(&result, 0);
+        assert!(message.contains("takes no subcommand"), "{message}");
+        assert!(!message.contains("is not a command"), "catalog does exist: {message}");
         assert!(spawn.calls().is_empty());
     }
 
