@@ -187,7 +187,11 @@ fn a_tool_call_runs_the_real_cli_and_returns_its_output() {
     let result = server.recv()["result"].clone();
 
     assert_eq!(result["isError"], json!(false), "{result}");
-    assert_eq!(result["content"][0]["text"], "gore config path");
+    // The line names the binary the server re-execs, which under test is the built `gore.exe`
+    // by absolute path rather than a bare `gore` — that is the point of showing it.
+    let shown = result["content"][0]["text"].as_str().expect("a command line");
+    assert!(shown.ends_with(" config path"), "{shown}");
+    assert!(shown.contains("gore"), "{shown}");
     let stdout = result["content"][1]["text"].as_str().unwrap();
     assert!(stdout.contains("config.json"), "{stdout}");
     assert_eq!(result["structuredContent"]["exit_code"], 0);
@@ -403,7 +407,8 @@ fn the_help_tool_returns_the_cli_own_help() {
     let result = server.recv()["result"].clone();
 
     assert_eq!(result["isError"], json!(false), "{result}");
-    assert_eq!(result["content"][0]["text"], "gore as patch-default --help");
+    let shown = result["content"][0]["text"].as_str().expect("a command line");
+    assert!(shown.ends_with(" as patch-default --help"), "{shown}");
     let help = result["content"][1]["text"].as_str().unwrap();
     assert!(help.contains("--expected-hex"), "{help}");
 
