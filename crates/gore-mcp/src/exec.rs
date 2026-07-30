@@ -555,15 +555,18 @@ mod tests {
 
         #[test]
         fn a_child_that_outruns_its_deadline_is_killed() {
-            // `ping -n 4` waits about three seconds; the deadline is one.
-            let (spawn, invocation) = shell("ping -n 4 127.0.0.1 > NUL", Duration::from_secs(1));
+            // The child would run for about half a minute; the deadline is one second. The gap is
+            // deliberately huge: with a child that finishes near the assertion bound, a slow
+            // machine makes "killed on time" and "ran to completion" indistinguishable, and the
+            // test flakes under parallel load instead of reporting anything.
+            let (spawn, invocation) = shell("ping -n 30 127.0.0.1 > NUL", Duration::from_secs(1));
             let started = Instant::now();
             let outcome = spawn.run(&invocation).expect("spawn");
 
             assert!(outcome.timed_out, "{outcome:?}");
             assert_eq!(outcome.status, None);
             assert!(
-                started.elapsed() < Duration::from_secs(3),
+                started.elapsed() < Duration::from_secs(15),
                 "the deadline should have cut this short, took {:?}",
                 started.elapsed()
             );

@@ -576,7 +576,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "patch-default",
         "Copy-on-write patch one `default-sites` scalar using semantic lookup plus raw CAS.",
         PATCH_DEFAULT_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .json(JsonSupport::Stdout)
@@ -595,7 +595,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "patch-tag-map",
         "Copy-on-write patch one sealed GameplayTag-to-float32 map entry using semantic CAS.",
         PATCH_TAG_MAP_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .json(JsonSupport::Stdout)

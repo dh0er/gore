@@ -366,7 +366,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract one entry without overwriting an existing file",
         VOICE_EXTRACT_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .exactly_one(VOICE_SELECTOR)
@@ -375,7 +375,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         "add",
         "Append a validated Ogg file to a new archive",
         VOICE_ADD_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .guide("voice"),
@@ -383,7 +383,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         "replace",
         "Replace one entry with a validated Ogg file in a new archive",
         VOICE_REPLACE_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .exactly_one(VOICE_SELECTOR)
@@ -392,7 +392,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         "apply-manifest",
         "Apply a versioned JSON edit manifest to a new archive in one pass",
         VOICE_APPLY_MANIFEST_ARGS,
-        Safety::write(),
+        Safety::write().installs_via(&["out"]),
         T_LONG,
     )
     .guide("voice"),

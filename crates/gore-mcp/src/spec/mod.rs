@@ -870,6 +870,54 @@ mod tests {
         }
     }
 
+    /// Every command that names an output must appear in at least one of the three lists.
+    ///
+    /// This is the guard the previous rounds needed. Each of them found one more command whose
+    /// output was reachable but unchecked — because "the CLI refuses an existing output" excuses
+    /// the *truncation* question and says nothing about the *destination* one, and the two kept
+    /// being conflated. Anything with an `out` argument has to be accounted for explicitly.
+    #[test]
+    fn every_command_with_an_output_argument_is_accounted_for() {
+        let mut unchecked: Vec<String> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                let outputs: Vec<&str> = command
+                    .args
+                    .iter()
+                    .filter(|arg| matches!(arg.kind, ArgKind::Path))
+                    .map(|arg| arg.name)
+                    .filter(|name| *name == "out")
+                    .collect();
+                if outputs.is_empty() {
+                    continue;
+                }
+                let covered = |name: &str| {
+                    command.safety.truncates.contains(&name)
+                        || command.safety.installs_via.contains(&name)
+                        || command.safety.derives.iter().any(|(arg, _)| *arg == name)
+                        // A command gated outright needs no per-argument check. Asked of the
+                        // gate rather than of `Class`, because a GameLaunch command requires write
+                        // permission even though its class alone does not say so.
+                        || command.safety.requirements(&Map::new()).write
+                };
+                for name in outputs {
+                    if !covered(name) {
+                        unchecked.push(format!("{} {}", group.tool, command.sub));
+                    }
+                }
+            }
+        }
+        // `asset extract` is the one exemption. Its CLI resolves the destination through
+        // `prepare_absent_output_directory`, which refuses anything inside the live game tree
+        // outright — so the command is already the guard, and adding it here would only replace a
+        // precise CLI error with a permission refusal.
+        unchecked.retain(|name| name != "gore_asset extract");
+        assert!(
+            unchecked.is_empty(),
+            "these name an output that no safety list covers: {unchecked:?}"
+        );
+    }
+
     /// And the same for outputs whose *destination* decides the classification.
     ///
     /// Kept beside the other two for the same reason: these three mechanisms guard one promise
@@ -896,6 +944,16 @@ mod tests {
             // Writes a package pair, its sidecars and a receipt; `asset extract` refuses a
             // game-tree destination itself, this one does not.
             ("gore_asset", "patch-fixed", &["out"]),
+            // Copy-on-write, so never truncating — but the cache they write is the one the game
+            // loads, and a fresh path inside `Script/` installs it.
+            ("gore_as", "patch-default", &["out"]),
+            ("gore_as", "patch-tag-map", &["out"]),
+            // Voice archives live in the installation, so a fresh output there is an installed
+            // archive however new the path is.
+            ("gore_voice", "extract", &["out"]),
+            ("gore_voice", "add", &["out"]),
+            ("gore_voice", "replace", &["out"]),
+            ("gore_voice", "apply-manifest", &["out"]),
             ("gore_texture", "pack", &["out"]),
         ];
         expected.sort_unstable();
