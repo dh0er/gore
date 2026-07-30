@@ -107,7 +107,7 @@ Two more flags tune behaviour rather than permissions:
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--timeout-secs <SECS>` | `0` | Override every per-command wall-clock cap. `0` keeps the built-in ones (60 s / 300 s / 1800 s by command). |
+| `--timeout-secs <SECS>` | `0` | Override every per-command wall-clock cap. `0` keeps the built-in ones (60 s / 300 s / 1800 s, and 2700 s for `as compile`). |
 | `--max-output-kib <KIB>` | `256` | Cap on captured stdout per command. Truncated output says so. |
 
 ## The tools
@@ -164,6 +164,11 @@ Only the guide ships in the release zip and only the guide is rendered by
 - Every command has a wall-clock limit and is killed if it exceeds it. Killing
   the CLI does not stop anything it started — after a timed-out `as compile`,
   check for a running game.
+- `as compile` gets a longer cap than anything else on purpose. It hands the
+  game its own 30-minute deadline and restores the installation afterwards, so
+  the outer limit has to outlast the inner one — a wrapper killed mid-compile
+  never runs that restore. Setting `--timeout-secs` below 30 minutes removes
+  that headroom and makes a timed-out compile leave the install staged.
 - Commands with a `--json` flag always get it, and their parsed output is
   returned as structured content alongside the text.
 - A command that fails is reported as a normal result carrying the CLI's own

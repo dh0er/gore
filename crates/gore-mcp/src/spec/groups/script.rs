@@ -14,7 +14,8 @@
 use crate::spec::{
     ArgForm::{Long, LongRepeated, Positional, PositionalRepeated, Switch},
     ArgKind::{Bool, Enum, Hex, Int, IntList, Path, Str, StrList},
-    ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG, T_NORMAL,
+    ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_COMPILE, T_FAST, T_LONG,
+    T_NORMAL,
 };
 
 const CACHE_FILE: ArgSpec =
@@ -610,7 +611,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
          `-as-generate-precompiled-data` flag. Launches the game.",
         COMPILE_ARGS,
         Safety::game_launch().in_place_without(&["out"]),
-        T_LONG,
+        T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
     .guide("scripts"),
@@ -620,7 +621,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
          Studio pipeline and launches the game.",
         COMPILE_MODULE_ARGS,
         Safety::game_launch(),
-        T_LONG,
+        T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
     .guide("scripts"),
@@ -701,6 +702,26 @@ mod tests {
             .map(|command| command.sub)
             .collect();
         assert_eq!(launching, vec!["compile", "compile-module"]);
+    }
+
+    /// The generator's own deadline, from `gore-as` (`compile.rs`: `Duration::from_secs(30 * 60)`).
+    const INNER_GENERATOR_TIMEOUT_SECS: u64 = 30 * 60;
+
+    #[test]
+    fn a_compile_outlives_the_generator_deadline_it_wraps() {
+        // The outer clock starts before preflight and staging; the inner one only when the game is
+        // launched. Equal budgets mean the outer kill always lands first on a long compile, and a
+        // killed wrapper never reaches `CompileTransaction::restore_install` — the installation is
+        // left staged. Whatever the numbers become, the outer one has to be the larger.
+        for sub in ["compile", "compile-module"] {
+            let command = AS.command(sub).expect("exists");
+            assert!(
+                command.timeout_secs > INNER_GENERATOR_TIMEOUT_SECS,
+                "`as {sub}` is capped at {}s, which does not outlast the generator's own {}s",
+                command.timeout_secs,
+                INNER_GENERATOR_TIMEOUT_SECS
+            );
+        }
     }
 
     #[test]

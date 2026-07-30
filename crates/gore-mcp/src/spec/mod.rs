@@ -462,6 +462,16 @@ impl GroupSpec {
 pub const T_FAST: u64 = 60;
 pub const T_NORMAL: u64 = 300;
 pub const T_LONG: u64 = 1800;
+/// The two commands that drive the game to regenerate the script cache.
+///
+/// Deliberately longer than [`T_LONG`]. `gore-as` gives the generator its own 30-minute deadline
+/// (`compile.rs`, `Duration::from_secs(30 * 60)`), but that clock only starts once the game is
+/// launched, while this one starts before the child has run preflight or staged the Script tree.
+/// Matching the two would guarantee the outer kill lands first on any long compile — and killing
+/// the wrapper mid-transaction skips `CompileTransaction::restore_install`, leaving the
+/// installation staged. The extra quarter hour is the headroom that lets the inner timeout, the
+/// game's termination and the restore all happen before this one is reached.
+pub const T_COMPILE: u64 = 2700;
 
 /// Every group this server exposes, in the order they appear in `tools/list`.
 ///
