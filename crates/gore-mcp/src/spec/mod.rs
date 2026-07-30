@@ -172,6 +172,12 @@ pub enum Derived {
     Extension(&'static str),
     /// `Path::join(_)` — `dump-mod` writes the `gore-dump/` folder inside the directory it is given.
     Child(&'static str),
+    /// `Path::join(<value of the named argument>)` — `scaffold` writes `<out>/<mod_name>/`.
+    ///
+    /// The difference from [`Derived::Child`] is where the last component comes from: a literal
+    /// here would be wrong, because the caller chooses it. This is what keeps `scaffold` ungated
+    /// for a fresh mod name while still catching a collision with an existing mod folder.
+    ChildOfArg(&'static str),
 }
 
 /// A command's safety class, including the conditional case.
@@ -202,7 +208,7 @@ pub struct Safety {
     ///
     /// A `Write` command needs no entry here for exactly two reasons, and every one that has none
     /// was checked against its CLI writer: it refuses an occupied destination itself (the `asset`
-    /// and `voice` families, `texture pack`, `as patch-default`, `as patch-tag-map`, `scaffold`),
+    /// and `voice` families, `texture pack`, `as patch-default`, `as patch-tag-map`),
     /// or it maintains the toolkit's own reversible state (`config set`/`unset`/`detect`,
     /// `mgr enable`/`disable`/`order`). Everything else is a mutation.
     ///
@@ -801,6 +807,7 @@ mod tests {
 
         let expected: Vec<(&str, &str, &[(&'static str, Derived)])> = vec![
             ("gore_catalog", "dump-mod", &[("out", Derived::Child("gore-dump"))]),
+            ("gore_project", "scaffold", &[("out", Derived::ChildOfArg("mod_name"))]),
             ("gore_texture", "extract", &[("out", Derived::Extension("png.json"))]),
         ];
         assert_eq!(derived, expected);

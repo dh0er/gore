@@ -321,7 +321,11 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         "scaffold",
         "Create a UE4SS Lua mod skeleton directory",
         SCAFFOLD_ARGS,
-        Safety::write(),
+        // The CLI refuses only when `Scripts/main.lua` is already there, so an existing
+        // non-Lua UE4SS mod under the same name is entered and its `enabled.txt` truncated.
+        // Unlike `gen`, the folder is fully derivable -- `<out>/<mod_name>` -- so a fresh name
+        // still needs no flag and only the collision is gated.
+        Safety::write().also_writes(&[("out", Derived::ChildOfArg("mod_name"))]),
         T_FAST,
     )
     .guide("items"),

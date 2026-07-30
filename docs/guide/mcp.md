@@ -82,10 +82,14 @@ line:
   `extract-remap`, and `bytediff --json`). Passing an input's own path as the
   output counts too — that is an in-place rewrite wearing a safe name.
   The `asset` and `voice` families, `texture pack` and `as patch-default` need
-  no gate at all — their CLI refuses an existing output on its own.
-  Two commands write a path no argument names, and are checked all the same:
-  `texture extract` also writes `<out>.png.json`, and `dump-mod` writes a
-  `gore-dump/` folder inside the directory it is given. Commands whose targets cannot be checked
+  no gate at all — their CLI refuses an existing output on its own. `scaffold`
+  refuses too, but only when `Scripts/main.lua` is already there, which is why
+  its mod folder is checked here as well.
+  Three commands write a path no argument spells out, and are checked all the
+  same: `texture extract` also writes `<out>.png.json`, `dump-mod` writes a
+  `gore-dump/` folder inside the directory it is given, and `scaffold` writes
+  `<out>/<mod_name>/` — so a fresh mod name needs no flag and only a collision
+  with an existing mod folder is gated. Commands whose targets cannot be checked
   need `--allow-write` outright, and writing into a directory is no exception —
   the folder may exist harmlessly while the files inside it are replaced one by
   one. That covers `gen` and `mod build` (target folder named inside the spec

@@ -377,6 +377,7 @@ fn existing_target(
         let derived = match how {
             Derived::Extension(extension) => base.with_extension(extension),
             Derived::Child(child) => base.join(child),
+            Derived::ChildOfArg(other) => base.join(args.get(other)?.as_str()?),
         };
         derived.exists().then(|| (name, derived.to_string_lossy().into_owned()))
     })
@@ -637,6 +638,27 @@ mod tests {
             "the sidecar exists and would be overwritten"
         );
         assert!(build_with("gore_texture", "extract", call, &permissive()).is_ok());
+    }
+
+    #[test]
+    fn scaffolding_over_an_existing_mod_folder_is_gated_but_a_fresh_name_is_not() {
+        // The CLI only refuses when `Scripts/main.lua` exists, so an existing non-Lua mod under
+        // the same name is entered and its `enabled.txt` truncated. The folder is `<out>/<mod_name>`
+        // -- both arguments -- so the collision can be caught without gating ordinary scaffolding.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let call = |name: &str| json!({ "mod_name": name, "out": dir.path().to_string_lossy() });
+
+        assert!(build_with("gore_project", "scaffold", call("BrandNew"), &options()).is_ok());
+
+        std::fs::create_dir(dir.path().join("Existing")).expect("create mod dir");
+        assert!(
+            matches!(
+                build_with("gore_project", "scaffold", call("Existing"), &options()),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "an occupied mod folder must be gated"
+        );
+        assert!(build_with("gore_project", "scaffold", call("Existing"), &permissive()).is_ok());
     }
 
     #[test]
