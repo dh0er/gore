@@ -89,17 +89,33 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Value {
     match spawn.run(&invocation) {
         Ok(outcome) => {
             // clap prints help to stdout on success; when a path is wrong it goes to stderr.
-            let body = if outcome.stdout.trim().is_empty() {
-                outcome.stderr.clone()
+            let (body, clipped, total) = if outcome.stdout.trim().is_empty() {
+                (outcome.stderr.clone(), outcome.stderr_truncated, outcome.stderr_total)
             } else {
-                outcome.stdout.clone()
+                (outcome.stdout.clone(), outcome.stdout_truncated, outcome.stdout_total)
             };
+
+            // The spawn layer applies the server's own --max-output-kib cap before this tool ever
+            // sees the text, so on a low cap `truncate` gets a prefix that is already under its
+            // limit and passes it through silently. Presenting a prefix as the exact help is the
+            // one failure this tool cannot afford: the flags it drops are invisible.
+            let mut text = truncate(&body);
+            let mut truncated = text.ends_with(TRUNCATION_MARKER);
+            if clipped && !truncated {
+                text.push_str(&format!(
+                    "\n… [truncated: the server captured {} of {total} bytes. Raise \
+                     --max-output-kib, or ask for a narrower command.]",
+                    body.len()
+                ));
+                truncated = true;
+            }
+
             json!({
                 "content": [
                     { "type": "text", "text": display },
-                    { "type": "text", "text": truncate(&body) },
+                    { "type": "text", "text": text },
                 ],
-                "structuredContent": { "exit_code": outcome.status },
+                "structuredContent": { "exit_code": outcome.status, "truncated": truncated },
                 "isError": !outcome.succeeded(),
             })
         }
@@ -171,6 +187,8 @@ fn available() -> String {
     format!("Available commands: {}.", names.join(", "))
 }
 
+const TRUNCATION_MARKER: &str = "… [truncated]";
+
 fn truncate(body: &str) -> String {
     if body.len() <= MAX_OUTPUT_BYTES {
         return body.to_string();
@@ -179,7 +197,7 @@ fn truncate(body: &str) -> String {
     while end > 0 && !body.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}\n… [truncated]", &body[..end])
+    format!("{}\n{TRUNCATION_MARKER}", &body[..end])
 }
 
 #[cfg(test)]
@@ -236,6 +254,36 @@ mod tests {
         let message = text_of(&result, 0);
         assert!(message.contains("texture"), "{message}");
         assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn help_clipped_by_the_server_output_cap_says_so() {
+        // A low --max-output-kib makes the spawn layer hand this tool a prefix that is already
+        // under its own 64 KiB limit, so `truncate` passes it through untouched. Without the
+        // upstream flag the result would present a prefix of `gore as --help` as the exact help,
+        // and the flags it dropped would simply not exist as far as the model is concerned.
+        let mut outcome = Outcome::success("Usage: gore as <COMMAND>\n  decode-header");
+        outcome.stdout_truncated = true;
+        outcome.stdout_total = 40_000;
+
+        let spawn = FakeSpawn::new(outcome);
+        let result = call_with(json!({ "command": "as" }), &spawn);
+
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(result["structuredContent"]["truncated"], json!(true));
+        let body = text_of(&result, 1);
+        assert!(body.contains("truncated"), "{body}");
+        assert!(body.contains("40000"), "the real size belongs in the message: {body}");
+        assert!(body.contains("--max-output-kib"), "{body}");
+    }
+
+    #[test]
+    fn untruncated_help_is_not_labelled_as_clipped() {
+        let spawn = FakeSpawn::new(Outcome::success("Usage: gore mgr <COMMAND>"));
+        let result = call_with(json!({ "command": "mgr" }), &spawn);
+
+        assert_eq!(result["structuredContent"]["truncated"], json!(false));
+        assert!(!text_of(&result, 1).contains("truncated"));
     }
 
     #[test]
