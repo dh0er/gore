@@ -385,6 +385,30 @@ mod tests {
     }
 
     #[test]
+    fn the_config_commands_are_deliberately_ungated() {
+        // `set`, `unset` and `detect` do rewrite an existing config.json, which the rest of the
+        // table would call a mutation. They are the one deliberate exception, for two reasons.
+        //
+        // What they change is a preference, not content: one absolute path, visible through
+        // `config list`, restored by running `set` again. Nothing a user or the game produced is
+        // lost. And the primer tells the model to reach for exactly this when a command cannot
+        // find the game — gating it would leave that advice unfollowable and turn the single most
+        // common setup failure into a dead end the agent cannot clear.
+        //
+        // The exception is stated in the guide, not just here, because it is the one place the
+        // "rewriting an existing file needs --allow-write" rule does not hold.
+        for sub in ["set", "unset", "detect"] {
+            let command = CONFIG.command(sub).expect("exists");
+            assert!(
+                !command.safety.worst_case().needs_write_permission(),
+                "`config {sub}` is gated; if that is intended, the guide and primer must say so"
+            );
+            assert!(command.safety.installs_via.is_empty());
+            assert!(command.safety.truncates.is_empty());
+        }
+    }
+
+    #[test]
     fn exactly_the_commands_whose_targets_cannot_be_checked_are_gated() {
         // `deploy-shared` copies the SDK into the game's `ue4ss/Mods`; `gen` rewrites
         // `<out>/<name from overrides.toml>`; `stubs` overwrites one `.lua` per class in its

@@ -70,7 +70,7 @@ Many commands sidestep the gate entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` needs no flag;
 omitting `--out` overwrites the game's own file and does.
 
-Four rules are worth knowing because they have no equivalent on the command
+Five rules are worth knowing because they have no equivalent on the command
 line:
 
 - **An existing output file is an overwrite, not a creation.** Every command
@@ -111,6 +111,12 @@ line:
   is an installation. That case needs
   `--allow-write`, recognised either from an explicit `--game` or from a `G1R`
   folder in the path.
+- **`gore config` is the one exception to all of this.** `set`, `unset` and
+  `detect` rewrite the shared `config.json` without a flag, even though it
+  already exists. What they change is a preference — one path, visible in
+  `config list`, restored by setting it again — and it is what an assistant
+  needs when a command cannot find the game. Gating it would turn the most
+  common setup failure into something the assistant cannot clear for you.
 - **`loc extract` is gated even though it never touches the game.** On the
   command line it asks *Proceed? [y/N]* before replacing the shared
   `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP

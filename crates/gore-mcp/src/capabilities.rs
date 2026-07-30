@@ -181,7 +181,9 @@ gore://guide/<page> and gore://reference/<page>.
 WHERE THE GAME IS
 Most commands locate the game themselves: an explicit `game` argument wins, then the configured
 path, then Steam auto-detection. If something fails because it cannot find the game, set it once
-with gore_config (subcommand "set", key "game-path") instead of passing `game` every time.
+with gore_config (subcommand "set", key "game-path") instead of passing `game` every time. That
+one needs no flag even though it rewrites an existing file: it stores a preference, not content,
+and it is what clears the most common setup failure.
 "#;
 
 const HOW_IT_BEHAVES: &str = r#"
