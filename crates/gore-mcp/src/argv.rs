@@ -696,15 +696,27 @@ fn type_name(value: &Value) -> &'static str {
 /// Anything that is not plainly a bare word is single-quoted. PowerShell treats a single-quoted
 /// string as literal, so `'` doubled is the only escape there is.
 pub fn render(exe: &std::path::Path, argv: &[OsString]) -> String {
-    // The program as it was actually launched. The documented setup points a client at an unpacked
-    // `gore.exe` by absolute path, which need not be on PATH — printing a bare `gore` would hand
-    // the reader a line that does not run.
-    let mut line = quote_for_powershell(&exe.to_string_lossy());
+    let mut line = invoke_program(exe);
     for token in argv {
         line.push(' ');
         line.push_str(&quote_for_powershell(&token.to_string_lossy()));
     }
     line
+}
+
+/// The program as PowerShell needs it written in order to actually run.
+///
+/// The documented setup points a client at an unpacked `gore.exe` by absolute path, which need not
+/// be on PATH — so the line has to name that binary. But a quoted path is a *string literal* to
+/// PowerShell, not a command: pasted as-is it prints the path and stops. `&` is the call operator
+/// that turns it back into an invocation. A bare word runs on its own and gains nothing from it.
+pub fn invoke_program(exe: &std::path::Path) -> String {
+    let quoted = quote_for_powershell(&exe.to_string_lossy());
+    if quoted.starts_with('\'') {
+        format!("& {quoted}")
+    } else {
+        quoted
+    }
 }
 
 pub fn quote_for_powershell(token: &str) -> String {
@@ -1447,10 +1459,15 @@ mod tests {
             &installed,
         )
         .unwrap();
+        // `&` is PowerShell's call operator. Without it the quoted path is a string literal that
+        // prints itself, so the line would not run when pasted.
         assert_eq!(
             elsewhere.display,
-            r"'C:\Program Files\gore\gore.exe' config set -- game-path D:/G1R"
+            r"& 'C:\Program Files\gore\gore.exe' config set -- game-path D:/G1R"
         );
+
+        // A bare program name is already an invocation and gains nothing from the operator.
+        assert!(!invocation.display.starts_with('&'), "{}", invocation.display);
 
         // The guide is PowerShell throughout and this line is presented as something to re-run, so
         // a token carrying shell syntax must not end the command when it is pasted.

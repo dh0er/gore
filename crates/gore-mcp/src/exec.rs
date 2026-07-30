@@ -122,7 +122,7 @@ impl ProcessSpawn {
 
 impl Spawn for ProcessSpawn {
     fn display_exe(&self) -> String {
-        crate::argv::quote_for_powershell(&self.exe.to_string_lossy())
+        crate::argv::invoke_program(&self.exe)
     }
 
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome> {
