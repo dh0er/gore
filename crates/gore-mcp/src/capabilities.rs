@@ -103,12 +103,27 @@ pub fn instructions(opts: &Options) -> String {
          undeploy, `mgr apply`, `mgr reset` and the in-place edits will be refused. If the user \
          needs them, they must restart this server with --allow-write; you cannot enable it.\n"
     });
-    text.push_str(if opts.allow_game_launch {
-        "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): ALLOWED \
-         (started with --allow-game-launch). It opens a real game window and takes minutes.\n"
-    } else {
-        "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): BLOCKED. \
-         The user must restart this server with --allow-game-launch.\n"
+    // Compiling needs both flags, not just --allow-game-launch: it drives the game to regenerate
+    // the cache and installs the result, so `Safety::requirements` marks every GameLaunch command
+    // as a write too. Announcing it as ALLOWED on the strength of one flag would promise something
+    // the gate then refuses.
+    text.push_str(match (opts.allow_game_launch, opts.allow_write) {
+        (true, true) => {
+            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
+             ALLOWED (started with --allow-game-launch and --allow-write). It opens a real game \
+             window and takes minutes.\n"
+        }
+        (true, false) => {
+            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
+             BLOCKED. These need BOTH --allow-game-launch and --allow-write, because compiling \
+             also stages files in the installation, and this server has only the first. The user \
+             must restart it with both.\n"
+        }
+        (false, _) => {
+            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
+             BLOCKED. These need BOTH --allow-game-launch and --allow-write. The user must \
+             restart this server with them; you cannot enable them.\n"
+        }
     });
     text.push_str(
         "\nMany commands avoid the gate entirely by writing somewhere new: passing an output \
@@ -197,6 +212,36 @@ mod tests {
         let allowed = instructions(&options(true, true));
         assert!(allowed.contains("ALLOWED"));
         assert!(!allowed.contains("BLOCKED"));
+    }
+
+    #[test]
+    fn the_primer_never_promises_a_compile_the_gate_would_refuse() {
+        // GameLaunch implies write in `Safety::requirements`, so --allow-game-launch alone is not
+        // enough. The primer used to report compiling as ALLOWED on that flag by itself, which
+        // told the model it could do something every attempt then refused.
+        let launch_only = instructions(&options(false, true));
+        assert!(
+            launch_only.contains("compile-module): BLOCKED"),
+            "one flag is not enough and the primer must say so"
+        );
+        assert!(launch_only.contains("BOTH"));
+
+        let both = instructions(&options(true, true));
+        assert!(both.contains("compile-module): ALLOWED"));
+
+        // What the primer claims and what the gate does must agree in every combination.
+        for (write, launch) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut opts = crate::Options::new(PathBuf::from("gore"), "0.1.0");
+            opts.allow_write = write;
+            opts.allow_game_launch = launch;
+            let compile = crate::spec::group("gore_as")
+                .and_then(|group| group.command("compile"))
+                .expect("as compile exists");
+            let permitted = !compile.safety.requirements(&serde_json::Map::new()).write
+                || (write && launch);
+            let claims_allowed = instructions(&opts).contains("compile-module): ALLOWED");
+            assert_eq!(claims_allowed, permitted && launch, "mismatch at ({write}, {launch})");
+        }
     }
 
     #[test]

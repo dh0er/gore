@@ -503,11 +503,15 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         T_FAST,
     )
     .guide("mod-manager"),
+    // Deletes the imported mod from the library, then rewrites the loadout without it. Nothing
+    // here is created, and nothing puts it back: the user has to re-import from wherever the mod
+    // originally came from, which they may no longer have. `enable`, `disable` and `order` stay
+    // plain writes because each is undone by its own inverse; this one is not.
     CommandSpec::new(
         "remove",
         "Remove a mod from the library (and drop it from the loadout)",
         MGR_ID_ARGS,
-        Safety::write(),
+        Safety::destructive(),
         T_FAST,
     )
     .guide("mod-manager"),
@@ -595,25 +599,33 @@ mod tests {
     }
 
     #[test]
-    fn reset_is_the_only_destructive_command() {
+    fn only_commands_that_delete_user_content_are_destructive() {
+        // `reset` restores a pristine install; `remove` deletes an imported mod from the library
+        // and nothing puts it back. Both take something away that the user supplied.
         let destructive: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case() == Class::Destructive)
             .map(|command| command.sub)
             .collect();
-        assert_eq!(destructive, vec!["reset"]);
+        assert_eq!(destructive, vec!["remove", "reset"]);
     }
 
     #[test]
-    fn exactly_the_installing_commands_need_allow_write() {
+    fn exactly_the_installing_and_deleting_commands_need_allow_write() {
+        // The two `deploy`/`undeploy` pairs are texture and mod; `apply` and `reset` are the
+        // manager's install-wide operations. `remove` is here for a different reason — it touches
+        // no installation, but it destroys library content.
         let gated: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(gated, vec!["deploy", "undeploy", "deploy", "undeploy", "apply", "reset"]);
+        assert_eq!(
+            gated,
+            vec!["deploy", "undeploy", "deploy", "undeploy", "remove", "apply", "reset"]
+        );
     }
 
     #[test]

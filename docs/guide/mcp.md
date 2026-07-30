@@ -55,8 +55,8 @@ the gate is decided **per subcommand**, not per tool.
 | Flag | Unlocks | Examples |
 |---|---|---|
 | *(none)* | Reading, and commands that create a file that is not there yet | `texture list`, `loc export`, `mod build`, `as decompile` |
-| `--allow-write` | Changing the game installation, rewriting a file in place, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mgr apply`, `mgr reset`, `texture deploy`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
-| `--allow-game-launch` | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
+| `--allow-write` | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mgr apply`, `mgr reset`, `mgr remove`, `texture deploy`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
+| `--allow-game-launch` **and** `--allow-write` | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 ```powershell
 gore mcp serve --allow-write
@@ -80,6 +80,10 @@ Two rules are worth knowing because they have no equivalent on the command line:
   `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP
   that prompt cannot be answered — stdin is the protocol channel — so it is
   suppressed, and the flag stands in for the confirmation.
+- **Compiling needs both flags.** `as compile` drives the game to regenerate the
+  script cache *and* installs the result, so `--allow-game-launch` alone is not
+  enough. `mgr remove` is gated for the same family of reason: it deletes an
+  imported mod from your library and nothing puts it back.
 
 Two more flags tune behaviour rather than permissions:
 
