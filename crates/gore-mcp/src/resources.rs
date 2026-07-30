@@ -60,8 +60,13 @@ pub fn templates() -> Vec<Value> {
 /// rather than a traversal: there is no path to traverse. The prefix must also match the page's own
 /// kind, so a reference page cannot be reached through the guide namespace or the other way round.
 pub fn read(uri: &str) -> Option<Value> {
+    // A fragment names a place *inside* a page, not a different page — the same thing it means in
+    // a browser. A client following an anchor out of the guide's own Markdown would otherwise be
+    // told the page does not exist.
+    let without_fragment = uri.split('#').next().unwrap_or(uri);
+
     let page = [Kind::Guide, Kind::Reference].into_iter().find_map(|kind| {
-        let slug = uri.strip_prefix(kind.uri_prefix())?;
+        let slug = without_fragment.strip_prefix(kind.uri_prefix())?;
         guide::page(slug).filter(|page| page.kind == kind)
     })?;
 
@@ -172,6 +177,20 @@ mod tests {
             let uri = resource["uri"].as_str().unwrap();
             assert!(read(uri).is_some(), "{uri} is listed but does not resolve");
         }
+    }
+
+    #[test]
+    fn a_fragment_names_a_place_in_the_page_not_another_page() {
+        let plain = read("gore://guide/textures").expect("textures resolves");
+        let anchored = read("gore://guide/textures#deploy").expect("the fragment is not a slug");
+
+        // Same content; the URI is echoed back as the client wrote it.
+        assert_eq!(anchored["contents"][0]["text"], plain["contents"][0]["text"]);
+        assert_eq!(anchored["contents"][0]["uri"], "gore://guide/textures#deploy");
+
+        // An unknown page is still unknown, fragment or not, and an empty slug is not a page.
+        assert!(read("gore://guide/nope#deploy").is_none());
+        assert!(read("gore://guide/#deploy").is_none());
     }
 
     #[test]
