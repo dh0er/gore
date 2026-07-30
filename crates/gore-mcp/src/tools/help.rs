@@ -143,6 +143,14 @@ fn meta_command(name: &str) -> Option<&'static [&'static str]> {
 
 /// Accept only paths that exist in the command table.
 fn validate(path: &[&str]) -> Result<(), String> {
+    // `gore help <path>` is clap's own explorer and takes a whole command path, not just one
+    // token — `gore help as compile` is valid. Strip the prefix and judge what follows; each step
+    // shortens the slice, so this terminates.
+    if let [first, rest @ ..] = path {
+        if *first == "help" && !rest.is_empty() {
+            return validate(rest);
+        }
+    }
     match path {
         [] => Ok(()),
         [first] => {
@@ -159,11 +167,6 @@ fn validate(path: &[&str]) -> Result<(), String> {
         }
         [first, second] => {
             if let Some(subcommands) = meta_command(first) {
-                // `gore help <command>` is clap's built-in explorer: its argument is any command,
-                // so validate it the way a bare first token is validated.
-                if *first == "help" {
-                    return validate(&[second]);
-                }
                 return if subcommands.contains(second) {
                     Ok(())
                 } else {
@@ -351,15 +354,31 @@ mod tests {
         // command. Refusing them would send a model hunting for a typo in something it read right.
         let spawn = FakeSpawn::new(Outcome::success("Usage: gore guide html"));
         for path in
-            ["mcp", "mcp serve", "mcp tools", "guide", "guide html", "help", "help mgr", "help gen"]
+            [
+                "mcp",
+                "mcp serve",
+                "mcp tools",
+                "guide",
+                "guide html",
+                "help",
+                "help mgr",
+                "help gen",
+                // clap's explorer takes a whole path, not one token.
+                "help as compile",
+                "help mgr reset",
+                "help guide html",
+            ]
         {
             let result = call_with(json!({ "command": path }), &spawn);
             assert_eq!(result["isError"], json!(false), "`{path}` should resolve");
         }
 
-        // `gore help <command>` takes any command, so a bogus one is still rejected.
-        let bad = call_with(json!({ "command": "help frobnicate" }), &spawn);
-        assert_eq!(bad["isError"], json!(true));
+        // `gore help <path>` takes any command path, so a bogus one is still rejected — at either
+        // depth.
+        for bogus in ["help frobnicate", "help as frobnicate", "help mgr reset extra"] {
+            let bad = call_with(json!({ "command": bogus }), &spawn);
+            assert_eq!(bad["isError"], json!(true), "`{bogus}` should be rejected");
+        }
 
         // A wrong subcommand under one of them still lists the real ones.
         let result = call_with(json!({ "command": "guide pdf" }), &spawn);

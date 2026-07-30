@@ -709,7 +709,9 @@ fn quote_for_powershell(token: &str) -> String {
     // read, and the whole point of showing it is that a person can use it.
     let bare = !token.is_empty()
         && token.chars().all(|character| {
-            character.is_ascii_alphanumeric() || "-_./\\:=+,@".contains(character)
+            // `@` is deliberately absent: PowerShell reads a leading `@` as splatting, so `@args`
+            // pasted bare expands a variable instead of passing the characters the child got.
+            character.is_ascii_alphanumeric() || "-_./\\:=+,".contains(character)
         });
     if bare {
         return token.to_string();
@@ -1455,7 +1457,9 @@ mod tests {
         // Ordinary paths and flags stay bare; quoting everything would make the line unreadable.
         assert_eq!(quote_for_powershell("--out"), "--out");
         assert_eq!(quote_for_powershell(r"D:\Games\G1R"), r"D:\Games\G1R");
-        for hostile in ["", "a b", "a;b", "a|b", "a&b", "$env:PATH", "a`b", "a(b)", "a\"b"] {
+        for hostile in
+            ["", "a b", "a;b", "a|b", "a&b", "$env:PATH", "a`b", "a(b)", "a\"b", "@args", "user@host"]
+        {
             let rendered = quote_for_powershell(hostile);
             assert!(rendered.starts_with('\'') && rendered.ends_with('\''), "{hostile:?} -> {rendered}");
         }
