@@ -156,7 +156,13 @@ impl Class {
             Class::Write => "writes new files",
             Class::Mutate => "MODIFIES THE INSTALL — needs --allow-write",
             Class::Destructive => "DESTRUCTIVE — needs --allow-write",
-            Class::GameLaunch => "LAUNCHES THE GAME — needs --allow-game-launch",
+            // Both flags, not one: `requirements` marks every GameLaunch command as a write too,
+            // because compiling stages its result in the installation. This label is the third
+            // surface that states it — the primer and the refusal message are the others — and all
+            // three have to agree with the gate.
+            Class::GameLaunch => {
+                "LAUNCHES THE GAME — needs --allow-game-launch AND --allow-write"
+            }
         }
     }
 }
@@ -719,6 +725,31 @@ mod tests {
         let safety = Safety::game_launch().in_place_without(&["out"]);
         assert_eq!(safety.effective(&Map::new()), Class::GameLaunch);
         assert_eq!(safety.worst_case(), Class::GameLaunch);
+    }
+
+    #[test]
+    fn every_surface_that_names_a_permission_agrees_with_the_gate() {
+        // The same fact is stated in three places — this label, the instructions primer, and the
+        // refusal message — and it has now been wrong in each of them once. A command that needs
+        // write permission must say so wherever it says anything.
+        for class in [Class::Read, Class::Write, Class::Mutate, Class::Destructive, Class::GameLaunch]
+        {
+            let label = class.label();
+            assert_eq!(
+                label.contains("--allow-write"),
+                class.needs_write_permission() || class == Class::GameLaunch,
+                "{label:?} disagrees with the gate about --allow-write"
+            );
+            assert_eq!(
+                label.contains("--allow-game-launch"),
+                class.needs_game_launch_permission(),
+                "{label:?} disagrees with the gate about --allow-game-launch"
+            );
+        }
+
+        // And the authority those labels describe: GameLaunch really does require both.
+        let requirements = Safety::game_launch().requirements(&Map::new());
+        assert!(requirements.game_launch && requirements.write);
     }
 
     #[test]
