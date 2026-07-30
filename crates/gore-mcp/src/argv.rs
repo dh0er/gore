@@ -346,7 +346,8 @@ fn gate(
             return Err(BuildError::Refused {
                 path: path.to_string(),
                 reason: format!(
-                    "`{name}` points at `{target}`, inside the game installation — writing there                      installs the result rather than producing a file to deploy later"
+                    "`{name}` points at `{target}`, inside the game installation, so writing \
+                     there installs the result instead of producing a file to deploy later"
                 ),
                 flag: "--allow-write",
             });
@@ -740,6 +741,65 @@ mod tests {
             &permissive()
         )
         .is_ok());
+    }
+
+    #[test]
+    fn no_error_message_carries_stray_whitespace() {
+        // These strings are written across source lines with a trailing `\`, and dropping one
+        // leaves the continuation's indentation inside the message. The model reads these; a
+        // sentence with twenty spaces in the middle of it is not what it should be parsing.
+        let errors = [
+            BuildError::UnknownSubcommand {
+                tool: "gore_as",
+                given: "nope".into(),
+                available: vec!["compile"],
+            },
+            BuildError::ArgsNotAnObject { got: "a string" },
+            BuildError::UnknownArgument { sub: "dump", given: "x".into(), known: vec!["out"] },
+            BuildError::MissingRequired { sub: "dump", name: "out", kind: "a path".into() },
+            BuildError::WrongType {
+                sub: "dump",
+                name: "out",
+                expected: "a path".into(),
+                got: "a number",
+            },
+            BuildError::NotInEnum {
+                sub: "catalog",
+                name: "kind",
+                allowed: vec!["item"],
+                got: "x".into(),
+            },
+            BuildError::NotHex { sub: "patch-fixed", name: "expected_hex", got: "zz".into() },
+            BuildError::OutOfRange {
+                sub: "inspect",
+                name: "export_index",
+                min: Some(0),
+                max: None,
+                got: -1,
+            },
+            BuildError::ExclusiveSet {
+                sub: "extract",
+                set: vec!["basename", "path"],
+                given: vec!["basename".into(), "path".into()],
+                exactly_one: true,
+            },
+            BuildError::Refused {
+                path: "mgr reset".into(),
+                reason: "restores a pristine install".into(),
+                flag: "--allow-write",
+            },
+        ];
+
+        for error in errors {
+            let rendered = error.to_string();
+            for line in rendered.lines() {
+                let body = line.trim_start();
+                assert!(
+                    !body.contains("  "),
+                    "{error:?} renders a run of spaces mid-line: {line:?}"
+                );
+            }
+        }
     }
 
     #[test]
