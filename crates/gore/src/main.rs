@@ -220,7 +220,7 @@ enum McpAction {
         /// Override every per-command wall-clock cap, in seconds (0 keeps the defaults)
         #[arg(long, default_value_t = 0, value_name = "SECS")]
         timeout_secs: u64,
-        /// Cap on captured stdout per command, in KiB
+        /// Cap on captured stdout per command, in KiB (0 keeps the default)
         #[arg(long, default_value_t = 256, value_name = "KIB")]
         max_output_kib: usize,
     },

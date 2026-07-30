@@ -24,12 +24,38 @@ pub fn serve(
     opts.allow_write = allow_write;
     opts.allow_game_launch = allow_game_launch;
     opts.timeout_override_secs = timeout_secs;
-    // A zero cap would make every tool result empty, which is never what anyone means by it.
-    opts.max_stdout_bytes = max_output_kib.max(1).saturating_mul(1024);
+    opts.max_stdout_bytes = stdout_cap_bytes(max_output_kib);
 
     let stdin = io::stdin();
     let stdout = io::stdout();
     gore_mcp::serve(opts, stdin.lock(), stdout.lock()).context("MCP server failed")
+}
+
+/// Resolve `--max-output-kib` to a byte cap.
+///
+/// `0` means "keep the built-in default", which is what `--timeout-secs 0` already means. Reading
+/// it as a literal zero would leave a 1 KiB cap that truncates almost every result — and someone
+/// passing zero to both flags is asking for defaults, not for that.
+fn stdout_cap_bytes(max_output_kib: usize) -> usize {
+    if max_output_kib == 0 {
+        gore_mcp::DEFAULT_MAX_STDOUT_BYTES
+    } else {
+        max_output_kib.saturating_mul(1024)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_means_the_default_cap_just_as_it_does_for_the_timeout() {
+        assert_eq!(stdout_cap_bytes(0), gore_mcp::DEFAULT_MAX_STDOUT_BYTES);
+        assert_eq!(stdout_cap_bytes(256), 256 * 1024);
+        assert_eq!(stdout_cap_bytes(1), 1024);
+        // A cap large enough to overflow the multiply saturates rather than wrapping to nothing.
+        assert_eq!(stdout_cap_bytes(usize::MAX), usize::MAX);
+    }
 }
 
 /// Print what `tools/list` would return.
