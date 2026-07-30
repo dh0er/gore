@@ -388,20 +388,15 @@ fn installs_into_game_tree(
     // whose destination is the *only* thing that matters; a truncating or derived output is just as
     // much an installation change when it lands in the game tree, and enumerating those separately
     // is how each of the last several rounds found one more command that had been missed.
-    let mut outputs = command
-        .safety
-        .installs_via
-        .iter()
-        .copied()
-        .chain(command.safety.truncates.iter().copied())
-        .chain(command.safety.derives.iter().map(|(name, _)| *name));
-
-    outputs.find_map(|name| {
-        let given = args.get(name)?.as_str()?;
+    //
+    // Derived paths are computed before they are checked. Mapping them back to the argument name
+    // would test the base path — and `texture extract`'s sidecar is a different file, which may be
+    // a link into the installation while the PNG beside it is not.
+    output_paths(command, args).into_iter().find_map(|(name, path)| {
         // Resolved first, always. A relative output is resolved by the *child* against this
         // process's working directory, so comparing it lexically would miss `--out .` run from
         // inside the installation — which is the same deployment by a shorter name.
-        let path = resolve(std::path::Path::new(given));
+        let path = resolve(&path);
 
         let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
         let names_the_game_folder =
@@ -409,6 +404,43 @@ fn installs_into_game_tree(
 
         (under_game || names_the_game_folder).then(|| (name, path.to_string_lossy().into_owned()))
     })
+}
+
+/// Every path this call writes: the ones an argument names, and the ones it derives from them.
+fn output_paths(
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Vec<(&'static str, std::path::PathBuf)> {
+    let named = command.safety.installs_via.iter().copied().chain(command.safety.truncates.iter().copied());
+
+    let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
+        .filter_map(|name| {
+            let given = args.get(name)?.as_str()?;
+            Some((name, std::path::PathBuf::from(given)))
+        })
+        .collect();
+
+    paths.extend(command.safety.derives.iter().filter_map(|(name, how)| {
+        let given = args.get(*name)?.as_str()?;
+        let base = std::path::Path::new(given);
+        let derived = match *how {
+            Derived::ChildOfArg(other) => base.join(args.get(other)?.as_str()?),
+            other => derived_path(base, other),
+        };
+        Some((*name, derived))
+    }));
+
+    paths
+}
+
+/// The two shapes that need nothing but the base path. `ChildOfArg` needs another argument's value
+/// and is resolved by the callers, which have the argument map.
+fn derived_path(base: &std::path::Path, how: Derived) -> std::path::PathBuf {
+    match how {
+        Derived::Extension(extension) => base.with_extension(extension),
+        Derived::Child(child) => base.join(child),
+        Derived::ChildOfArg(_) => base.to_path_buf(),
+    }
 }
 
 /// Make a path absolute, and resolve symlinks as far down as it already exists.
@@ -484,9 +516,8 @@ fn existing_target(
         let given = args.get(name)?.as_str()?;
         let base = std::path::Path::new(given);
         let derived = match how {
-            Derived::Extension(extension) => base.with_extension(extension),
-            Derived::Child(child) => base.join(child),
             Derived::ChildOfArg(other) => base.join(args.get(other)?.as_str()?),
+            other => derived_path(base, other),
         };
         derived.exists().then(|| (name, derived.to_string_lossy().into_owned()))
     })
@@ -920,6 +951,31 @@ mod tests {
             );
             assert!(build_with(tool, sub, call(live), &permissive()).is_ok());
         }
+    }
+
+    #[test]
+    fn a_derived_output_is_checked_where_it_lands_not_where_its_base_does() {
+        // `texture extract` writes the PNG and `<out>.png.json` beside it. Those are two files: the
+        // PNG can sit safely outside while the sidecar is a link into the installation.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let install = dir.path().join("G1R").join("Content");
+        std::fs::create_dir_all(&install).expect("install-like tree");
+
+        let png = dir.path().join("cursor.png");
+        let sidecar = dir.path().join("cursor.png.json");
+        if !symlink_file(&install.join("absent.json"), &sidecar) {
+            eprintln!("skipping: this platform/user cannot create symlinks");
+            return;
+        }
+
+        let call = json!({ "game": "G", "asset": "/Game/T", "out": png.to_string_lossy() });
+        assert!(
+            matches!(
+                build_with("gore_texture", "extract", call, &options()),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "the sidecar lands in the installation even though the PNG does not"
+        );
     }
 
     #[test]
