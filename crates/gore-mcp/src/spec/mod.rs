@@ -753,6 +753,11 @@ mod tests {
             ("gore_project", "package", &["out"]),
             ("gore_texture", "extract", &["out"]),
             ("gore_texture", "index", &["out"]),
+            ("gore_as", "replace", &["out"]),
+            ("gore_as", "splice", &["out"]),
+            ("gore_as", "extract", &["out"]),
+            ("gore_as", "extract-remap", &["out"]),
+            ("gore_as", "bytediff", &["json"]),
         ];
         let mut expected = expected;
         expected.sort_unstable();

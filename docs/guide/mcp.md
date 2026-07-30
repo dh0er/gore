@@ -77,7 +77,9 @@ line:
   at a path that already exists needs `--allow-write`; a fresh path needs
   nothing. That covers the catalog and model generators, `loc export`,
   `loc import`, `audio replace`, `audio export-patch`, `audio apply-patch`,
-  `texture extract` and `project package`. Passing an input's own path as the
+  `texture extract`, `texture index --out`, `project package`, and the
+  cache-producing `as` commands (`replace`, `splice`, `extract`,
+  `extract-remap`, and `bytediff --json`). Passing an input's own path as the
   output counts too — that is an in-place rewrite wearing a safe name.
   Commands writing *into* a directory (`stubs`, `audio extract`, `texture pack`,
   `as emit-all`, anything targeting the Mods folder) are not gated this way:

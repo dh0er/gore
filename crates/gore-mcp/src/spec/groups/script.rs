@@ -625,11 +625,14 @@ const AS_COMMANDS: &[CommandSpec] = &[
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
     .guide("scripts"),
+    // These five publish with a plain `std::fs::write` over whatever is at the destination
+    // (cmd/as_cache.rs) -- unlike `patch-default` and `patch-tag-map`, which refuse an occupied
+    // output themselves. `bytediff` is the odd one: its `--json` is a report path, not a switch.
     CommandSpec::new(
         "replace",
         "Replace an existing module (by name) in a base cache with a mini-cache's module.",
         REPLACE_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("scripts"),
@@ -637,7 +640,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "splice",
         "Splice a primitive-only mini-cache module into a base cache.",
         SPLICE_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("scripts"),
@@ -645,7 +648,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract one module into a standalone 1-module mini-cache (module + full tail tables).",
         EXTRACT_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("scripts"),
@@ -654,7 +657,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Extract one module from a regen cache AND remap its bytecode refs to a base (vanilla) \
          cache's keys.",
         EXTRACT_REMAP_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("scripts"),
@@ -664,7 +667,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
          after normalizing away build noise. Classifies each aligned function IDENTICAL / \
          BENIGN-DIFF / SEMANTIC-DIFF.",
         BYTEDIFF_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["json"]),
         T_LONG,
     )
     .json(JsonSupport::OutputFile)
