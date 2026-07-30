@@ -199,6 +199,14 @@ pub struct Safety {
     /// an occupied destination outright, and these are the commands whose whole purpose is to be
     /// re-run to regenerate their output. The gate answers "may this agent aim at a path it can
     /// see is occupied", which is the question an agent's mistake actually turns on.
+    ///
+    /// A `Write` command needs no entry here for exactly three reasons, and every one that has
+    /// none was checked against its CLI writer: it refuses an occupied destination itself (the
+    /// `asset` and `voice` families, `texture pack`, `as patch-default`, `as patch-tag-map`,
+    /// `scaffold`); it writes *into* a directory that ordinarily exists, where there is no single
+    /// path to check (`stubs`, `audio extract`, `voice extract`, `as emit-all`); or it maintains
+    /// the toolkit's own reversible state (`config set`/`unset`/`detect`, `mgr import`/`enable`/
+    /// `disable`/`order`). Anything that fits none of the three is classified as a mutation.
     pub truncates: &'static [&'static str],
     /// Paths this command writes that no argument names, as `(argument, how it is derived)`.
     ///

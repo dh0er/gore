@@ -150,11 +150,15 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .guide("textures"),
+    // Writes `<mod_dir>/<mount path>/<leaf>.{uasset,uexp}` and either writes or *deletes* the
+    // sibling `.ubulk` (cmd/texture.rs). Those paths come from `mount_dir(mod_dir, asset)`, a
+    // mapping this layer would have to reimplement to check — so, like `gen`, it is gated instead
+    // of described. Replacing the same asset twice is the ordinary case that overwrites.
     CommandSpec::new(
         "replace",
         "Replace a texture with a PNG, writing rewritten cooked files into a mod dir",
         TEXTURE_REPLACE_ARGS,
-        Safety::write(),
+        Safety::mutate(),
         T_NORMAL,
     )
     .guide("textures"),
@@ -401,11 +405,14 @@ const MOD_DEPLOY_ARGS: &[ArgSpec] =
 const MOD_UNDEPLOY_ARGS: &[ArgSpec] = &[GAME];
 
 const MOD_COMMANDS: &[CommandSpec] = &[
+    // `gore_mod::write_bundle` calls `remove_dir_all` on `<out>/<name from the spec JSON>` before
+    // rebuilding it, so a colliding mod name erases whatever was there. The name lives inside the
+    // spec file, which this layer does not read.
     CommandSpec::new(
         "build",
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
-        Safety::write(),
+        Safety::mutate(),
         T_LONG,
     )
     .guide("bundles"),
@@ -618,8 +625,10 @@ mod tests {
     #[test]
     fn exactly_the_installing_and_deleting_commands_need_allow_write() {
         // The two `deploy`/`undeploy` pairs are texture and mod; `apply` and `reset` are the
-        // manager's install-wide operations. `remove` is here for a different reason — it touches
-        // no installation, but it destroys library content.
+        // manager's install-wide operations. The rest are here because they overwrite or delete
+        // paths this layer cannot check: `remove` destroys library content, `texture replace`
+        // rewrites cooked files under a mount-mapped path, and `mod build` clears its bundle
+        // directory before rebuilding it.
         let gated: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
@@ -628,7 +637,10 @@ mod tests {
             .collect();
         assert_eq!(
             gated,
-            vec!["deploy", "undeploy", "deploy", "undeploy", "remove", "apply", "reset"]
+            vec![
+                "replace", "deploy", "undeploy", "build", "deploy", "undeploy", "remove", "apply",
+                "reset"
+            ]
         );
     }
 
