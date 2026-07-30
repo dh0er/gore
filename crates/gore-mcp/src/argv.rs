@@ -308,7 +308,7 @@ fn gate(
                  to write a new file instead)"
             )
         } else {
-            "modifies the game installation".into()
+            "changes the game installation or the shared catalogs the tools read".into()
         };
         return Err(BuildError::Refused { path: path.to_string(), reason, flag: "--allow-write" });
     }

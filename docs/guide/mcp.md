@@ -54,8 +54,8 @@ the gate is decided **per subcommand**, not per tool.
 
 | Flag | Unlocks | Examples |
 |---|---|---|
-| *(none)* | Reading, and commands that only create new files | `texture list`, `loc export`, `mod build`, `as decompile` |
-| `--allow-write` | Changing the game installation, or rewriting a file in place | `mod deploy`, `mgr apply`, `mgr reset`, `texture deploy`, `loc import` without an output path |
+| *(none)* | Reading, and commands that create a file that is not there yet | `texture list`, `loc export`, `mod build`, `as decompile` |
+| `--allow-write` | Changing the game installation, rewriting a file in place, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mgr apply`, `mgr reset`, `texture deploy`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
 | `--allow-game-launch` | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 ```powershell
@@ -68,6 +68,18 @@ message naming the flag, and only you can restart the server with it.
 Many commands sidestep the gate entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` needs no flag;
 omitting `--out` overwrites the game's own file and does.
+
+Two rules are worth knowing because they have no equivalent on the command line:
+
+- **An existing output file is an overwrite, not a creation.** `catalog dump`,
+  `catalog`, `story-catalog`, `gui-model` and `sync` replace their `out` file
+  without asking, so pointing one at a path that already exists needs
+  `--allow-write`. A fresh path needs nothing.
+- **`loc extract` is gated even though it never touches the game.** On the
+  command line it asks *Proceed? [y/N]* before replacing the shared
+  `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP
+  that prompt cannot be answered — stdin is the protocol channel — so it is
+  suppressed, and the flag stands in for the confirmation.
 
 Two more flags tune behaviour rather than permissions:
 

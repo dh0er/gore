@@ -67,8 +67,12 @@ const LOC_COMMANDS: &[CommandSpec] = &[
         "Auto-detect (or --lcache) the game's .lcache and write the shared gore/loc_catalog.json \
          (used by the save editor and mod studio too)",
         LOC_EXTRACT_ARGS,
-        // Writes the shared catalog next to the tool's own config, never the game installation.
-        Safety::write(),
+        // Gated even though it never touches the game installation. The CLI guards this write with
+        // a y/N prompt, and forcing `--yes` above removes that confirmation without replacing it —
+        // so the gate takes the prompt's place. The target is the shared catalog the save editor
+        // and mod studio also read, and it is derived from no argument, so the `truncates` rule
+        // cannot see it: an already-extracted catalog would otherwise be replaced ungated.
+        Safety::mutate(),
         T_LONG,
     )
     .forced(&["--yes"])
@@ -419,6 +423,12 @@ mod tests {
         assert_eq!(extract.forced_argv, &["--yes"]);
         // The caller must not be able to turn it back on.
         assert!(extract.arg("yes").is_none());
+        // Suppressing the confirmation is only defensible because the gate replaces it: the
+        // shared catalog is not something an agent may overwrite on its own initiative.
+        assert!(
+            extract.safety.requirements(&serde_json::Map::new()).write,
+            "a forced --yes must be paid for with --allow-write"
+        );
     }
 
     #[test]
