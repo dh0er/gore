@@ -99,13 +99,17 @@ impl Session {
             "initialize" => Some(Response::ok(id, self.initialize(&params))),
 
             "notifications/initialized" => {
-                self.initialized = true;
-                None
+                // Only a real notification advances the handshake. The same method carrying an id
+                // is a malformed request, and taking state from it would be trusting the mistake.
+                if request.is_notification() {
+                    self.initialized = true;
+                }
+                notification_reply(request, id)
             }
             // Anything else in the notification namespace (`cancelled`, `progress`, a future
             // addition) is accepted and ignored. Notifications must never be answered, not even
             // with an error, so an unknown one cannot be reported as `METHOD_NOT_FOUND`.
-            method if method.starts_with("notifications/") => None,
+            method if method.starts_with("notifications/") => notification_reply(request, id),
 
             "ping" => Some(Response::ok(id, json!({}))),
 
@@ -286,6 +290,22 @@ pub fn serve<R: BufRead, W: Write>(opts: Options, reader: R, writer: W) -> io::R
     Ok(())
 }
 
+/// Silence for a notification — but only when it really was one.
+///
+/// A `notifications/*` method sent *with* an id is a request by JSON-RPC's definition, and an
+/// unanswered request leaves the caller waiting on something that will never come, or retrying it.
+/// The method exists, so `METHOD_NOT_FOUND` would be misleading; what is wrong is the id.
+fn notification_reply(request: &Request, id: Value) -> Option<Response> {
+    if request.is_notification() {
+        return None;
+    }
+    Some(Response::error(
+        id,
+        errors::INVALID_REQUEST,
+        format!("`{}` is a notification and must not carry an `id`", request.method),
+    ))
+}
+
 /// The reply one frame earns, or `None` when it earns silence.
 fn reply_to(session: &mut Session, frame: Frame) -> Option<Response> {
     match frame {
@@ -336,13 +356,27 @@ mod tests {
     }
 
     fn request(method: &str, params: Value) -> Request {
-        serde_json::from_value(json!({
+        request_with_id(method, params, json!(1))
+    }
+
+    /// `id_present` is `#[serde(skip)]` — the transport sets it from the raw object, because
+    /// `Option<Value>` cannot tell an omitted `id` from a null one. A helper that deserializes
+    /// directly has to set it too, or everything it builds looks like a notification.
+    fn request_with_id(method: &str, params: Value, id: Value) -> Request {
+        let mut request: Request = serde_json::from_value(json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": id,
             "method": method,
             "params": params,
         }))
-        .expect("request")
+        .expect("request");
+        request.id_present = true;
+        request
+    }
+
+    fn notification(method: &str, params: Value) -> Request {
+        serde_json::from_value(json!({ "jsonrpc": "2.0", "method": method, "params": params }))
+            .expect("notification")
     }
 
     #[test]
@@ -585,6 +619,34 @@ mod tests {
         let result = response.result.expect("still a result");
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["structuredContent"]["exit_code"], 1);
+    }
+
+    #[test]
+    fn a_notification_method_sent_with_an_id_is_answered() {
+        // With an id it is a request, whatever the method is called. Staying silent would leave the
+        // caller waiting on a reply that is never coming.
+        for method in ["notifications/initialized", "notifications/cancelled"] {
+            let line = format!("{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{method}\"}}
+");
+            let mut output = Vec::new();
+            serve(options(), Cursor::new(line.into_bytes()), &mut output).expect("clean shutdown");
+
+            let text = String::from_utf8(output).expect("utf-8");
+            assert!(!text.trim().is_empty(), "{method} with an id must be answered");
+            let reply: Value = serde_json::from_str(text.trim()).expect("json");
+            assert_eq!(reply["id"], json!(7));
+            assert_eq!(reply["error"]["code"], json!(errors::INVALID_REQUEST));
+        }
+
+        // And the handshake is not advanced by a malformed one.
+        let mut session = Session::new(options());
+        let request = request_with_id("notifications/initialized", json!({}), json!(7));
+        assert!(session.handle(&request).is_some());
+        assert!(!session.is_initialized(), "state must not come from a malformed request");
+
+        // The real notification still advances it, silently.
+        assert!(session.handle(&notification("notifications/initialized", json!({}))).is_none());
+        assert!(session.is_initialized());
     }
 
     #[test]
