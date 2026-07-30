@@ -161,6 +161,19 @@ impl Class {
     }
 }
 
+/// How a command builds a second output path out of one it was given.
+///
+/// Only shapes the gate can compute from the arguments alone belong here. `gore gen` derives its
+/// target from the mod name inside `overrides.toml`, which this layer cannot see without parsing
+/// the file, so that command is classified as a mutation instead of being described here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Derived {
+    /// `Path::with_extension(_)` — `texture extract` writes `out` and `out` + `.png.json`.
+    Extension(&'static str),
+    /// `Path::join(_)` — `dump-mod` writes the `gore-dump/` folder inside the directory it is given.
+    Child(&'static str),
+}
+
 /// A command's safety class, including the conditional case.
 #[derive(Clone, Copy, Debug)]
 pub struct Safety {
@@ -187,13 +200,13 @@ pub struct Safety {
     /// re-run to regenerate their output. The gate answers "may this agent aim at a path it can
     /// see is occupied", which is the question an agent's mistake actually turns on.
     pub truncates: &'static [&'static str],
-    /// Paths this command writes that no argument names, as `(argument, replacement extension)`.
+    /// Paths this command writes that no argument names, as `(argument, how it is derived)`.
     ///
     /// `texture extract` writes its PNG to `out` and a metadata sidecar to
     /// `out.with_extension("png.json")`. Only the first is an argument, so [`Safety::truncates`]
     /// cannot see the second — and a fresh PNG beside an existing sidecar would pass the gate and
     /// truncate it. Anything a command derives from an argument and then overwrites belongs here.
-    pub derives: &'static [(&'static str, &'static str)],
+    pub derives: &'static [(&'static str, Derived)],
 }
 
 impl Safety {
@@ -235,7 +248,7 @@ impl Safety {
     }
 
     /// Register paths the command derives from an argument and overwrites. See [`Safety::derives`].
-    pub const fn also_writes(mut self, derived: &'static [(&'static str, &'static str)]) -> Self {
+    pub const fn also_writes(mut self, derived: &'static [(&'static str, Derived)]) -> Self {
         self.derives = derived;
         self
     }
@@ -729,6 +742,7 @@ mod tests {
             ("gore_loc", "import", &["out"]),
             ("gore_project", "package", &["out"]),
             ("gore_texture", "extract", &["out"]),
+            ("gore_texture", "index", &["out"]),
         ];
         let mut expected = expected;
         expected.sort_unstable();
@@ -739,6 +753,34 @@ mod tests {
         for (tool, sub, args) in &gated {
             let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
             for arg in *args {
+                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+            }
+        }
+    }
+
+    /// The same list for paths a command computes rather than is handed. Kept beside the one above
+    /// because the two mechanisms guard the same promise and have to be extended together.
+    #[test]
+    fn exactly_the_known_derived_outputs_are_gated() {
+        let mut derived: Vec<(&str, &str, &[(&'static str, Derived)])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.derives.is_empty() {
+                    derived.push((group.tool, command.sub, command.safety.derives));
+                }
+            }
+        }
+        derived.sort_unstable_by_key(|(tool, sub, _)| (*tool, *sub));
+
+        let expected: Vec<(&str, &str, &[(&'static str, Derived)])> = vec![
+            ("gore_catalog", "dump-mod", &[("out", Derived::Child("gore-dump"))]),
+            ("gore_texture", "extract", &[("out", Derived::Extension("png.json"))]),
+        ];
+        assert_eq!(derived, expected);
+
+        for (tool, sub, entries) in &derived {
+            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            for (arg, _) in *entries {
                 assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
             }
         }

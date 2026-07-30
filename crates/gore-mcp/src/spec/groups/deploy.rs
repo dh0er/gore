@@ -10,7 +10,7 @@
 use crate::spec::{
     ArgForm::{Long, Positional, Switch},
     ArgKind::{Bool, Int, Path, Str},
-    ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG, T_NORMAL,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG, T_NORMAL,
 };
 
 /// The optional game root, spelled the same way by many commands.
@@ -146,7 +146,7 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract a texture's top mip to a PNG",
         TEXTURE_EXTRACT_ARGS,
-        Safety::write_truncating(&["out"]).also_writes(&[("out", "png.json")]),
+        Safety::write_truncating(&["out"]).also_writes(&[("out", Derived::Extension("png.json"))]),
         T_NORMAL,
     )
     .guide("textures"),
@@ -179,7 +179,9 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         "index",
         "Build the texture index (asset->package_id) and cache it to the shared dir",
         TEXTURE_INDEX_ARGS,
-        Safety::write(),
+        // Without `out` this publishes an immutable generation-specific cache; with one it calls
+        // `TextureIndex::save`, which is a plain `fs::write` over whatever is at that path.
+        Safety::write_truncating(&["out"]),
         T_LONG,
     )
     .guide("textures"),

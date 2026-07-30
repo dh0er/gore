@@ -12,7 +12,9 @@ use std::time::Duration;
 use serde_json::{Map, Value};
 
 use crate::server::Options;
-use crate::spec::{ArgForm, ArgKind, ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport};
+use crate::spec::{
+    ArgForm, ArgKind, ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport,
+};
 
 /// A fully built child-process invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,9 +371,13 @@ fn existing_target(
 
     // A derived path is written just as unconditionally as the one the caller named, and the
     // caller cannot avoid it by choosing a different argument value for something else.
-    command.safety.derives.iter().copied().find_map(|(name, extension)| {
+    command.safety.derives.iter().copied().find_map(|(name, how)| {
         let given = args.get(name)?.as_str()?;
-        let derived = std::path::Path::new(given).with_extension(extension);
+        let base = std::path::Path::new(given);
+        let derived = match how {
+            Derived::Extension(extension) => base.with_extension(extension),
+            Derived::Child(child) => base.join(child),
+        };
         derived.exists().then(|| (name, derived.to_string_lossy().into_owned()))
     })
 }
@@ -608,13 +614,13 @@ mod tests {
             "--allow-write still permits the overwrite"
         );
 
-        // `gen` writes into the game's Mods directory, which always exists. Gating on that would
-        // refuse every ordinary call, so it is deliberately not marked as truncating.
+        // `stubs` writes .lua files into a directory that ordinarily already exists. There is no
+        // single path to gate, so an existing output directory stays ungated.
         assert!(
             build_with(
-                "gore_project",
-                "gen",
-                json!({ "overrides": "o.toml", "out": dir.path().to_string_lossy() }),
+                "gore_catalog",
+                "stubs",
+                json!({ "model": "model.json", "out": dir.path().to_string_lossy() }),
                 &options()
             )
             .is_ok(),
@@ -936,10 +942,12 @@ mod tests {
 
     #[test]
     fn commands_that_only_write_new_files_need_no_flag() {
+        // `gen` is deliberately not here: it rewrites a mod folder inside the directory it is
+        // given, so it is a mutation. `scaffold` refuses to clobber an existing mod itself.
         assert!(build_with(
             "gore_project",
-            "gen",
-            json!({ "overrides": "o.toml", "out": "Mods" }),
+            "scaffold",
+            json!({ "mod_name": "MyMod", "out": "Mods" }),
             &options()
         )
         .is_ok());

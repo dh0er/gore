@@ -11,7 +11,7 @@
 use crate::spec::{
     ArgForm::{Long, Positional},
     ArgKind::{Enum, Path, Str},
-    ArgSpec, CommandSpec, GroupShape, GroupSpec, Safety, T_FAST, T_NORMAL,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, Safety, T_FAST, T_NORMAL,
 };
 
 /// The single validated config key, from the `ConfigKey` value enum. clap renders variants in
@@ -245,7 +245,8 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "Generate the gore-dump UE4SS mod (reads live CDO stat values in-game -> \
          gore_game_data.json, the input to `sync`)",
         DUMP_MOD_ARGS,
-        Safety::write(),
+        // Always writes the fixed `gore-dump/` folder inside the directory it is given.
+        Safety::write().also_writes(&[("out", Derived::Child("gore-dump"))]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -326,7 +327,11 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         "gen",
         "Compile overrides.toml into a UE4SS Lua mod",
         GEN_ARGS,
-        Safety::write(),
+        // `out` is a Mods directory that always exists, and the folder actually rewritten is
+        // `<out>/<name from overrides.toml>` -- a path this layer cannot compute without parsing
+        // that file. cmd/gen.rs rewrites enabled.txt and Scripts/main.lua unconditionally, so an
+        // existing mod (generated or hand-edited) is replaced. Not gateable, therefore gated.
+        Safety::mutate(),
         T_NORMAL,
     )
     .guide("items"),
@@ -372,13 +377,16 @@ mod tests {
     }
 
     #[test]
-    fn deploy_shared_is_the_only_installation_mutating_command_here() {
+    fn exactly_the_commands_that_write_into_the_mods_folder_are_gated() {
+        // Both target the game's `ue4ss/Mods`: `deploy-shared` copies the SDK in, and `gen`
+        // rewrites `<out>/<name from overrides.toml>` -- a path no argument names, which is why it
+        // is gated outright rather than described as a derived output.
         let mutating: Vec<&str> = [CONFIG, CATALOG, PROJECT]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(mutating, vec!["deploy-shared"]);
+        assert_eq!(mutating, vec!["gen", "deploy-shared"]);
     }
 }
