@@ -180,23 +180,30 @@ pub struct Safety {
     /// Naming the argument here makes an existing target count as a mutation, so the common case
     /// (a fresh path) stays free and only the destructive one asks for `--allow-write`.
     pub truncates: &'static [&'static str],
+    /// Paths this command writes that no argument names, as `(argument, replacement extension)`.
+    ///
+    /// `texture extract` writes its PNG to `out` and a metadata sidecar to
+    /// `out.with_extension("png.json")`. Only the first is an argument, so [`Safety::truncates`]
+    /// cannot see the second — and a fresh PNG beside an existing sidecar would pass the gate and
+    /// truncate it. Anything a command derives from an argument and then overwrites belongs here.
+    pub derives: &'static [(&'static str, &'static str)],
 }
 
 impl Safety {
     pub const fn read() -> Self {
-        Self { base: Class::Read, in_place_without: None, truncates: &[] }
+        Self { base: Class::Read, in_place_without: None, truncates: &[], derives: &[] }
     }
     pub const fn write() -> Self {
-        Self { base: Class::Write, in_place_without: None, truncates: &[] }
+        Self { base: Class::Write, in_place_without: None, truncates: &[], derives: &[] }
     }
     pub const fn mutate() -> Self {
-        Self { base: Class::Mutate, in_place_without: None, truncates: &[] }
+        Self { base: Class::Mutate, in_place_without: None, truncates: &[], derives: &[] }
     }
     pub const fn destructive() -> Self {
-        Self { base: Class::Destructive, in_place_without: None, truncates: &[] }
+        Self { base: Class::Destructive, in_place_without: None, truncates: &[], derives: &[] }
     }
     pub const fn game_launch() -> Self {
-        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[] }
+        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[], derives: &[] }
     }
 
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
@@ -210,13 +217,20 @@ impl Safety {
             base: Class::Write,
             in_place_without: Some(out_arg[0]),
             truncates: out_arg,
+            derives: &[],
         }
     }
 
     /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
     /// they already exist. See [`Safety::truncates`].
     pub const fn write_truncating(outputs: &'static [&'static str]) -> Self {
-        Self { base: Class::Write, in_place_without: None, truncates: outputs }
+        Self { base: Class::Write, in_place_without: None, truncates: outputs, derives: &[] }
+    }
+
+    /// Register paths the command derives from an argument and overwrites. See [`Safety::derives`].
+    pub const fn also_writes(mut self, derived: &'static [(&'static str, &'static str)]) -> Self {
+        self.derives = derived;
+        self
     }
 
     /// Escalate an existing class with the same in-place rule (used by `as compile`).

@@ -140,11 +140,13 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .guide("textures"),
+    // Writes two files: the PNG named by `out`, and a metadata sidecar at
+    // `out.with_extension("png.json")` that no argument mentions (cmd/texture.rs).
     CommandSpec::new(
         "extract",
         "Extract a texture's top mip to a PNG",
         TEXTURE_EXTRACT_ARGS,
-        Safety::write_truncating(&["out"]),
+        Safety::write_truncating(&["out"]).also_writes(&[("out", "png.json")]),
         T_NORMAL,
     )
     .guide("textures"),

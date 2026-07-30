@@ -256,8 +256,24 @@ fn check_argument_sets(
     command: &CommandSpec,
     args: &Map<String, Value>,
 ) -> Result<(), BuildError> {
+    // A switch counts as given only when it is `true`. The argv builder omits a `false` switch
+    // entirely, so `{"no_diagnostics": false, "diagnostics_hook": "x"}` produces a command line
+    // carrying only `--diagnostics-hook`, which clap accepts — rejecting it here would refuse a
+    // call that is valid the moment it reaches the CLI. Value arguments keep key-presence
+    // semantics: naming one at all is the choice clap conflicts on.
     let present = |set: &[&'static str]| -> Vec<&'static str> {
-        set.iter().copied().filter(|name| args.contains_key(*name)).collect()
+        set.iter()
+            .copied()
+            .filter(|name| match args.get(*name) {
+                None => false,
+                Some(value) => {
+                    let is_switch = command
+                        .arg(name)
+                        .is_some_and(|spec| matches!(spec.form, ArgForm::Switch(_)));
+                    !is_switch || value.as_bool() != Some(false)
+                }
+            })
+            .collect()
     };
 
     for set in command.exactly_one_of {
@@ -338,14 +354,25 @@ fn gate(
     Ok(())
 }
 
-/// The first declared output path that is already occupied.
+/// The first output path that is already occupied — named by an argument, or derived from one.
 fn existing_target(
     command: &CommandSpec,
     args: &Map<String, Value>,
 ) -> Option<(&'static str, String)> {
-    command.safety.truncates.iter().copied().find_map(|name| {
+    let named = command.safety.truncates.iter().copied().find_map(|name| {
         let given = args.get(name)?.as_str()?;
         std::path::Path::new(given).exists().then(|| (name, given.to_string()))
+    });
+    if named.is_some() {
+        return named;
+    }
+
+    // A derived path is written just as unconditionally as the one the caller named, and the
+    // caller cannot avoid it by choosing a different argument value for something else.
+    command.safety.derives.iter().copied().find_map(|(name, extension)| {
+        let given = args.get(name)?.as_str()?;
+        let derived = std::path::Path::new(given).with_extension(extension);
+        derived.exists().then(|| (name, derived.to_string_lossy().into_owned()))
     })
 }
 
@@ -592,6 +619,55 @@ mod tests {
             )
             .is_ok(),
             "a command whose output is an existing directory stays ungated"
+        );
+    }
+
+    #[test]
+    fn a_derived_output_is_gated_even_when_the_named_one_is_fresh() {
+        // `texture extract` writes `out` and a sidecar at out.with_extension("png.json"). Deleting
+        // the PNG and re-extracting leaves the sidecar behind, so the named output looks fresh
+        // while the derived one is about to be replaced.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let png = dir.path().join("cursor.png");
+        let sidecar = dir.path().join("cursor.png.json");
+
+        let call = json!({ "game": "G", "asset": "/Game/T", "out": png.to_string_lossy() });
+        assert!(
+            build_with("gore_texture", "extract", call.clone(), &options()).is_ok(),
+            "nothing exists yet"
+        );
+
+        std::fs::write(&sidecar, b"{}").expect("write sidecar");
+        let refused = build_with("gore_texture", "extract", call.clone(), &options());
+        assert!(
+            matches!(refused, Err(BuildError::Refused { flag: "--allow-write", .. })),
+            "the sidecar exists and would be overwritten"
+        );
+        assert!(build_with("gore_texture", "extract", call, &permissive()).is_ok());
+    }
+
+    #[test]
+    fn a_switch_set_to_false_does_not_trip_an_exclusivity_rule() {
+        // The argv builder omits a false switch, so the command line clap sees carries only
+        // `--diagnostics-hook` — a call this check used to refuse and the CLI would have accepted.
+        let with_false = json!({
+            "game": "G",
+            "no_diagnostics": false,
+            "diagnostics_hook": "hook.dll",
+        });
+        assert!(build_with("gore_as", "compile", with_false, &permissive()).is_ok());
+
+        let with_true = json!({
+            "game": "G",
+            "no_diagnostics": true,
+            "diagnostics_hook": "hook.dll",
+        });
+        assert!(
+            matches!(
+                build_with("gore_as", "compile", with_true, &permissive()),
+                Err(BuildError::ExclusiveSet { .. })
+            ),
+            "a switch that is actually on still conflicts"
         );
     }
 
