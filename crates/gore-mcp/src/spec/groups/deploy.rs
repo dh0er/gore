@@ -361,7 +361,11 @@ const ASSET_COMMANDS: &[CommandSpec] = &[
         "patch-fixed",
         "Apply one snapshot-bound raw wire edit to a new package pair.",
         ASSET_PATCH_FIXED_ARGS,
-        Safety::write(),
+        // The CLI checks only that the output is absent. `asset extract` additionally refuses a
+        // destination in the game tree (`prepare_absent_output_directory`); this command does
+        // not, so a fresh `.uasset` path below G1R would publish the pair, its sidecars and
+        // the receipt straight into the live installation.
+        Safety::write().installs_via(&["out"]),
         T_NORMAL,
     )
     .json(JsonSupport::Stdout)

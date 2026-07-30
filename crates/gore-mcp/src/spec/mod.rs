@@ -893,6 +893,9 @@ mod tests {
             ("gore_project", "scaffold", &["out"]),
             // Both produce a Zen triplet that is a build artifact anywhere but `~mods`.
             ("gore_asset", "pack", &["out"]),
+            // Writes a package pair, its sidecars and a receipt; `asset extract` refuses a
+            // game-tree destination itself, this one does not.
+            ("gore_asset", "patch-fixed", &["out"]),
             ("gore_texture", "pack", &["out"]),
         ];
         expected.sort_unstable();
