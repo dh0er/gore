@@ -70,10 +70,16 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
         ));
     };
 
-    let path: Vec<&str> = command.split_whitespace().collect();
-    if let Err(message) = validate(&path) {
+    let requested: Vec<&str> = command.split_whitespace().collect();
+    if let Err(message) = validate(&requested) {
         return Ok(to_error_result(message));
     }
+
+    // `gore help as compile` and `gore as compile --help` print the same thing, and this tool
+    // always uses the second form. Keeping the prefix and appending `--help` would ask clap's help
+    // subcommand for *its* help instead of the command that was asked about.
+    let path: Vec<&str> =
+        requested.iter().skip_while(|token| **token == "help").copied().collect();
 
     let display = if path.is_empty() {
         "gore --help".to_string()
@@ -346,6 +352,28 @@ mod tests {
 
         assert_eq!(result["structuredContent"]["truncated"], json!(false));
         assert!(!text_of(&result, 1).contains("truncated"));
+    }
+
+    #[test]
+    fn a_built_in_help_path_asks_about_the_command_not_about_help() {
+        // `gore help as compile --help` would print the help subcommand's own help. The two forms
+        // are equivalent, and this tool always spawns the `--help` one.
+        let spawn = FakeSpawn::new(Outcome::success("Usage: gore as compile"));
+        let result = call_with(json!({ "command": "help as compile" }), &spawn);
+
+        assert_eq!(result["isError"], json!(false));
+        let argv: Vec<String> = spawn.calls()[0]
+            .argv
+            .iter()
+            .map(|token| token.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(argv, vec!["as", "compile", "--help"]);
+        assert_eq!(text_of(&result, 0), "gore as compile --help");
+
+        // `help` on its own is the top-level listing, which is what `gore help` prints too.
+        let spawn = FakeSpawn::new(Outcome::success("Usage: gore <COMMAND>"));
+        call_with(json!({ "command": "help" }), &spawn);
+        assert!(spawn.calls()[0].argv.iter().all(|token| token != "help"));
     }
 
     #[test]
