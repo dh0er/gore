@@ -870,6 +870,43 @@ mod tests {
         }
     }
 
+    /// And the same for outputs whose *destination* decides the classification.
+    ///
+    /// Kept beside the other two for the same reason: these three mechanisms guard one promise
+    /// between them, and every round that added a command to one of them found the next round
+    /// adding it to another.
+    #[test]
+    fn exactly_the_known_installation_sensitive_outputs_are_gated() {
+        let mut sensitive: Vec<(&str, &str, &[&'static str])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.installs_via.is_empty() {
+                    sensitive.push((group.tool, command.sub, command.safety.installs_via));
+                }
+            }
+        }
+        sensitive.sort_unstable();
+
+        let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
+            // Both write a mod folder carrying an executable Scripts/main.lua.
+            ("gore_catalog", "dump-mod", &["out"]),
+            ("gore_project", "scaffold", &["out"]),
+            // Both produce a Zen triplet that is a build artifact anywhere but `~mods`.
+            ("gore_asset", "pack", &["out"]),
+            ("gore_texture", "pack", &["out"]),
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(sensitive, expected);
+
+        for (tool, sub, args) in &sensitive {
+            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            for arg in *args {
+                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+            }
+        }
+    }
+
     /// The same list for paths a command computes rather than is handed. Kept beside the one above
     /// because the two mechanisms guard the same promise and have to be extended together.
     #[test]

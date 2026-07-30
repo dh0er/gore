@@ -104,9 +104,11 @@ line:
   Closing that window would mean making these commands refuse to re-run at all,
   which is the one thing they exist to do.
 - **Where a file lands can matter more than what writes it.** `texture pack`
-  and `asset pack` normally produce an artifact you deploy later, so they need
-  no flag — but pointing `--out` inside the game tree writes straight into the
-  live `~mods` override, which is a deployment. That case needs
+  and `asset pack` normally produce an artifact you deploy later, and `dump-mod`
+  and `scaffold` normally produce a mod folder you install afterwards — so none
+  of them needs a flag. Point `--out` inside the game tree and the same call
+  writes straight into the live `~mods` override or the live `ue4ss\Mods`, which
+  is an installation. That case needs
   `--allow-write`, recognised either from an explicit `--game` or from a `G1R`
   folder in the path.
 - **`loc extract` is gated even though it never touches the game.** On the

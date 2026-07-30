@@ -818,6 +818,39 @@ mod tests {
     }
 
     #[test]
+    fn generating_a_mod_into_the_live_mods_folder_is_gated() {
+        // `dump-mod` and `scaffold` write a mod folder containing an executable Scripts/main.lua.
+        // Into a scratch directory that is a build artifact; into the game's own ue4ss/Mods it is
+        // an installed, enabled mod.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scratch = dir.path().to_string_lossy().into_owned();
+        let live = "D:/Games/G1R/G1R/Binaries/Win64/ue4ss/Mods";
+
+        for (tool, sub, extra) in [
+            ("gore_catalog", "dump-mod", json!({ "model": "m.json", "catalog": "c.json" })),
+            ("gore_project", "scaffold", json!({ "mod_name": "MyMod" })),
+        ] {
+            let call = |out: &str| {
+                let mut args = extra.as_object().expect("object").clone();
+                args.insert("out".into(), Value::String(out.to_string()));
+                Value::Object(args)
+            };
+            assert!(
+                build_with(tool, sub, call(&scratch), &options()).is_ok(),
+                "{sub} into a scratch directory needs no flag"
+            );
+            assert!(
+                matches!(
+                    build_with(tool, sub, call(live), &options()),
+                    Err(BuildError::Refused { flag: "--allow-write", .. })
+                ),
+                "{sub} into the live Mods folder installs a mod"
+            );
+            assert!(build_with(tool, sub, call(live), &permissive()).is_ok());
+        }
+    }
+
+    #[test]
     fn a_relative_output_is_resolved_before_the_game_tree_is_judged() {
         // The child resolves a relative path against this process's working directory, so judging
         // it lexically would wave through `--out .` run from inside the installation.

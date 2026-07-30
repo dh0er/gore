@@ -248,7 +248,8 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
          gore_game_data.json, the input to `sync`)",
         DUMP_MOD_ARGS,
         // Always writes the fixed `gore-dump/` folder inside the directory it is given.
-        Safety::write().also_writes(&[("out", Derived::Child("gore-dump"))]),
+        Safety::write().also_writes(&[("out", Derived::Child("gore-dump"))])
+            .installs_via(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -325,7 +326,8 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         // non-Lua UE4SS mod under the same name is entered and its `enabled.txt` truncated.
         // Unlike `gen`, the folder is fully derivable -- `<out>/<mod_name>` -- so a fresh name
         // still needs no flag and only the collision is gated.
-        Safety::write().also_writes(&[("out", Derived::ChildOfArg("mod_name"))]),
+        Safety::write().also_writes(&[("out", Derived::ChildOfArg("mod_name"))])
+            .installs_via(&["out"]),
         T_FAST,
     )
     .guide("items"),
