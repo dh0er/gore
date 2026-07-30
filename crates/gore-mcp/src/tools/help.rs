@@ -81,10 +81,11 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
     let path: Vec<&str> =
         requested.iter().skip_while(|token| **token == "help").copied().collect();
 
+    let program = spawn.display_exe();
     let display = if path.is_empty() {
-        "gore --help".to_string()
+        format!("{program} --help")
     } else {
-        format!("gore {} --help", path.join(" "))
+        format!("{program} {} --help", path.join(" "))
     };
     let mut argv: Vec<std::ffi::OsString> =
         path.iter().map(std::ffi::OsString::from).collect();
@@ -253,6 +254,10 @@ mod tests {
     /// A runner that cannot start anything, standing in for a missing or unrunnable binary.
     struct FailingSpawn;
     impl Spawn for FailingSpawn {
+        fn display_exe(&self) -> String {
+            "gore".to_string()
+        }
+
         fn run(&self, _: &Invocation) -> std::io::Result<crate::exec::Outcome> {
             Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))
         }

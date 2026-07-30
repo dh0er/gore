@@ -234,7 +234,7 @@ pub fn build(
         command.timeout_secs
     });
 
-    Ok(Invocation { display: render(&argv), argv, path, timeout })
+    Ok(Invocation { display: render(&opts.exe, &argv), argv, path, timeout })
 }
 
 fn reject_unknown_arguments(
@@ -695,8 +695,11 @@ fn type_name(value: &Value) -> &'static str {
 ///
 /// Anything that is not plainly a bare word is single-quoted. PowerShell treats a single-quoted
 /// string as literal, so `'` doubled is the only escape there is.
-fn render(argv: &[OsString]) -> String {
-    let mut line = String::from("gore");
+pub fn render(exe: &std::path::Path, argv: &[OsString]) -> String {
+    // The program as it was actually launched. The documented setup points a client at an unpacked
+    // `gore.exe` by absolute path, which need not be on PATH — printing a bare `gore` would hand
+    // the reader a line that does not run.
+    let mut line = quote_for_powershell(&exe.to_string_lossy());
     for token in argv {
         line.push(' ');
         line.push_str(&quote_for_powershell(&token.to_string_lossy()));
@@ -704,7 +707,7 @@ fn render(argv: &[OsString]) -> String {
     line
 }
 
-fn quote_for_powershell(token: &str) -> String {
+pub fn quote_for_powershell(token: &str) -> String {
     // A bare word is left alone: quoting `--out` or `textures` would only make the line harder to
     // read, and the whole point of showing it is that a person can use it.
     let bare = !token.is_empty()
@@ -1432,6 +1435,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(invocation.display, "gore config set -- game-path 'D:/Program Files/G1R'");
+
+        // The documented setup launches an unpacked binary by absolute path, which need not be on
+        // PATH. A line beginning with a bare `gore` would not run when pasted.
+        let mut installed = permissive();
+        installed.exe = PathBuf::from(r"C:\Program Files\gore\gore.exe");
+        let elsewhere = build_with(
+            "gore_config",
+            "set",
+            json!({ "key": "game-path", "value": "D:/G1R" }),
+            &installed,
+        )
+        .unwrap();
+        assert_eq!(
+            elsewhere.display,
+            r"'C:\Program Files\gore\gore.exe' config set -- game-path D:/G1R"
+        );
 
         // The guide is PowerShell throughout and this line is presented as something to re-run, so
         // a token carrying shell syntax must not end the command when it is pasted.

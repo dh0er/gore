@@ -82,11 +82,21 @@ impl Outcome {
 
 pub trait Spawn: Send + Sync {
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome>;
+
+    /// The program this runner starts, for the reproducible command line shown to the reader.
+    ///
+    /// Not derivable from the invocation: an `Invocation` carries only the arguments, and the
+    /// binary is chosen once at startup.
+    fn display_exe(&self) -> String;
 }
 
 /// Lets a caller keep a handle on the runner it gave the session — which is how a test inspects
 /// what was actually spawned after the fact.
 impl<T: Spawn + ?Sized> Spawn for std::sync::Arc<T> {
+    fn display_exe(&self) -> String {
+        (**self).display_exe()
+    }
+
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome> {
         (**self).run(invocation)
     }
@@ -111,6 +121,10 @@ impl ProcessSpawn {
 }
 
 impl Spawn for ProcessSpawn {
+    fn display_exe(&self) -> String {
+        crate::argv::quote_for_powershell(&self.exe.to_string_lossy())
+    }
+
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome> {
         let started = Instant::now();
 
@@ -257,6 +271,10 @@ impl FakeSpawn {
 }
 
 impl Spawn for FakeSpawn {
+    fn display_exe(&self) -> String {
+        "gore".to_string()
+    }
+
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome> {
         self.calls.lock().expect("fake spawn lock").push(invocation.clone());
         Ok(self.outcome.clone())
