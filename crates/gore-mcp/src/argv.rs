@@ -78,7 +78,7 @@ impl fmt::Display for BuildError {
             ),
             BuildError::NotHex { sub, name, got } => write!(
                 f,
-                "`{sub}` argument `{name}` must be lowercase hex with an even number of digits, \
+                "`{sub}` argument `{name}` must be hex with an even number of digits, \
                  got `{got}`."
             ),
             BuildError::OutOfRange { sub, name, min, max, got } => {
@@ -312,7 +312,34 @@ fn gate(
         };
         return Err(BuildError::Refused { path: path.to_string(), reason, flag: "--allow-write" });
     }
+
+    // A `Write` command is ungated because it creates new files. When its output is already there,
+    // it does not create anything — it truncates — so the promise the gate rests on no longer
+    // holds and the call has to be treated as a mutation.
+    if !opts.allow_write {
+        if let Some((name, target)) = existing_target(command, args) {
+            return Err(BuildError::Refused {
+                path: path.to_string(),
+                reason: format!(
+                    "`{name}` already exists at `{target}`, and this command overwrites its output \
+                     rather than refusing (choose a path that does not exist yet)"
+                ),
+                flag: "--allow-write",
+            });
+        }
+    }
     Ok(())
+}
+
+/// The first declared output path that is already occupied.
+fn existing_target(
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Option<(&'static str, String)> {
+    command.safety.truncates.iter().copied().find_map(|name| {
+        let given = args.get(name)?.as_str()?;
+        std::path::Path::new(given).exists().then(|| (name, given.to_string()))
+    })
 }
 
 fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String, BuildError> {
@@ -333,9 +360,15 @@ fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String
         }
         ArgKind::Hex => {
             let given = text(command, spec, value)?;
+            // Either case. The CLI does not agree with itself here — `asset patch-fixed` accepts
+            // uppercase (`cmd/asset.rs`, `is_ascii_hexdigit`) while `as patch-default` does not
+            // (`cmd/as_cache.rs`, `a`–`f` only) — and this pre-check must not be stricter than the
+            // command it guards. Rejecting `1A2B` before spawn would refuse a value the shell
+            // accepts; letting it through costs one spawn and yields the CLI's own error, which is
+            // the authority. The per-argument help still says lowercase where the CLI insists.
             let valid = !given.is_empty()
                 && given.len() % 2 == 0
-                && given.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                && given.bytes().all(|b| b.is_ascii_hexdigit());
             if valid {
                 Ok(given.to_string())
             } else {
@@ -509,6 +542,83 @@ mod tests {
             .iter()
             .map(|token| token.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_write_command_is_gated_once_its_output_already_exists() {
+        // `Class::Write` runs ungated because it creates new files. `gore catalog dump` calls
+        // fs::write, so pointing it at an existing path truncates that file — which is a mutation
+        // however the class is labelled.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fresh = dir.path().join("model.json");
+        let occupied = dir.path().join("precious.json");
+        std::fs::write(&occupied, b"{}").expect("write fixture");
+
+        let call = |out: &std::path::Path| {
+            json!({ "sdk_dir": "SDK", "out": out.to_string_lossy() })
+        };
+
+        assert!(
+            build_with("gore_catalog", "dump", call(&fresh), &options()).is_ok(),
+            "a path that does not exist yet needs no flag"
+        );
+        assert!(
+            matches!(
+                build_with("gore_catalog", "dump", call(&occupied), &options()),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "an existing target must be gated"
+        );
+        assert!(
+            build_with("gore_catalog", "dump", call(&occupied), &permissive()).is_ok(),
+            "--allow-write still permits the overwrite"
+        );
+
+        // `gen` writes into the game's Mods directory, which always exists. Gating on that would
+        // refuse every ordinary call, so it is deliberately not marked as truncating.
+        assert!(
+            build_with(
+                "gore_project",
+                "gen",
+                json!({ "overrides": "o.toml", "out": dir.path().to_string_lossy() }),
+                &options()
+            )
+            .is_ok(),
+            "a command whose output is an existing directory stays ungated"
+        );
+    }
+
+    #[test]
+    fn hex_arguments_accept_either_case_but_still_require_pairs() {
+        // `gore asset patch-fixed` validates with `is_ascii_hexdigit`, so uppercase is a value the
+        // shell accepts. This pre-check refusing it would be a rejection the CLI never makes.
+        let base = |hex: &str| {
+            json!({
+                "uasset": "in.uasset", "usmap": "m.usmap", "extract_receipt": "r.json",
+                "selector": "s.json", "expected_hex": hex, "replacement_hex": "00000000",
+                "out": "out.uasset",
+            })
+        };
+        for hex in ["deadbeef", "DEADBEEF", "DeAdBeEf", "1a2B"] {
+            assert!(
+                build_with("gore_asset", "patch-fixed", base(hex), &permissive()).is_ok(),
+                "{hex} should be accepted"
+            );
+        }
+        for bad in ["abc", "zz", "0x1234", "12 34"] {
+            assert!(
+                matches!(
+                    build_with("gore_asset", "patch-fixed", base(bad), &permissive()),
+                    Err(BuildError::NotHex { .. })
+                ),
+                "{bad:?} should be rejected"
+            );
+        }
+        // An empty string never reaches the hex check; `text` rejects it as the wrong type first.
+        assert!(matches!(
+            build_with("gore_asset", "patch-fixed", base(""), &permissive()),
+            Err(BuildError::WrongType { .. })
+        ));
     }
 
     #[test]

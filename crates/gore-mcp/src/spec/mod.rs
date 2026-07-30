@@ -62,7 +62,9 @@ pub enum ArgKind {
     /// A filesystem path. Passed through verbatim; the CLI owns existence and permission checks.
     Path,
     Str,
-    /// Lowercase hex with an even number of digits, as the content-addressed patch commands expect.
+    /// Hex with an even number of digits, as the content-addressed patch commands expect. Case is
+    /// left to the command: `asset patch-fixed` takes either, `as patch-default` insists on
+    /// lowercase, and this pre-check refuses neither.
     Hex,
     Int { min: Option<i64>, max: Option<i64> },
     Bool,
@@ -170,28 +172,42 @@ pub struct Safety {
     /// when not. Treating them as unconditionally dangerous would block the safe usage; treating
     /// them as unconditionally safe would let an agent overwrite the game's own files.
     pub in_place_without: Option<&'static str>,
+    /// Arguments naming a path this command overwrites if it is already there.
+    ///
+    /// [`Class::Write`] promises "creates new files", and that is what lets it run ungated. A
+    /// command that reaches for `fs::write` on its output breaks the promise the moment the path
+    /// exists -- a rerun, or an agent picking an unrelated existing file, silently truncates it.
+    /// Naming the argument here makes an existing target count as a mutation, so the common case
+    /// (a fresh path) stays free and only the destructive one asks for `--allow-write`.
+    pub truncates: &'static [&'static str],
 }
 
 impl Safety {
     pub const fn read() -> Self {
-        Self { base: Class::Read, in_place_without: None }
+        Self { base: Class::Read, in_place_without: None, truncates: &[] }
     }
     pub const fn write() -> Self {
-        Self { base: Class::Write, in_place_without: None }
+        Self { base: Class::Write, in_place_without: None, truncates: &[] }
     }
     pub const fn mutate() -> Self {
-        Self { base: Class::Mutate, in_place_without: None }
+        Self { base: Class::Mutate, in_place_without: None, truncates: &[] }
     }
     pub const fn destructive() -> Self {
-        Self { base: Class::Destructive, in_place_without: None }
+        Self { base: Class::Destructive, in_place_without: None, truncates: &[] }
     }
     pub const fn game_launch() -> Self {
-        Self { base: Class::GameLaunch, in_place_without: None }
+        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[] }
     }
 
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
     pub const fn write_or_in_place(out_arg: &'static str) -> Self {
-        Self { base: Class::Write, in_place_without: Some(out_arg) }
+        Self { base: Class::Write, in_place_without: Some(out_arg), truncates: &[] }
+    }
+
+    /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
+    /// they already exist. See [`Safety::truncates`].
+    pub const fn write_truncating(outputs: &'static [&'static str]) -> Self {
+        Self { base: Class::Write, in_place_without: None, truncates: outputs }
     }
 
     /// Escalate an existing class with the same in-place rule (used by `as compile`).

@@ -195,7 +195,7 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "dump",
         "Parse UE4SS SDK dump into gore-reflect reflection model JSON",
         DUMP_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -211,7 +211,7 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "catalog",
         "Generate a catalog JSON from a UE4SS object dump",
         CATALOG_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -219,7 +219,7 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "story-catalog",
         "Build a strict, generation-sealed NPC and quest-parent catalog.",
         STORY_CATALOG_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -227,7 +227,7 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "gui-model",
         "Convert a gore reflection model into a gore-mod GUI shape JSON",
         GUI_MODEL_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -236,7 +236,7 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "Refresh the gore-mod GUI model from a runtime game-data dump (with real default values), \
          produced in-game by the gore-dump UE4SS mod",
         SYNC_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),

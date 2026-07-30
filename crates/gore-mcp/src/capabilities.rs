@@ -34,7 +34,7 @@ pub const SERVER_TITLE: &str = "GORE — Gothic 1 Remake modding toolkit";
 pub const SERVER_DESCRIPTION: &str =
     "Drives the full gore CLI: items, localization, audio, voice, textures, cooked data assets, \
      AngelScript, mod bundles and the multi-mod manager.";
-pub const SERVER_WEBSITE: &str = "https://github.com/dh0er/goresave";
+pub const SERVER_WEBSITE: &str = "https://github.com/dh0er/gore";
 
 /// Choose the protocol version to answer with.
 ///
