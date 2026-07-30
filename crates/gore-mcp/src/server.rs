@@ -259,33 +259,55 @@ pub fn serve<R: BufRead, W: Write>(opts: Options, reader: R, writer: W) -> io::R
     let mut transport = Transport::new(reader, writer);
 
     while let Some(frame) = transport.read_frame()? {
-        let response = match frame {
-            Frame::Message(request) => {
-                let is_notification = request.is_notification();
-                let response = session.handle(&request);
-                // Belt and braces: whatever a handler returns, a message without an id gets no
-                // reply. Answering one is a protocol violation that confuses strict clients.
-                if is_notification {
-                    None
-                } else {
-                    response
+        match frame {
+            // A batch answers with an array of exactly the replies its members earned. If every
+            // member was a notification there is nothing to say, and JSON-RPC 2.0 requires silence
+            // rather than an empty array.
+            Frame::Batch(members) => {
+                let replies: Vec<Response> =
+                    members.into_iter().filter_map(|member| reply_to(&mut session, member)).collect();
+                if !replies.is_empty() {
+                    transport.write_message(&replies)?;
                 }
             }
-            Frame::Invalid { id, reason } => {
-                Some(Response::error(id, errors::INVALID_REQUEST, reason))
+            single => {
+                if let Some(response) = reply_to(&mut session, single) {
+                    transport.write_message(&response)?;
+                }
             }
-            Frame::Malformed { reason } => Some(Response::parse_error(reason)),
-            Frame::Oversized => Some(Response::parse_error(format!(
-                "request exceeds the {MAX_FRAME_BYTES} byte frame limit"
-            ))),
-        };
-
-        if let Some(response) = response {
-            transport.write_message(&response)?;
         }
     }
 
     Ok(())
+}
+
+/// The reply one frame earns, or `None` when it earns silence.
+fn reply_to(session: &mut Session, frame: Frame) -> Option<Response> {
+    match frame {
+        Frame::Message(request) => {
+            let is_notification = request.is_notification();
+            let response = session.handle(&request);
+            // Belt and braces: whatever a handler returns, a message without an id gets no reply.
+            // Answering one is a protocol violation that confuses strict clients.
+            if is_notification {
+                None
+            } else {
+                response
+            }
+        }
+        Frame::Invalid { id, reason } => Some(Response::error(id, errors::INVALID_REQUEST, reason)),
+        Frame::Malformed { reason } => Some(Response::parse_error(reason)),
+        Frame::Oversized => Some(Response::parse_error(format!(
+            "request exceeds the {MAX_FRAME_BYTES} byte frame limit"
+        ))),
+        // The transport never nests batches; a member that is itself an array is reported as an
+        // invalid request by `parse_object`.
+        Frame::Batch(_) => Some(Response::error(
+            Value::Null,
+            errors::INVALID_REQUEST,
+            "a batch may not contain another batch",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -558,6 +580,80 @@ mod tests {
         let result = response.result.expect("still a result");
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["structuredContent"]["exit_code"], 1);
+    }
+
+    #[test]
+    fn a_batch_is_answered_with_one_array_of_replies() {
+        // MCP revisions before 2025-06-18 permit JSON-RPC batches, and this server still
+        // negotiates them, so a client may legitimately send an array in one frame.
+        let input = Cursor::new(
+            concat!(
+                r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},"#,
+                r#"{"jsonrpc":"2.0","id":2,"method":"ping"}]"#,
+                "
+",
+            )
+            .as_bytes()
+            .to_vec(),
+        );
+        let mut output = Vec::new();
+        serve(options(), input, &mut output).expect("clean shutdown");
+
+        let text = String::from_utf8(output).expect("utf-8");
+        assert_eq!(text.lines().count(), 1, "a batch answers in one frame: {text}");
+        let replies: Vec<Value> = serde_json::from_str(text.trim()).expect("an array");
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["id"], json!(1));
+        assert_eq!(replies[1]["id"], json!(2));
+    }
+
+    #[test]
+    fn a_batch_of_notifications_is_answered_with_silence() {
+        let input = Cursor::new(
+            "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}]
+"
+                .as_bytes()
+                .to_vec(),
+        );
+        let mut output = Vec::new();
+        serve(options(), input, &mut output).expect("clean shutdown");
+        assert!(output.is_empty(), "an empty array reply is a protocol violation");
+    }
+
+    #[test]
+    fn an_empty_batch_is_an_invalid_request() {
+        let input = Cursor::new("[]
+".as_bytes().to_vec());
+        let mut output = Vec::new();
+        serve(options(), input, &mut output).expect("clean shutdown");
+
+        let reply: Value =
+            serde_json::from_str(String::from_utf8(output).unwrap().trim()).expect("json");
+        assert_eq!(reply["error"]["code"], json!(errors::INVALID_REQUEST));
+    }
+
+    #[test]
+    fn a_bad_member_does_not_cost_the_rest_of_the_batch_its_answer() {
+        let input = Cursor::new(
+            concat!(
+                r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},"#,
+                r#"{"nonsense":true},"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"ping"}]"#,
+                "
+",
+            )
+            .as_bytes()
+            .to_vec(),
+        );
+        let mut output = Vec::new();
+        serve(options(), input, &mut output).expect("clean shutdown");
+
+        let replies: Vec<Value> =
+            serde_json::from_str(String::from_utf8(output).unwrap().trim()).expect("an array");
+        assert_eq!(replies.len(), 3);
+        assert!(replies[0]["result"].is_object());
+        assert_eq!(replies[1]["error"]["code"], json!(errors::INVALID_REQUEST));
+        assert!(replies[2]["result"].is_object());
     }
 
     #[test]

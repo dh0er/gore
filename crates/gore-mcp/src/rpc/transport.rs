@@ -36,6 +36,12 @@ pub enum Frame {
     Malformed { reason: String },
     /// Longer than [`MAX_FRAME_BYTES`]; the remainder of the line was discarded.
     Oversized,
+    /// A JSON-RPC batch: an array of requests and notifications in one frame.
+    ///
+    /// MCP revisions before `2025-06-18` permit these, and this server still negotiates those
+    /// revisions, so a client is entitled to send one. Elements are parsed individually — a batch
+    /// with one malformed member still answers the rest.
+    Batch(Vec<Frame>),
 }
 
 pub struct Transport<R: BufRead, W: Write> {
@@ -128,6 +134,22 @@ fn parse_frame(line: &[u8]) -> Frame {
         Ok(value) => value,
         Err(error) => return Frame::Malformed { reason: error.to_string() },
     };
+    if let Value::Array(items) = value {
+        if items.is_empty() {
+            // JSON-RPC 2.0 calls an empty batch an invalid request rather than an empty answer.
+            return Frame::Invalid {
+                id: Value::Null,
+                reason: "an empty batch is not a request".into(),
+            };
+        }
+        // One level only: an array nested inside a batch is not a request, and `parse_object`
+        // reports it as such instead of recursing.
+        return Frame::Batch(items.into_iter().map(parse_object).collect());
+    }
+    parse_object(value)
+}
+
+fn parse_object(value: Value) -> Frame {
     let id = value.get("id").cloned().unwrap_or(Value::Null);
     match serde_json::from_value::<Request>(value) {
         Ok(request) if request.version_ok() => Frame::Message(Box::new(request)),

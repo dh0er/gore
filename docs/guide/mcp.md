@@ -84,6 +84,10 @@ line:
   the directory ordinarily exists and there is no single path to check. The
   `asset` and `voice` families and `as patch-default` need no gate at all —
   their CLI refuses an existing output on its own.
+  The check happens before the command starts, so it is a permission boundary
+  and not a lock: a file created *while* a command runs is still overwritten.
+  Closing that window would mean making these commands refuse to re-run at all,
+  which is the one thing they exist to do.
 - **`loc extract` is gated even though it never touches the game.** On the
   command line it asks *Proceed? [y/N]* before replacing the shared
   `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP

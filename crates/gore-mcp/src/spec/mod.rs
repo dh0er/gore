@@ -179,6 +179,13 @@ pub struct Safety {
     /// exists -- a rerun, or an agent picking an unrelated existing file, silently truncates it.
     /// Naming the argument here makes an existing target count as a mutation, so the common case
     /// (a fresh path) stays free and only the destructive one asks for `--allow-write`.
+    ///
+    /// This is a permission boundary, not a lock. The check runs before the child is spawned, and
+    /// the child writes some time later, so a file appearing in between is still overwritten. That
+    /// window cannot be closed from here — only the CLI's own publication step could, by refusing
+    /// an occupied destination outright, and these are the commands whose whole purpose is to be
+    /// re-run to regenerate their output. The gate answers "may this agent aim at a path it can
+    /// see is occupied", which is the question an agent's mistake actually turns on.
     pub truncates: &'static [&'static str],
     /// Paths this command writes that no argument names, as `(argument, replacement extension)`.
     ///
