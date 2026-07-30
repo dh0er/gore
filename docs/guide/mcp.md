@@ -55,7 +55,7 @@ the gate is decided **per subcommand**, not per tool.
 | Flag | Unlocks | Examples |
 |---|---|---|
 | *(none)* | Reading, and commands that create a file that is not there yet | `texture list`, `loc export`, `mod build`, `as decompile` |
-| `--allow-write` | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mod build`, `mgr apply`, `mgr reset`, `mgr remove`, `texture deploy`, `texture replace`, `gen`, `deploy-shared`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
+| `--allow-write` | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mod build`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture replace`, `gen`, `stubs`, `audio extract`, `as emit-all`, `deploy-shared`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
 | `--allow-game-launch` **and** `--allow-write` | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 ```powershell
@@ -81,18 +81,19 @@ line:
   cache-producing `as` commands (`replace`, `splice`, `extract`,
   `extract-remap`, and `bytediff --json`). Passing an input's own path as the
   output counts too — that is an in-place rewrite wearing a safe name.
-  Commands writing *into* a directory (`stubs`, `audio extract`, `texture pack`,
-  `as emit-all`, anything targeting the Mods folder) are not gated this way:
-  the directory ordinarily exists and there is no single path to check. The
-  `asset` and `voice` families and `as patch-default` need no gate at all —
-  their CLI refuses an existing output on its own.
+  The `asset` and `voice` families, `texture pack` and `as patch-default` need
+  no gate at all — their CLI refuses an existing output on its own.
   Two commands write a path no argument names, and are checked all the same:
   `texture extract` also writes `<out>.png.json`, and `dump-mod` writes a
-  `gore-dump/` folder inside the directory it is given. Three commands cannot be checked at all
-  and need `--allow-write` outright: `gen` and `mod build` name their target
-  folder inside the spec file they read (and `mod build` clears that folder
-  before rebuilding it), and `texture replace` writes cooked files under a path
-  derived from the asset name, deleting a stale `.ubulk` on the way.
+  `gore-dump/` folder inside the directory it is given. Commands whose targets cannot be checked
+  need `--allow-write` outright, and writing into a directory is no exception —
+  the folder may exist harmlessly while the files inside it are replaced one by
+  one. That covers `gen` and `mod build` (target folder named inside the spec
+  file they read; `mod build` clears it first), `texture replace` (cooked files
+  under a path derived from the asset name, deleting a stale `.ubulk`),
+  `stubs`, `audio extract` and `as emit-all` (one file per class, sample or
+  module), and `mgr import` (re-importing the same mod deletes the payload of
+  the entry it replaces).
   The check happens before the command starts, so it is a permission boundary
   and not a lock: a file created *while* a command runs is still overwritten.
   Closing that window would mean making these commands refuse to re-run at all,

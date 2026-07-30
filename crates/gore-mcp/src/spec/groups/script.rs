@@ -529,7 +529,10 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "emit-all",
         "Emit ALL modules as recompilable .as into <outdir>, mirroring ScriptRelativeFilename.",
         EMIT_ALL_ARGS,
-        Safety::write(),
+        // Writes every decompiled module under `outdir` with `fs::write`. The module paths come from
+        // the cache being read, so hand edits in that tree are truncated and nothing here can check
+        // for them first.
+        Safety::mutate(),
         T_LONG,
     )
     .guide("scripts"),

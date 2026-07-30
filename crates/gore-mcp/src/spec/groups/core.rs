@@ -203,7 +203,9 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "stubs",
         "Generate LuaLS/EmmyLua type stubs from model.json",
         STUBS_ARGS,
-        Safety::write(),
+        // Writes one `.lua` per class into `out`, overwriting whatever is there. The class names come
+        // from the model file this layer does not read.
+        Safety::mutate(),
         T_NORMAL,
     )
     .guide("catalogs-and-models"),
@@ -377,16 +379,17 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_commands_that_write_into_the_mods_folder_are_gated() {
-        // Both target the game's `ue4ss/Mods`: `deploy-shared` copies the SDK in, and `gen`
-        // rewrites `<out>/<name from overrides.toml>` -- a path no argument names, which is why it
-        // is gated outright rather than described as a derived output.
+    fn exactly_the_commands_whose_targets_cannot_be_checked_are_gated() {
+        // `deploy-shared` copies the SDK into the game's `ue4ss/Mods`; `gen` rewrites
+        // `<out>/<name from overrides.toml>`; `stubs` overwrites one `.lua` per class in its
+        // output directory. None of those paths can be computed from the arguments, so all three
+        // are gated outright rather than described as derived outputs.
         let mutating: Vec<&str> = [CONFIG, CATALOG, PROJECT]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(mutating, vec!["gen", "deploy-shared"]);
+        assert_eq!(mutating, vec!["stubs", "gen", "deploy-shared"]);
     }
 }

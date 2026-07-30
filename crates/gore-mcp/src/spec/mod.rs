@@ -200,13 +200,17 @@ pub struct Safety {
     /// re-run to regenerate their output. The gate answers "may this agent aim at a path it can
     /// see is occupied", which is the question an agent's mistake actually turns on.
     ///
-    /// A `Write` command needs no entry here for exactly three reasons, and every one that has
-    /// none was checked against its CLI writer: it refuses an occupied destination itself (the
-    /// `asset` and `voice` families, `texture pack`, `as patch-default`, `as patch-tag-map`,
-    /// `scaffold`); it writes *into* a directory that ordinarily exists, where there is no single
-    /// path to check (`stubs`, `audio extract`, `voice extract`, `as emit-all`); or it maintains
-    /// the toolkit's own reversible state (`config set`/`unset`/`detect`, `mgr import`/`enable`/
-    /// `disable`/`order`). Anything that fits none of the three is classified as a mutation.
+    /// A `Write` command needs no entry here for exactly two reasons, and every one that has none
+    /// was checked against its CLI writer: it refuses an occupied destination itself (the `asset`
+    /// and `voice` families, `texture pack`, `as patch-default`, `as patch-tag-map`, `scaffold`),
+    /// or it maintains the toolkit's own reversible state (`config set`/`unset`/`detect`,
+    /// `mgr enable`/`disable`/`order`). Everything else is a mutation.
+    ///
+    /// "It writes into a directory" is deliberately *not* a third reason. The directory may
+    /// ordinarily exist, but the files inside it are still truncated one by one — `audio extract`,
+    /// `as emit-all` and `stubs` each overwrite entries whose names come from data this layer
+    /// never reads. Not being able to preflight a target is a reason to gate the command, not a
+    /// reason to let it through.
     pub truncates: &'static [&'static str],
     /// Paths this command writes that no argument names, as `(argument, how it is derived)`.
     ///

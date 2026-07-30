@@ -502,7 +502,10 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "import",
         "Import a mod (folder, .zip, or single game file) into the library",
         MGR_IMPORT_ARGS,
-        Safety::write(),
+        // Re-importing the same source under the same name derives the same id, and activation moves
+        // the existing library entry aside before `cleanup()` deletes its payload for good -- so an
+        // import can be the only thing standing between the user and an older mod version.
+        Safety::mutate(),
         T_NORMAL,
     )
     .guide("mod-manager"),
@@ -626,9 +629,9 @@ mod tests {
     fn exactly_the_installing_and_deleting_commands_need_allow_write() {
         // The two `deploy`/`undeploy` pairs are texture and mod; `apply` and `reset` are the
         // manager's install-wide operations. The rest are here because they overwrite or delete
-        // paths this layer cannot check: `remove` destroys library content, `texture replace`
-        // rewrites cooked files under a mount-mapped path, and `mod build` clears its bundle
-        // directory before rebuilding it.
+        // paths this layer cannot check: `remove` destroys library content, `import` replaces it
+        // when the same mod is imported twice, `texture replace` rewrites cooked files under a
+        // mount-mapped path, and `mod build` clears its bundle directory before rebuilding it.
         let gated: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
@@ -638,8 +641,8 @@ mod tests {
         assert_eq!(
             gated,
             vec![
-                "replace", "deploy", "undeploy", "build", "deploy", "undeploy", "remove", "apply",
-                "reset"
+                "replace", "deploy", "undeploy", "build", "deploy", "undeploy", "import",
+                "remove", "apply", "reset"
             ]
         );
     }

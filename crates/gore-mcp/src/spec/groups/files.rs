@@ -197,7 +197,10 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract samples to WAV (.wav) for listening/editing",
         AUDIO_EXTRACT_ARGS,
-        Safety::write(),
+        // Writes `<out>/<index>_<sample>.wav` per sample with `fs::write`, so a rerun or an edited
+        // WAV in that directory is truncated. The names come from the bank's own sample list, which
+        // this layer cannot read -- not preflightable, therefore gated.
+        Safety::mutate(),
         T_NORMAL,
     )
     .guide("audio"),

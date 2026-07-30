@@ -613,19 +613,6 @@ mod tests {
             build_with("gore_catalog", "dump", call(&occupied), &permissive()).is_ok(),
             "--allow-write still permits the overwrite"
         );
-
-        // `stubs` writes .lua files into a directory that ordinarily already exists. There is no
-        // single path to gate, so an existing output directory stays ungated.
-        assert!(
-            build_with(
-                "gore_catalog",
-                "stubs",
-                json!({ "model": "model.json", "out": dir.path().to_string_lossy() }),
-                &options()
-            )
-            .is_ok(),
-            "a command whose output is an existing directory stays ungated"
-        );
     }
 
     #[test]
