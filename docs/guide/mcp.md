@@ -106,11 +106,12 @@ line:
 - **Where a file lands can matter more than what writes it.** `texture pack`
   and `asset pack` normally produce an artifact you deploy later, and `dump-mod`
   and `scaffold` normally produce a mod folder you install afterwards — so none
-  of them needs a flag. Point `--out` inside the game tree and the same call
-  writes straight into the live `~mods` override or the live `ue4ss\Mods`, which
-  is an installation. That case needs
-  `--allow-write`, recognised either from an explicit `--game` or from a `G1R`
-  folder in the path.
+  of them needs a flag. Point an output inside the game tree and the same call
+  writes straight into the live installation — the `~mods` override, `ue4ss\Mods`,
+  or the game's own `.lcache` or `.bank` — which is a deployment however new the
+  path is. That case needs `--allow-write`, recognised either from an explicit
+  `--game` or from a `G1R` folder in the path, and it applies to every command's
+  declared output rather than a chosen few.
 - **`gore config` is the one exception to all of this.** `set`, `unset` and
   `detect` rewrite the shared `config.json` without a flag, even though it
   already exists. What they change is a preference — one path, visible in
