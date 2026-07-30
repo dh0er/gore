@@ -381,8 +381,10 @@ fn installs_into_game_tree(
     command: &CommandSpec,
     args: &Map<String, Value>,
 ) -> Option<(&'static str, String)> {
-    let game =
-        args.get("game").and_then(Value::as_str).map(|root| resolve(std::path::Path::new(root)));
+    let game = args
+        .get("game")
+        .and_then(Value::as_str)
+        .and_then(|root| resolve(std::path::Path::new(root)));
 
     // Every declared output, not just the ones registered here. `installs_via` names the outputs
     // whose destination is the *only* thing that matters; a truncating or derived output is just as
@@ -396,7 +398,10 @@ fn installs_into_game_tree(
         // Resolved first, always. A relative output is resolved by the *child* against this
         // process's working directory, so comparing it lexically would miss `--out .` run from
         // inside the installation — which is the same deployment by a shorter name.
-        let path = resolve(&path);
+        let Some(path) = resolve(&path) else {
+            // Too many links to follow. Where the write lands is unknown, so it is gated.
+            return Some((name, "a symlink chain too deep to follow".to_string()));
+        };
 
         let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
         let names_the_game_folder =
@@ -449,14 +454,18 @@ fn derived_path(base: &std::path::Path, how: Derived) -> std::path::PathBuf {
 /// created, so it does not exist yet and canonicalizing fails. Resolving the deepest existing
 /// ancestor and re-attaching the rest gets the symlinked parents — a junction pointing into the
 /// game folder is exactly how this check would otherwise be walked around.
-fn resolve(path: &std::path::Path) -> std::path::PathBuf {
+/// `None` when the link chain is too deep to follow.
+///
+/// The caller must treat that as "could be anywhere", not as "fine": returning the unresolved path
+/// would let a chain one hop longer than the budget walk straight past the gate.
+fn resolve(path: &std::path::Path) -> Option<std::path::PathBuf> {
     resolve_following_links(path, 0)
 }
 
 /// How many symlink hops to follow before giving up. Loops are the reason there is a limit at all.
 const MAX_LINK_HOPS: u8 = 8;
 
-fn resolve_following_links(path: &std::path::Path, hops: u8) -> std::path::PathBuf {
+fn resolve_following_links(path: &std::path::Path, hops: u8) -> Option<std::path::PathBuf> {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
 
     let mut existing = absolute.as_path();
@@ -471,28 +480,32 @@ fn resolve_following_links(path: &std::path::Path, hops: u8) -> std::path::PathB
             // name — which is not where the write lands. `fs::write` follows the link, so a
             // dangling link pointing into the installation would otherwise pass both this check
             // and the existence check and then create the file the game reads.
-            if hops < MAX_LINK_HOPS {
-                if let Ok(metadata) = std::fs::symlink_metadata(&resolved) {
-                    if metadata.file_type().is_symlink() {
-                        if let Ok(target) = std::fs::read_link(&resolved) {
-                            let followed = if target.is_absolute() {
-                                target
-                            } else {
-                                resolved.parent().unwrap_or(std::path::Path::new("")).join(target)
-                            };
-                            return resolve_following_links(&followed, hops + 1);
-                        }
+            if let Ok(metadata) = std::fs::symlink_metadata(&resolved) {
+                if metadata.file_type().is_symlink() {
+                    if hops >= MAX_LINK_HOPS {
+                        // Out of budget with a link still in front of us: where this lands is
+                        // unknown, and unknown must not read as safe.
+                        return None;
                     }
+                    if let Ok(target) = std::fs::read_link(&resolved) {
+                        let followed = if target.is_absolute() {
+                            target
+                        } else {
+                            resolved.parent().unwrap_or(std::path::Path::new("")).join(target)
+                        };
+                        return resolve_following_links(&followed, hops + 1);
+                    }
+                    return None;
                 }
             }
-            return resolved;
+            return Some(resolved);
         }
         match (existing.parent(), existing.file_name()) {
             (Some(parent), Some(name)) => {
                 trailing.push(name);
                 existing = parent;
             }
-            _ => return absolute,
+            _ => return Some(absolute),
         }
     }
 }
@@ -951,6 +964,33 @@ mod tests {
             );
             assert!(build_with(tool, sub, call(live), &permissive()).is_ok());
         }
+    }
+
+    #[test]
+    fn a_link_chain_too_deep_to_follow_is_refused_rather_than_waved_through() {
+        // The hop budget used to return the unresolved path, so a chain one link longer than the
+        // budget looked like an ordinary outside path. Unknown must not read as safe.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let install = dir.path().join("G1R");
+        std::fs::create_dir_all(&install).expect("install-like tree");
+
+        // hop_0 -> hop_1 -> ... -> hop_11 -> <install>/absent.json
+        let mut target = install.join("absent.json");
+        for hop in (0..12).rev() {
+            let link = dir.path().join(format!("hop_{hop}.json"));
+            if !symlink_file(&target, &link) {
+                eprintln!("skipping: this platform/user cannot create symlinks");
+                return;
+            }
+            target = link;
+        }
+
+        let call = json!({ "sdk_dir": "SDK", "out": target.to_string_lossy() });
+        let refused = build_with("gore_catalog", "dump", call, &options());
+        assert!(
+            matches!(refused, Err(BuildError::Refused { flag: "--allow-write", .. })),
+            "a chain past the budget must be refused, got {refused:?}"
+        );
     }
 
     #[test]

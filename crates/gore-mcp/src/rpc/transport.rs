@@ -154,6 +154,17 @@ fn parse_object(value: Value) -> Frame {
     // Read before deserializing: `Option<Value>` collapses an omitted `id` and `"id": null` into
     // the same `None`, and only the first of those is a notification.
     let id_present = value.get("id").is_some();
+    // An object, array or boolean id is not a shape JSON-RPC allows. Rejecting it here, before the
+    // session sees it, is what keeps a bad id from running the call and then answering with
+    // something the client cannot correlate — and therefore may retry.
+    if let Some(given) = value.get("id") {
+        if !Request::id_shape_ok(given) {
+            return Frame::Invalid {
+                id: Value::Null,
+                reason: "`id` must be a string, a number, or null".into(),
+            };
+        }
+    }
     match serde_json::from_value::<Request>(value) {
         Ok(mut request) if request.version_ok() => {
             request.id_present = id_present;
@@ -171,6 +182,29 @@ mod tests {
 
     fn transport(input: &str) -> Transport<Cursor<Vec<u8>>, Vec<u8>> {
         Transport::new(Cursor::new(input.as_bytes().to_vec()), Vec::new())
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_string_number_or_null_is_an_invalid_request() {
+        // JSON-RPC allows only those three. Dispatching an object id would run the call and answer
+        // with something the client cannot correlate — and may therefore send again.
+        for id in ["{}", "[]", "true", "[1,2]"] {
+            let line = format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}");
+            match parse_frame(line.as_bytes()) {
+                Frame::Invalid { reason, .. } => {
+                    assert!(reason.contains("`id`"), "{id}: {reason}")
+                }
+                other => panic!("{id} should be invalid, got {other:?}"),
+            }
+        }
+
+        for id in ["1", "\"abc\"", "null"] {
+            let line = format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}");
+            assert!(
+                matches!(parse_frame(line.as_bytes()), Frame::Message(_)),
+                "{id} is a valid id"
+            );
+        }
     }
 
     #[test]

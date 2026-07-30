@@ -37,6 +37,14 @@ pub struct Request {
 }
 
 impl Request {
+    /// Whether a value is a shape JSON-RPC allows as an id.
+    ///
+    /// Strings, numbers and null. An object, array or boolean is not correlatable by a client, so
+    /// dispatching one would run the call and answer with something the caller cannot match to it.
+    pub fn id_shape_ok(id: &Value) -> bool {
+        id.is_string() || id.is_number() || id.is_null()
+    }
+
     /// A message with no `id` member must never be answered.
     ///
     /// Presence, not value. `"id": null` is a request with a null id — discouraged by JSON-RPC but
