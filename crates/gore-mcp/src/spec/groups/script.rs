@@ -609,7 +609,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Compile AngelScript into a precompiled cache by driving the game's own \
          `-as-generate-precompiled-data` flag. Launches the game.",
         COMPILE_ARGS,
-        Safety::game_launch().in_place_without("out"),
+        Safety::game_launch().in_place_without(&["out"]),
         T_LONG,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)

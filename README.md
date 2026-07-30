@@ -77,8 +77,10 @@ Claude Desktop, or any client with a JSON config:
 ```
 
 Reading and creating new files works out of the box. Changing the game
-installation needs `--allow-write`, and compiling AngelScript — which starts the
-game — needs `--allow-game-launch`. Details: [MCP server](docs/guide/mcp.md).
+installation — or overwriting a file that is already there — needs
+`--allow-write`. Compiling AngelScript starts the game *and* stages the result
+in the installation, so it needs `--allow-game-launch` **and** `--allow-write`
+together. Details: [MCP server](docs/guide/mcp.md).
 
 ## Documentation
 

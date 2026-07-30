@@ -144,7 +144,7 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract a texture's top mip to a PNG",
         TEXTURE_EXTRACT_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("textures"),

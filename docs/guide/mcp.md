@@ -69,12 +69,21 @@ Many commands sidestep the gate entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` needs no flag;
 omitting `--out` overwrites the game's own file and does.
 
-Two rules are worth knowing because they have no equivalent on the command line:
+Three rules are worth knowing because they have no equivalent on the command
+line:
 
-- **An existing output file is an overwrite, not a creation.** `catalog dump`,
-  `catalog`, `story-catalog`, `gui-model` and `sync` replace their `out` file
-  without asking, so pointing one at a path that already exists needs
-  `--allow-write`. A fresh path needs nothing.
+- **An existing output file is an overwrite, not a creation.** Every command
+  that writes a *named* output file replaces it without asking, so pointing one
+  at a path that already exists needs `--allow-write`; a fresh path needs
+  nothing. That covers the catalog and model generators, `loc export`,
+  `loc import`, `audio replace`, `audio export-patch`, `audio apply-patch`,
+  `texture extract` and `project package`. Passing an input's own path as the
+  output counts too — that is an in-place rewrite wearing a safe name.
+  Commands writing *into* a directory (`stubs`, `audio extract`, `texture pack`,
+  `as emit-all`, anything targeting the Mods folder) are not gated this way:
+  the directory ordinarily exists and there is no single path to check. The
+  `asset` and `voice` families and `as patch-default` need no gate at all —
+  their CLI refuses an existing output on its own.
 - **`loc extract` is gated even though it never touches the game.** On the
   command line it asks *Proceed? [y/N]* before replacing the shared
   `loc_catalog.json` that the save editor and Mod Studio also read. Over MCP

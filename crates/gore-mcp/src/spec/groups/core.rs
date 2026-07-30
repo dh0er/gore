@@ -334,7 +334,7 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         "package",
         "Zip a mod folder into distributable UE4SS layout",
         PACKAGE_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("items"),

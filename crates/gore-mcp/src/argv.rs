@@ -294,11 +294,18 @@ fn gate(
     let required = command.safety.requirements(args);
 
     if required.game_launch && !opts.allow_game_launch {
-        return Err(BuildError::Refused {
-            path: path.to_string(),
-            reason: "launches the game executable".into(),
-            flag: "--allow-game-launch",
-        });
+        // Every GameLaunch command is a write too: compiling drives the game to regenerate the
+        // cache and then installs the result. Naming only `--allow-game-launch` would send the
+        // user to restart with a flag set that this same gate refuses one line further down.
+        let (reason, flag) = if required.write && !opts.allow_write {
+            (
+                "launches the game executable and stages the result in the installation",
+                "--allow-game-launch --allow-write",
+            )
+        } else {
+            ("launches the game executable", "--allow-game-launch")
+        };
+        return Err(BuildError::Refused { path: path.to_string(), reason: reason.into(), flag });
     }
     if required.write && !opts.allow_write {
         let reason = if required.rewrites_in_place {
@@ -586,6 +593,63 @@ mod tests {
             .is_ok(),
             "a command whose output is an existing directory stays ungated"
         );
+    }
+
+    #[test]
+    fn passing_the_input_path_as_the_output_does_not_launder_an_in_place_rewrite() {
+        // Supplying `out` is what turns `loc import` from "rewrite the .lcache" into "write a new
+        // file" — but only if it names somewhere new. Handing it the input's own path is the
+        // in-place case again, and the writer underneath replaces that file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lcache = dir.path().join("Alkimia.lcache");
+        std::fs::write(&lcache, b"x").expect("write fixture");
+        let edits = dir.path().join("edits.json");
+        let fresh = dir.path().join("new.lcache");
+
+        let call = |out: &std::path::Path| {
+            json!({
+                "lcache": lcache.to_string_lossy(),
+                "edits": edits.to_string_lossy(),
+                "out": out.to_string_lossy(),
+            })
+        };
+
+        assert!(build_with("gore_loc", "import", call(&fresh), &options()).is_ok());
+        assert!(
+            matches!(
+                build_with("gore_loc", "import", call(&lcache), &options()),
+                Err(BuildError::Refused { flag: "--allow-write", .. })
+            ),
+            "out == in is a rewrite, not a creation"
+        );
+    }
+
+    #[test]
+    fn a_compile_refusal_names_every_flag_the_call_still_needs() {
+        // Reporting only --allow-game-launch would send the user off to restart with a flag set
+        // this same gate refuses: every GameLaunch command is a write too.
+        let neither = build_with(
+            "gore_as",
+            "compile",
+            json!({ "game": "G", "out": "fresh.Cache" }),
+            &options(),
+        );
+        let Err(error) = neither else { panic!("must be refused") };
+        let message = error.to_string();
+        assert!(message.contains("--allow-game-launch"), "{message}");
+        assert!(message.contains("--allow-write"), "{message}");
+
+        // With write already granted, only the launch flag is missing and only it is named.
+        let mut write_only = options();
+        write_only.allow_write = true;
+        let Err(error) =
+            build_with("gore_as", "compile", json!({ "game": "G", "out": "fresh.Cache" }), &write_only)
+        else {
+            panic!("must be refused")
+        };
+        let message = error.to_string();
+        assert!(message.contains("--allow-game-launch"), "{message}");
+        assert!(!message.contains("--allow-write"), "{message}");
     }
 
     #[test]

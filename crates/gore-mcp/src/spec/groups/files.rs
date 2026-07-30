@@ -89,7 +89,7 @@ const LOC_COMMANDS: &[CommandSpec] = &[
         "export",
         "Decrypt the .lcache and write {id:{language:value}} JSON (all languages)",
         LOC_EXPORT_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("text-and-dialogs"),
@@ -97,7 +97,7 @@ const LOC_COMMANDS: &[CommandSpec] = &[
         "import",
         "Apply {id:{language:value}} edits and re-encrypt the .lcache",
         LOC_IMPORT_ARGS,
-        Safety::write_or_in_place("out"),
+        Safety::write_or_in_place(&["out"]),
         T_NORMAL,
     )
     .guide("text-and-dialogs"),
@@ -205,7 +205,7 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "replace",
         "Replace samples with new audio (WAV) via PCM injection",
         AUDIO_REPLACE_ARGS,
-        Safety::write_or_in_place("out"),
+        Safety::write_or_in_place(&["out"]),
         T_NORMAL,
     )
     .guide("audio"),
@@ -222,7 +222,7 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "export-patch",
         "Build a shareable audio patch zip (manifest + replacement WAVs, no game audio)",
         AUDIO_EXPORT_PATCH_ARGS,
-        Safety::write(),
+        Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
     .guide("audio"),
@@ -230,7 +230,7 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "apply-patch",
         "Apply a patch zip (from export-patch) to a bank",
         AUDIO_APPLY_PATCH_ARGS,
-        Safety::write_or_in_place("out"),
+        Safety::write_or_in_place(&["out"]),
         T_NORMAL,
     )
     .guide("audio"),

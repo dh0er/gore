@@ -200,8 +200,17 @@ impl Safety {
     }
 
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
-    pub const fn write_or_in_place(out_arg: &'static str) -> Self {
-        Self { base: Class::Write, in_place_without: Some(out_arg), truncates: &[] }
+    ///
+    /// The same argument is registered as truncating. Supplying it is what makes the call a write
+    /// rather than an in-place rewrite, but only if it names somewhere new: passing the input's own
+    /// path as the output turns "write a new file" back into "replace that file", and the atomic
+    /// writer underneath does exactly that.
+    pub const fn write_or_in_place(out_arg: &'static [&'static str; 1]) -> Self {
+        Self {
+            base: Class::Write,
+            in_place_without: Some(out_arg[0]),
+            truncates: out_arg,
+        }
     }
 
     /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
@@ -211,8 +220,14 @@ impl Safety {
     }
 
     /// Escalate an existing class with the same in-place rule (used by `as compile`).
-    pub const fn in_place_without(mut self, out_arg: &'static str) -> Self {
-        self.in_place_without = Some(out_arg);
+    ///
+    /// Registers the argument as truncating for the same reason
+    /// [`Safety::write_or_in_place`] does: an output that names an existing path is a replacement,
+    /// not a creation. Redundant on a `GameLaunch` command, which is gated either way — but the
+    /// builder must not be the one spelling where the rule silently stops applying.
+    pub const fn in_place_without(mut self, out_arg: &'static [&'static str; 1]) -> Self {
+        self.in_place_without = Some(out_arg[0]);
+        self.truncates = out_arg;
         self
     }
 
@@ -628,7 +643,7 @@ mod tests {
 
     #[test]
     fn in_place_commands_are_reported_as_mutating_only_when_the_output_is_omitted() {
-        let safety = Safety::write_or_in_place("out");
+        let safety = Safety::write_or_in_place(&["out"]);
         let mut with_out = Map::new();
         with_out.insert("out".into(), Value::from("new.bank"));
 
@@ -639,8 +654,72 @@ mod tests {
 
     #[test]
     fn a_game_launching_command_stays_game_launching_when_it_also_writes_in_place() {
-        let safety = Safety::game_launch().in_place_without("out");
+        let safety = Safety::game_launch().in_place_without(&["out"]);
         assert_eq!(safety.effective(&Map::new()), Class::GameLaunch);
         assert_eq!(safety.worst_case(), Class::GameLaunch);
+    }
+
+    #[test]
+    fn an_in_place_command_also_guards_the_output_it_was_given() {
+        // Supplying `out` is what downgrades these from "rewrite the input" to "write a new file",
+        // but only when it names somewhere new. Passing the input's own path as the output is the
+        // in-place case wearing the safe class.
+        let safety = Safety::write_or_in_place(&["out"]);
+        assert_eq!(safety.in_place_without, Some("out"));
+        assert_eq!(safety.truncates, &["out"]);
+    }
+
+    /// Every command that overwrites a named output file, as one list.
+    ///
+    /// This exists because getting it partly right is the failure mode: the first version of the
+    /// truncation gate covered the catalog commands and missed `package`, `loc export`,
+    /// `audio export-patch` and `texture extract`, all of which truncate just the same. A new
+    /// command that writes a file has to be added here deliberately.
+    ///
+    /// Directory outputs are deliberately absent. `stubs`, `audio extract`, `texture pack`,
+    /// `as emit-all` and the Mods-directory commands write *into* a directory that ordinarily
+    /// already exists, so there is no single path to gate and gating the directory would refuse
+    /// routine calls. Commands whose CLI refuses an existing output on its own -- the whole
+    /// `asset` and `voice` families, `as patch-default`, `as patch-tag-map` -- are absent because
+    /// the CLI is already the guard.
+    #[test]
+    fn exactly_the_known_file_writers_gate_an_existing_output() {
+        let mut gated: Vec<(&str, &str, &[&'static str])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.truncates.is_empty() {
+                    gated.push((group.tool, command.sub, command.safety.truncates));
+                }
+            }
+        }
+        gated.sort_unstable();
+
+        let expected: Vec<(&str, &str, &[&'static str])> = vec![
+            ("gore_audio", "apply-patch", &["out"]),
+            ("gore_audio", "export-patch", &["out"]),
+            ("gore_audio", "replace", &["out"]),
+            ("gore_as", "compile", &["out"]),
+            ("gore_catalog", "catalog", &["out"]),
+            ("gore_catalog", "dump", &["out"]),
+            ("gore_catalog", "gui-model", &["out"]),
+            ("gore_catalog", "story-catalog", &["out"]),
+            ("gore_catalog", "sync", &["out"]),
+            ("gore_loc", "export", &["out"]),
+            ("gore_loc", "import", &["out"]),
+            ("gore_project", "package", &["out"]),
+            ("gore_texture", "extract", &["out"]),
+        ];
+        let mut expected = expected;
+        expected.sort_unstable();
+
+        assert_eq!(gated, expected);
+
+        // Every named argument must actually exist on its command, or the gate silently never fires.
+        for (tool, sub, args) in &gated {
+            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            for arg in *args {
+                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+            }
+        }
     }
 }

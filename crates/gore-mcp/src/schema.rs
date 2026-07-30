@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn a_conditionally_in_place_command_says_which_argument_makes_it_safe() {
-        let safety = Safety::write_or_in_place("out");
+        let safety = Safety::write_or_in_place(&["out"]);
         let note = safety_note(&safety);
         assert!(note.contains("`out`"));
         assert!(note.contains("--allow-write"));
