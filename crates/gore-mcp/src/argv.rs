@@ -603,20 +603,35 @@ fn type_name(value: &Value) -> &'static str {
 
 /// Render the command line for display. Quoting is cosmetic — the child never sees a shell — but a
 /// token with a space in it has to look quoted or the echoed line is not copy-pasteable.
+/// The command line as a person would type it into PowerShell.
+///
+/// Every guide example is PowerShell and the tool result presents this as something to re-run, so
+/// it has to be safe to paste. The child is never started through a shell — `Command` takes the
+/// argv directly — but a displayed token like `C:\mods;whoami` would end the command at the
+/// semicolon and run the rest, and these tokens come from a model.
+///
+/// Anything that is not plainly a bare word is single-quoted. PowerShell treats a single-quoted
+/// string as literal, so `'` doubled is the only escape there is.
 fn render(argv: &[OsString]) -> String {
     let mut line = String::from("gore");
     for token in argv {
-        let token = token.to_string_lossy();
         line.push(' ');
-        if token.is_empty() || token.contains(char::is_whitespace) || token.contains('"') {
-            line.push('"');
-            line.push_str(&token.replace('"', "\\\""));
-            line.push('"');
-        } else {
-            line.push_str(&token);
-        }
+        line.push_str(&quote_for_powershell(&token.to_string_lossy()));
     }
     line
+}
+
+fn quote_for_powershell(token: &str) -> String {
+    // A bare word is left alone: quoting `--out` or `textures` would only make the line harder to
+    // read, and the whole point of showing it is that a person can use it.
+    let bare = !token.is_empty()
+        && token.chars().all(|character| {
+            character.is_ascii_alphanumeric() || "-_./\\:=+,@".contains(character)
+        });
+    if bare {
+        return token.to_string();
+    }
+    format!("'{}'", token.replace('\'', "''"))
 }
 
 #[cfg(test)]
@@ -1174,10 +1189,36 @@ mod tests {
             &permissive(),
         )
         .unwrap();
-        assert_eq!(
-            invocation.display,
-            "gore config set -- game-path \"D:/Program Files/G1R\""
-        );
+        assert_eq!(invocation.display, "gore config set -- game-path 'D:/Program Files/G1R'");
+
+        // The guide is PowerShell throughout and this line is presented as something to re-run, so
+        // a token carrying shell syntax must not end the command when it is pasted.
+        let dangerous = build_with(
+            "gore_config",
+            "set",
+            json!({ "key": "game-path", "value": "C:/mods;whoami" }),
+            &permissive(),
+        )
+        .unwrap();
+        assert_eq!(dangerous.display, "gore config set -- game-path 'C:/mods;whoami'");
+
+        // A single quote is the only character a PowerShell literal string escapes, by doubling.
+        let quoted = build_with(
+            "gore_config",
+            "set",
+            json!({ "key": "game-path", "value": "it's here" }),
+            &permissive(),
+        )
+        .unwrap();
+        assert_eq!(quoted.display, "gore config set -- game-path 'it''s here'");
+
+        // Ordinary paths and flags stay bare; quoting everything would make the line unreadable.
+        assert_eq!(quote_for_powershell("--out"), "--out");
+        assert_eq!(quote_for_powershell(r"D:\Games\G1R"), r"D:\Games\G1R");
+        for hostile in ["", "a b", "a;b", "a|b", "a&b", "$env:PATH", "a`b", "a(b)", "a\"b"] {
+            let rendered = quote_for_powershell(hostile);
+            assert!(rendered.starts_with('\'') && rendered.ends_with('\''), "{hostile:?} -> {rendered}");
+        }
     }
 
     #[test]

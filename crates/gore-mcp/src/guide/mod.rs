@@ -116,7 +116,10 @@ pub struct Section<'a> {
 /// headings would shred half the pages into fragments.
 pub fn sections(markdown: &str) -> Vec<Section<'_>> {
     let mut heads: Vec<(usize, usize, u8, &str)> = Vec::new();
-    let mut fence: Option<&str> = None;
+    // The fence character and how many of it opened the block. Both matter: a closing fence carries
+    // no info string and must be at least as long as the opener, so a page that documents Markdown
+    // by wrapping ```toml in ```` stays one block instead of four.
+    let mut fence: Option<(char, usize)> = None;
     let mut offset = 0usize;
 
     for line in markdown.split_inclusive('\n') {
@@ -126,18 +129,19 @@ pub fn sections(markdown: &str) -> Vec<Section<'_>> {
         let text = line.trim_end_matches(['\r', '\n']);
         let trimmed = text.trim_start();
 
-        if let Some(marker) = fence {
-            if trimmed.starts_with(marker) {
+        if let Some((character, opened_with)) = fence {
+            let run = trimmed.chars().take_while(|candidate| *candidate == character).count();
+            if run >= opened_with && trimmed[run..].trim().is_empty() {
                 fence = None;
             }
             continue;
         }
-        if trimmed.starts_with("```") {
-            fence = Some("```");
+        if let Some(opened_with) = opening_fence(trimmed, '`') {
+            fence = Some(('`', opened_with));
             continue;
         }
-        if trimmed.starts_with("~~~") {
-            fence = Some("~~~");
+        if let Some(opened_with) = opening_fence(trimmed, '~') {
+            fence = Some(('~', opened_with));
             continue;
         }
 
@@ -182,6 +186,12 @@ pub fn sections(markdown: &str) -> Vec<Section<'_>> {
     sections
 }
 
+/// The length of a fence this line opens, if it opens one. Three or more of the same character.
+fn opening_fence(trimmed: &str, character: char) -> Option<usize> {
+    let run = trimmed.chars().take_while(|candidate| *candidate == character).count();
+    (run >= 3).then_some(run)
+}
+
 /// The GitHub heading-anchor rule: lowercase, drop punctuation, spaces become hyphens.
 pub fn anchor(heading: &str) -> String {
     let mut anchor = String::with_capacity(heading.len());
@@ -206,6 +216,33 @@ mod tests {
         // PowerShell comments look exactly like Markdown headings. Getting this wrong would split
         // most pages in the guide at arbitrary points inside their examples.
         let markdown = "# Real\n\n```powershell\n# not a heading\ngore config list\n```\n\n## Also real\n";
+        let headings: Vec<&str> =
+            sections(markdown).into_iter().map(|section| section.heading).collect();
+        assert_eq!(headings, vec!["Real", "Also real"]);
+    }
+
+    #[test]
+    fn an_info_string_does_not_close_a_fence() {
+        // A page showing how to write a fenced block contains an inner ```toml. Treating that as
+        // the close would end the block early and turn the rest of the example into headings.
+        let markdown = concat!(
+            "# Real
+
+",
+            "````
+",
+            "```toml
+",
+            "# not a heading
+",
+            "```
+",
+            "````
+
+",
+            "## Also real
+",
+        );
         let headings: Vec<&str> =
             sections(markdown).into_iter().map(|section| section.heading).collect();
         assert_eq!(headings, vec!["Real", "Also real"]);
