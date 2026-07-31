@@ -1443,6 +1443,28 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_carries_the_very_line_a_result_would_have_led_with() {
+        // The in-place arm is the one whose reason names no file at all — the rewrite is identified
+        // by the argument that was left out. Pinning the refusal to `display` is what stops the
+        // line the model relays and the line a successful result leads with from becoming two
+        // renderings, only one of which would carry the real binary and the real quoting.
+        let invocation = build_with(
+            "gore_loc",
+            "import",
+            json!({ "lcache": "Alkimia.lcache", "edits": "edits.json" }),
+            &options(),
+        )
+        .expect("the command line itself is valid");
+        let raised = invocation.consent.as_ref().expect("a rewrite in place must be asked about");
+
+        let message = crate::consent::refusal(raised, &crate::consent::Decision::Dismissed);
+        assert!(message.starts_with("refused:"), "{message}");
+        // Whole and on a line of its own: a `display` folded into a sentence is one the user cannot
+        // select and paste, which is the only reason it is relayed at all.
+        assert!(message.lines().any(|line| line == invocation.display), "{message}");
+    }
+
+    #[test]
     fn a_question_names_the_command_the_way_a_user_would_type_it() {
         // "`reset` modifies the game installation" is ambiguous — several groups have a command
         // that could be called that. The full path is what a user can act on, and this is the

@@ -20,7 +20,8 @@ gore catalog --kind knowledge UE4SS_ObjectDump.txt -o knowledge_catalog.json
 
 `--kind` is one of `item`, `npc`, `knowledge`. For the knowledge catalog,
 `--script-cache <CACHE>` enriches entries with captions read from the shipping
-script cache.
+script cache. It must be a module cache: the `0x9e377abe` magic is checked
+before the captions are read, so `Binds.Cache` is refused by name.
 
 ## The story catalog
 

@@ -340,9 +340,12 @@ fn a_client_that_can_be_asked_gets_a_question_and_the_command_runs_on_yes() {
 
     let result = server.recv()["result"].clone();
     // The command ran and failed on its missing input, which is a completely different thing from
-    // being refused: a refusal never reaches a process, so it shows no command line and no exit
-    // code. Both are the discriminator here.
+    // being refused. The command line no longer tells them apart — a refusal shows it too, so the
+    // model can put it in front of the user — and `loc import` appears in a refusal's opening
+    // sentence as well. What is left is that a refusal never reaches a process: it opens with
+    // `refused:` and carries no exit code.
     let ran = result["content"][0]["text"].as_str().expect("a first block");
+    assert!(!ran.starts_with("refused:"), "the answer was yes, so nothing was refused: {result}");
     assert!(ran.contains("loc import"), "a run leads with the command line: {result}");
     assert!(
         result["content"].to_string().contains("exit code 1"),

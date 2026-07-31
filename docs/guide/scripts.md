@@ -24,6 +24,13 @@ gore as static-names  "$CACHE"            # the n"…" FName literal pool
 gore as walk          "$CACHE"            # raw type-name string scan (decode aid)
 ```
 
+Every one of these takes a module cache and proves it first: the `0x9e377abe`
+magic at offset 0x10 is checked before anything walks the container, so pointing
+one at `Binds.Cache` or another side table names the format mismatch and the
+path rather than failing somewhere inside the parse. `walk` is no exception —
+its raw string scan starts after the outer header, so it reads caches, not
+arbitrary blobs.
+
 `<needle>` is a substring filter on `module.Class::func` and defaults to
 everything. `decompile` and `disasm` print at most `--max` functions (default
 20); `emit` at most `--max` modules (default 5); `emit-all` has no limit and

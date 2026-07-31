@@ -106,8 +106,14 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
         off += 8;
         match ctype {
             0x4C49_5354 => {
-                // "LIST" — nested; check for SNDH
+                // "LIST" — nested; check for SNDH. This is the arm every shipped bank takes.
                 if off + 8 <= end && u32_be(b, off + 4) == 0x534E_4448 {
+                    // The size field is the four bytes after that fourcc, so it needs `off + 12`,
+                    // not the `off + 8` that proved the fourcc. A file cut short between the two
+                    // is damage; reading it anyway indexed past the buffer and panicked.
+                    if off + 12 > end {
+                        return Err("SNDH chunk header cut short (truncated bank)".into());
+                    }
                     sndh_off = off + 0x0C;
                     sndh_size = u32_le(b, off + 8) as usize;
                 }
@@ -127,8 +133,32 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
     }
 
     let entry_size = if version <= 0x28 { 4 } else { 8 };
+    // A zero-length SNDH body is how FMOD writes a bank that holds no sub-banks at all — it is not
+    // damage. Six of the ten shipped banks look like this: the four 506-byte placeholders
+    // (Music_NotDemo, Music_NyrasPrologue, SFX_NotDemo, SFX_NyrasPrologue) plus Master.bank (mixer
+    // and buses only) and Master.strings.bank (string table only). Every chunk header in them is
+    // intact down to the trailing PLAT; there is simply no `SND ` chunk and no FSB5. That absent
+    // `SND ` is what makes the branch decidable: it sits after the top-level LIST in every bank
+    // that has one, so in a bank that has none the LIST body runs exactly to EOF. Comparing only
+    // the RIFF length would be suggestive rather than exact — zeroing these four size bytes in
+    // place leaves both the file length and the RIFF field honest, and would let a bank still
+    // carrying its whole FSB5 payload be told it is intact and empty. Neither subtraction can
+    // underflow: `b.len() >= 0x18` from the header check, and the PROJ/BNKI check above proved
+    // `list_body + 8 <= b.len()`.
+    let sample_free = sndh_size == 0
+        && b.len() - 8 == u32_le(b, 0x04) as usize
+        && b.len() - list_body == u32_le(b, list_body - 4) as usize;
+    if sample_free {
+        return Err(
+            "bank carries no sample data (its SNDH chunk is empty): a placeholder or a \
+             metadata-only bank such as Master.bank or *.strings.bank, not a damaged one — the \
+             samples are in SFX.bank, Music.bank, VO.bank and CINEMATICS.bank"
+                .into(),
+        );
+    }
+    // 1..=3 bytes cannot hold SNDH's mandatory 4-byte chunk-version prefix, so the body is torn.
     if sndh_size < 4 {
-        return Err("SNDH too small".into());
+        return Err("SNDH too small (truncated or corrupt bank)".into());
     }
     let banks = (sndh_size - 4) / entry_size; // skip 4-byte chunk-version
     let mut out = Vec::with_capacity(banks);
@@ -923,5 +953,200 @@ mod tests {
         let fsb = build_fsb5_pcm16("hi", 88200, 2, &[0i16; 128]).unwrap();
         assert!(fsb.len() > 0x4A);
         assert!(parse_fsb5(&fsb[..0x4A]).is_err());
+    }
+
+    /// How SNDH hangs off BNKI. `parse_bank` has an arm for each and they read the size field from
+    /// different offsets; all ten shipped banks take the nested one, so a fixture that only emits
+    /// `Direct` leaves the arm the game actually uses untested.
+    #[derive(Clone, Copy)]
+    enum Sndh {
+        /// A direct sub-chunk of BNKI.
+        Direct,
+        /// One level down, inside a nested `LIST`, the way the shipped banks are written.
+        NestedInList,
+    }
+
+    /// A minimal RIFF/`FEV ` bank whose SNDH body is exactly `body`, followed by `trailing_snd` as
+    /// the payload of a top-level `SND ` chunk — empty for the sample-free banks, which have no
+    /// `SND ` chunk at all. Carries only the wrapper `parse_bank` actually walks — FMT (bank
+    /// version at absolute 0x14), the top-level LIST holding PROJ/BNKI, then SNDH — and backpatches
+    /// the RIFF size so the whole-file length field is honest. The real game banks are never
+    /// vendored here; the chunk layout is the whole of what these tests need.
+    fn bank_with_sndh(body: &[u8], sndh: Sndh, trailing_snd: &[u8]) -> Vec<u8> {
+        let u32b = |v: u32| v.to_le_bytes();
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        // The sub-chunk walk begins right after PROJ framing chunks as [fourcc][u32 size][body],
+        // so BNKI is the first such header and needs a size of its own.
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+        match sndh {
+            Sndh::Direct => {
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+            Sndh::NestedInList => {
+                // [LIST][size][list type][SNDH][size][body]: the walk recognises the nested chunk
+                // by the fourcc four bytes into the LIST body and takes the body twelve bytes in.
+                b.extend_from_slice(b"LIST");
+                b.extend_from_slice(&u32b((0x0C + body.len()) as u32));
+                b.extend_from_slice(b"MODS");
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+        }
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // A bank that carries samples keeps them in a top-level `SND ` chunk behind the LIST, so
+        // its LIST is not the last chunk in the file. A sample-free bank ends with the LIST.
+        if !trailing_snd.is_empty() {
+            b.extend_from_slice(b"SND ");
+            b.extend_from_slice(&u32b(trailing_snd.len() as u32));
+            b.extend_from_slice(trailing_snd);
+        }
+
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+        b
+    }
+
+    /// The sample-free shape with SNDH directly under BNKI.
+    fn bank_with_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::Direct, &[])
+    }
+
+    /// The sample-free shape with SNDH nested in a `LIST`, as every shipped bank writes it.
+    fn bank_with_nested_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::NestedInList, &[])
+    }
+
+    /// Offset of the four bytes `parse_bank` reads as the SNDH size, i.e. just past the fourcc.
+    fn sndh_size_field(b: &[u8]) -> usize {
+        b.windows(4)
+            .position(|w| w == b"SNDH")
+            .expect("the fixture writes exactly one SNDH fourcc")
+            + 4
+    }
+
+    #[test]
+    fn parse_bank_reports_an_empty_sndh_as_a_sample_free_bank_not_a_broken_one() {
+        // Six of the ten shipped banks are shaped like this — the four 506-byte placeholders plus
+        // Master.bank (mixer only) and Master.strings.bank (string table only). Calling them
+        // "SNDH too small" sent people looking for a corrupt file that was never corrupt.
+        let err = parse_bank(&bank_with_sndh_body(&[])).unwrap_err();
+        assert!(
+            err.contains("no sample data"),
+            "an intact bank that simply has no samples must say so, got {err:?}"
+        );
+        assert!(
+            !err.contains("too small"),
+            "a bank that is not damaged must not be described as damaged, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_still_reports_damage_when_the_sndh_body_is_a_partial_version_prefix() {
+        // 1..=3 bytes cannot hold SNDH's mandatory 4-byte chunk-version prefix, so this file is
+        // torn, not empty. Widening the friendly branch to the whole `< 4` guard would swallow it.
+        let err = parse_bank(&bank_with_sndh_body(&[0, 0, 0])).unwrap_err();
+        assert!(
+            err.contains("SNDH too small"),
+            "a torn SNDH body must still be reported as damage, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_calls_an_empty_sndh_damaged_when_the_riff_length_disagrees_with_the_file_size() {
+        // What the RIFF-length corroboration buys: a file whose byte count disagrees with its own
+        // RIFF header must not pass itself off as a placeholder just because SNDH reads zero.
+        let mut b = bank_with_sndh_body(&[]);
+        b.push(0); // RIFF now claims the file ends one byte earlier than it does
+        let err = parse_bank(&b).unwrap_err();
+        assert!(
+            err.contains("SNDH too small"),
+            "a bank whose RIFF length disagrees with its size must be called damaged, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_does_not_call_a_bank_sample_free_when_its_sndh_size_was_zeroed_in_place() {
+        // The case the RIFF length alone cannot see, and the reason the LIST must reach EOF too.
+        // Zeroing those four bytes in a real `VO.bank` — 652,800 bytes, 598 KB of `SND ` payload
+        // it can no longer find — changes neither the file length nor the RIFF field, so a
+        // corroboration built only on those two tells a badly damaged bank it is "not a damaged
+        // one". Saying nothing is wrong is worse than the "SNDH too small" this branch replaced.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let mut b = bank_with_sndh(&body, Sndh::NestedInList, &[0xAB; 64]);
+        assert_eq!(
+            parse_bank(&b).unwrap().len(),
+            1,
+            "the fixture must be a bank that really does carry a sample before it is corrupted"
+        );
+        let size_field = sndh_size_field(&b);
+        b[size_field..size_field + 4].copy_from_slice(&0u32.to_le_bytes());
+        let err = parse_bank(&b).unwrap_err();
+        assert!(
+            !err.contains("no sample data"),
+            "a bank whose `SND ` payload is still there must not be called sample-free, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_reports_a_bank_truncated_inside_its_nested_sndh_header_instead_of_panicking() {
+        // The window this exists for: `Music_NotDemo.bank` cut to 444..=447 bytes. The guard proved
+        // room for the fourcc and the body then read four more bytes for the size, so `gore audio
+        // list` answered a short file with a Rust backtrace — and the Studio, which catches the
+        // unwind, with an opaque transport panic instead of a decode error.
+        let whole = bank_with_nested_sndh_body(&[0u8; 12]);
+        let size_field = sndh_size_field(&whole);
+        for cut in size_field..size_field + 4 {
+            let err = parse_bank(&whole[..cut]).unwrap_err();
+            assert!(
+                err.contains("truncated"),
+                "a bank cut off at {cut} inside its SNDH size field must be reported as \
+                 truncated, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bank_finds_the_sndh_chunk_that_a_shipped_bank_nests_inside_a_list() {
+        // Every one of the ten real banks reaches SNDH through the nested `LIST` arm, not the
+        // direct one the other fixtures emit. Pin that the nested fixture is genuinely walked, so
+        // the truncation case above cannot pass by failing some earlier check.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let entries = parse_bank(&bank_with_nested_sndh_body(&body)).unwrap();
+        assert_eq!(entries.len(), 1, "a nested SNDH with one entry holds one FSB5");
+    }
+
+    #[test]
+    fn parse_bank_still_returns_one_entry_for_a_bank_that_ships_an_fsb5() {
+        // The ordinary bank runs through the same guard, so pin it next to the new branch: a
+        // 4-byte version prefix plus one 8-byte entry is still exactly one FSB5.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let entries = parse_bank(&bank_with_sndh_body(&body)).unwrap();
+        assert_eq!(entries.len(), 1, "a bank with one SNDH entry holds one FSB5");
     }
 }

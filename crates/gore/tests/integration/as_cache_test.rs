@@ -39,6 +39,134 @@ fn decode_header_prints_values() {
         .stdout(contains("d54f0ffb10c1054b99f11446a43ed5dc"));
 }
 
+/// A file that is not a module cache, shaped like the one people actually hit: `Binds.Cache` sits
+/// beside the real cache, carries no `CACHE_MAGIC` at 0x10, and holds the ASCII of an embedded
+/// script path where a Modules walk expects an `FString` length — `b"/Scr"` little-endian is the
+/// 1919111983 out of the original report.
+fn not_a_module_cache() -> Vec<u8> {
+    let mut bytes = vec![0u8; 16];
+    bytes.extend_from_slice(&0x0072_6579u32.to_le_bytes()); // 0x10: not CACHE_MAGIC
+    bytes.extend_from_slice(&0x0000_7fffu32.to_le_bytes()); // 0x14: a count nothing backs
+    bytes.extend_from_slice(b"/Script/Engine.Actor"); // 0x18: the FString length that lied
+    bytes
+}
+
+#[test]
+fn every_module_cache_subcommand_rejects_a_file_that_is_not_a_module_cache() {
+    // `Binds.Cache` sits beside the real cache and is the file people point `as` at by mistake.
+    // Every structural walker skips the outer header and re-reads the module count from 0x14, so
+    // `decompile` started a Modules walk at 0x18, read the ASCII of an embedded script path as an
+    // FString length, and blamed the container: `resolver: unexpected end of data at pos 28: needed
+    // 1919111983 more bytes`. The decoy below reproduces exactly that read. `decode-header` had
+    // parsed the magic all along but named neither the file nor a code, so it goes through the same
+    // gate rather than standing apart from it. The two patch arms are absent only because they
+    // validate their selector file first — they reach this gate through the same two helpers.
+    let dir = tempfile::tempdir().unwrap();
+    let decoy_path = dir.path().join("Binds.Cache");
+    std::fs::write(&decoy_path, not_a_module_cache()).unwrap();
+    let decoy = decoy_path.to_str().unwrap();
+    let out_path = dir.path().join("never-written.Cache");
+    let out = out_path.to_str().unwrap();
+    let outdir_path = dir.path().join("never-emitted");
+    let outdir = outdir_path.to_str().unwrap();
+
+    for args in [
+        &["as", "decode-header", decoy][..],
+        &["as", "info", decoy][..],
+        &["as", "walk", decoy][..],
+        &["as", "decompile", decoy][..],
+        &["as", "disasm", decoy][..],
+        &["as", "emit", decoy][..],
+        &["as", "emit-all", decoy, outdir][..],
+        &["as", "static-names", decoy][..],
+        &["as", "replace", decoy, decoy, "SomeModule", "-o", out][..],
+        &["as", "splice", decoy, decoy, "-o", out][..],
+        &["as", "extract", decoy, "SomeModule", "-o", out][..],
+        &["as", "extract-remap", decoy, "SomeModule", decoy, "-o", out][..],
+        &["as", "bytediff", decoy, decoy][..],
+        &["as", "default-sites", decoy][..],
+        &["as", "tag-map-sites", decoy][..],
+    ] {
+        let assertion = Command::cargo_bin("gore").unwrap().args(args).assert().failure();
+        let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+        let invocation = args.join(" ");
+        assert!(
+            stderr.contains("bad cache magic"),
+            "`gore {invocation}` must name the format mismatch, got: {stderr}"
+        );
+        assert!(
+            stderr.contains(decoy),
+            "`gore {invocation}` must name the offending file, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("unexpected end of data"),
+            "`gore {invocation}` still blames the container walk: {stderr}"
+        );
+    }
+    // Every `-o` arm above was handed the same destination, so this is what its name claims: a
+    // refusal that has already opened, created or truncated the output leaves the file behind.
+    assert!(
+        !out_path.exists(),
+        "a refused input must leave the -o path uncreated"
+    );
+    assert!(
+        !outdir_path.exists(),
+        "emit-all must refuse before it creates an output tree"
+    );
+}
+
+#[test]
+fn catalog_knowledge_rejects_a_script_cache_that_is_not_a_module_cache() {
+    // The same walkers, reached from another command family: `--script-cache` hands a user-chosen
+    // path to the knowledge-caption extractor, which runs `parse_modules` and `RefResolver::build`
+    // itself. Pointed at `Binds.Cache` it produced the identical invented length, worded as
+    // `extracting knowledge captions from '…': unexpected end of data at pos 28: needed 1919111983
+    // more bytes`. The case lives beside the `as` arms because the check it reaches is theirs.
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("UE4SS_ObjectDump.txt");
+    std::fs::write(
+        &dump_path,
+        "[0001] ASClass /Script/Angelscript.Topic_Diego_209799 [n: 1]\n",
+    )
+    .unwrap();
+    let decoy_path = dir.path().join("Binds.Cache");
+    std::fs::write(&decoy_path, not_a_module_cache()).unwrap();
+    let decoy = decoy_path.to_str().unwrap();
+    let out_path = dir.path().join("never-written.json");
+
+    let assertion = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "catalog",
+            "--kind",
+            "knowledge",
+            dump_path.to_str().unwrap(),
+            "--script-cache",
+            decoy,
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("bad cache magic"),
+        "`gore catalog --kind knowledge --script-cache` must name the format mismatch, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(decoy),
+        "`gore catalog --kind knowledge --script-cache` must name the offending file, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("unexpected end of data"),
+        "`gore catalog --kind knowledge --script-cache` still blames the container walk: {stderr}"
+    );
+    assert!(
+        !out_path.exists(),
+        "a refused script cache must leave the catalog output uncreated"
+    );
+}
+
 #[test]
 fn cli_command_graph_has_stack_headroom_for_version_and_help() {
     Command::cargo_bin("gore")

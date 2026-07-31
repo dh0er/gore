@@ -13,9 +13,41 @@ Spoken lines are **not** in the FMOD banks. Sounds and music are covered in
 ```powershell
 $VO = "$GAME\G1R\Story\VoiceOver\german_new.zip"
 
-gore voice list --archive "$VO"          # `index` is an alias
-gore voice list --archive "$VO" --json   # machine-readable index
+gore voice list --archive "$VO"                 # `index` is an alias
+gore voice list --archive "$VO" --json          # machine-readable index
+gore voice list --archive "$VO" --filter DIA_   # only paths containing DIA_
 ```
+
+The listing is **bounded**. Real archives are large — `german_new.zip` holds
+33,323 entries — so `list` prints at most `--max` entries (default 100) and
+leaves out the directory records, which carry no audio.
+
+It always says what it left out. The header names the archive total, how many
+entries a `--filter` kept, and how many directory records it dropped; a
+shortened listing ends with a `… [truncated: …]` line. The JSON document carries
+`entry_count` (the whole archive), `directory_count` (directory records among
+the matches), `matched_count`, `listed_count` (the length of `entries`), and two
+booleans that answer two different questions: `truncated` says whether `--max`
+stopped the listing, and `complete` says whether the array is the whole archive
+— a filter or a dropped directory record narrows it without truncating it.
+
+```powershell
+gore voice list --archive "$VO" --filter DIA_ --max 500
+gore voice list --archive "$VO" --directories   # include directory records
+gore voice list --archive "$VO" --filter DIA_ --max 0 --json   # counts only
+```
+
+Do not answer a truncation notice by asking for everything at once. All 33,323
+entries of `german_new.zip` are an ~11 MB JSON document, far past what an MCP
+client accepts in one result, and the cut lands inside the array — narrow with
+`--filter` instead, and raise `--max` only as far as you need. `--max 0` lists
+nothing and reports only the counts, which is the cheap way to ask "how many
+match?".
+
+`--filter` is case-insensitive on purpose: real archives hold `LINE_ONE.OGG`
+next to `line.ogg`, and a case-sensitive filter would report "nothing found"
+when the truth is "wrong case". It folds case exactly the way `--basename`
+does, so `--filter MÜLLER` finds `DIA_Müller_01.ogg` in a German archive.
 
 ## Selecting one entry
 
@@ -130,6 +162,9 @@ runtime is still runtime-dependent — treat additions as experimental.
 |---|---|---|
 | `--archive <ZIP>` | all | Input voice ZIP. Never modified. |
 | `--json` | `list`, `match-line` | One JSON document instead of human-readable output. |
+| `--filter <TEXT>` | `list` | Keep only entry paths containing this substring, case-insensitive. |
+| `--max <N>` | `list` | Max entries to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
+| `--directories` | `list` | Also list directory entries, which carry no audio. |
 | `--loc-id <ID>` | `match-line` | Trimmed ASCII localization id, without `.ogg`. |
 | `--basename <NAME>` | `extract`, `replace` | Case-insensitive basename; only when unique. |
 | `--path <ARCHIVE_PATH>` | `extract`, `add`, `replace` | Exact, case-sensitive archive path. |

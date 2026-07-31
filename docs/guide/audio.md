@@ -13,6 +13,17 @@ gore audio list --bank "$GAME\G1R\Content\FMOD\Desktop\SFX.bank"
 Prints every sample with its name, codec, sample rate, channel count, and
 duration. The sample name is the key you use in every other command.
 
+Not every bank carries samples. `Master.bank` holds only the mixer and its
+buses, `Master.strings.bank` only the string table, and `Music_NotDemo.bank`,
+`Music_NyrasPrologue.bank`, `SFX_NotDemo.bank` and `SFX_NyrasPrologue.bank` are
+506-byte placeholders. For these, `list` says the bank carries no sample data
+rather than calling it damaged — they are intact, there is simply nothing in
+them to extract or replace. It still says it as a failure: the command writes
+`error: decoding bank: bank carries no sample data …` to stderr and exits 1,
+and the `gore_audio` MCP tool flags the result as an error. A script that walks
+all ten banks has to expect that; the samples themselves are in `SFX.bank`,
+`Music.bank`, `VO.bank` and `CINEMATICS.bank`.
+
 ## Extract
 
 ```powershell

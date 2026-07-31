@@ -44,10 +44,15 @@ pub struct Consent {
     pub remedy: Option<String>,
     /// The command line, exactly as the tool result would show it.
     ///
-    /// Shown in the dialog because `reason` cannot always name the file: an in-place rewrite is
-    /// identified by an argument that was *omitted*, and which argument holds the input differs per
-    /// command. The command line answers "which file?" for every arm at once, without a per-command
-    /// table to keep in step — and it is the same string the user could paste into a shell.
+    /// Shown in the dialog, and in every refusal, because `reason` cannot always name the file: an
+    /// in-place rewrite is identified by an argument that was *omitted*, and which argument holds
+    /// the input differs per command. The command line answers "which file?" for every arm at once,
+    /// without a per-command table to keep in step — and it is the same string the user could paste
+    /// into a shell.
+    ///
+    /// The refusal needs it for a second reason too. It sends the model off to put the call in
+    /// front of the user itself, and the clients that reach a refusal at all are the ones that
+    /// answered their own dialog without rendering the payload this line used to travel in alone.
     pub command_line: String,
     /// Which pre-approval flags cover this call.
     pub needs: Needs,
@@ -267,6 +272,12 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
         Some(remedy) => format!("\n\n{remedy}."),
         None => String::new(),
     };
+    // The line ASK_THEM_YOURSELF sends the model off to show. It is `Invocation::display` — the
+    // same string a successful result leads with and the dialog puts in front of a person — so what
+    // the model relays is the command that would run, not a second rendering of it. The dialog is
+    // where it used to live alone, and a client that answers its own dialogs discards that payload
+    // without showing it to anybody.
+    let line = &consent.command_line;
 
     match decision {
         // Callers gate on these; producing a refusal for one would be a bug, but a message beats a
@@ -276,6 +287,7 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
         Decision::Declined => format!(
             "refused: the confirmation came back \"no\" — the client answered `decline`.\n\n\
              {head}.{remedy}\n\n\
+             {line}\n\n\
              Nothing ran. Whether a person actually saw the question is not visible from here: a \
              client that cannot show a dialog answers on the user's behalf, in milliseconds.\n\n\
              {ASK_THEM_YOURSELF}\n\n\
@@ -287,6 +299,7 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
             "refused: the confirmation was dismissed without an answer — the client answered \
              `cancel`.\n\n\
              {head}.{remedy}\n\n\
+             {line}\n\n\
              Nothing ran. A dismissal means nobody chose: the dialog was closed, or the client \
              could not show one at all.\n\n\
              {ASK_THEM_YOURSELF}\n\n\
@@ -297,15 +310,22 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
         Decision::NotAsked(Policy::CannotAsk) => format!(
             "refused: {head}, and this MCP client cannot put that question to the user — it did \
              not advertise the `elicitation` capability during initialize.{remedy}\n\n\
+             {line}\n\n\
              {ASK_THEM_YOURSELF}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
         ),
 
+        // The one arm that does not carry ASK_THEM_YOURSELF, so nothing here points at the command
+        // line and it would arrive unannounced — directly above a *different* command, the one the
+        // server would have to be restarted with. It still belongs here: this arm's reason names no
+        // file either. So it is introduced instead of dropped.
         Decision::NotAsked(Policy::NeverAsk) => format!(
             "refused: {head}, and this server was started with --no-consent-prompts, so it does \
              not ask. `user_approved` is refused here too — the flag exists precisely so that an \
              unattended agent cannot talk its own way past this.\n\n\
+             The call that was refused:\n\n\
+             {line}\n\n\
              Only the user can allow it, by restarting the server with:\n\
              \n    gore mcp serve {flags}{remedy}",
             flags = consent.needs.flags(),
@@ -320,6 +340,7 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
         Decision::Failed(detail) => format!(
             "refused: {head}, and asking the user about it failed: {detail}. Treated as a \
              refusal — nothing ran.{remedy}\n\n\
+             {line}\n\n\
              {ASK_THEM_YOURSELF}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
@@ -451,6 +472,49 @@ mod tests {
         let never = refusal(&consent, &Decision::NotAsked(Policy::NeverAsk));
         assert!(!never.contains("send the same call again"), "{never}");
         assert!(never.contains("user_approved"), "it must still say the field will not help: {never}");
+    }
+
+    #[test]
+    fn every_refusal_shows_the_line_it_tells_the_model_to_relay() {
+        // The dialog used to be the only place the command line appeared, and the clients that
+        // reach a refusal at all are precisely the ones that answered that dialog themselves
+        // without rendering it. So "show them the command line above" pointed at nothing, and the
+        // model was sent off to relay a string it had never been given — one it cannot reconstruct
+        // either, since it knows neither which binary this server runs nor how it quotes.
+        let consent = consent();
+        // Without this the whole test is vacuous: `find("")` is `Some(0)`, so an empty field would
+        // satisfy every ordering assertion below while each refusal rendered a blank paragraph.
+        assert!(!consent.command_line.is_empty(), "the fixture has to carry a line to look for");
+
+        for decision in [
+            Decision::Declined,
+            Decision::Dismissed,
+            Decision::NotAsked(Policy::CannotAsk),
+            Decision::NotAsked(Policy::NeverAsk),
+            Decision::Failed("broken pipe".into()),
+        ] {
+            let text = refusal(&consent, &decision);
+            let at = text
+                .find(&consent.command_line)
+                .unwrap_or_else(|| panic!("{decision:?} shows no command line: {text}"));
+
+            // On a line of its own, because that is what makes it selectable and pasteable — and
+            // because the indentation test skips exactly the line that *equals* this string. Folded
+            // into a sentence it would stop being skipped and start being policed as prose.
+            assert!(
+                text.lines().any(|line| line == consent.command_line),
+                "{decision:?} folds the call into a sentence: {text}"
+            );
+
+            // "Above" has to have exactly one antecedent. Every refusal names the indented
+            // `gore mcp serve …` restart line below the call, and a model relaying that one instead
+            // would ask the user to change how the server was started rather than to allow the call.
+            let restart = text.find("gore mcp serve").expect("the flag route is always named");
+            assert!(at < restart, "{decision:?} puts the call below the restart line: {text}");
+            if let Some(pointer) = text.find("the command line above") {
+                assert!(at < pointer, "{decision:?} names the line after pointing at it: {text}");
+            }
+        }
     }
 
     #[test]
@@ -687,8 +751,13 @@ mod tests {
         ] {
             let text = refusal(&consent, &decision);
             for line in text.lines() {
-                // The one deliberate indent is the copy-pasteable command line.
-                if line.trim_start().starts_with("gore mcp serve") {
+                // The one deliberate indent is the copy-pasteable restart line. The call's own
+                // command line is skipped for a different reason: it is data rather than prose,
+                // and whatever spacing `argv::render` had to quote into a path says nothing about
+                // how the literals in this file are laid out.
+                if line == consent.command_line.as_str()
+                    || line.trim_start().starts_with("gore mcp serve")
+                {
                     continue;
                 }
                 assert!(!line.starts_with(' '), "{decision:?} indents {line:?}");

@@ -505,7 +505,9 @@ const AS_COMMANDS: &[CommandSpec] = &[
     .guide("scripts"),
     CommandSpec::new(
         "walk",
-        "Scan length-prefixed type-name strings (decode investigation aid).",
+        "Scan length-prefixed type-name strings (decode investigation aid). The input must be a \
+         module cache: the scan starts after the outer header, so the `0x9e377abe` magic is \
+         checked first and an arbitrary blob is refused rather than scanned.",
         WALK_ARGS,
         Safety::read(),
         T_NORMAL,

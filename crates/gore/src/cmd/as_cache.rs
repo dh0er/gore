@@ -15,7 +15,9 @@ use gore_as::cache::walk_modules::{module_count, module_region_end};
 pub enum AsCmd {
     /// Parse and print the outer cache header.
     DecodeHeader { file: PathBuf },
-    /// Scan length-prefixed type-name strings (decode investigation aid).
+    /// Scan length-prefixed type-name strings (decode investigation aid). The input must be a
+    /// module cache: the scan starts after the outer header, so the `0x9e377abe` magic is
+    /// checked first and an arbitrary blob is refused rather than scanned.
     Walk {
         file: PathBuf,
         #[arg(long, default_value_t = 100)]
@@ -338,7 +340,7 @@ pub enum TagMapCmd {
 const DEFAULT_SELECTOR_MAX_BYTES: u64 = 64 * 1024;
 const DEFAULT_USMAP_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_BINDS_MAX_BYTES: u64 = 128 * 1024 * 1024;
-const TAG_MAP_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const MODULE_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES: usize = 1_024;
 const DEFAULT_USMAP_MAX_CANDIDATES: usize = 16;
 const TAG_MAP_SITES_REPORT_FORMAT: &str = "gore-as-tag-map-sites-v1";
@@ -825,7 +827,7 @@ fn read_default_usmap(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn read_tag_map_cache(path: &Path) -> Result<Vec<u8>> {
-    read_regular_bounded(path, TAG_MAP_CACHE_MAX_BYTES, "AS_TAG_MAP_INPUT")
+    read_validated_cache(path, "AS_TAG_MAP_INPUT")
 }
 
 fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
@@ -856,6 +858,36 @@ fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<
         );
     }
     Ok(bytes)
+}
+
+/// Prove a buffer really is an AngelScript module cache before anything walks it. `Binds.Cache` and
+/// the other side tables carry no `CACHE_MAGIC` at 0x10, and every structural walker deliberately
+/// skips the header and re-reads the module count from 0x14; without this gate they read an
+/// arbitrary `FString` length out of unrelated bytes and blame a container parse for a wrong file.
+/// Visible to the crate because `gore catalog knowledge --script-cache` feeds the same walkers.
+pub(crate) fn validate_module_cache(path: &Path, bytes: &[u8], label: &'static str) -> Result<()> {
+    CacheHeader::parse(bytes).with_context(|| {
+        format!(
+            "{label}: {} is not an AngelScript module cache — pass the game's \
+             PrecompiledScript_Shipping.Cache or a mini-cache from 'gore as extract'",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Read a bounded regular file and prove its outer header, under the caller's own `AS_*` code so
+/// that a tag-map input is not diagnosed as a plain cache input.
+fn read_validated_cache(path: &Path, label: &'static str) -> Result<Vec<u8>> {
+    let bytes = read_regular_bounded(path, MODULE_CACHE_MAX_BYTES, label)?;
+    validate_module_cache(path, &bytes, label)?;
+    Ok(bytes)
+}
+
+/// Read a module cache and prove its outer header. The single entry point for every subcommand that
+/// walks the `Modules` TMap or the seven global tail tables.
+fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
+    read_validated_cache(path, "AS_CACHE_INPUT")
 }
 
 fn evidence_file_proof(path: &Path, bytes: &[u8]) -> EvidenceFileProofJson {
@@ -1352,23 +1384,20 @@ fn guarded_pristine_script_cache(
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let h = CacheHeader::parse(&bytes).context("parsing header")?;
             println!("hash       : {}", hex16(&h.hash));
             println!("magic      : {:#010x}", h.magic);
             println!("type_count : {}", h.type_count);
         }
         AsCmd::Walk { file, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             for s in scan_strings(&bytes, CacheHeader::SIZE, max) {
                 println!("0x{:08x}  len={:<4} {}", s.offset, s.len, s.text);
             }
         }
         AsCmd::Info { file } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let tail = module_region_end(&bytes).context("walking modules")?;
             println!("modules  : {}", module_count(&bytes));
             println!("tail_off : {:#x}", tail);
@@ -1379,8 +1408,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Decompile { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
             // decompile output matches emitted source (subclass casts, native-call trimming).
@@ -1403,8 +1431,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} function(s))");
         }
         AsCmd::EmitAll { file, outdir } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             let stats = gore_as::cache::emit_all::emit_all_tree(
@@ -1425,8 +1452,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Emit { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             let prepared = gore_as::cache::emit_all::PreparedEmit::new(
@@ -1450,8 +1476,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} module(s))");
         }
         AsCmd::StaticNames { file, indices } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             println!("StaticNames count: {}", refs.static_name_count());
             let show: Vec<i64> = if indices.is_empty() {
@@ -1467,8 +1492,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
         }
         AsCmd::Disasm { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let funcs =
                 gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
@@ -1493,6 +1517,9 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             let bytes = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
+            // Ahead of evidence loading: a non-cache input otherwise draws a `not usable
+            // native-default evidence` warning before anything names the real mismatch.
+            validate_module_cache(&cache, &bytes, "AS_DEFAULT_INPUT")?;
             let evidence = load_default_mutation_evidence(
                 &cache,
                 &bytes,
@@ -1591,6 +1618,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let replacement = decode_default_hex(&replacement_hex, "AS_DEFAULT_REPLACEMENT")?;
             let input = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
+            validate_module_cache(&cache, &input, "AS_DEFAULT_INPUT")?;
             let evidence = load_default_mutation_evidence(
                 &cache,
                 &input,
@@ -1967,10 +1995,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             target,
             out,
         } => {
-            let base_b =
-                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
-            let mini_b =
-                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let base_b = read_module_cache(&base)?;
+            let mini_b = read_module_cache(&mini)?;
             let n = module_count(&base_b);
             let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target)
                 .context("replace")?;
@@ -1985,10 +2011,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Splice { base, mini, out } => {
-            let base_b =
-                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
-            let mini_b =
-                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let base_b = read_module_cache(&base)?;
+            let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
             let spliced = splice_auto(&base_b, &mini_b).context("splicing")?;
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
@@ -2002,8 +2026,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Extract { cache, module, out } => {
-            let b =
-                std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
+            let b = read_module_cache(&cache)?;
             let n = module_count(&b);
             let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
             std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
@@ -2022,10 +2045,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             allow_new_symbols,
             out,
         } => {
-            let regen_b = std::fs::read(&regen_cache)
-                .with_context(|| format!("reading {}", regen_cache.display()))?;
-            let base_b = std::fs::read(&base_cache)
-                .with_context(|| format!("reading {}", base_cache.display()))?;
+            let regen_b = read_module_cache(&regen_cache)?;
+            let base_b = read_module_cache(&base_cache)?;
             let n = module_count(&regen_b);
             let mini =
                 gore_as::cache::splice::extract_module(&regen_b, &module).context("extract")?;
@@ -2071,10 +2092,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             fail_on_semantic,
         } => {
             use gore_as::cache::bytediff::{self, Filters, NormOpts, Verdict};
-            let v_bytes = std::fs::read(&vanilla)
-                .with_context(|| format!("reading vanilla {}", vanilla.display()))?;
-            let r_bytes = std::fs::read(&regen)
-                .with_context(|| format!("reading regen {}", regen.display()))?;
+            // The two positionals are the easiest pair in the CLI to swap, so each keeps the role
+            // label its own read carried before both moved to the shared helper.
+            let v_bytes = read_module_cache(&vanilla).context("reading the vanilla cache")?;
+            let r_bytes = read_module_cache(&regen).context("reading the regen cache")?;
 
             let opts = NormOpts {
                 n2_slots: norm_slots,

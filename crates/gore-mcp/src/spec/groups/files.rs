@@ -8,7 +8,7 @@
 
 use crate::spec::{
     ArgForm::{Long, Switch},
-    ArgKind::{Bool, Path, Str},
+    ArgKind::{Bool, Int, Path, Str},
     ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG, T_NORMAL,
 };
 
@@ -284,7 +284,35 @@ const VOICE_SELECTOR: &[&[&str]] = &[&["basename", "path"]];
 const VOICE_OUT_ZIP: ArgSpec =
     ArgSpec::new("out", Long("out"), Path, "New output ZIP; must not already exist", true);
 
-const VOICE_LIST_ARGS: &[ArgSpec] = &[VOICE_ARCHIVE];
+/// `list` is bounded by `--max` in the CLI itself, which is what keeps a 33,000-entry archive from
+/// being clipped mid-array into a JSON document that no longer parses. The bound is only useful if
+/// an agent can move it, so all three narrowing flags are exposed here.
+const VOICE_LIST_ARGS: &[ArgSpec] = &[
+    VOICE_ARCHIVE,
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Keep only entry paths containing this substring (case-insensitive)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max entries to print. The result states how many matched when it stops here; 0 lists \
+         nothing and reports only the counts",
+        false,
+    )
+    .with_default("100"),
+    ArgSpec::new(
+        "directories",
+        Switch("directories"),
+        Bool,
+        "Also list the archive's directory entries, which carry no audio",
+        false,
+    ),
+];
 
 const VOICE_MATCH_LINE_ARGS: &[ArgSpec] = &[
     VOICE_ARCHIVE,
@@ -346,7 +374,7 @@ const VOICE_APPLY_MANIFEST_ARGS: &[ArgSpec] = &[
 const VOICE_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "list",
-        "Index and list every entry in a voice archive",
+        "Index a voice archive and list a bounded page of its entries",
         VOICE_LIST_ARGS,
         Safety::read(),
         T_NORMAL,

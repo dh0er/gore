@@ -649,6 +649,30 @@ mod voice_cli_tests {
     }
 
     #[test]
+    fn voice_list_bounds_default_to_a_hundred_entries_and_hide_directories() {
+        // The bound only protects anybody if it applies to the call nobody thought about, so pin
+        // the defaults here rather than leaving them to a `default_value_t` that can be edited
+        // without anything noticing.
+        let cli =
+            Cli::try_parse_from(["gore", "voice", "list", "--archive", "voices.zip"]).unwrap();
+        let Commands::Voice {
+            action:
+                cmd::voice::VoiceAction::List {
+                    filter,
+                    max,
+                    directories,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected voice list command");
+        };
+        assert_eq!(max, 100);
+        assert_eq!(filter, None);
+        assert!(!directories);
+    }
+
+    #[test]
     fn voice_entry_selector_requires_exactly_one_mode() {
         let base = [
             "gore",

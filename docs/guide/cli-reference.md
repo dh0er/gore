@@ -111,7 +111,7 @@ it up to `*.gore-bak`.
 
 | Subcommand | Flags |
 |---|---|
-| `list` (alias `index`) | `--archive <ZIP>` · `--json` |
+| `list` (alias `index`) | `--archive <ZIP>` · `--filter <TEXT>` · `--max <N>` (default 100) · `--directories` · `--json` |
 | `match-line` | `--archive` · `--loc-id <ASCII_ID>` (no `.ogg` suffix) · `--json` |
 | `extract` | `--archive` · `--basename <NAME>` \| `--path <ARCHIVE_PATH>` · `-o, --out <DIR>` |
 | `add` | `--archive` · `--path <ARCHIVE_PATH>` · `--ogg <OGG>` · `-o, --out <ZIP>` |
@@ -168,8 +168,16 @@ Output directories must not exist and are never placed in the game tree.
 | `extract-remap <REGEN> <MODULE> <BASE>` | `--allow-new-symbols` · `-o, --out` |
 | `bytediff <VANILLA> <REGEN>` | `--module` · `--func` · `--verdict` · `--show-benign` · `--context <N>` · `--norm-slots` · `--no-norm-scope` · `--no-norm-reguard` · `--json <PATH>` · `--fail-on-semantic` |
 
-`patch-default`, `patch-tag-map`, `patch-fixed` and the `as` extract/splice
-family never overwrite an existing output path.
+`patch-default`, `patch-tag-map` and `asset patch-fixed` never overwrite an
+existing output path. The `as` extract/splice family — `replace`, `splice`,
+`extract`, `extract-remap` — writes over whatever is at `-o`.
+
+Every `as` subcommand that takes a cache file checks the `0x9e377abe`
+module-cache magic before walking it, so pointing one at `Binds.Cache` or any
+other side table names the format mismatch and the offending path rather than
+failing somewhere inside the container parse. The same check guards
+`catalog --kind knowledge --script-cache`, which feeds the caption extractor the
+same walkers.
 
 `tag-map-sites` and `patch-tag-map` additionally require exact bounded
 `Binds.Cache` and `.usmap` evidence, discovered from the game layout or from
