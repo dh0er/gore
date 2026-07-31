@@ -33,6 +33,20 @@ Claude Desktop, or any client with a JSON config:
 }
 ```
 
+### As a Claude Code plugin
+
+`plugins/gore/` in this repository is a plugin that registers the server *and*
+installs the `gore-modding` skill, so a client gets the tools and the workflow
+around them in one step instead of two. Its `.mcp.json` invokes `gore` by name,
+so `gore.exe` has to be on `PATH` — that is the one thing the plugin cannot do
+for you, since the binary is a Rust build rather than something a package manager
+fetches on demand.
+
+The skill deliberately carries no asset paths, ids or sample names. Everything
+factual lives in this guide, which ships inside the binary and is therefore always
+the version you are actually running; a skill that restated any of it would drift
+the first time the game updated.
+
 Point GORE at the game once (see [Getting started](getting-started.md)) and the
 agent will not have to pass a game path at all:
 

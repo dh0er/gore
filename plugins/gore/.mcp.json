@@ -1,0 +1,6 @@
+{
+  "gore": {
+    "command": "gore",
+    "args": ["mcp", "serve"]
+  }
+}
