@@ -1070,6 +1070,7 @@ dependencies = [
  "image",
  "libc",
  "mlua",
+ "repak",
  "serde",
  "serde_json",
  "sha2",

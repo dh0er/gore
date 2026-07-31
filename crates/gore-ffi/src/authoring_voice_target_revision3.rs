@@ -1420,6 +1420,7 @@ mod tests {
             audio: Vec::new(),
             texture: Vec::new(),
             files: Vec::new(),
+            pak_files: Vec::new(),
             scripts: Vec::new(),
             dialog_topics: Vec::new(),
             voice: vec![VoiceArchiveEdit {

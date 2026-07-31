@@ -505,7 +505,7 @@ impl GroupSpec {
 
 /// Wall-clock caps. Three tiers rather than a number per command: the distinction that matters is
 /// "prints something", "rewrites some files" and "walks the entire game", and inventing a precise
-/// budget for each of 77 commands would be false precision.
+/// budget for each of 78 commands would be false precision.
 pub const T_FAST: u64 = 60;
 pub const T_NORMAL: u64 = 300;
 pub const T_LONG: u64 = 1800;
@@ -542,7 +542,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 77;
+pub const EXPECTED_LEAF_COUNT: usize = 78;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)

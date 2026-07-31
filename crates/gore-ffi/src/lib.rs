@@ -2191,6 +2191,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],

@@ -1851,6 +1851,13 @@ pub enum ComponentInfo {
         /// `G1R/Content/Slate/Cursors/Normal/Normal.PNG`.
         targets: Vec<String>,
     },
+    PakFilePatch {
+        rel: String,
+        /// The SAME game-root-relative destinations [`ComponentInfo::FilePatch`] names, claimed
+        /// from an additive `~mods` pak instead of overwritten on disk. Spelling them identically
+        /// is what lets conflict analysis see the two mechanisms fighting over one file.
+        targets: Vec<String>,
+    },
     VoiceArchivePatch {
         rel: String,
         /// `"<archive>|<member path>"` targets used for soft, order-dependent conflicts.
@@ -2141,6 +2148,10 @@ mod tests {
                     rel: "voice".into(),
                     targets: vec!["German.zip|NPC/hello.ogg".into()],
                 },
+                ComponentInfo::PakFilePatch {
+                    rel: "pak_files".into(),
+                    targets: vec!["G1R/Content/Slate/Cursors/Normal/Normal.PNG".into()],
+                },
                 ComponentInfo::Triplet {
                     rel_base: "paks/zzz_MyMod_P".into(),
                     targets: vec!["pak:zzz_MyMod_P".into()],
@@ -2181,6 +2192,7 @@ mod tests {
             "component tag: {json}"
         );
         assert!(json.contains("\"loose_pak\""), "component tag: {json}");
+        assert!(json.contains("\"pak_file_patch\""), "component tag: {json}");
         assert!(json.contains("\"raw_file\""), "component tag: {json}");
         assert!(json.contains("\"script_cache\""), "raw target tag: {json}");
 

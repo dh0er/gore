@@ -49,6 +49,29 @@ const TEXTURE_LIST_ARGS: &[ArgSpec] = &[
     ),
 ];
 
+/// `paklist` is bounded by `--max` in the CLI itself, which is what keeps the installation's 4,577
+/// pak entries from being clipped mid-path into a JSON document that no longer parses. The bound is
+/// only useful if an agent can move it, so both narrowing flags are exposed here.
+const TEXTURE_PAKLIST_ARGS: &[ArgSpec] = &[
+    GAME,
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Keep only entry paths containing this substring (case-insensitive)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max entries to print. The result states how many matched when it stops here; 0 lists \
+         nothing and reports only the counts",
+        false,
+    )
+    .with_default("100"),
+];
+
 const TEXTURE_EXTRACT_ARGS: &[ArgSpec] = &[
     GAME,
     TEXTURE_ASSET,
@@ -140,6 +163,19 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         T_LONG,
     )
     .guide("textures"),
+    // The only command here that reads the plain `.pak` containers rather than the IoStore side.
+    // It answers what `texture list` cannot: whether a path is already packed, and therefore
+    // whether replacing that file on disk would ever be read.
+    CommandSpec::new(
+        "paklist",
+        "List what the game's own .pak containers carry, so a loose-file destination can be \
+         checked before it is written",
+        TEXTURE_PAKLIST_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("textures"),
     // Writes two files: the PNG named by `out`, and a metadata sidecar at
     // `out.with_extension("png.json")` that no argument mentions (cmd/texture.rs).
     CommandSpec::new(
@@ -208,7 +244,9 @@ pub const TEXTURE: GroupSpec = GroupSpec {
     title: "gore texture",
     cli: "texture",
     summary: "Extract and replace game textures in the UE5 IoStore containers. The workflow is \
-              list → extract → replace → pack → deploy; only the last two touch the installation.",
+              list → extract → replace → pack → deploy; only the last two touch the installation. \
+              paklist answers a separate question: which paths the game's own .pak containers \
+              already carry, and therefore which loose files on disk can never be read.",
     shape: GroupShape::Nested,
     commands: TEXTURE_COMMANDS,
 };
@@ -632,7 +670,7 @@ mod tests {
 
     #[test]
     fn the_group_sizes_match_the_cli() {
-        assert_eq!(TEXTURE.commands.len(), 7);
+        assert_eq!(TEXTURE.commands.len(), 8);
         assert_eq!(ASSET.commands.len(), 4);
         assert_eq!(MOD.commands.len(), 3);
         assert_eq!(MGR.commands.len(), 10);

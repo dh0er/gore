@@ -1753,6 +1753,7 @@ fn goremod_components(
             | Component::TexturePatch { path, .. }
             | Component::AngelScriptPatch { path, .. }
             | Component::FilePatch { path, .. }
+            | Component::PakFilePatch { path, .. }
             | Component::VoiceArchivePatch { path, .. } => path,
         };
         if !crate::is_safe_rel_path(comp_path) {
@@ -1836,6 +1837,21 @@ fn goremod_components(
                 targets.sort();
                 targets.dedup();
                 ComponentInfo::FilePatch {
+                    rel: join_rel(prefix, path),
+                    targets,
+                }
+            }
+            Component::PakFilePatch { path, targets } => {
+                // Same destinations, same allowlist, same reason: only the deploy mechanism
+                // differs, and an archive must not be able to smuggle a destination past import
+                // through the additive door that the in-place door would refuse.
+                let mut targets = targets.clone();
+                for target in &targets {
+                    crate::validate_loose_game_path(target)?;
+                }
+                targets.sort();
+                targets.dedup();
+                ComponentInfo::PakFilePatch {
                     rel: join_rel(prefix, path),
                     targets,
                 }
@@ -2259,6 +2275,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "TestModule".into(),
@@ -2305,6 +2322,7 @@ mod tests {
                 game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
                 source_path: cursor.display().to_string(),
             }],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],

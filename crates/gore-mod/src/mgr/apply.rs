@@ -548,6 +548,12 @@ fn apply_loadout_with_limits(
     // output triplet name by this index, so two TexturePatch components in one mod would otherwise
     // collide and clobber each other's output.
     let mut tex_comp_idx = 0usize;
+    // Same reasoning for pak-file components, on its own counter so a bundle carrying both kinds
+    // cannot have one kind's index collide with the other's temp dir.
+    let mut pak_files_comp_idx = 0usize;
+    // One pak-shadow oracle for the whole composed apply, built at most once and only if a loose
+    // destination actually asks.
+    let mut shadow = crate::PakShadowIndex::new(&gp.root);
     for l in &loaded {
         for comp in &l.meta.components {
             match comp {
@@ -851,6 +857,22 @@ fn apply_loadout_with_limits(
                             ));
                             continue;
                         }
+                        // A destination one of the shipped containers already carries is inert:
+                        // Unreal consults a mounted pak before the file on disk, so the write
+                        // would succeed and change nothing. Warn and SKIP rather than fail, for
+                        // the same reason the missing-target case does — the manager composes many
+                        // mods and one bad destination must not brick the whole loadout after the
+                        // working deployment is gone.
+                        if let Some(pak) = shadow.owning_pak(&game_path)? {
+                            warnings.push(format!(
+                                "{}: loose-file target {game_path} is already packed in {pak}, so \
+                                 the packed copy wins and replacing it on disk would change \
+                                 nothing — skipping (the mod's author wants a \"pak_files\" \
+                                 section instead)",
+                                l.entry.id
+                            ));
+                            continue;
+                        }
                         loose_files.insert(
                             target,
                             PendingPayload {
@@ -860,6 +882,28 @@ fn apply_loadout_with_limits(
                         );
                         // later-wins
                     }
+                }
+                ComponentInfo::PakFilePatch { rel, .. } => {
+                    validate_payload_rel(rel, "pak file component", limits)?;
+                    let snapshot = snapshot_component_tree(
+                        &l.library_entry,
+                        rel,
+                        "pak file component",
+                        limits,
+                        &mut budget,
+                    )?;
+                    // Additive, so no destination has to exist and nothing is shadow-checked:
+                    // `meta.id` gives cross-mod uniqueness of the pak name, `pak_files_comp_idx`
+                    // per-component uniqueness within a mod.
+                    let paks = crate::prepare_pak_file_component(
+                        snapshot.bundle_root(),
+                        rel,
+                        &l.meta.id,
+                        pak_files_comp_idx,
+                        &gp,
+                    )?;
+                    plan.texture_triplets.extend(paks);
+                    pak_files_comp_idx += 1;
                 }
                 ComponentInfo::VoiceArchivePatch { rel, .. } => {
                     validate_payload_rel(rel, "voice patch", limits)?;

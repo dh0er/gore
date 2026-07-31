@@ -22,7 +22,7 @@ gore --version
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. | [text-and-dialogs](text-and-dialogs.md) |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). | [audio](audio.md) |
 | `voice` | `list` (`index`) · `match-line` · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Index/extract/copy-on-write edit voice-over ZIP archives. | [voice](voice.md) |
-| `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. | [textures](textures.md) |
+| `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` · `paklist` | Extract/replace IoStore textures → Zen triplet in `~mods`. | [textures](textures.md) |
 | `asset` | `extract` · `inspect` · `patch-fixed` · `pack` | Extract, inspect, copy-on-write patch, and offline-pack one cooked DataAsset. | [dataassets](dataassets.md) |
 | `as` | see [below](#as) | AngelScript precompiled-cache tooling (experimental). | [scripts](scripts.md) |
 | `catalog` | — | Generate an item/npc/knowledge catalog from a UE4SS object dump. | [catalogs](catalogs-and-models.md) |
@@ -131,6 +131,7 @@ Inputs are never modified; `-o` must not already exist.
 | `deploy` | `--game` · `--triplet-dir <DIR>` · `--name` |
 | `index` | `--game` · `-o, --out <PATH>` |
 | `undeploy` | `--game` · `--name` |
+| `paklist` | `--game` · `--filter <TEXT>` · `--max <N>` · `--json` |
 
 ## `asset`
 

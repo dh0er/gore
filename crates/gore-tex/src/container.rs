@@ -1072,14 +1072,135 @@ fn collect_package_paths(
 /// point), e.g. `G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset` -- the
 /// mod-manager uses this to inspect foreign pak-only mods.
 pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
+    Ok(read_pak_listing(pak)?.files)
+}
+
+/// One plain `.pak`, its mount point, and every entry its directory index names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PakListing {
+    /// The container these entries were read from.
+    pub pak: PathBuf,
+    /// The mount point verbatim: `../../../` for the game's base container,
+    /// `../../../G1R/Plugins/` for the five shipped DialogFacials paks.
+    pub mount_point: String,
+    /// Entry paths as the index spells them, sorted and deduped. They are relative
+    /// to `mount_point`, NOT to the install root -- see
+    /// [`mount_prefix_from_game_root`], which is what closes that gap.
+    pub files: Vec<String>,
+}
+
+fn read_pak_listing(pak: &Path) -> Result<PakListing> {
     let mut file = std::io::BufReader::new(std::fs::File::open(pak)?);
     let reader = repak::PakBuilder::new()
         .reader(&mut file)
         .map_err(|e| anyhow::anyhow!("failed to read pak index of {}: {e}", pak.display()))?;
+    let mount_point = reader.mount_point().to_owned();
     let mut files = reader.files();
     files.sort();
     files.dedup();
-    Ok(files)
+    Ok(PakListing {
+        pak: pak.to_path_buf(),
+        mount_point,
+        files,
+    })
+}
+
+/// Every plain `.pak` the game itself ships: the containers sitting DIRECTLY in
+/// `G1R/Content/Paks`, in a stable alphabetical order. The scan is deliberately
+/// not recursive, so `~mods` and `LogicMods` -- where this toolkit and every other
+/// mod manager publish -- can never be mistaken for something that shipped.
+pub fn game_pak_paths(game_root: &Path) -> Result<Vec<PathBuf>> {
+    let paks_dir = game_root.join("G1R/Content/Paks");
+    validate_plain_directory_root(&paks_dir, "game Paks")?;
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&paks_dir)? {
+        let path = entry?.path();
+        if !path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("pak"))
+        {
+            continue;
+        }
+        // `metadata`, not the directory entry's own file type: a `.pak` reached
+        // through a junction is still a container the game mounts, and skipping it
+        // would leave a hole in a set whose whole value is being complete.
+        if std::fs::metadata(&path)?.is_file() {
+            found.push(path);
+        }
+    }
+    // `read_dir` order is not defined. Sorting makes two runs against one
+    // installation report in the same order and name a malformed container the
+    // same way twice.
+    found.sort();
+    Ok(found)
+}
+
+/// Read the index of every shipped `.pak` in one pass.
+pub fn list_game_paks(game_root: &Path) -> Result<Vec<PakListing>> {
+    game_pak_paths(game_root)?
+        .iter()
+        .map(|pak| read_pak_listing(pak))
+        .collect()
+}
+
+/// Translate a pak mount point into the game-root-relative directory prefix its
+/// entries hang off, or `None` when the mount reaches somewhere this rule cannot
+/// express.
+///
+/// UE resolves a mount point against the executable's directory,
+/// `<install>/G1R/Binaries/Win64/`, so the three `../` of `../../../` land exactly
+/// on the install root and `../../../G1R/Plugins/` yields `G1R/Plugins/`. Anything
+/// not anchored at `../../../`, or with a `..` still left over after it, is
+/// refused rather than guessed at.
+pub fn mount_prefix_from_game_root(mount_point: &str) -> Option<String> {
+    let normalized = mount_point.replace('\\', "/");
+    let rest = normalized.strip_prefix("../../../")?.trim_start_matches('/');
+    if rest.split('/').any(|part| part == ".." || part == ".") {
+        return None;
+    }
+    if rest.is_empty() || rest.ends_with('/') {
+        return Some(rest.to_owned());
+    }
+    Some(format!("{rest}/"))
+}
+
+/// Every path the game's own containers already carry, lowercased and relative to
+/// the install root -- the answer to "would a file written here on disk ever be
+/// read?".
+///
+/// Unreal consults a mounted pak before the physical filesystem, so a loose file
+/// at a path one of these containers also carries is inert: the packed copy wins
+/// and the bytes on disk are never seen. This is the set a destination must be
+/// tested against BEFORE it is written. Testing "does a loose file already exist
+/// there" answers a different question and gets `G1R/Config/**` -- 59 entries that
+/// exist only inside the pak and nowhere on disk -- exactly backwards.
+///
+/// Keys are forward-slash, ASCII-lowercased and prefix-resolved through
+/// [`mount_prefix_from_game_root`]; a caller must fold its own destination the
+/// same way before looking it up. The fold is deliberately ASCII-only rather than
+/// `to_lowercase`: every one of the 4,577 entries on the shipped build is ASCII,
+/// and a Unicode fold on this side that a caller does not repeat exactly would
+/// miss a key and report a shadowed path as free. On that build this is ~4,600
+/// keys and ~260 KB, from a full parse of six pak indexes -- so hold the returned
+/// set for the whole operation instead of calling this once per candidate path.
+pub fn pak_shadow_index(game_root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let mut index = std::collections::BTreeSet::new();
+    for listing in list_game_paks(game_root)? {
+        // Fail closed on a mount this rule cannot place. Skipping the container
+        // instead would answer "not shadowed" for every path inside it, which is
+        // the one wrong answer this set exists to prevent.
+        let prefix = mount_prefix_from_game_root(&listing.mount_point).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot place {} against the install root: mount point {:?} is not under '../../../'",
+                listing.pak.display(),
+                listing.mount_point
+            )
+        })?;
+        for file in &listing.files {
+            index.insert(format!("{prefix}{file}").to_ascii_lowercase());
+        }
+    }
+    Ok(index)
 }
 
 /// Strictly reopen a freshly produced one-package additive triplet. Unlike the
@@ -4401,6 +4522,122 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write a tiny plain V11 pak carrying `entries` under `mount_point`, using the
+    /// same repak writer API `repack_to_zen` uses.
+    fn tiny_pak(path: &Path, mount_point: &str, entries: &[&str]) {
+        use std::io::BufWriter;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut pak_file = BufWriter::new(std::fs::File::create(path).unwrap());
+        let mut w = repak::PakBuilder::new().writer(
+            &mut pak_file,
+            repak::Version::V11,
+            mount_point.to_string(),
+            None,
+        );
+        for entry in entries {
+            w.write_file(entry, false, entry.as_bytes()).unwrap();
+        }
+        w.write_index().unwrap();
+    }
+
+    /// The layout `pak_shadow_index` scans, in miniature: two shipped containers
+    /// with the two mount points the real install uses, and a deployed mod
+    /// container in `~mods` that is not part of the baseline.
+    fn fake_install_paks(root: &Path) {
+        let paks = root.join("G1R/Content/Paks");
+        tiny_pak(
+            &paks.join("G1R-Windows.pak"),
+            "../../../",
+            &["G1R/Content/Slate/Cursors/Normal/Normal.PNG"],
+        );
+        tiny_pak(
+            &paks.join("G1R_DialogFacials_GermanG1R-Windows.pak"),
+            "../../../G1R/Plugins/",
+            &["G1R_DialogFacials_German/AssetRegistry.bin"],
+        );
+        tiny_pak(
+            &paks.join("~mods/zzz_MyMod_1_files_P.pak"),
+            "../../../",
+            &["G1R/Content/Movies/G1R_Intro.bk2"],
+        );
+    }
+
+    #[test]
+    fn the_shadow_index_places_every_shipped_pak_where_its_entries_actually_live() {
+        // The base container mounts at the install root, but the five shipped
+        // DialogFacials paks mount at `../../../G1R/Plugins/` and spell their
+        // entries relative to that. Unioning the raw index strings would file
+        // `G1R_DialogFacials_German/AssetRegistry.bin` at the install root -- a key
+        // no destination can ever match -- and the path it really shadows would be
+        // missing from the set, which is the answer that lets an inert write through.
+        let dir = unique_tmp("shadowidx");
+        fake_install_paks(&dir);
+
+        let index = pak_shadow_index(&dir).unwrap();
+
+        assert!(index.contains("g1r/content/slate/cursors/normal/normal.png"));
+        assert!(index.contains("g1r/plugins/g1r_dialogfacials_german/assetregistry.bin"));
+        assert!(!index.contains("g1r_dialogfacials_german/assetregistry.bin"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_container_in_the_mods_folder_is_not_part_of_the_shadow_index() {
+        // The set answers "did this ship packed", which is what makes a loose write
+        // inert. A pak this toolkit deployed into `~mods` is the mod, not the
+        // baseline: counting it would let a bundle shadow itself and refuse its own
+        // second deploy.
+        let dir = unique_tmp("shadowmods");
+        fake_install_paks(&dir);
+
+        let index = pak_shadow_index(&dir).unwrap();
+
+        assert_eq!(index.len(), 2, "{index:?}");
+        assert!(!index.contains("g1r/content/movies/g1r_intro.bk2"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pak_mounted_outside_the_install_root_is_refused_rather_than_dropped() {
+        // The one case where skipping is worse than failing: every path inside an
+        // unplaceable container would come back "not shadowed", and a caller would
+        // write files the engine never reads while being told nothing.
+        let dir = unique_tmp("shadowmount");
+        tiny_pak(
+            &dir.join("G1R/Content/Paks/Odd.pak"),
+            "../../../../Elsewhere/",
+            &["Foo.txt"],
+        );
+
+        let error = pak_shadow_index(&dir).unwrap_err();
+
+        assert!(
+            error.to_string().contains("is not under '../../../'"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_mount_point_resolves_to_the_directory_its_entries_occupy() {
+        // `../../../` is resolved against `<install>/G1R/Binaries/Win64/`, so it is
+        // the install root itself and its entries are already install-relative.
+        assert_eq!(mount_prefix_from_game_root("../../../").as_deref(), Some(""));
+        assert_eq!(
+            mount_prefix_from_game_root("../../../G1R/Plugins/").as_deref(),
+            Some("G1R/Plugins/")
+        );
+        // A mount written without the trailing slash still names a directory.
+        assert_eq!(
+            mount_prefix_from_game_root("../../../G1R/Plugins").as_deref(),
+            Some("G1R/Plugins/")
+        );
+        // Above the install root, short of it, and not relative at all.
+        assert_eq!(mount_prefix_from_game_root("../../../../"), None);
+        assert_eq!(mount_prefix_from_game_root("../../"), None);
+        assert_eq!(mount_prefix_from_game_root("/Game/"), None);
     }
 
     /// A nonexistent container path must surface as an error (io-ish TexError),

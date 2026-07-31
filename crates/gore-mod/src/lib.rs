@@ -299,10 +299,15 @@ pub struct BuildSpec {
     pub audio: Vec<AudioReplacement>,
     #[serde(default)]
     pub texture: Vec<TextureReplacement>,
-    /// Loose game files to replace on disk — the only section that reaches content living outside
-    /// the IoStore containers and the voice/FMOD archives.
+    /// Loose game files to replace on disk — reaches content living outside the IoStore containers
+    /// and the voice/FMOD archives, but only where no mounted pak already carries the same path.
     #[serde(default)]
     pub files: Vec<LooseFileReplacement>,
+    /// The same destinations, claimed from an ADDITIVE `~mods` pak instead of overwritten on disk.
+    /// Which mechanism a bundle uses is declared here and never inferred from the install: a
+    /// bundle that switched routes per machine would owe a different undeploy on every machine.
+    #[serde(default)]
+    pub pak_files: Vec<LooseFileReplacement>,
     #[serde(default)]
     pub scripts: Vec<ScriptModule>,
     /// Authored AngelScript topics to register at the target conversation's natural UI boundary.
@@ -343,6 +348,11 @@ pub enum Component {
     /// game-root-relative destination in `targets` in place, with a `*.gore-bak` backup.
     /// Replace-only: every target must already exist in the install.
     FilePatch { path: String, targets: Vec<String> },
+    /// Loose-file payloads at `path` (manifest.json + opaque payload files); deploy packs them into
+    /// ONE additive `~mods` pak that claims each game-root-relative destination in `targets` from
+    /// the pak filesystem. Additive — no in-place write and no `*.gore-bak`; undeploy deletes the
+    /// pak. Unlike [`Component::FilePatch`] the destinations need not exist on disk.
+    PakFilePatch { path: String, targets: Vec<String> },
     /// AngelScript mini-caches at `path` (manifest.json + `*.cache`); deploy splices/replaces
     /// them into `PrecompiledScript_Shipping.Cache` in place, with a `*.gore-bak` backup.
     AngelScriptPatch { path: String },
@@ -754,40 +764,19 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
 
     // loose files → manifest + opaque payloads (replaced in place at deploy, with a backup)
     if !spec.files.is_empty() {
-        let mut map: BTreeMap<String, String> = BTreeMap::new();
-        let mut seen: BTreeSet<String> = BTreeSet::new();
-        for (i, f) in spec.files.iter().enumerate() {
-            validate_loose_game_path(&f.game_path)?;
-            // Windows path identity is case-insensitive, so two spellings of one destination are
-            // one destination. Silently letting the later entry win would leave the loser's bytes
-            // in the bundle with nothing pointing at them; say so instead.
-            if !seen.insert(f.game_path.to_ascii_lowercase()) {
-                return Err(ModError::Other(format!(
-                    "duplicate files entry for game path {:?}: one bundle must not replace the \
-                     same loose file twice",
-                    f.game_path
-                )));
-            }
-            let source = resolve_spec_path(base, &f.source_path);
-            let bytes = read_regular_file_limited(
-                &source,
-                &format!("files[{i}] source"),
-                MAX_LOOSE_FILE_BYTES,
-            )?;
-            // Prefix with the index so distinct destinations that sanitize to the same name can't
-            // collide and overwrite each other.
-            let fname = format!("{i}_{}", sanitize(&f.game_path));
-            files.insert(format!("files/{fname}"), bytes);
-            map.insert(f.game_path.clone(), format!("files/{fname}"));
-        }
-        let targets: Vec<String> = map.keys().cloned().collect();
-        files.insert(
-            "files/manifest.json".into(),
-            serde_json::to_vec_pretty(&map)?,
-        );
+        let map = lower_loose_section(base, "files", &spec.files, &mut files)?;
         components.push(Component::FilePatch {
             path: "files".into(),
-            targets,
+            targets: map.into_keys().collect(),
+        });
+    }
+
+    // pak files → the same manifest + payloads, packed into an additive `~mods` pak at deploy
+    if !spec.pak_files.is_empty() {
+        let map = lower_loose_section(base, "pak_files", &spec.pak_files, &mut files)?;
+        components.push(Component::PakFilePatch {
+            path: "pak_files".into(),
+            targets: map.into_keys().collect(),
         });
     }
 
@@ -801,6 +790,52 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
         serde_json::to_vec_pretty(&manifest)?,
     );
     Ok(Bundle { files, manifest })
+}
+
+/// Stage one loose-file section's payloads into the bundle under `section/` and return its
+/// `{ game_path: bundle-relative payload }` manifest map.
+///
+/// `files` and `pak_files` name destinations in exactly the same spelling and differ only in the
+/// mechanism deploy uses to reach them, so the authoring questions — is this destination allowed,
+/// and was it named twice — are asked here once. Build stays game-free: whether the destination is
+/// reachable in place on THIS install is a deploy-time question, not a bundle property.
+fn lower_loose_section(
+    base: &Path,
+    section: &str,
+    entries: &[LooseFileReplacement],
+    files: &mut Files,
+) -> Result<BTreeMap<String, String>> {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (i, f) in entries.iter().enumerate() {
+        validate_loose_game_path(&f.game_path)?;
+        // Windows path identity is case-insensitive, so two spellings of one destination are
+        // one destination. Silently letting the later entry win would leave the loser's bytes
+        // in the bundle with nothing pointing at them; say so instead.
+        if !seen.insert(f.game_path.to_ascii_lowercase()) {
+            return Err(ModError::Other(format!(
+                "duplicate {section} entry for game path {:?}: one bundle must not name the \
+                 same loose file twice in one section",
+                f.game_path
+            )));
+        }
+        let source = resolve_spec_path(base, &f.source_path);
+        let bytes = read_regular_file_limited(
+            &source,
+            &format!("{section}[{i}] source"),
+            MAX_LOOSE_FILE_BYTES,
+        )?;
+        // Prefix with the index so distinct destinations that sanitize to the same name can't
+        // collide and overwrite each other.
+        let fname = format!("{i}_{}", sanitize(&f.game_path));
+        files.insert(format!("{section}/{fname}"), bytes);
+        map.insert(f.game_path.clone(), format!("{section}/{fname}"));
+    }
+    files.insert(
+        format!("{section}/manifest.json"),
+        serde_json::to_vec_pretty(&map)?,
+    );
+    Ok(map)
 }
 
 /// Write a built bundle's files under `dir` (creating parent dirs).
@@ -2080,6 +2115,99 @@ pub(crate) fn validate_loose_game_path(game_path: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Which mounted pak entries this install already carries — the oracle that says whether an
+/// in-place loose-file write can be observed at all.
+///
+/// Unreal consults a mounted pak before the physical filesystem, so a destination the base
+/// containers already carry is inert on disk: the write succeeds, the backup is taken, and the game
+/// keeps reading the packed copy. This is deliberately a DEPLOY-time question. Whether a path is
+/// shadowed is a property of the installation, not of the bundle, and a bundle that decided its own
+/// footprint per machine would owe a different undeploy on every machine.
+///
+/// Built at most once per deploy and only when something actually asks: a texture-only bundle must
+/// not pay for parsing ~110 KB of pak directory it will never consult.
+pub(crate) struct PakShadowIndex {
+    game_root: PathBuf,
+    entries: Option<BTreeSet<String>>,
+}
+
+impl PakShadowIndex {
+    pub(crate) fn new(game_root: &Path) -> Self {
+        Self {
+            game_root: game_root.to_path_buf(),
+            entries: None,
+        }
+    }
+
+    /// The filename of the pak already carrying `game_path`, or `None` when the destination is
+    /// reachable on disk.
+    pub(crate) fn owning_pak(&mut self, game_path: &str) -> Result<Option<String>> {
+        let paks = self.game_root.join("G1R").join("Content").join("Paks");
+        // An install with no `Paks` directory carries nothing, and neither does a synthetic test
+        // root. Asking gore-tex to scan a directory that is not there would turn "no paks" into a
+        // deploy failure, which is the opposite of what this gate is for.
+        if !paks.is_dir() {
+            return Ok(None);
+        }
+        if self.entries.is_none() {
+            self.entries = Some(
+                gore_tex::container::pak_shadow_index(&self.game_root).map_err(|error| {
+                    ModError::Other(format!(
+                        "reading the installed pak index below {}: {error}",
+                        paks.display()
+                    ))
+                })?,
+            );
+        }
+        let key = shadow_key(game_path);
+        if !self
+            .entries
+            .as_ref()
+            .expect("the index was just built")
+            .contains(&key)
+        {
+            return Ok(None);
+        }
+        // Name the container, not just the fact. The index is a flat set of entry paths, so the
+        // provenance is recovered here — on the refusal path only, where re-reading a few
+        // indexes costs nothing and every ordinary deploy pays nothing for it.
+        Ok(Some(
+            shadowing_pak_name(&self.game_root, &key).unwrap_or_else(|| "a mounted pak".into()),
+        ))
+    }
+}
+
+/// The one spelling both sides of a shadow comparison are folded to: forward slashes, lowercase.
+/// Deliberately `to_lowercase`, not the ASCII-only fold used for authoring dedup — this string is
+/// looked up in a set gore-tex built with `to_lowercase`, and the two must agree exactly.
+fn shadow_key(path: &str) -> String {
+    path.trim().replace('\\', "/").to_lowercase()
+}
+
+/// The filename of the shipped container whose index carries `key` (an already-folded game-root-
+/// relative path). Entries are re-anchored through the same mount-prefix rule the shadow index
+/// itself uses, so the name this reports can never disagree with the refusal it decorates.
+fn shadowing_pak_name(game_root: &Path, key: &str) -> Option<String> {
+    for listing in gore_tex::container::list_game_paks(game_root).ok()? {
+        let Some(prefix) = gore_tex::container::mount_prefix_from_game_root(&listing.mount_point)
+        else {
+            continue;
+        };
+        if listing
+            .files
+            .iter()
+            .any(|file| shadow_key(&format!("{prefix}{file}")) == key)
+        {
+            return listing
+                .pak
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned);
+        }
+    }
+    None
 }
 
 /// Voice archives are single `.zip` filenames under the fixed `Story/VoiceOver` directory.
@@ -5236,6 +5364,8 @@ fn prepare(
     let mut plan = DeployPlan::default();
     let mut voice = PendingVoiceEdits::new();
     let mut voice_order = 0usize;
+    // One oracle for the whole deploy, however many loose-file components the bundle carries.
+    let mut shadow = PakShadowIndex::new(&gp.root);
     for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
             Component::Ue4ssLua { name, path, .. } => {
@@ -5474,7 +5604,17 @@ fn prepare(
                 plan.writes.push((cache_path, running));
             }
             Component::FilePatch { path, targets: _ } => {
-                prepare_file_component(bundle_dir, path, gp, prev, &mut plan)?;
+                prepare_file_component(bundle_dir, path, gp, prev, &mut shadow, &mut plan)?;
+            }
+            Component::PakFilePatch { path, targets: _ } => {
+                let paks = prepare_pak_file_component(
+                    bundle_dir,
+                    path,
+                    &manifest.mod_meta.name,
+                    comp_idx,
+                    gp,
+                )?;
+                plan.texture_triplets.extend(paks);
             }
             Component::VoiceArchivePatch { path } => {
                 merge_voice_component(bundle_dir, path, &mut voice, &mut voice_order)?;
@@ -5492,11 +5632,14 @@ fn prepare(
 /// Replace-only. A missing, non-regular or link target is refused now, before `stage` creates a
 /// single backup — an add-new loose file would need delete-on-undeploy semantics, and
 /// `validate_record` refuses a delete-only cleanup claim against a live game file for good reason.
+/// A destination a mounted pak already carries is refused for the opposite reason: the write would
+/// succeed and change nothing, which is the one failure the toolkit cannot observe afterwards.
 fn prepare_file_component(
     bundle_dir: &Path,
     path: &str,
     gp: &GamePaths,
     prev: Option<&DeployRecord>,
+    shadow: &mut PakShadowIndex,
     plan: &mut DeployPlan,
 ) -> Result<()> {
     if !is_safe_rel_path(path) {
@@ -5527,6 +5670,11 @@ fn prepare_file_component(
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // The whole `G1R/Config` subtree is like this: shipped only inside the pak, absent
+                // from disk. "Does not exist" would be true and misleading, so say which it is.
+                if let Some(pak) = shadow.owning_pak(game_path)? {
+                    return Err(shadowed_loose_target_error(game_path, &pak));
+                }
                 return Err(ModError::Other(format!(
                     "loose file target does not exist: {} — a bundle can only replace a file this \
                      install already ships",
@@ -5534,6 +5682,9 @@ fn prepare_file_component(
                 )));
             }
             Err(error) => return Err(io("reading loose file target metadata")(error)),
+        }
+        if let Some(pak) = shadow.owning_pak(game_path)? {
+            return Err(shadowed_loose_target_error(game_path, &pak));
         }
         // Inherit the game-update contract wholesale: if Steam replaced this file underneath a
         // deployed mod, the preserved backup is stale and `stage` must re-snapshot the newer file.
@@ -5553,6 +5704,18 @@ fn prepare_file_component(
         });
     }
     Ok(())
+}
+
+/// The refusal for an in-place destination a mounted pak already carries. It names the container
+/// that wins and the section that would reach the same destination, because "this does nothing" is
+/// only useful to an author who is told what does.
+fn shadowed_loose_target_error(game_path: &str, pak: &str) -> ModError {
+    ModError::Other(format!(
+        "loose file target {game_path:?} is already packed in {pak}; a mounted pak is consulted \
+         before the file on disk, so replacing it in place would change nothing — move this \
+         destination to the bundle's \"pak_files\" section, which claims it from an additive \
+         ~mods pak instead"
+    ))
 }
 
 /// Stream one bundle payload into a private temp candidate and hash it, without ever holding the
@@ -5762,6 +5925,109 @@ fn prepare_texture_component(
         out.push((src, dst));
     }
     Ok(out)
+}
+
+/// Prepare ONE pak-file component: pack every payload in the manifest at `path` (bundle-relative)
+/// into a single plain V11 `.pak` named
+/// `zzz_{sanitize(mod_name)}_{name_hash(mod_name)}_{comp_idx}_files_P`, mirroring the `_tex_P`
+/// convention. Returns the (src, dst) pair to copy into `~mods` — temp work only, no game writes.
+///
+/// The container shape is the one the shipped paks use: mount point `../../../` with entries
+/// spelled `G1R/Content/…`, so a claimed destination lands in the same virtual namespace the base
+/// container resolves. Entries are stored uncompressed; the base game's Oodle slot is never
+/// referenced, so the method table stays empty and correct.
+fn prepare_pak_file_component(
+    bundle_dir: &Path,
+    path: &str,
+    mod_name: &str,
+    comp_idx: usize,
+    gp: &GamePaths,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
+    if !is_safe_rel_path(path) {
+        return Err(ModError::Other(format!(
+            "unsafe pak file patch path: {path:?}"
+        )));
+    }
+    let map: BTreeMap<String, String> = serde_json::from_slice(&read_safe_bundle_file(
+        bundle_dir,
+        Path::new(&format!("{path}/manifest.json")),
+        "pak file manifest",
+        MAX_BUNDLE_MANIFEST_BYTES,
+    )?)?;
+    if map.is_empty() {
+        return Err(ModError::Other(
+            "pak file component claims no destinations; an empty pak would mount and do nothing"
+                .into(),
+        ));
+    }
+    // The pak name must be unique across DISTINCT mods and across several pak-file components in
+    // one bundle, for exactly the reasons the triplet name is. Keeping `files` non-numeric before
+    // `_P` also keeps `container_priority_key`'s `_<n>_P` version branch from firing on it.
+    let pak_name = format!(
+        "zzz_{}_{}_{}_files_P",
+        sanitize(mod_name),
+        name_hash(mod_name),
+        comp_idx
+    );
+    let pack_out = std::env::temp_dir().join(format!(
+        "gore-mod-pak-files-{}-{}",
+        std::process::id(),
+        comp_idx
+    ));
+    let _ = std::fs::remove_dir_all(&pack_out);
+    std::fs::create_dir_all(&pack_out).map_err(io("mkdir pak-files pack dir"))?;
+    let src = pack_out.join(format!("{pak_name}.pak"));
+    {
+        let file = std::fs::File::create(&src)
+            .map_err(io(&format!("creating loose-file pak {}", src.display())))?;
+        let mut buffered = std::io::BufWriter::new(file);
+        {
+            let mut writer = repak::PakBuilder::new().writer(
+                &mut buffered,
+                repak::Version::V11,
+                "../../../".to_string(),
+                None,
+            );
+            for (game_path, payload_rel) in &map {
+                // The manifest may come from an untrusted bundle: ask the same authoring question
+                // the `files` section asks, against the same allowlist. One allowlist, one answer
+                // to "may a bundle claim this destination" — the mechanism does not widen it.
+                validate_loose_game_path(game_path)?;
+                if !is_safe_rel_path(payload_rel) {
+                    return Err(ModError::Other(format!(
+                        "unsafe pak file payload path: {payload_rel:?}"
+                    )));
+                }
+                let bytes = read_safe_bundle_file(
+                    bundle_dir,
+                    Path::new(payload_rel),
+                    "pak file payload",
+                    MAX_LOOSE_FILE_BYTES,
+                )?;
+                writer
+                    .write_file(game_path, false, &bytes)
+                    .map_err(|error| {
+                        ModError::Other(format!("writing pak entry {game_path:?}: {error}"))
+                    })?;
+            }
+            writer
+                .write_index()
+                .map_err(|error| ModError::Other(format!("writing pak index: {error}")))?;
+        }
+        let file = buffered.into_inner().map_err(|error| {
+            ModError::Io(format!("flushing loose-file pak {}: {error}", src.display()))
+        })?;
+        file.sync_all()
+            .map_err(io(&format!("syncing loose-file pak {}", src.display())))?;
+    }
+    let dst = gp
+        .root
+        .join("G1R")
+        .join("Content")
+        .join("Paks")
+        .join("~mods")
+        .join(format!("{pak_name}.pak"));
+    Ok(vec![(src, dst)])
 }
 
 /// Stage a prepared plan WITHOUT touching any live game file: snapshot each target's current
@@ -9184,6 +9450,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -9361,6 +9628,7 @@ mod tests {
             }],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9468,6 +9736,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9497,6 +9766,7 @@ mod tests {
                 image_path: png.display().to_string(),
             }],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9530,6 +9800,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "MyMod".into(),
@@ -9580,6 +9851,7 @@ mod tests {
                 game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
                 source_path: "Normal.PNG".into(),
             }],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "MyModule".into(),
@@ -9771,10 +10043,207 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files,
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
         }
+    }
+
+    fn test_pak_files_spec(name: &str, pak_files: Vec<LooseFileReplacement>) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![],
+            pak_files,
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        }
+    }
+
+    /// A plain V11 pak in the exact shape the shipped containers use — mount `../../../`, entries
+    /// spelled `G1R/…` — sitting directly in `G1R/Content/Paks` where the shadow oracle looks.
+    fn write_base_pak(game: &Path, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
+        let paks = game.join("G1R").join("Content").join("Paks");
+        std::fs::create_dir_all(&paks).unwrap();
+        let path = paks.join(format!("{name}.pak"));
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        {
+            let mut writer = repak::PakBuilder::new().writer(
+                &mut file,
+                repak::Version::V11,
+                "../../../".to_string(),
+                None,
+            );
+            for &(entry, bytes) in entries {
+                writer.write_file(entry, false, bytes).unwrap();
+            }
+            writer.write_index().unwrap();
+        }
+        file.flush().unwrap();
+        path
+    }
+
+    /// The additive route is DECLARED, never inferred from the install. `pak_files` gets its own
+    /// component, its own bundle subdir and its own manifest, so one bundle keeps one footprint on
+    /// every machine — the two sections may even name the same destination, said twice on purpose.
+    #[test]
+    fn a_pak_files_section_produces_its_own_component_beside_the_in_place_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+        let mut spec = test_pak_files_spec(
+            "BothRoutes",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        spec.files = vec![LooseFileReplacement {
+            game_path: "G1R/Content/Movies/Intro.bk2".into(),
+            source_path: source.display().to_string(),
+        }];
+
+        let bundle = build_bundle(&spec).unwrap();
+        assert!(matches!(
+            bundle.manifest.components.as_slice(),
+            [
+                Component::FilePatch { path: files, targets: file_targets },
+                Component::PakFilePatch { path: paks, targets: pak_targets },
+            ] if files == "files"
+                && paks == "pak_files"
+                && file_targets == &vec!["G1R/Content/Movies/Intro.bk2".to_string()]
+                && pak_targets == &vec![TEST_CURSOR.to_string()]
+        ));
+        assert!(bundle.files.contains_key("pak_files/manifest.json"));
+        assert!(
+            bundle
+                .files
+                .keys()
+                .any(|rel| rel.starts_with("pak_files/0_")),
+            "the payload must be staged under its own section: {:?}",
+            bundle.files.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// The experiment this gate exists for: all eight cursor PNGs were replaced on disk and the
+    /// cursor did not change, because `G1R-Windows.pak` carries them and Unreal consults a mounted
+    /// pak before the filesystem. A deploy that succeeds and changes nothing is the one failure the
+    /// toolkit can never observe afterwards, so it is refused before the backup is taken — naming
+    /// the container that wins and the section that does reach the file.
+    #[test]
+    fn deploy_refuses_an_in_place_target_a_mounted_pak_already_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        write_base_pak(&game, "G1R-Windows", &[(TEST_CURSOR, b"packed-cursor")]);
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "ShadowedCursor", &source);
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("already packed in G1R-Windows.pak"),
+            "the refusal must name the container that wins: {error}"
+        );
+        assert!(
+            error.contains("pak_files"),
+            "the refusal must name the section that reaches it instead: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            b"shipped-cursor",
+            "the refusal must land before any write"
+        );
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    /// A destination NO pak carries stays reachable in place. Without this, the gate could pass by
+    /// refusing everything the moment an install has containers at all — which is every install.
+    #[test]
+    fn deploy_still_replaces_a_loose_target_no_pak_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        write_base_pak(
+            &game,
+            "G1R-Windows",
+            &[("G1R/Content/Movies/Intro.bk2", b"packed-movie")],
+        );
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "UnshadowedCursor", &source);
+        deploy(&bundle_dir, &game).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"modded-cursor");
+    }
+
+    /// The `pak_files` route is additive end to end: one `zzz_…_files_P.pak` in `~mods`, no backup
+    /// to keep, and undeploy deletes exactly what was added. The destination need not exist on disk
+    /// at all — on the shipped build the whole `G1R/Config` subtree is like that.
+    #[test]
+    fn pak_files_publish_one_additive_pak_that_undeploy_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(game.join("G1R").join("Content")).unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+        let spec = test_pak_files_spec(
+            "PakCursor",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        let bundle_dir = dir.path().join("bundle-pak-cursor");
+        write_bundle(&bundle_dir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let record = deploy(&bundle_dir, &game).unwrap();
+        assert!(
+            record.backups.is_empty(),
+            "an additive component must take no backup: {:?}",
+            record.backups
+        );
+        let mut published: Vec<PathBuf> =
+            std::fs::read_dir(game.join("G1R").join("Content").join("Paks").join("~mods"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+        published.sort();
+        assert_eq!(published.len(), 1, "published: {published:?}");
+        let pak = published.remove(0);
+        let name = pak.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("zzz_PakCursor_") && name.ends_with("_files_P.pak"),
+            "the pak must mirror the triplet naming convention: {name}"
+        );
+        assert_eq!(
+            gore_tex::container::list_pak_files(&pak).unwrap(),
+            vec![TEST_CURSOR.to_string()],
+            "the entry must be spelled exactly as the base container spells it"
+        );
+        assert!(
+            !game.join(loose_relative_os_path(TEST_CURSOR)).exists(),
+            "an additive component must not create the destination on disk"
+        );
+
+        undeploy(&game).unwrap();
+        assert!(!pak.exists(), "undeploy must delete what it added");
+        assert!(!record_path(&game).exists());
     }
 
     #[test]
@@ -9796,6 +10265,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![
@@ -9875,6 +10345,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![
@@ -10869,6 +11340,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -11164,6 +11636,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -11223,6 +11696,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice,
@@ -11349,6 +11823,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -11481,6 +11956,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "ignored_for_add".into(),
@@ -11993,6 +12469,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -12274,6 +12751,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],

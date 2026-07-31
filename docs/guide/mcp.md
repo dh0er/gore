@@ -7,7 +7,7 @@ check a load order for conflicts.
 
 Every tool call runs a real `gore` subcommand as a child process and returns its
 output, with the exact command line shown first — whatever the agent did, you can
-re-run it in a shell yourself. All 77 leaf commands are reachable, and this guide
+re-run it in a shell yourself. All 78 leaf commands are reachable, and this guide
 ships inside the binary so the agent can read it before acting.
 
 ## Setup
@@ -251,7 +251,7 @@ its arguments. Two more are specific to the server.
 | `gore_mgr` | `mgr` | [mod-manager](mod-manager.md) |
 | `gore_as` | `as` | [scripts](scripts.md) |
 
-Eleven tools rather than 77 keeps a client's tool list navigable while still
+Eleven tools rather than 78 keeps a client's tool list navigable while still
 covering every command. `gore_catalog` and `gore_project` have no matching CLI
 subcommand — they group top-level commands that belong to one workflow.
 

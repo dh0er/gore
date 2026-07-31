@@ -80,13 +80,15 @@ ever touch it.
 That second world is small enough to enumerate:
 
 ```powershell
-gore texture list --game "$GAME" --filter Cursor   # is it in the container?
+gore texture list    --game "$GAME" --filter Cursor   # is it in the container?
+gore texture paklist --game "$GAME" --filter Cursor   # is it also inside a pak?
 
 Get-ChildItem -Recurse -File "$GAME\G1R\Content" |
   Where-Object { $_.Extension -notin '.pak', '.ucas', '.utoc' }
 ```
 
-The second command prints about thirty files on a stock install, in four groups:
+The `Get-ChildItem` line prints about thirty files on a stock install, in four
+groups:
 
 | Loose file | What it is |
 |---|---|
@@ -94,6 +96,20 @@ The second command prints about thirty files on a stock install, in four groups:
 | `G1R\Content\Movies\*.bk2` (with `.srt`/`.uasset` sidecars) | pre-rendered Bink movies — [Voice-over](voice.md#the-intro-movie-brings-its-own-audio) |
 | `G1R\Content\Slate\Cursors\Normal\*` | the mouse cursor — see below |
 | `G1R\Content\Splash\Splash.bmp` | the startup splash |
+
+Loose is not the same as reachable on disk. Checking every loose file in the
+install against the file indexes of all six shipped paks yields exactly eight
+collisions, and they are the eight cursors. The FMOD banks, the Bink movies with
+their `.srt` subtitles, and `Splash.bmp` appear in no pak at all, so those three
+groups are single-copy and a bundle's [`files` section](bundles.md#loose-files)
+replaces them in place. The cursors are the exception, and they need
+[`pak_files`](bundles.md#shadowed-destinations).
+
+`G1R\Config` is the trap that never shows up as a collision: there is no loose
+`Config` directory anywhere in the install. Every `.ini` the game reads,
+`DefaultEngine.ini` included, exists **only** inside `G1R-Windows.pak`. Editing
+one is a `pak_files` job by construction — `files` is replace-only, and here
+there is nothing on disk to replace.
 
 Spoken dialog is loose too, just not under `Content`: it lives in language ZIPs
 under `G1R\Story\VoiceOver` ([Voice-over](voice.md)).
@@ -142,14 +158,14 @@ them. The `HardwareCursors=` line that names the path lives in a packed
 `DefaultEngine.ini` that has not been read, so the hotspot is inferred from how
 the art is cropped rather than quoted from the config.
 
-One thing is **not settled**, and it decides whether editing those files works
-at all: the same eight names are also in `G1R-Windows.pak`'s index, at the same
-byte sizes. If the loader goes through the pak filesystem, the packed copy
-shadows your edit; if it opens a raw OS path, the loose copy wins. That cannot
-be answered offline. Edit the loose PNGs to something unmistakable and launch
-once. If the cursor does not change, the packed copy is live and the change has
-to ship as a loose-file `.pak` in `~mods\` — a different pipeline from this page
-either way.
+Editing those eight files on disk, however, does nothing — and that part is
+settled. The same eight names are also entries in `G1R-Windows.pak`, at the same
+uncompressed sizes, and no offline reading could say which copy the loader
+opens. One launch decided it: all eight loose PNGs were replaced and the pointer
+did not change, while a cooked texture replaced by the same bundle in the same
+launch was plainly visible. The packed copy is the live one. A new cursor has to
+ship as a pak that overrides those eight entries, which is a bundle's
+[`pak_files` section](bundles.md#shadowed-destinations).
 
 ## What is proven, and by what
 
@@ -159,18 +175,23 @@ triplet is a well-formed container, and an asset read back out of it through
 retoc is byte-identical to what went in, down to the pixels. What a human has
 seen — once each, recorded in a commit message and nowhere else — is that such
 a container mounts and renders in game: first an uncompressed one, and after the
-compressed-writer fix a fully compressed multi-block one too. There is no
-screenshot and no test behind those two sentences. A *deployed* triplet is
-verified by SHA-256 and by nothing else: `deploy` records a hash per file and
-confirms the bytes arrived. Nothing in this toolkit ever observes the screen, so
-a successful deploy means the file is in place — never that anything changed.
+compressed-writer fix a fully compressed multi-block one too. The most recent
+sighting is the one with a date on it: on BuildID 24340829, a triplet deployed
+into `~mods\` by `gore mod deploy` put its replacement art on the main menu, in
+the same launch that showed the loose cursor edit changing nothing. That is what
+establishes that `~mods\` mounts on this build — and it is still one person
+looking at one screen. There is no screenshot, and nothing in the test suite
+checks any of it. A *deployed* triplet is verified by SHA-256 and by nothing
+else: `deploy` records a hash per file and confirms the bytes arrived. Nothing
+in this toolkit ever observes the screen, so a successful deploy means the file
+is in place — never that anything changed.
 
 ## Flag summary
 
 | Flag | Commands | Meaning |
 |---|---|---|
 | `--game <PATH>` | all | Install dir containing `G1R\Content\Paks\…`. Falls back to the configured path. |
-| `--filter <TEXT>` | `list` | Keep only asset paths containing this substring. |
+| `--filter <TEXT>` | `list`, `paklist` | Keep only paths containing this substring. |
 | `-o, --out <PATH>` | `extract`, `pack`, `index` | Output PNG, triplet output dir, or index path. |
 | `--image <PNG>` | `replace` | Replacement PNG (RGBA8/RGB8). |
 | `--mod-dir <DIR>` | `replace`, `pack` | Cooked-file staging dir laid out under its mount path. |
