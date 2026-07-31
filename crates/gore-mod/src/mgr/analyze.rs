@@ -48,6 +48,9 @@ pub enum ConflictKind {
     VoiceArchive,
     /// Wholesale live-file replacement (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
     RawFile,
+    /// Wholesale replacement of a loose game file, target = the game-root-relative path
+    /// (case-insensitive, forward slashes).
+    LooseFile,
 }
 
 /// How bad an overlap is.
@@ -133,6 +136,23 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                             &mut buckets,
                             ConflictKind::ScriptModule,
                             t.clone(),
+                            Severity::Hard,
+                            &m.id,
+                        );
+                    }
+                }
+                // A loose file is replaced whole, so a second claimant does not lose one key the
+                // way a loc id or an audio sample does — it loses its entire file. No
+                // cross-namespace matching is needed: `loose_target_allowed` excludes every
+                // destination the other components write (the .lcache, the banks, the script
+                // cache, the voice ZIPs and everything under Paks), so the target sets are
+                // disjoint by construction.
+                ComponentInfo::FilePatch { targets, .. } => {
+                    for t in targets {
+                        note(
+                            &mut buckets,
+                            ConflictKind::LooseFile,
+                            norm_loose(t),
                             Severity::Hard,
                             &m.id,
                         );
@@ -285,6 +305,12 @@ fn norm_voice(t: &str) -> String {
     t.trim().replace('\\', "/").to_lowercase()
 }
 
+/// Loose-file namespace normalization. Windows path identity is case-insensitive, so two mods
+/// spelling one destination differently are still fighting over one file.
+fn norm_loose(t: &str) -> String {
+    t.trim().replace('\\', "/").to_lowercase()
+}
+
 /// Stable bucket key for a raw-file replacement target.
 fn raw_key(t: &RawTarget) -> String {
     match t {
@@ -400,6 +426,41 @@ mod tests {
             rel: "raw/x".into(),
             target_file,
         }
+    }
+    fn loose(targets: &[&str]) -> ComponentInfo {
+        ComponentInfo::FilePatch {
+            rel: "files".into(),
+            targets: strs(targets),
+        }
+    }
+
+    /// Two mods replacing one loose game file is a whole-file clobber, not a mergeable later-wins
+    /// situation like a loc key: the loser keeps nothing. Windows path identity is
+    /// case-insensitive, so the two spellings below name ONE file and must land in one bucket —
+    /// reporting them separately would tell the user the two mods do not overlap.
+    #[test]
+    fn two_mods_replacing_one_loose_file_conflict_hard_across_spellings() {
+        let a = meta(
+            "mod-a",
+            vec![loose(&["G1R/Content/Slate/Cursors/Normal/Normal.PNG"])],
+        );
+        let b = meta(
+            "mod-b",
+            vec![loose(&["G1R\\Content\\Slate\\Cursors\\Normal\\normal.png"])],
+        );
+        let c = meta("mod-c", vec![loose(&["G1R/Content/Movies/Intro.mp4"])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
+
+        assert_eq!(
+            analyze(&[&a, &b, &c], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/slate/cursors/normal/normal.png",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )],
+            "a third mod on a different loose file must not be dragged in"
+        );
     }
 
     fn conflict(kind: ConflictKind, target: &str, mods: &[&str], severity: Severity) -> Conflict {
@@ -756,6 +817,8 @@ mod tests {
                 raw(RawTarget::ScriptCache),
                 tex(&["/Game/UI/T_X"]),
                 pak(&["/Game/UI/T_X"]), // same asset twice within the same mod
+                loose(&["G1R/Content/Slate/Cursors/Normal/Normal.PNG"]),
+                loose(&["g1r/content/slate/cursors/normal/normal.png"]), // and once more, folded
                 lua("DirA", &["ADamageData.Health"], false),
                 lua("DirA", &["ADamageData.Health"], false), // same dir name twice
             ],

@@ -127,8 +127,29 @@ const AUDIO_KEY: ArgSpec = ArgSpec::new(
 )
 .with_default("the built-in Gothic 1 Remake studio key");
 
-const AUDIO_LIST_ARGS: &[ArgSpec] =
-    &[ArgSpec::new("bank", Long("bank"), Path, "Path to a .bank file", true), AUDIO_KEY];
+/// `list` is bounded by `--max` in the CLI itself, which is what keeps `SFX.bank`'s 7,218 samples
+/// from being clipped mid-line into a result whose back half is simply absent. The bound is only
+/// useful if an agent can move it, so both narrowing flags are exposed here.
+const AUDIO_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("bank", Long("bank"), Path, "Path to a .bank file", true),
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Keep only sample names containing this substring (case-insensitive)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max samples to print. The result states how many matched when it stops here; 0 lists \
+         nothing and reports only the counts",
+        false,
+    )
+    .with_default("100"),
+    AUDIO_KEY,
+];
 
 const AUDIO_EXTRACT_ARGS: &[ArgSpec] = &[
     ArgSpec::new("bank", Long("bank"), Path, "Path to a .bank file", true),
@@ -192,6 +213,7 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         Safety::read(),
         T_NORMAL,
     )
+    .json(JsonSupport::Stdout)
     .guide("audio"),
     CommandSpec::new(
         "extract",
@@ -446,6 +468,37 @@ mod tests {
         assert_eq!(LOC.commands.len(), 4);
         assert_eq!(AUDIO.commands.len(), 6);
         assert_eq!(VOICE.commands.len(), 6);
+    }
+
+    #[test]
+    fn both_bounded_listings_expose_the_same_narrowing_flags() {
+        // `voice list` was bounded first and `audio list` was not, so an agent that hit the 256 KiB
+        // result cap on `SFX.bank` was told to "narrow the query with a filter" by a command that
+        // had none. They are one convention now, and this is what keeps them one: neither may gain
+        // or lose a narrowing flag alone.
+        for group in [AUDIO, VOICE] {
+            let list = group.command("list").expect("both groups list");
+            for name in ["filter", "max"] {
+                assert!(
+                    list.arg(name).is_some(),
+                    "{} list must declare `{name}`",
+                    group.cli
+                );
+            }
+            assert_eq!(
+                list.json,
+                JsonSupport::Stdout,
+                "{} list must offer the machine-readable mode",
+                group.cli
+            );
+            // The switch is implied by `JsonSupport::Stdout` and appended by the argv builder;
+            // declaring it as well would let a caller pass it twice.
+            assert!(
+                list.arg("json").is_none(),
+                "{} list must not also declare `json` as an argument",
+                group.cli
+            );
+        }
     }
 
     #[test]

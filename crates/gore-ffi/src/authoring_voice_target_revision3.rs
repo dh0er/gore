@@ -1419,6 +1419,7 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: Vec::new(),
             texture: Vec::new(),
+            files: Vec::new(),
             scripts: Vec::new(),
             dialog_topics: Vec::new(),
             voice: vec![VoiceArchiveEdit {

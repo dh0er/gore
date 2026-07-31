@@ -2190,6 +2190,7 @@ mod tests {
             loc_edits: Default::default(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],

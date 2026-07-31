@@ -17,10 +17,17 @@ Write a `spec.json`:
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
+  "files":   [ { "game_path": "G1R/Content/Slate/Cursors/Normal/Normal.PNG", "source_path": "Normal.PNG" } ],
   "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ],
   "dialog_topics": [ { "id": "viper-test", "participant_name": "om_stt_viper_302", "topic_class": "/Script/Angelscript.ChoiceMyViper", "sentinel_class": "/Script/Angelscript.ChoiceStt302ViperExit" } ]
 }
 ```
+
+**Asset paths are resolved relative to the spec file's own directory.**
+`wav_path`, `ogg_path`, `image_path`, `mini_cache` and `source_path` may be
+written as bare filenames beside the spec, whatever directory you run `gore mod
+build` from; absolute paths are used as written. This is the same rule
+[`gore audio replace --map`](audio.md) uses for its WAVs.
 
 Every section is optional; `delay_ms` may be set alongside `overrides` to defer
 the CDO patch. Each section maps to the domain guide of the same name:
@@ -44,10 +51,41 @@ What deploy does per domain:
 | `audio` | in-place bank rewrite, original backed up to `*.gore-bak` |
 | `voice` | transactional ZIP rewrite under `G1R\Story\VoiceOver` |
 | `texture` | cooks + packs a Zen triplet into `~mods\` (additive) |
+| `files` | in-place replacement of a loose game file, original backed up to `*.gore-bak` |
 | `scripts` | splices the mini-caches into the script cache, backed up to `*.gore-bak` |
 | `dialog_topics` | guarded runtime topic registration |
 
 `gore mod undeploy` restores every backup and removes every additive container.
+
+## Loose files
+
+Most game content lives in the IoStore containers (use `texture`) or in an
+archive (use `audio` / `voice`). A few things Unreal simply reads off disk — the
+mouse cursor at `G1R\Content\Slate\Cursors\Normal\Normal.PNG` and its DPI
+variants are the standard example. The `files` section is the only way to reach
+those.
+
+- `game_path` is forward-slash and relative to the **game install root** (the
+  directory that contains `G1R`).
+- It is **replace-only**: the file must already exist in the install. Deploy
+  refuses a `game_path` this install does not ship rather than creating it.
+- Replaceable destinations are files under `G1R/Content` or `G1R/Config`,
+  excluding `G1R/Content/Paks` (that is what `texture` and the mod manager's
+  paks own), any `*.gore-bak` backup, and the four files that already have their
+  own deploy mechanism — the `.lcache`, an FMOD `.bank`, the precompiled script
+  cache, and a voice `.zip`. Everything else, including `G1R/Binaries`, is
+  refused when the bundle is built.
+- The original is preserved as `<file>.gore-bak` and restored by `gore mod
+  undeploy`. If the game updates underneath a deployed bundle, the stale backup
+  is dropped and the newer file becomes the pristine one, exactly as for the
+  `.lcache` and the banks.
+
+Two mods replacing the same loose file is a **hard** conflict in
+[`gore mgr analyze`](mod-manager.md): the loser keeps nothing. An apply still
+succeeds — the later mod in load order wins the whole file.
+
+Whether the game honors a replaced loose file at runtime is a per-file
+question; the toolkit only guarantees the replacement and its restore.
 
 ## Dialog topics
 

@@ -1752,6 +1752,7 @@ fn goremod_components(
             | Component::AudioPatch { path, .. }
             | Component::TexturePatch { path, .. }
             | Component::AngelScriptPatch { path, .. }
+            | Component::FilePatch { path, .. }
             | Component::VoiceArchivePatch { path, .. } => path,
         };
         if !crate::is_safe_rel_path(comp_path) {
@@ -1819,6 +1820,22 @@ fn goremod_components(
                 let mut targets: Vec<String> = entries.iter().map(|e| e.module.clone()).collect();
                 targets.sort();
                 ComponentInfo::AngelScriptPatch {
+                    rel: join_rel(prefix, path),
+                    targets,
+                }
+            }
+            Component::FilePatch { path, targets } => {
+                // The destinations come from the manifest variant, like `TexturePatch`'s assets:
+                // the payloads are opaque bytes and reading them would prove nothing extra. Each
+                // one is re-validated against the same allowlist the record layer enforces, so an
+                // archive cannot smuggle a destination past import that deploy would refuse.
+                let mut targets = targets.clone();
+                for target in &targets {
+                    crate::validate_loose_game_path(target)?;
+                }
+                targets.sort();
+                targets.dedup();
+                ComponentInfo::FilePatch {
                     rel: join_rel(prefix, path),
                     targets,
                 }
@@ -2177,8 +2194,8 @@ impl Drop for StagingGuard {
 mod tests {
     use super::*;
     use crate::{
-        build_bundle, write_bundle, BuildSpec, ModMeta, ScriptModule, VoiceArchiveEdit,
-        VoicePatchOp,
+        build_bundle, write_bundle, BuildSpec, LooseFileReplacement, ModMeta, ScriptModule,
+        VoiceArchiveEdit, VoicePatchOp,
     };
     use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
@@ -2241,6 +2258,7 @@ mod tests {
             loc_edits: loc,
             audio: vec![],
             texture: vec![],
+            files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "TestModule".into(),
@@ -2259,6 +2277,69 @@ mod tests {
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
         bdir
+    }
+
+    /// The library sidecar has to carry a loose-file component's DESTINATIONS, because that is the
+    /// only thing conflict analysis and apply can key off. The second half is the point of the
+    /// test: the manifest is authored data, so an archive that names a destination the deploy
+    /// record would refuse must be caught at import, not at apply — by then a user has already
+    /// built a loadout around it.
+    #[test]
+    fn import_goremod_file_patch_keeps_targets_and_refuses_a_forbidden_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let cursor = tmp.path().join("Normal.PNG");
+        fs::write(&cursor, b"CURSOR-BYTES").unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta {
+                name: "LooseProbe".into(),
+                version: "1".into(),
+                author: "tester".into(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![LooseFileReplacement {
+                game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                source_path: cursor.display().to_string(),
+            }],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        };
+        let bdir = tmp.path().join("LooseProbe");
+        write_bundle(&bdir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let meta = import(&lib, &bdir).unwrap();
+        assert!(
+            meta.components.iter().any(|c| matches!(
+                c,
+                ComponentInfo::FilePatch { rel, targets }
+                    if rel == "files"
+                        && targets == &vec!["G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_string()]
+            )),
+            "components: {:?}",
+            meta.components
+        );
+
+        let manifest_path = bdir.join("gore-mod.json");
+        let tampered = String::from_utf8(fs::read(&manifest_path).unwrap())
+            .unwrap()
+            .replace(
+                "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+                "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
+            );
+        fs::write(&manifest_path, tampered).unwrap();
+        // A fresh library so the refusal cannot be confused with an update-path failure.
+        let error = import(&tmp.path().join("lib-tampered"), &bdir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("not a replaceable game file"),
+            "unexpected error: {error}"
+        );
     }
 
     /// A folder import that IS the library dir — or a parent that contains it — must be rejected

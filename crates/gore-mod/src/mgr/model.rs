@@ -1845,6 +1845,12 @@ pub enum ComponentInfo {
         rel: String,
         targets: Vec<String>,
     },
+    FilePatch {
+        rel: String,
+        /// Game-root-relative, forward-slash destinations this component replaces wholesale, e.g.
+        /// `G1R/Content/Slate/Cursors/Normal/Normal.PNG`.
+        targets: Vec<String>,
+    },
     VoiceArchivePatch {
         rel: String,
         /// `"<archive>|<member path>"` targets used for soft, order-dependent conflicts.

@@ -7,11 +7,45 @@ samples in pure Rust — no FMOD installation or third-party tool is needed.
 ## Inspect a bank
 
 ```powershell
-gore audio list --bank "$GAME\G1R\Content\FMOD\Desktop\SFX.bank"
+$SFX = "$GAME\G1R\Content\FMOD\Desktop\SFX.bank"
+
+gore audio list --bank "$SFX"                  # the first 100 samples
+gore audio list --bank "$SFX" --json           # machine-readable listing
+gore audio list --bank "$SFX" --filter Orcdog  # only names containing Orcdog
 ```
 
-Prints every sample with its name, codec, sample rate, channel count, and
-duration. The sample name is the key you use in every other command.
+Prints each sample with its name, sample rate, channel count and duration,
+under a header naming the bank's codec. The sample name is the key you use in
+every other command.
+
+The listing is **bounded**. Real banks are large — `SFX.bank` holds 7,218
+samples — so `list` prints at most `--max` samples (default 100).
+
+It always says what it left out. The header names the bank total, its codec and
+how many samples a `--filter` kept; a shortened listing ends with a
+`… [truncated: …]` line. The JSON document carries `bank`, `codec`,
+`sample_count` (the whole bank), `matched_count`, `listed_count` (the length of
+`samples`), and two booleans that answer two different questions: `truncated`
+says whether `--max` stopped the listing, and `complete` says whether the array
+is the whole bank — a filter narrows it without truncating it.
+
+```powershell
+gore audio list --bank "$SFX" --filter Orcdog --max 500
+gore audio list --bank "$SFX" --filter Orcdog --max 0 --json   # counts only
+```
+
+Do not answer a truncation notice by asking for everything at once. All 7,218
+samples of `SFX.bank` are a 458,589-byte table, far past the 256 KiB an MCP
+client accepts in one result, and the cut lands in the middle of a line — so
+filtering what arrived answers "no such sample" for the 3,095 that never did.
+Narrow with `--filter` instead, and raise `--max` only as far as you need.
+`--max 0` lists nothing and reports only the counts, which is the cheap way to
+ask "how many match?".
+
+`--filter` is case-insensitive on purpose: sample names carry their own casing
+(`SFX_CREA_Orcdog_Grunt_L1_05`), and a case-sensitive filter would report
+"nothing found" when the truth is "wrong case". It folds case exactly the way
+`gore voice list --filter` does.
 
 Not every bank carries samples. `Master.bank` holds only the mixer and its
 buses, `Master.strings.bank` only the string table, and `Music_NotDemo.bank`,
@@ -32,6 +66,11 @@ gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --sample Foo  # just one
 ```
 
 `--sample` takes a single sample name, or `all` (the default).
+
+Extraction decodes Vorbis, so a sample in another codec is skipped rather than
+written. Skips are reported to stderr once per *reason*, with a count and the
+first sample that hit it — a whole bank in the wrong codec is one root cause,
+not 7,218 of them.
 
 ## Replace
 
@@ -92,6 +131,9 @@ pass it.
 | Flag | Commands | Meaning |
 |---|---|---|
 | `--bank <PATH>` | all | The `.bank` file to read or modify. |
+| `--json` | `list` | One JSON document instead of the human-readable table. |
+| `--filter <TEXT>` | `list` | Keep only sample names containing this substring, case-insensitive. |
+| `--max <N>` | `list` | Max samples to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
 | `-o, --out <PATH>` | `extract`, `replace`, `export-patch`, `apply-patch` | Output dir (`extract`), output bank (`replace`, `apply-patch`), or output zip (`export-patch`). |
 | `--sample <NAME>` | `extract` | One sample name, or `all` (default). |
 | `--map <PATH>` | `replace`, `export-patch` | `{ "SampleName": "new.wav" }` JSON; WAV paths relative to it. |

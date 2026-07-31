@@ -4,5 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Synthetic `.bank` builders for downstream tests. Default-off so nothing in a shipped binary can
+# reach a fixture builder, and so a normal build never compiles it.
+test-fixtures = []
+
 [dependencies]
 lewton = "0.10"

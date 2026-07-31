@@ -48,6 +48,9 @@ blake3 = "1"
 # read the MCP command table in order to compare it against clap's own `--help`.
 gore-mcp = { path = "../gore-mcp" }
 gore-asset = { path = "../gore-asset", features = ["test-fixtures"] }
+# `audio list` has no `.bank` fixture in the tree and the inner FSB5 builder is not a bank; this
+# exposes gore-fmod's own RIFF/FEV wrapper builder the same way gore-asset exposes its fixtures.
+gore-fmod = { path = "../gore-fmod", features = ["test-fixtures"] }
 predicates = "2"
 retoc = { path = "../../vendor/retoc" }
 usmap = { git = "https://github.com/trumank/jmap.git", rev = "909bce98a33e7d1932941404af7865514249f6be" }
@@ -112,3 +115,11 @@ path = "tests/integration/mcp_serve_test.rs"
 [[test]]
 name = "mcp_spec_sync"
 path = "tests/integration/mcp_spec_sync.rs"
+
+[[test]]
+name = "audio_test"
+path = "tests/integration/audio_test.rs"
+
+[[test]]
+name = "modcmd_test"
+path = "tests/integration/modcmd_test.rs"

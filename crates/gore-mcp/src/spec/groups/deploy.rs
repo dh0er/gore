@@ -399,7 +399,13 @@ pub const ASSET: GroupSpec = GroupSpec {
 // ---------------------------------------------------------------------------------------------
 
 const MOD_BUILD_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("spec", Long("spec"), Path, "Path to the build spec JSON", true),
+    ArgSpec::new(
+        "spec",
+        Long("spec"),
+        Path,
+        "Path to the build spec JSON; asset paths inside it resolve against its directory",
+        true,
+    ),
     ArgSpec::new(
         "out",
         Long("out"),

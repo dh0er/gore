@@ -237,7 +237,7 @@ enum McpAction {
 enum ModAction {
     /// Build a bundle dir from a BuildSpec JSON
     Build {
-        /// Path to the build spec JSON
+        /// Path to the build spec JSON; asset paths inside it resolve against its directory
         #[arg(long)]
         spec: PathBuf,
         /// Output directory (the bundle is written to <out>/<mod-name>)
@@ -268,6 +268,16 @@ enum AudioAction {
         /// Path to a .bank file
         #[arg(long)]
         bank: PathBuf,
+        /// Keep only sample names containing this substring (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Max samples to print. The result states how many matched when it stops here; 0 lists
+        /// nothing and reports only the counts
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+        /// Emit one JSON document instead of the human-readable table
+        #[arg(long)]
+        json: bool,
         /// Override the bank encryption key (defaults to the Gothic 1 Remake key)
         #[arg(long)]
         key: Option<String>,
@@ -451,7 +461,13 @@ fn run_cli() {
         Commands::Asset { action } => cmd::asset::run(action),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
-            AudioAction::List { bank, key } => cmd::audio::list(bank, key),
+            AudioAction::List {
+                bank,
+                filter,
+                max,
+                json,
+                key,
+            } => cmd::audio::list(bank, filter, max, json, key),
             AudioAction::Extract {
                 bank,
                 out,

@@ -51,24 +51,125 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn list(bank: PathBuf, key: Option<String>) -> Result<()> {
+/// List a bank's samples under a bound. Decoding reads and decrypts the whole bank either way --
+/// `SFX.bank` is 260 MB on disk -- so the narrowing here is a presentation decision only. A listing
+/// that stopped silently would let a caller read the first `max` samples as the whole bank and
+/// conclude a sound does not exist, so both output modes label the cut.
+pub fn list(
+    bank: PathBuf,
+    filter: Option<String>,
+    max: usize,
+    json: bool,
+    key: Option<String>,
+) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
     let f0 = gore_fmod::bank_fsb0(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
-    println!("{} samples, codec {:?}", f0.samples.len(), f0.codec);
-    for (i, s) in f0.samples.iter().enumerate() {
-        let secs = if s.freq > 0 {
-            s.num_samples as f64 / s.freq as f64
-        } else {
-            0.0
-        };
+    let sample_count = f0.samples.len();
+    // Filter first, cap second: `matched_count` is only meaningful if the cap never hides a
+    // candidate the filter would have kept.
+    let needle = filter.as_deref().map(str::to_lowercase);
+    let matched = f0
+        .samples
+        .iter()
+        .enumerate()
+        .filter(|(_, sample)| {
+            needle
+                .as_deref()
+                .is_none_or(|needle| super::contains_case_insensitive(&sample.name, needle))
+        })
+        .collect::<Vec<_>>();
+    let listed = &matched[..matched.len().min(max)];
+    let notice =
+        (listed.len() < matched.len()).then(|| list_truncation_notice(matched.len(), listed.len()));
+
+    if json {
+        let samples = listed
+            .iter()
+            .map(|(index, sample)| {
+                // The same spelling `gore-ffi`'s `audio_list` gives the mod studio, so the CLI and
+                // the GUI describe one sample the same way.
+                serde_json::json!({
+                    "index": index,
+                    "name": sample.name,
+                    "freq": sample.freq,
+                    "channels": sample.channels,
+                    "seconds": sample_seconds(sample),
+                })
+            })
+            .collect::<Vec<_>>();
+        // Two booleans because there are two questions and one answer cannot serve both.
+        // `truncated` says whether `--max` stopped the listing, and it is what `truncation_notice`
+        // belongs to. "Is this array the whole bank" is a different question -- a filter narrows
+        // without truncating -- and `complete` answers it, so neither has to be inferred by
+        // comparing counts.
+        let mut document = serde_json::json!({
+            "bank": bank.display().to_string(),
+            "codec": format!("{:?}", f0.codec),
+            "sample_count": sample_count,
+            "matched_count": matched.len(),
+            "listed_count": samples.len(),
+            "truncated": notice.is_some(),
+            "complete": samples.len() == sample_count,
+            "samples": samples,
+        });
+        if let Some(notice) = &notice {
+            document["truncation_notice"] = serde_json::json!(notice);
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
+    // Without this clause a filter that matched nothing prints a header and no rows, and a bank
+    // with no rows is a documented failure of its own (`Master.bank` and the placeholders), so the
+    // reader cannot tell "nothing matched" from "wrong bank".
+    let narrowed = match filter {
+        Some(_) => format!(", {} matched --filter", matched.len()),
+        None => String::new(),
+    };
+    println!("{sample_count} samples, codec {:?}{narrowed}", f0.codec);
+    for (i, s) in listed {
         println!(
             "#{i:<5} {:6}Hz {}ch {:6.2}s  {}",
-            s.freq, s.channels, secs, s.name
+            s.freq,
+            s.channels,
+            sample_seconds(s),
+            s.name
         );
     }
+    if let Some(notice) = &notice {
+        // The same marker the MCP server appends to a clipped result, so a reader who has learned
+        // to look for one line has learned to look for both.
+        println!("… [truncated: {notice}]");
+    }
     Ok(())
+}
+
+/// Playing time of one sample. A bank can carry a zero frequency for a placeholder entry, and
+/// dividing by it would print `NaN`/`inf` into a JSON document that then fails to parse.
+fn sample_seconds(sample: &gore_fmod::Fsb5Sample) -> f64 {
+    if sample.freq > 0 {
+        sample.num_samples as f64 / sample.freq as f64
+    } else {
+        0.0
+    }
+}
+
+/// One sentence that must answer "how much am I not seeing" and "what do I type instead". It
+/// deliberately does not hand back the `--max` that would list everything: followed on the 7,218
+/// samples of `SFX.bank` that is a 458,589-byte table against a 256 KiB result budget
+/// (`gore_mcp::DEFAULT_MAX_STDOUT_BYTES`), and the cut lands mid-line inside sample #4122 -- so the
+/// 3,095 samples past it are not merely unshown, they are absent, and a caller who filters what
+/// arrived is told a sound does not exist. Sending a caller there is the failure this bound
+/// prevents.
+fn list_truncation_notice(matched: usize, listed: usize) -> String {
+    format!(
+        "{matched} samples matched and only the first {listed} are shown. Narrow the query with \
+         --filter, and raise --max only as far as you need: asking for all {matched} at once \
+         produces a document large enough to be cut off in transit, and a cut-off JSON array no \
+         longer parses."
+    )
 }
 
 pub fn extract(
@@ -93,7 +194,13 @@ pub fn extract(
         _ => (0..fsb.samples.len()).collect(),
     };
 
+    // One line per distinct reason, not per sample. `extract_wav` decodes Vorbis, so a bank whose
+    // codec is anything else rejects every sample for the same cause: on the 7,218 samples of
+    // `SFX.bank` that was 7,218 identical stderr lines (~400 KB) describing one fact. The first
+    // sample to hit a reason is named, which is what a single-sample run needs, and the count says
+    // how far it went.
     let (mut ok, mut skipped) = (0usize, 0usize);
+    let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for i in indices {
         match gore_fmod::extract_wav(&block, &fsb, i) {
             Ok(wav) => {
@@ -106,9 +213,16 @@ pub fn extract(
             }
             Err(e) => {
                 skipped += 1;
-                eprintln!("skip #{i} {}: {e}", fsb.samples[i].name);
+                let seen = skips.entry(e).or_insert((0, i));
+                seen.0 += 1;
             }
         }
+    }
+    for (reason, (count, first)) in &skips {
+        eprintln!(
+            "skipped {count} sample(s), first #{first} {}: {reason}",
+            fsb.samples[*first].name
+        );
     }
     println!(
         "extracted {ok} wav file(s) to {} ({skipped} skipped)",

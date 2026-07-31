@@ -150,11 +150,59 @@ Manifest rules, all enforced:
   order.
 - Any error publishes no output at all.
 
+## The intro movie brings its own audio
+
+`G1R\Content\Movies\G1R_Intro.bk2` is a pre-rendered Bink video — 3840×2160,
+9,047 frames at 60 fps, 150.8 s — and it carries **four embedded audio tracks**
+of its own (ids 0–3, all 48 kHz). The intro you hear is baked into that file.
+
+So the per-line recordings under `Cutscenes/Intro/` and
+`Cutscenes/IntroCutscene/` are a dead end for anything audible. `gore voice
+replace` does its job on them — the new Ogg lands in the archive, validated,
+and the archive verifies — and the intro sounds exactly as it did before. A
+second clue that they are not the playback path: in `german_new.zip` all 44
+Oggs in those two folders are
+**byte-identical**, one 8.07 s 22.05 kHz placeholder repeated (`list` shows it
+as one repeated CRC32). Other language archives do hold real recordings there —
+`english_newer.zip` has 44 files with 44 different payloads — but the movie
+still plays its own tracks.
+
+This was found the hard way: an intro line was replaced, confirmed present in
+the rebuilt archive, deployed — and the intro played exactly as before.
+
+The subtitles are the opposite story. The one subtitle file that ships,
+`G1R_Intro_en.srt`, holds localization ids rather than text:
+
+```
+5
+00:00:22,706 --> 00:00:23,190
+AlkimiaLocalization:TEXT_WIP_DKPDOUC_20260303_012643
+```
+
+Every language's intro subtitles therefore come out of the loc catalog, and a
+`loc_edits` change to one of those ids shows up on the very next playback. See
+[Text & dialogs](text-and-dialogs.md).
+
+For an audible proof early in a new game, replace a real in-engine conversation
+line instead. `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg` is the
+first NPC line of a new game:
+
+```powershell
+gore voice replace --archive "$VO" `
+    --path "german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg" `
+    --ogg new.ogg -o german_replaced.zip
+```
+
 ## Deployment reality check
 
 `replace` targets an existing recording and is the established path. `add` is
 archive-safe, but whether the game actually resolves a brand-new voice path at
 runtime is still runtime-dependent — treat additions as experimental.
+
+A correct replacement is not the same as an audible one. The archive edit is
+verified; whether that recording is what the engine plays at the moment you are
+listening to is a separate question, and the intro above is the case where the
+answer is no.
 
 ## Flag summary
 

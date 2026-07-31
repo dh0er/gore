@@ -8,6 +8,121 @@
 
 pub mod vorbis;
 
+/// Synthetic `.bank` fixtures shared by downstream crates' tests.
+///
+/// Deliberately hidden behind the default-off `test-fixtures` feature: it builds banks, it never
+/// reads or writes a game one, and nothing in a shipped binary should be able to reach it.
+///
+/// It exists because the public builders stop one layer short of a bank. [`build_fsb5_pcm16_multi`]
+/// emits the inner FSB5 block, which [`parse_bank`](crate::parse_bank) rejects as "not a RIFF/FEV
+/// bank", so a test that wants to exercise a reader end to end has no input at all -- and the real
+/// banks are 260 MB of game data that is never vendored into this repository.
+#[cfg(feature = "test-fixtures")]
+pub mod test_fixture {
+    use super::{build_fsb5_pcm16_multi, fsb5_encrypt, is_pristine_bank, Pcm16Sample};
+
+    /// `count` mono PCM16 samples named `{prefix}{index:02}`, one frame each.
+    ///
+    /// The names are what a `--filter` is tested against and the frame is what makes the bank
+    /// small; a listing reads neither the audio nor its length.
+    pub fn numbered_pcm16_samples(prefix: &str, count: usize, freq: u32) -> Vec<Pcm16Sample> {
+        (0..count)
+            .map(|index| Pcm16Sample {
+                name: format!("{prefix}{index:02}"),
+                freq,
+                channels: 1,
+                pcm: vec![0i16; 1],
+            })
+            .collect()
+    }
+
+    /// Wrap `samples` in a pristine RIFF/`FEV ` bank encrypted with `key`, the way the game ships
+    /// one: [`is_pristine_bank`] accepts it, [`super::bank_fsb0`] lists it, and
+    /// [`super::replace_samples`] takes it as a base.
+    ///
+    /// Only the wrapper both gore-fmod walkers actually read is emitted -- FMT (the bank version
+    /// lives at absolute 0x14), the top-level LIST holding PROJ/BNKI, an SNDH entry pointing at the
+    /// FSB5, and one WAV node referencing (SoundBankIndex 0, SubsoundIndex 0). Every sub-chunk is
+    /// framed as `[fourcc][u32 size][body]` starting right after PROJ, so BNKI carries its own size
+    /// too. The codec is PCM16, not the shipped banks' Vorbis, which is a feature for a listing
+    /// test: `codec` in the output can only be right by reading it.
+    pub fn pristine_bank_pcm16(samples: &[Pcm16Sample], key: &[u8]) -> Result<Vec<u8>, String> {
+        let mut fsb5 = build_fsb5_pcm16_multi(samples)?;
+        fsb5_encrypt(&mut fsb5, key);
+        let u32b = |v: u32| v.to_le_bytes();
+
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        debug_assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+
+        // SNDH: a 4-byte chunk-version prefix (its low 2 bytes double as the injector's X16 count)
+        // plus one 8-byte entry (absolute FSB5 offset, FSB5 size).
+        b.extend_from_slice(b"SNDH");
+        let sndh_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let sndh_body = b.len();
+        b.extend_from_slice(&[2u8, 0, 0, 0]); // X16 count = 1 (1<<1)
+        let sndh_entry = b.len();
+        b.extend_from_slice(&u32b(0)); // entry.offset (backpatched)
+        b.extend_from_slice(&u32b(0)); // entry.size   (backpatched)
+        let sndh_size = (b.len() - sndh_body) as u32;
+        b[sndh_size_pos..sndh_size_pos + 4].copy_from_slice(&u32b(sndh_size));
+
+        // WAV node: body ≥ 0x1A, with SoundBankIndex (i32 @+0x12) and SubsoundIndex (i32 @+0x16)
+        // both 0, which is the reference an injection repoints.
+        b.extend_from_slice(b"WAV ");
+        let wav_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let wav_body = b.len();
+        b.extend_from_slice(&[0u8; 0x1A]);
+        let wav_size = (b.len() - wav_body) as u32;
+        b[wav_size_pos..wav_size_pos + 4].copy_from_slice(&u32b(wav_size));
+
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // SND chunk carrying the encrypted FSB5, 32-aligned.
+        b.extend_from_slice(b"SND ");
+        let snd_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let pad = (32 - (b.len() % 32)) % 32;
+        b.resize(b.len() + pad, 0);
+        let fsb5_abs = b.len() as u32;
+        b.extend_from_slice(&fsb5);
+        let snd_size = (b.len() - (snd_size_pos + 4)) as u32;
+        b[snd_size_pos..snd_size_pos + 4].copy_from_slice(&u32b(snd_size));
+
+        b[sndh_entry..sndh_entry + 4].copy_from_slice(&u32b(fsb5_abs));
+        b[sndh_entry + 4..sndh_entry + 8].copy_from_slice(&u32b(fsb5.len() as u32));
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+
+        // A fixture that is not pristine would send its reader down a different code path than the
+        // one under test, and say nothing about why.
+        if !is_pristine_bank(&b) {
+            return Err("fixture bank is not pristine".into());
+        }
+        Ok(b)
+    }
+}
+
 // ---------- little/big-endian readers ----------
 #[inline]
 pub fn u32_le(b: &[u8], o: usize) -> u32 {

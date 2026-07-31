@@ -75,6 +75,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   longer the same number once a page is printed. The array length is
   `listed_count`.
 
+- Added a `files` section to the bundle build spec: a bundle can now replace a
+  loose game file — one Unreal reads from disk rather than from the IoStore
+  containers or an archive, such as the mouse cursor at
+  `G1R\Content\Slate\Cursors\Normal\Normal.PNG`. Replacement only; the original
+  is preserved as `*.gore-bak` and restored by `gore mod undeploy`, and
+  destinations are limited to files under `G1R/Content` or `G1R/Config` that are
+  not pak containers, backups, or one of the four files that already have their
+  own deploy mechanism. `gore mgr` reports two mods replacing the same loose file
+  as a hard conflict and applies them later-wins.
+- `gore mod build` now resolves every asset path in a spec (`wav_path`,
+  `ogg_path`, `image_path`, `mini_cache`, `source_path`) relative to the spec
+  file's own directory instead of the process working directory, matching
+  `gore audio replace --map`. Absolute paths are unchanged. A failure names the
+  resolved path plus the section and index it came from. A spec whose relative
+  assets sat in the working directory rather than beside the spec has to move
+  them or spell them absolutely.
+- Bounded `gore audio list`, which printed one line per sample with nothing
+  stopping it: 458,589 bytes over 7,219 lines for `SFX.bank`. Through the MCP
+  server that was cut at the 256 KiB stdout cap, mid-line inside sample #4122,
+  so the back 43 per cent of the bank was simply absent from what the caller
+  then searched — and the answer came back "not found" rather than "not shown".
+  It now prints at most `--max` samples (default 100), takes a case-insensitive
+  `--filter`, and has a `--json` mode carrying `sample_count`, `matched_count`,
+  `listed_count`, `truncated`, `complete`, `truncation_notice` and the bank's
+  codec.
+- The guide now says which parts of the game the texture and voice commands
+  cannot reach. The mouse cursor is a file-based Unreal hardware cursor — eight
+  loose PNGs under `G1R\Content\Slate\Cursors\Normal\` — so replacing the cooked
+  `T_HardwareCursor` texture is inert, and the pre-rendered intro movie carries
+  four embedded audio tracks, so replacing the per-line Ogg files under
+  `Cutscenes/Intro/` lands correctly in the archive and stays inaudible. Both
+  were found by building a mod that changed neither.
+
 ## [0.1.0] - 2026-06-19
 
 - Initial release: command-line companion for gore-mod (catalog sync, loc

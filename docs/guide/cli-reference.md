@@ -65,7 +65,7 @@ Commands that touch the install (`deploy-shared`, `mod`, `mgr`, `texture`,
 
 | Subcommand | Flags |
 |---|---|
-| `build` | `--spec <SPEC>` · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) |
+| `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) |
 | `deploy` | `--bundle <BUNDLE>` · `--game <GAME>` |
 | `undeploy` | `--game <GAME>` |
 
@@ -97,7 +97,7 @@ All subcommands except `reset` accept `--library <DIR>` and `--loadout <FILE>`.
 
 | Subcommand | Flags |
 |---|---|
-| `list` | `--bank <BANK>` · `--key <KEY>` |
+| `list` | `--bank <BANK>` · `--filter <TEXT>` · `--max <N>` (default 100) · `--json` · `--key <KEY>` |
 | `extract` | `--bank` · `-o, --out <DIR>` · `--sample <NAME\|all>` · `--key` |
 | `replace` | `--map <MAP>` · `--bank` · `-o, --out <BANK>` · `--key` |
 | `restore` | `--bank` |
