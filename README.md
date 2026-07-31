@@ -76,13 +76,25 @@ Claude Desktop, or any client with a JSON config:
 }
 ```
 
-Reading works out of the box, and so does writing to a free path outside the
-game installation. Changing the installation — or overwriting a file that is
-already there — needs `--allow-write`, and so do the commands whose real targets
-cannot be checked in advance (`gen`, `mod build`, `texture replace`, `stubs`,
-`audio extract`, `as emit-all`). Compiling AngelScript starts the game *and*
-stages the result in the installation, so it needs `--allow-game-launch` **and**
-`--allow-write` together. Details: [MCP server](docs/guide/mcp.md).
+Reading works out of the box, and so does writing to a free path outside the game
+installation. Anything that changes something already there — the installation
+itself, an existing file, or a target the server cannot check in advance (`gen`,
+`mod build`, `texture replace`, `stubs`, `audio extract`, `as emit-all`) — is
+**confirmed with you first**: your client shows a dialog naming the command and
+the file, and nothing runs unless you agree. Claude Code, Cursor and Codex all
+support it with no configuration — but only while they are interactive. Claude
+Code driven non-interactively answers for you, and every such call is refused
+without you seeing anything.
+
+Where no dialog reaches you, the assistant asks you in the chat instead: the
+refusal shows it the command line to put in front of you, and your answer comes
+back as `user_approved`. The result then says the command ran on that claim — the
+server saw no confirmation of its own, so the transcript is what you check. See
+[MCP server](docs/guide/mcp.md).
+
+For unattended use, `--allow-write` and `--allow-game-launch` answer in advance,
+and `--no-consent-prompts` refuses instead of asking. Details:
+[MCP server](docs/guide/mcp.md).
 
 ## Documentation
 

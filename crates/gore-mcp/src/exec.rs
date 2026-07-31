@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::argv::Invocation;
-use crate::spec::{Class, CommandSpec, JsonSupport};
+use crate::spec::{Class, CommandSpec};
 
 /// How often we check whether the child has finished.
 ///
@@ -314,30 +314,25 @@ pub fn to_call_result(
         )));
     }
 
-    let mut structured = json!({
-        "exit_code": outcome.status,
-        "timed_out": outcome.timed_out,
-        "duration_ms": outcome.duration_ms,
-        "stdout_truncated": outcome.stdout_truncated,
-        "stderr_truncated": outcome.stderr_truncated,
-        "stdout_bytes": outcome.stdout_total,
-        "stderr_bytes": outcome.stderr_total,
-    });
-
-    // Commands with a `--json` switch always get it, so their output is machine-readable without
-    // the model having to ask. Truncated output is skipped: half a JSON document never parses, and
-    // a parse error here would look like the command misbehaved.
-    if command.json == JsonSupport::Stdout && !outcome.stdout_truncated {
-        if let Ok(parsed) = serde_json::from_str::<Value>(&outcome.stdout) {
-            structured["json"] = parsed;
-        }
-    }
-
+    // Deliberately no `structuredContent`. See `no_result_carries_structured_content` in lib.rs:
+    // a client that sees that member is entitled to treat it as *the* result and ignore `content`,
+    // and a summary of byte counts is not a result. Everything worth knowing — the command line,
+    // the exit code, what was printed, what was cut — is in the blocks above.
     json!({
         "content": content,
-        "structuredContent": structured,
         "isError": !outcome.succeeded(),
     })
+}
+
+/// Add one more text block to a rendered result.
+///
+/// Used for what is true of the *call* rather than of the command's output — today, that it ran on
+/// a claim of approval nobody here verified. It goes last so that the command line stays the first
+/// thing a reader meets, and so that no existing block moves.
+pub fn append_note(result: &mut Value, note: String) {
+    if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+        content.push(text_block(&note));
+    }
 }
 
 /// A tool error that never reached a child process — a bad argument or a refusal.
@@ -439,7 +434,8 @@ mod tests {
         assert_eq!(result["isError"], json!(false));
         assert_eq!(result["content"][0]["text"], "gore config path");
         assert_eq!(result["content"][1]["text"], "C:/x/config.json\n");
-        assert_eq!(result["structuredContent"]["exit_code"], 0);
+        // A success says nothing further: the exit code is only worth a line when it is not zero.
+        assert_eq!(result["content"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -471,9 +467,9 @@ mod tests {
 
         assert_eq!(result["isError"], json!(true));
         let summary = result["content"][1]["text"].as_str().unwrap();
+        // The text is the only channel, so "it was killed" has to be readable in it rather than
+        // inferable from a null exit code in a member no model may ever see.
         assert!(summary.contains("did not finish within 60s"), "{summary}");
-        assert_eq!(result["structuredContent"]["timed_out"], json!(true));
-        assert_eq!(result["structuredContent"]["exit_code"], Value::Null);
     }
 
     #[test]
@@ -491,7 +487,6 @@ mod tests {
 
         assert!(body.contains("truncated"), "{body}");
         assert!(body.contains("5000000"), "{body}");
-        assert_eq!(result["structuredContent"]["stdout_truncated"], json!(true));
     }
 
     #[test]
@@ -548,6 +543,7 @@ mod tests {
                 path: "shell".into(),
                 timeout,
                 display: format!("cmd /C {command}"),
+                consent: None,
             };
             (spawn, invocation)
         }
@@ -600,6 +596,7 @@ mod tests {
                 path: "shell".into(),
                 timeout: Duration::from_secs(60),
                 display: "cmd /C …".into(),
+                consent: None,
             };
             let outcome = spawn.run(&invocation).expect("spawn");
 
@@ -626,6 +623,7 @@ mod tests {
                 path: "shell".into(),
                 timeout: Duration::from_secs(5),
                 display: "…".into(),
+                consent: None,
             };
             assert!(spawn.run(&invocation).is_err());
         }
@@ -636,6 +634,5 @@ mod tests {
         let result = to_error_result("refused: nope");
         assert_eq!(result["isError"], json!(true));
         assert_eq!(result["content"][0]["text"], "refused: nope");
-        assert!(result.get("structuredContent").is_none());
     }
 }

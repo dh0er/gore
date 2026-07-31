@@ -91,8 +91,14 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
         path.iter().map(std::ffi::OsString::from).collect();
     argv.push("--help".into());
 
-    let invocation =
-        Invocation { argv, path: path.join(" "), timeout: TIMEOUT, display: display.clone() };
+    // `--help` prints and exits. There is nothing here for a person to agree to.
+    let invocation = Invocation {
+        argv,
+        path: path.join(" "),
+        timeout: TIMEOUT,
+        display: display.clone(),
+        consent: None,
+    };
     match spawn.run(&invocation) {
         Ok(outcome) => {
             // clap prints help to stdout on success; when a path is wrong it goes to stderr.
@@ -107,22 +113,22 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
             // limit and passes it through silently. Presenting a prefix as the exact help is the
             // one failure this tool cannot afford: the flags it drops are invisible.
             let mut text = truncate(&body);
-            let mut truncated = text.ends_with(TRUNCATION_MARKER);
-            if clipped && !truncated {
+            if clipped && !text.ends_with(TRUNCATION_MARKER) {
                 text.push_str(&format!(
                     "\n… [truncated: the server captured {} of {total} bytes. Raise \
                      --max-output-kib, or ask for a narrower command.]",
                     body.len()
                 ));
-                truncated = true;
             }
 
+            // No `structuredContent`: it would replace the help text with a boolean in any client
+            // that prefers the structured channel, and the help text is the entire tool. The
+            // truncation flag it used to carry is stated in the text itself, where it is read.
             Ok(json!({
                 "content": [
                     { "type": "text", "text": display },
                     { "type": "text", "text": text },
                 ],
-                "structuredContent": { "exit_code": outcome.status, "truncated": truncated },
                 "isError": !outcome.succeeded(),
             }))
         }
@@ -343,7 +349,6 @@ mod tests {
         let result = call_with(json!({ "command": "as" }), &spawn);
 
         assert_eq!(result["isError"], json!(false));
-        assert_eq!(result["structuredContent"]["truncated"], json!(true));
         let body = text_of(&result, 1);
         assert!(body.contains("truncated"), "{body}");
         assert!(body.contains("40000"), "the real size belongs in the message: {body}");
@@ -355,7 +360,6 @@ mod tests {
         let spawn = FakeSpawn::new(Outcome::success("Usage: gore mgr <COMMAND>"));
         let result = call_with(json!({ "command": "mgr" }), &spawn);
 
-        assert_eq!(result["structuredContent"]["truncated"], json!(false));
         assert!(!text_of(&result, 1).contains("truncated"));
     }
 

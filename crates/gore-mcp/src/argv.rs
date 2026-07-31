@@ -1,9 +1,13 @@
-//! Turning a `tools/call` into a command line, and refusing the ones this server may not run.
+//! Turning a `tools/call` into a command line, and spotting the ones a person should agree to first.
 //!
 //! Everything here produces messages aimed at a language model rather than at a log: a rejected
 //! call comes back as a tool error, and the model's next attempt is only as good as what it was
-//! told. So the errors name the argument, state the expected shape, and — for a refusal — say
-//! exactly which flag the server would have to be restarted with.
+//! told. So the errors name the argument and state the expected shape.
+//!
+//! The safety gate is the exception, because its output is read by a *person*. It does not reject;
+//! it attaches a [`Consent`] to the invocation describing what the command would overwrite, install
+//! or launch, and [`crate::consent`] puts that in front of the user. Whether the answer even gets
+//! asked for is decided by how the server was started — see [`Options::pre_approves`].
 
 use std::ffi::OsString;
 use std::fmt;
@@ -11,6 +15,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::consent::{Consent, Needs};
 use crate::server::Options;
 use crate::spec::{
     ArgForm, ArgKind, ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport,
@@ -27,6 +32,12 @@ pub struct Invocation {
     /// The command line as a person would type it, echoed in the tool result so the transcript is
     /// reproducible in a shell.
     pub display: String,
+    /// Set when a person has to agree before this runs. `None` means the call is either harmless or
+    /// already pre-approved by the flags the server was started with.
+    ///
+    /// Carried on the invocation rather than returned as an error because it is not a failure: the
+    /// command line is complete and correct, and the only open question is whether to run it.
+    pub consent: Option<Consent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +56,6 @@ pub enum BuildError {
         given: Vec<String>,
         exactly_one: bool,
     },
-    Refused { path: String, reason: String, flag: &'static str },
 }
 
 impl fmt::Display for BuildError {
@@ -112,15 +122,6 @@ impl fmt::Display for BuildError {
                     )
                 }
             }
-            BuildError::Refused { path, reason, flag } => write!(
-                f,
-                "refused: `gore {path}` {reason}, and this MCP server was started without \
-                 {flag}.\n\n\
-                 Only the user can allow it, by restarting the server with that flag:\n\
-                 \n    gore mcp serve {flag}\n\n\
-                 Reading needs no flag, and neither does writing to a path that is free and \
-                 outside the game installation."
-            ),
         }
     }
 }
@@ -153,7 +154,11 @@ pub fn build(
 
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
-    gate(command, &args, opts, &path)?;
+    // Dropped rather than never computed, so that turning a flag on cannot change which arm the
+    // gate would have matched — only whether anyone is asked about it. The command line it shows is
+    // filled in below, once there is one.
+    let mut consent = consent_for(command, &args, &path)
+        .filter(|consent| !opts.pre_approves(&consent.needs));
 
     let mut flags: Vec<OsString> = Vec::new();
     let mut positionals: Vec<(u8, Vec<OsString>)> = Vec::new();
@@ -234,7 +239,14 @@ pub fn build(
         command.timeout_secs
     });
 
-    Ok(Invocation { display: render(&opts.exe, &argv), argv, path, timeout })
+    // One rendering, used in both places: what the user is asked about and what the tool result
+    // reports as having run are then the same line by construction, not by agreement.
+    let display = render(&opts.exe, &argv);
+    if let Some(consent) = consent.as_mut() {
+        consent.command_line = display.clone();
+    }
+
+    Ok(Invocation { display, argv, path, timeout, consent })
 }
 
 fn reject_unknown_arguments(
@@ -304,72 +316,96 @@ fn check_argument_sets(
     Ok(())
 }
 
-fn gate(
+/// What a person would have to agree to before this call may run, if anything.
+///
+/// Deliberately independent of how the server was started. Whether the question is *asked* is a
+/// separate decision made by the caller, and keeping the two apart means a pre-approved server
+/// still computes the same answer — so `--allow-write` widens who may say yes, never what the gate
+/// can see.
+///
+/// The arms are ordered most-specific-first and the first match wins. A command that trips arm two
+/// would also trip arm four, but "changes the game installation" is the truer sentence than "the
+/// output file already exists", and only one question gets asked.
+fn consent_for(
     command: &CommandSpec,
     args: &Map<String, Value>,
-    opts: &Options,
     path: &str,
-) -> Result<(), BuildError> {
+) -> Option<Consent> {
     let required = command.safety.requirements(args);
+    let question = |reason: String, remedy: Option<String>, needs: Needs| {
+        Some(Consent {
+            path: path.to_string(),
+            reason,
+            remedy,
+            // Not known here; `build` fills it in once the argv is assembled.
+            command_line: String::new(),
+            needs,
+        })
+    };
 
-    if required.game_launch && !opts.allow_game_launch {
+    if required.game_launch {
         // Every GameLaunch command is a write too: compiling drives the game to regenerate the
-        // cache and then installs the result. Naming only `--allow-game-launch` would send the
-        // user to restart with a flag set that this same gate refuses one line further down.
-        let (reason, flag) = if required.write && !opts.allow_write {
-            (
-                "launches the game executable and stages the result in the installation",
-                "--allow-game-launch --allow-write",
-            )
+        // cache and then installs the result. `Needs::flags` is what keeps the launch flag from
+        // ever being named on its own.
+        let reason = if required.write {
+            "launches the game executable and stages the result in the installation"
         } else {
-            ("launches the game executable", "--allow-game-launch")
+            "launches the game executable"
         };
-        return Err(BuildError::Refused { path: path.to_string(), reason: reason.into(), flag });
+        return question(
+            reason.into(),
+            None,
+            Needs { write: required.write, game_launch: true },
+        );
     }
-    if required.write && !opts.allow_write {
-        let reason = if required.rewrites_in_place {
+
+    if required.write {
+        let needs = Needs { write: true, game_launch: false };
+        if required.rewrites_in_place {
             let escape = command.safety.in_place_without.unwrap_or("out");
+            return question(
+                format!("would overwrite its input in place because `{escape}` was omitted"),
+                Some(format!("Pass `{escape}` to write a new file instead")),
+                needs,
+            );
+        }
+        return question(
+            "changes the game installation or the shared catalogs the tools read".into(),
+            None,
+            needs,
+        );
+    }
+
+    // Some outputs are only harmless because of where they usually point. Aim one at the game tree
+    // and the command has installed something, which is what the question is really about.
+    if let Some((name, target)) = installs_into_game_tree(command, args) {
+        return question(
             format!(
-                "would overwrite its input in place because `{escape}` was omitted (pass `{escape}` \
-                 to write a new file instead)"
-            )
-        } else {
-            "changes the game installation or the shared catalogs the tools read".into()
-        };
-        return Err(BuildError::Refused { path: path.to_string(), reason, flag: "--allow-write" });
+                "`{name}` points at `{target}`, inside the game installation, so writing there \
+                 installs the result instead of producing a file to deploy later"
+            ),
+            Some(format!(
+                "Point `{name}` outside the installation to produce a file to deploy later"
+            )),
+            Needs { write: true, game_launch: false },
+        );
     }
 
-    // Some outputs are only harmless because of where they usually point. Aim one at the game
-    // tree and the command has installed something, which is exactly what the gate is refusing.
-    if !opts.allow_write {
-        if let Some((name, target)) = installs_into_game_tree(command, args) {
-            return Err(BuildError::Refused {
-                path: path.to_string(),
-                reason: format!(
-                    "`{name}` points at `{target}`, inside the game installation, so writing \
-                     there installs the result instead of producing a file to deploy later"
-                ),
-                flag: "--allow-write",
-            });
-        }
+    // A `Write` command needs no question because it creates new files. When its output is already
+    // there, it does not create anything — it truncates — so the promise that made it harmless no
+    // longer holds and the call has to be treated as a mutation.
+    if let Some((name, target)) = existing_target(command, args) {
+        return question(
+            format!(
+                "`{name}` already exists at `{target}`, and this command overwrites its output \
+                 rather than refusing"
+            ),
+            Some("Choose a path that does not exist yet".into()),
+            Needs { write: true, game_launch: false },
+        );
     }
 
-    // A `Write` command is ungated because it creates new files. When its output is already there,
-    // it does not create anything — it truncates — so the promise the gate rests on no longer
-    // holds and the call has to be treated as a mutation.
-    if !opts.allow_write {
-        if let Some((name, target)) = existing_target(command, args) {
-            return Err(BuildError::Refused {
-                path: path.to_string(),
-                reason: format!(
-                    "`{name}` already exists at `{target}`, and this command overwrites its output \
-                     rather than refusing (choose a path that does not exist yet)"
-                ),
-                flag: "--allow-write",
-            });
-        }
-    }
-    Ok(())
+    None
 }
 
 /// The first output argument aimed inside a game installation.
@@ -761,6 +797,22 @@ mod tests {
         build(spec::group(tool).expect("group exists"), sub, &args, opts)
     }
 
+    /// The question a call would raise, or `None` when it may simply run.
+    ///
+    /// Building must succeed either way: needing someone's agreement is not a malformed call, it is
+    /// a complete command line with one thing left to settle.
+    #[track_caller]
+    fn question(tool: &str, sub: &str, args: Value, opts: &Options) -> Option<Consent> {
+        build_with(tool, sub, args, opts)
+            .expect("the command line itself is valid")
+            .consent
+    }
+
+    /// Whether a call asks about a write - the shape all but one gate arm produces.
+    fn asks_about_a_write(raised: Option<Consent>) -> bool {
+        raised.is_some_and(|consent| consent.needs == Needs { write: true, game_launch: false })
+    }
+
     fn argv_of(tool: &str, sub: &str, args: Value) -> Vec<String> {
         build_with(tool, sub, args, &permissive())
             .expect("should build")
@@ -785,19 +837,16 @@ mod tests {
         };
 
         assert!(
-            build_with("gore_catalog", "dump", call(&fresh), &options()).is_ok(),
-            "a path that does not exist yet needs no flag"
+            question("gore_catalog", "dump", call(&fresh), &options()).is_none(),
+            "a path that does not exist yet is nobody's business"
         );
         assert!(
-            matches!(
-                build_with("gore_catalog", "dump", call(&occupied), &options()),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
-            "an existing target must be gated"
+            asks_about_a_write(question("gore_catalog", "dump", call(&occupied), &options())),
+            "an existing target must be put to the user"
         );
         assert!(
-            build_with("gore_catalog", "dump", call(&occupied), &permissive()).is_ok(),
-            "--allow-write still permits the overwrite"
+            question("gore_catalog", "dump", call(&occupied), &permissive()).is_none(),
+            "--allow-write pre-approves the overwrite, so nobody is asked"
         );
     }
 
@@ -812,17 +861,16 @@ mod tests {
 
         let call = json!({ "game": "G", "asset": "/Game/T", "out": png.to_string_lossy() });
         assert!(
-            build_with("gore_texture", "extract", call.clone(), &options()).is_ok(),
+            question("gore_texture", "extract", call.clone(), &options()).is_none(),
             "nothing exists yet"
         );
 
         std::fs::write(&sidecar, b"{}").expect("write sidecar");
-        let refused = build_with("gore_texture", "extract", call.clone(), &options());
         assert!(
-            matches!(refused, Err(BuildError::Refused { flag: "--allow-write", .. })),
+            asks_about_a_write(question("gore_texture", "extract", call.clone(), &options())),
             "the sidecar exists and would be overwritten"
         );
-        assert!(build_with("gore_texture", "extract", call, &permissive()).is_ok());
+        assert!(question("gore_texture", "extract", call, &permissive()).is_none());
     }
 
     #[test]
@@ -833,7 +881,7 @@ mod tests {
             json!({ "game": "D:/Games/G1R", "mod_dir": "mod", "name": "zzz_Mine_P", "out": out })
         };
 
-        assert!(build_with("gore_texture", "pack", call("build/triplet"), &options()).is_ok());
+        assert!(question("gore_texture", "pack", call("build/triplet"), &options()).is_none());
 
         for inside in [
             "D:/Games/G1R/G1R/Content/Paks/~mods",
@@ -841,21 +889,18 @@ mod tests {
             "E:/elsewhere/G1R/Content/Paks/~mods", // names the game folder outright
         ] {
             assert!(
-                matches!(
-                    build_with("gore_texture", "pack", call(inside), &options()),
-                    Err(BuildError::Refused { flag: "--allow-write", .. })
-                ),
+                asks_about_a_write(question("gore_texture", "pack", call(inside), &options())),
                 "{inside} should be treated as an installation change"
             );
         }
 
-        assert!(build_with(
+        assert!(question(
             "gore_texture",
             "pack",
             call("D:/Games/G1R/G1R/Content/Paks/~mods"),
             &permissive()
         )
-        .is_ok());
+        .is_none());
     }
 
     #[test]
@@ -898,11 +943,6 @@ mod tests {
                 given: vec!["basename".into(), "path".into()],
                 exactly_one: true,
             },
-            BuildError::Refused {
-                path: "mgr reset".into(),
-                reason: "restores a pristine install".into(),
-                flag: "--allow-write",
-            },
         ];
 
         for error in errors {
@@ -928,24 +968,21 @@ mod tests {
             json!({ "lcache": "in.lcache", "edits": "edits.json", "out": out })
         };
 
-        assert!(build_with(
+        assert!(question(
             "gore_loc",
             "import",
             call(outside.to_string_lossy().into_owned()),
             &options()
         )
-        .is_ok());
+        .is_none());
 
         assert!(
-            matches!(
-                build_with(
-                    "gore_loc",
-                    "import",
-                    call("D:/Games/G1R/G1R/Content/Localization/Alkimia.lcache".into()),
-                    &options()
-                ),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
+            asks_about_a_write(question(
+                "gore_loc",
+                "import",
+                call("D:/Games/G1R/G1R/Content/Localization/Alkimia.lcache".into()),
+                &options()
+            )),
             "writing the cache back into the installation is a deployment"
         );
     }
@@ -969,17 +1006,14 @@ mod tests {
                 Value::Object(args)
             };
             assert!(
-                build_with(tool, sub, call(&scratch), &options()).is_ok(),
-                "{sub} into a scratch directory needs no flag"
+                question(tool, sub, call(&scratch), &options()).is_none(),
+                "{sub} into a scratch directory is nobody's business"
             );
             assert!(
-                matches!(
-                    build_with(tool, sub, call(live), &options()),
-                    Err(BuildError::Refused { flag: "--allow-write", .. })
-                ),
+                asks_about_a_write(question(tool, sub, call(live), &options())),
                 "{sub} into the live Mods folder installs a mod"
             );
-            assert!(build_with(tool, sub, call(live), &permissive()).is_ok());
+            assert!(question(tool, sub, call(live), &permissive()).is_none());
         }
     }
 
@@ -1003,10 +1037,10 @@ mod tests {
         }
 
         let call = json!({ "sdk_dir": "SDK", "out": target.to_string_lossy() });
-        let refused = build_with("gore_catalog", "dump", call, &options());
+        let raised = question("gore_catalog", "dump", call, &options());
         assert!(
-            matches!(refused, Err(BuildError::Refused { flag: "--allow-write", .. })),
-            "a chain past the budget must be refused, got {refused:?}"
+            asks_about_a_write(raised.clone()),
+            "a chain past the budget must be asked about, got {raised:?}"
         );
     }
 
@@ -1027,10 +1061,7 @@ mod tests {
 
         let call = json!({ "game": "G", "asset": "/Game/T", "out": png.to_string_lossy() });
         assert!(
-            matches!(
-                build_with("gore_texture", "extract", call, &options()),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
+            asks_about_a_write(question("gore_texture", "extract", call, &options())),
             "the sidecar lands in the installation even though the PNG does not"
         );
     }
@@ -1054,10 +1085,7 @@ mod tests {
 
         let call = json!({ "sdk_dir": "SDK", "out": link.to_string_lossy() });
         assert!(
-            matches!(
-                build_with("gore_catalog", "dump", call, &options()),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
+            asks_about_a_write(question("gore_catalog", "dump", call, &options())),
             "the write lands inside the installation, whatever the link is called"
         );
     }
@@ -1085,21 +1113,18 @@ mod tests {
         let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
         let absolute = inside.to_string_lossy().into_owned();
         assert!(
-            matches!(
-                build_with("gore_texture", "pack", call(&absolute), &options()),
-                Err(BuildError::Refused { .. })
-            ),
+            question("gore_texture", "pack", call(&absolute), &options()).is_some(),
             "the absolute form was already caught"
         );
 
         // The same directory named relatively, from a working directory inside it.
         let previous = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(&inside).expect("enter the install tree");
-        let relative = build_with("gore_texture", "pack", call("."), &options());
+        let relative = question("gore_texture", "pack", call("."), &options());
         std::env::set_current_dir(previous).expect("restore cwd");
 
         assert!(
-            matches!(relative, Err(BuildError::Refused { .. })),
+            relative.is_some(),
             "`--out .` inside the installation is the same deployment by a shorter name"
         );
     }
@@ -1112,17 +1137,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let call = |name: &str| json!({ "mod_name": name, "out": dir.path().to_string_lossy() });
 
-        assert!(build_with("gore_project", "scaffold", call("BrandNew"), &options()).is_ok());
+        assert!(question("gore_project", "scaffold", call("BrandNew"), &options()).is_none());
 
         std::fs::create_dir(dir.path().join("Existing")).expect("create mod dir");
         assert!(
-            matches!(
-                build_with("gore_project", "scaffold", call("Existing"), &options()),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
-            "an occupied mod folder must be gated"
+            asks_about_a_write(question("gore_project", "scaffold", call("Existing"), &options())),
+            "an occupied mod folder must be asked about"
         );
-        assert!(build_with("gore_project", "scaffold", call("Existing"), &permissive()).is_ok());
+        assert!(question("gore_project", "scaffold", call("Existing"), &permissive()).is_none());
     }
 
     #[test]
@@ -1169,42 +1191,97 @@ mod tests {
             })
         };
 
-        assert!(build_with("gore_loc", "import", call(&fresh), &options()).is_ok());
+        assert!(question("gore_loc", "import", call(&fresh), &options()).is_none());
         assert!(
-            matches!(
-                build_with("gore_loc", "import", call(&lcache), &options()),
-                Err(BuildError::Refused { flag: "--allow-write", .. })
-            ),
+            asks_about_a_write(question("gore_loc", "import", call(&lcache), &options())),
             "out == in is a rewrite, not a creation"
         );
     }
 
     #[test]
-    fn a_compile_refusal_names_every_flag_the_call_still_needs() {
-        // Reporting only --allow-game-launch would send the user off to restart with a flag set
-        // this same gate refuses: every GameLaunch command is a write too.
-        let neither = build_with(
-            "gore_as",
-            "compile",
-            json!({ "game": "G", "out": "fresh.Cache" }),
-            &options(),
-        );
-        let Err(error) = neither else { panic!("must be refused") };
-        let message = error.to_string();
-        assert!(message.contains("--allow-game-launch"), "{message}");
-        assert!(message.contains("--allow-write"), "{message}");
+    fn compiling_asks_about_the_launch_and_the_write_together() {
+        // Compiling drives the game to regenerate its cache and then stages the result, so it is
+        // both. Naming only the launch would send someone off to restart with a flag set that
+        // still does not cover the call.
+        let call = || json!({ "game": "G", "out": "fresh.Cache" });
+        let raised = question("gore_as", "compile", call(), &options()).expect("must be asked");
+        assert_eq!(raised.needs, Needs { write: true, game_launch: true });
+        assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
 
-        // With write already granted, only the launch flag is missing and only it is named.
+        // With write pre-approved the launch is still outstanding, so the question is still put —
+        // and the flags it names stay the *complete* set the call needs rather than the remainder.
+        // A partial set is not something anyone can paste into a shell.
         let mut write_only = options();
         write_only.allow_write = true;
-        let Err(error) =
-            build_with("gore_as", "compile", json!({ "game": "G", "out": "fresh.Cache" }), &write_only)
-        else {
-            panic!("must be refused")
-        };
-        let message = error.to_string();
-        assert!(message.contains("--allow-game-launch"), "{message}");
-        assert!(!message.contains("--allow-write"), "{message}");
+        let raised = question("gore_as", "compile", call(), &write_only).expect("must be asked");
+        assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
+
+        // Both pre-approved: nothing left to settle.
+        assert!(question("gore_as", "compile", call(), &permissive()).is_none());
+    }
+
+    #[test]
+    fn every_gate_arm_asks_a_question_a_person_can_read() {
+        // These reasons are written across source lines with a trailing `\`. Dropping one folds the
+        // continuation's indentation into the middle of a sentence — and unlike the other messages
+        // in this file, this one is read by a human in a dialog rather than by a model.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let occupied = dir.path().join("taken.json");
+        std::fs::write(&occupied, b"{}").expect("write fixture");
+
+        let arms = [
+            // launches the game, and stages the result
+            ("gore_as", "compile", json!({})),
+            // rewrites its input in place
+            ("gore_loc", "import", json!({ "lcache": "a.lcache", "edits": "e.json" })),
+            // changes the installation outright
+            ("gore_mgr", "reset", json!({})),
+            // lands inside the game tree
+            ("gore_texture", "pack", json!({
+                "mod_dir": "m", "name": "zzz_P", "out": "D:/Games/G1R/G1R/Content/Paks/~mods",
+            })),
+            // its output is already there
+            ("gore_catalog", "dump", json!({
+                "sdk_dir": "SDK", "out": occupied.to_string_lossy(),
+            })),
+        ];
+
+        for (tool, sub, args) in arms {
+            let raised = question(tool, sub, args, &options())
+                .unwrap_or_else(|| panic!("{sub} should raise a question"));
+            let shown = crate::consent::elicitation_params(&raised);
+            let message = shown["message"].as_str().expect("a message");
+
+            for line in message.lines() {
+                assert!(!line.contains("  "), "{sub} double-spaces {line:?}");
+            }
+            assert!(message.contains(&format!("gore {}", raised.path)), "{sub}: {message}");
+            // Whatever the arm, the line that would run is in front of the person deciding.
+            assert!(!raised.command_line.is_empty(), "{sub} shows no command line");
+            assert!(message.contains(&raised.command_line), "{sub}: {message}");
+            assert!(message.ends_with("Run it?"), "{sub}: {message}");
+        }
+    }
+
+    #[test]
+    fn pre_approval_changes_who_is_asked_and_never_what_the_gate_sees() {
+        // The gate runs identically whatever the server was started with; the flags only decide
+        // whether the answer is already known. Computing it lazily would make a permissive server
+        // blind to a classification bug that a strict one would catch.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let occupied = dir.path().join("taken.json");
+        std::fs::write(&occupied, b"{}").expect("write fixture");
+        let call = json!({ "sdk_dir": "SDK", "out": occupied.to_string_lossy() });
+
+        let strict = question("gore_catalog", "dump", call.clone(), &options());
+        assert!(strict.is_some());
+
+        let mut write_only = options();
+        write_only.allow_write = true;
+        assert!(
+            question("gore_catalog", "dump", call, &write_only).is_none(),
+            "--allow-write covers a plain overwrite, so the same finding raises no question"
+        );
     }
 
     #[test]
@@ -1350,42 +1427,61 @@ mod tests {
     }
 
     #[test]
-    fn an_install_mutating_command_is_refused_without_allow_write() {
-        let error =
-            build_with("gore_project", "deploy-shared", json!({}), &options()).unwrap_err();
-        let message = error.to_string();
+    fn an_install_mutating_command_asks_and_names_the_flag_when_it_cannot() {
+        let raised =
+            question("gore_project", "deploy-shared", json!({}), &options()).expect("must ask");
+        assert_eq!(raised.needs, Needs { write: true, game_launch: false });
+
+        // On a client that cannot show a dialog the question becomes the old refusal, which has to
+        // carry a command line the user can act on — there is no other route to yes.
+        let message = crate::consent::refusal(
+            &raised,
+            &crate::consent::Decision::NotAsked(crate::consent::Policy::CannotAsk),
+        );
         assert!(message.starts_with("refused:"), "{message}");
-        assert!(message.contains("--allow-write"), "{message}");
         assert!(message.contains("gore mcp serve --allow-write"), "{message}");
     }
 
     #[test]
-    fn a_refusal_names_the_command_the_way_a_user_would_type_it() {
+    fn a_question_names_the_command_the_way_a_user_would_type_it() {
         // "`reset` modifies the game installation" is ambiguous — several groups have a command
-        // that could be called that. The full path is what a user can act on.
-        let nested = build_with("gore_mgr", "reset", json!({}), &options()).unwrap_err();
-        assert!(nested.to_string().contains("`gore mgr reset`"), "{nested}");
-
-        let flat = build_with("gore_project", "deploy-shared", json!({}), &options()).unwrap_err();
-        assert!(flat.to_string().contains("`gore deploy-shared`"), "{flat}");
+        // that could be called that. The full path is what a user can act on, and this is the
+        // sentence they read in the dialog before deciding.
+        for (tool, sub, typed) in [
+            ("gore_mgr", "reset", "gore mgr reset"),
+            ("gore_project", "deploy-shared", "gore deploy-shared"),
+        ] {
+            let raised = question(tool, sub, json!({}), &options()).expect("must ask");
+            let shown = crate::consent::elicitation_params(&raised);
+            let message = shown["message"].as_str().expect("a message");
+            assert!(message.contains(typed), "{sub}: {message}");
+        }
     }
 
     #[test]
-    fn a_game_launching_command_needs_both_flags_when_it_also_writes_in_place() {
-        // `as compile` without `out` installs the fresh cache over the game's own. The launch gate
-        // is reported first because it is the more surprising of the two.
+    fn a_game_launching_command_that_also_rewrites_in_place_asks_about_both() {
+        // `as compile` without `out` installs the fresh cache over the game's own. One question
+        // covers both, and it stays outstanding until *both* flags pre-approve it.
+        let raised = question("gore_as", "compile", json!({}), &options()).expect("must ask");
+        assert_eq!(raised.needs, Needs { write: true, game_launch: true });
+
         let mut launch_only = options();
         launch_only.allow_game_launch = true;
+        assert!(
+            question("gore_as", "compile", json!({}), &launch_only).is_some(),
+            "the write half is still unapproved"
+        );
 
-        let blocked = build_with("gore_as", "compile", json!({}), &options()).unwrap_err();
-        assert!(blocked.to_string().contains("--allow-game-launch"), "{blocked}");
-
-        let still_blocked = build_with("gore_as", "compile", json!({}), &launch_only).unwrap_err();
-        assert!(still_blocked.to_string().contains("--allow-write"), "{still_blocked}");
+        let mut write_only = options();
+        write_only.allow_write = true;
+        assert!(
+            question("gore_as", "compile", json!({}), &write_only).is_some(),
+            "the launch half is still unapproved"
+        );
 
         let mut both = launch_only.clone();
         both.allow_write = true;
-        assert!(build_with("gore_as", "compile", json!({}), &both).is_ok());
+        assert!(question("gore_as", "compile", json!({}), &both).is_none());
     }
 
     #[test]

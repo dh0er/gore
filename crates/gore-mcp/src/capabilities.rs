@@ -15,6 +15,7 @@
 
 use serde_json::{json, Value};
 
+use crate::consent::{Needs, Policy};
 use crate::server::Options;
 
 /// The newest revision we implement. Also what we answer with when a client asks for something we
@@ -84,59 +85,100 @@ pub fn server_info(server_version: &str) -> Value {
 /// standing cost — it sits in every context this client opens — which is why it stays an index and
 /// never becomes documentation. The documentation is the guide, reachable through `gore_guide`.
 ///
-/// It depends on `Options` because the safety tiers are the part a model most needs to know up
-/// front: being told "that command needs `--allow-write`" *before* attempting it saves a wasted
-/// call and a confusing refusal.
-pub fn instructions(opts: &Options) -> String {
+/// It depends on `Options` and on the session's [`Policy`] because what happens to a destructive
+/// call is the part a model most needs to know up front. "That one will pause while the user
+/// decides" and "that one will be refused outright" call for completely different behaviour, and
+/// learning which by attempting it costs a wasted call either way.
+pub fn instructions(opts: &Options, policy: Policy) -> String {
     let mut text = String::from(PRIMER);
 
     text.push_str("\nWHAT THIS SERVER MAY DO\n");
     text.push_str(
-        "Reading anything always works. Writing works when the command can show it is creating \
-         something rather than replacing it: a fresh output path needs no flag, an occupied one \
-         does, and so does an output aimed inside the game installation. A few commands compute \
-         their targets from a file this server does not read (gen, mod build, texture replace) or \
-         write a whole tree of them (stubs, audio extract, as emit-all); those are gated whatever \
-         is on disk. Two tiers are gated, and the gate is decided per subcommand, not per tool:\n",
+        "Reading anything is unremarkable, and so is writing to a path that is free and outside \
+         the game installation. What needs agreement is changing something that already exists: an \
+         occupied output path, an output aimed inside the installation, an in-place rewrite. A few \
+         commands compute their targets from a file this server does not read (gen, mod build, \
+         texture replace) or write a whole tree of them (stubs, audio extract, as emit-all); those \
+         are gated whatever is on disk. The decision is per subcommand, not per tool:\n",
     );
-    text.push_str(if opts.allow_write {
-        "- Changing the game installation, or rewriting a file in place: ALLOWED (this server was \
-         started with --allow-write).\n"
-    } else {
-        "- Changing the game installation, or rewriting a file in place: BLOCKED. Deploy, \
-         undeploy, `mgr apply`, `mgr reset` and the in-place edits will be refused. If the user \
-         needs them, they must restart this server with --allow-write; you cannot enable it.\n"
+    // Both lines ask `Options::pre_approves` — the same function the gate itself uses — rather than
+    // reading the flags directly. The primer promising something the gate then refuses is the
+    // failure mode this whole section keeps re-learning, and sharing one predicate ends it.
+    text.push_str(&format!(
+        "- Changing the game installation, or rewriting a file in place: {}.\n",
+        will_be(&WRITES, opts, policy)
+    ));
+    // Compiling is not merely a launch: it drives the game to regenerate the cache and then stages
+    // the result, so it needs the write pre-approval too.
+    text.push_str(&format!(
+        "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): {}. It \
+         opens a real game window and takes minutes.\n",
+        will_be(&LAUNCHES, opts, policy)
+    ));
+    text.push_str(match policy {
+        Policy::Ask => CONSENT_ASK,
+        Policy::CannotAsk => CONSENT_CANNOT_ASK,
+        Policy::NeverAsk => CONSENT_NEVER_ASK,
     });
-    // Compiling needs both flags, not just --allow-game-launch: it drives the game to regenerate
-    // the cache and installs the result, so `Safety::requirements` marks every GameLaunch command
-    // as a write too. Announcing it as ALLOWED on the strength of one flag would promise something
-    // the gate then refuses.
-    text.push_str(match (opts.allow_game_launch, opts.allow_write) {
-        (true, true) => {
-            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
-             ALLOWED (started with --allow-game-launch and --allow-write). It opens a real game \
-             window and takes minutes.\n"
-        }
-        (true, false) => {
-            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
-             BLOCKED. These need BOTH --allow-game-launch and --allow-write, because compiling \
-             also stages files in the installation, and this server has only the first. The user \
-             must restart it with both.\n"
-        }
-        (false, _) => {
-            "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): \
-             BLOCKED. These need BOTH --allow-game-launch and --allow-write. The user must \
-             restart this server with them; you cannot enable them.\n"
-        }
-    });
+    if policy != Policy::NeverAsk {
+        text.push_str(CONSENT_RELAY);
+    }
     text.push_str(
-        "\nMany commands avoid the gate entirely by writing somewhere new: passing an output \
-         argument turns an in-place rewrite into a new file. Prefer that.\n",
+        "\nMany commands sidestep the question entirely by writing somewhere new: passing an \
+         output argument turns an in-place rewrite into a new file. Prefer that.\n",
     );
 
     text.push_str(HOW_IT_BEHAVES);
     text
 }
+
+/// The two tiers the primer reports on, as the gate itself would describe them.
+const WRITES: Needs = Needs { write: true, game_launch: false };
+const LAUNCHES: Needs = Needs { write: true, game_launch: true };
+
+/// What becomes of a call in one tier, in one phrase.
+///
+/// The refusing postures name the flags from [`Needs::flags`] rather than spelling them out, so the
+/// launch line cannot end up offering `--allow-game-launch` on its own — a flag set that would
+/// still leave the call refused.
+fn will_be(needs: &Needs, opts: &Options, policy: Policy) -> String {
+    if opts.pre_approves(needs) {
+        return "PRE-APPROVED, so it runs without interrupting anyone".into();
+    }
+    match policy {
+        Policy::Ask => "CONFIRMED WITH THE USER before anything runs".into(),
+        Policy::CannotAsk | Policy::NeverAsk => format!(
+            "REFUSED; only the user can change that, by restarting this server with {}",
+            needs.flags()
+        ),
+    }
+}
+
+const CONSENT_ASK: &str = "\nWhat is not pre-approved is not forbidden. This server puts it to the \
+client, which is meant to show it to the user, so such a call takes longer while they decide. Do \
+not read that delay as a hang and do not send the call again. A refusal comes back as an ordinary \
+tool error naming the exact answer the client gave. Read it rather than assuming a person chose: \
+some clients answer on the user's behalf, in milliseconds and without showing anything, and the \
+error says what to do when that is what happened.\n";
+
+const CONSENT_CANNOT_ASK: &str = "\nThis client cannot put a question to the user — it did not \
+advertise the `elicitation` capability — so anything not pre-approved is refused instead. The \
+refusal names the flag the user would have to restart this server with; you cannot enable it.\n";
+
+/// The route that works wherever the dialog does not, offered to both refusing-by-accident
+/// postures.
+///
+/// Held apart from the two strings above because the posture that must *not* see it is the third
+/// one: under `--no-consent-prompts` a claim is refused as well, and pointing at it there would
+/// send a model round a loop it cannot leave.
+const CONSENT_RELAY: &str = "\nWhen such a call is refused, you still have a move: ask the user \
+yourself, in the conversation, showing them the command line from the refusal. If they agree, send \
+the same call again with `user_approved` set to their own words. Never set that field without \
+having asked — it is recorded in the result as your claim, and nothing here can check it.\n";
+
+const CONSENT_NEVER_ASK: &str = "\nThis server was started with --no-consent-prompts, so anything \
+not pre-approved is refused without asking. The refusal names the flag the user would have to \
+restart it with; you cannot enable it.\n";
 
 /// The standing part of the primer.
 ///
@@ -208,16 +250,35 @@ mod tests {
         opts
     }
 
-    #[test]
-    fn the_primer_states_which_tiers_are_unlocked() {
-        let blocked = instructions(&options(false, false));
-        assert!(blocked.contains("--allow-write"));
-        assert!(blocked.contains("--allow-game-launch"));
-        assert!(blocked.contains("BLOCKED"));
+    /// The primer as a client that can show a dialog receives it — the ordinary case.
+    fn asking(allow_write: bool, allow_game_launch: bool) -> String {
+        instructions(&options(allow_write, allow_game_launch), Policy::Ask)
+    }
 
-        let allowed = instructions(&options(true, true));
-        assert!(allowed.contains("ALLOWED"));
-        assert!(!allowed.contains("BLOCKED"));
+    #[test]
+    fn the_primer_states_what_becomes_of_each_tier() {
+        let asked = asking(false, false);
+        assert!(asked.contains("CONFIRMED WITH THE USER"), "{asked}");
+        assert!(!asked.contains("REFUSED"), "nothing is refused when the user can be asked");
+
+        let pre_approved = asking(true, true);
+        assert!(pre_approved.contains("PRE-APPROVED"), "{pre_approved}");
+        assert!(!pre_approved.contains("CONFIRMED WITH THE USER"), "{pre_approved}");
+
+        for policy in [Policy::CannotAsk, Policy::NeverAsk] {
+            let text = instructions(&options(false, false), policy);
+            assert!(text.contains("REFUSED"), "{policy:?}: {text}");
+            assert!(text.contains("--allow-write"), "{policy:?}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_delay_while_the_user_decides_is_announced_as_such() {
+        // Otherwise an agent reads the pause as a hung server and retries, which puts a second
+        // dialog on top of the first for the same call.
+        let text = asking(false, false);
+        assert!(text.contains("takes longer while they decide"), "{text}");
+        assert!(text.contains("do not send the call again"), "{text}");
     }
 
     #[test]
@@ -226,9 +287,9 @@ mod tests {
         // stopped being true once commands whose targets cannot be checked became mutations. The
         // primer is the one thing every client reads, so an overstatement there is the most
         // expensive kind.
-        let text = instructions(&options(false, false));
+        let text = asking(false, false);
         assert!(!text.contains("writing new files, always works"), "{text}");
-        assert!(text.contains("Reading anything always works"));
+        assert!(text.contains("Reading anything is unremarkable"), "{text}");
         assert!(
             text.contains("gated whatever is on disk"),
             "the primer must say that some writes are gated regardless"
@@ -236,38 +297,59 @@ mod tests {
     }
 
     #[test]
-    fn the_primer_never_promises_a_compile_the_gate_would_refuse() {
+    fn the_primer_never_claims_a_compile_runs_unattended_unless_it_would() {
         // GameLaunch implies write in `Safety::requirements`, so --allow-game-launch alone is not
-        // enough. The primer used to report compiling as ALLOWED on that flag by itself, which
+        // enough. The primer used to report compiling as unlocked on that flag by itself, which
         // told the model it could do something every attempt then refused.
-        let launch_only = instructions(&options(false, true));
         assert!(
-            launch_only.contains("compile-module): BLOCKED"),
+            asking(false, true).contains("compile-module): CONFIRMED WITH THE USER"),
             "one flag is not enough and the primer must say so"
         );
-        assert!(launch_only.contains("BOTH"));
+        assert!(asking(true, true).contains("compile-module): PRE-APPROVED"));
 
-        let both = instructions(&options(true, true));
-        assert!(both.contains("compile-module): ALLOWED"));
+        // What the primer claims and what the gate does must agree in every combination. The gate
+        // is consulted here rather than restated, so a change to `Safety` that the primer does not
+        // follow fails this test instead of shipping as a false promise.
+        let compile = crate::spec::group("gore_as")
+            .and_then(|group| group.command("compile"))
+            .expect("as compile exists");
+        let required = compile.safety.requirements(&serde_json::Map::new());
+        assert!(required.game_launch, "this test is about the launch tier");
 
-        // What the primer claims and what the gate does must agree in every combination.
         for (write, launch) in [(false, false), (true, false), (false, true), (true, true)] {
-            let mut opts = crate::Options::new(PathBuf::from("gore"), "0.1.0");
-            opts.allow_write = write;
-            opts.allow_game_launch = launch;
-            let compile = crate::spec::group("gore_as")
-                .and_then(|group| group.command("compile"))
-                .expect("as compile exists");
-            let permitted = !compile.safety.requirements(&serde_json::Map::new()).write
-                || (write && launch);
-            let claims_allowed = instructions(&opts).contains("compile-module): ALLOWED");
-            assert_eq!(claims_allowed, permitted && launch, "mismatch at ({write}, {launch})");
+            let opts = options(write, launch);
+            let gate_stays_silent = opts.pre_approves(&Needs {
+                write: required.write,
+                game_launch: required.game_launch,
+            });
+            let claims_unattended = instructions(&opts, Policy::Ask)
+                .contains("compile-module): PRE-APPROVED");
+            assert_eq!(
+                claims_unattended, gate_stays_silent,
+                "mismatch at (write={write}, launch={launch})"
+            );
         }
     }
 
     #[test]
+    fn the_primer_offers_the_route_that_needs_no_dialog() {
+        // Both refusing-by-accident postures leave one move that works: ask the user in the
+        // conversation and relay their words. A model that learns this only from a refusal wastes a
+        // call first — and in the posture where no dialog can be shown, wastes it every time.
+        for policy in [Policy::Ask, Policy::CannotAsk] {
+            let text = instructions(&options(false, false), policy);
+            assert!(text.contains("user_approved"), "{policy:?}: {text}");
+        }
+
+        // Not under --no-consent-prompts: there the field is refused too, and offering it would
+        // send the model into a loop it cannot win.
+        let never = instructions(&options(false, false), Policy::NeverAsk);
+        assert!(!never.contains("user_approved"), "{never}");
+    }
+
+    #[test]
     fn the_primer_points_at_the_guide() {
-        let text = instructions(&options(false, false));
+        let text = asking(false, false);
         assert!(text.contains("gore_guide"));
         assert!(text.contains("gore://guide/"));
         assert!(text.contains("BEFORE YOU ACT"));
@@ -277,7 +359,7 @@ mod tests {
     fn the_primer_names_every_tool_the_server_advertises() {
         // The primer is the model's index of this server. A tool missing from it is a tool the
         // model has to stumble onto.
-        let text = instructions(&options(false, false));
+        let text = asking(false, false);
         for tool in crate::tool_definitions() {
             let name = tool["name"].as_str().expect("a tool name");
             assert!(text.contains(name), "the primer does not mention {name}");
@@ -288,7 +370,7 @@ mod tests {
     fn the_primer_stays_short_enough_to_carry_in_every_context() {
         // It is loaded into every conversation with this server, so length is a standing cost.
         // This is a budget, not a target: if it needs to grow, move the content into the guide.
-        let text = instructions(&options(true, true));
+        let text = instructions(&options(true, true), Policy::Ask);
         assert!(
             text.lines().count() < 70,
             "the primer has grown to {} lines; move detail into the guide",
@@ -299,8 +381,12 @@ mod tests {
     #[test]
     fn the_primer_tells_the_model_it_cannot_lift_the_gate_itself() {
         // Without this an agent will keep retrying a refused command, or try to restart the server.
-        let text = instructions(&options(false, false));
-        assert!(text.contains("you cannot enable it"), "{text}");
+        // Only the two postures that refuse say it: where the user *can* be asked, telling the
+        // model it is powerless would push it to nag for flags instead of simply asking.
+        for policy in [Policy::CannotAsk, Policy::NeverAsk] {
+            let text = instructions(&options(false, false), policy);
+            assert!(text.contains("you cannot enable it"), "{policy:?}: {text}");
+        }
     }
 
     #[test]

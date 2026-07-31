@@ -14,17 +14,34 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-pub fn serve(
-    allow_write: bool,
-    allow_game_launch: bool,
-    timeout_secs: u64,
-    max_output_kib: usize,
-) -> Result<()> {
+/// The `gore mcp serve` flags, kept as a struct because five of them in a row — three of which are
+/// booleans — is an argument list two of which can be swapped without the compiler noticing.
+pub struct ServeOptions {
+    pub allow_write: bool,
+    pub allow_game_launch: bool,
+    pub no_consent_prompts: bool,
+    pub timeout_secs: u64,
+    pub max_output_kib: usize,
+}
+
+pub fn serve(flags: ServeOptions) -> Result<()> {
+    // Saying "do not ask me" and "here is what you may do without asking" at once is a
+    // contradiction, and silently picking one would leave someone believing the other. It matters:
+    // one of the two readings runs commands that change the installation.
+    if flags.no_consent_prompts && (flags.allow_write || flags.allow_game_launch) {
+        bail!(
+            "--no-consent-prompts refuses everything that would need confirming, so pairing it \
+             with --allow-write or --allow-game-launch asks for both a stricter and a looser \
+             server at once. Pass one or the other."
+        );
+    }
+
     let mut opts = gore_mcp::Options::new(resolve_self()?, env!("CARGO_PKG_VERSION"));
-    opts.allow_write = allow_write;
-    opts.allow_game_launch = allow_game_launch;
-    opts.timeout_override_secs = timeout_secs;
-    opts.max_stdout_bytes = stdout_cap_bytes(max_output_kib);
+    opts.allow_write = flags.allow_write;
+    opts.allow_game_launch = flags.allow_game_launch;
+    opts.never_ask = flags.no_consent_prompts;
+    opts.timeout_override_secs = flags.timeout_secs;
+    opts.max_stdout_bytes = stdout_cap_bytes(flags.max_output_kib);
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -47,6 +64,32 @@ fn stdout_cap_bytes(max_output_kib: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flags() -> ServeOptions {
+        ServeOptions {
+            allow_write: false,
+            allow_game_launch: false,
+            no_consent_prompts: false,
+            timeout_secs: 0,
+            max_output_kib: 256,
+        }
+    }
+
+    #[test]
+    fn asking_for_a_stricter_and_a_looser_server_at_once_is_rejected() {
+        // Whichever way it were resolved, someone would be running a server that does the opposite
+        // of what they typed — and one of the two readings changes the game installation.
+        for (write, launch) in [(true, false), (false, true), (true, true)] {
+            let contradictory = ServeOptions {
+                allow_write: write,
+                allow_game_launch: launch,
+                no_consent_prompts: true,
+                ..flags()
+            };
+            let error = serve(contradictory).expect_err("must not start");
+            assert!(error.to_string().contains("--no-consent-prompts"), "{error}");
+        }
+    }
 
     #[test]
     fn zero_means_the_default_cap_just_as_it_does_for_the_timeout() {

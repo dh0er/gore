@@ -85,13 +85,22 @@ impl Server {
     }
 
     fn initialize(&mut self) -> Value {
+        self.initialize_with(json!({}))
+    }
+
+    /// Hand-shake declaring the `elicitation` capability, so the server may ask questions.
+    fn initialize_able_to_answer(&mut self) -> Value {
+        self.initialize_with(json!({ "elicitation": {} }))
+    }
+
+    fn initialize_with(&mut self, capabilities: Value) -> Value {
         self.send(json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2025-11-25",
-                "capabilities": {},
+                "capabilities": capabilities,
                 "clientInfo": { "name": "gore-integration-test", "version": "0" },
             },
         }));
@@ -99,6 +108,29 @@ impl Server {
         self.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
         response
     }
+}
+
+/// A `tools/call` that trips the safety gate but is harmless if it does run.
+///
+/// `loc import` without `out` rewrites its input in place, which is what earns the question. The
+/// paths do not exist, so the command it would run fails on the missing input before touching
+/// anything — the test can therefore answer "yes" for real rather than mocking the outcome.
+fn a_gated_call(id: u32, tmp: &Path) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": "gore_loc",
+            "arguments": {
+                "subcommand": "import",
+                "args": {
+                    "lcache": tmp.join("absent.lcache").to_string_lossy(),
+                    "edits": tmp.join("absent.json").to_string_lossy(),
+                },
+            },
+        },
+    })
 }
 
 #[test]
@@ -194,7 +226,9 @@ fn a_tool_call_runs_the_real_cli_and_returns_its_output() {
     assert!(shown.contains("gore"), "{shown}");
     let stdout = result["content"][1]["text"].as_str().unwrap();
     assert!(stdout.contains("config.json"), "{stdout}");
-    assert_eq!(result["structuredContent"]["exit_code"], 0);
+    // Everything the model needs is in `content`, and nothing is anywhere else — a client that
+    // prefers `structuredContent` would otherwise be handed a byte count instead of this path.
+    assert!(result.get("structuredContent").is_none(), "{result}");
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0), "stderr was: {stderr}");
@@ -264,8 +298,8 @@ fn a_failing_command_is_reported_as_a_tool_error_with_its_message() {
     assert!(response.get("error").is_none(), "a failing command is not a protocol error");
     let result = &response["result"];
     assert_eq!(result["isError"], json!(true), "{result}");
-    assert_eq!(result["structuredContent"]["exit_code"], 1);
     let rendered = result["content"].to_string();
+    assert!(rendered.contains("exit code 1"), "{rendered}");
     assert!(rendered.contains("game-path is not set"), "{rendered}");
 
     let (code, stderr) = server.shutdown();
@@ -273,9 +307,194 @@ fn a_failing_command_is_reported_as_a_tool_error_with_its_message() {
 }
 
 #[test]
+fn a_client_that_can_be_asked_gets_a_question_and_the_command_runs_on_yes() {
+    // The whole point of the change, end to end over a real pipe: no flag, no restart, and the
+    // command still runs once a person agrees.
+    let tmp = TempDir::new().unwrap();
+    let mut server = Server::spawn(tmp.path());
+    server.initialize_able_to_answer();
+
+    server.send(a_gated_call(30, tmp.path()));
+
+    // What arrives first is not the reply — it is the server asking.
+    let question = server.recv();
+    assert_eq!(question["method"], "elicitation/create", "{question}");
+    assert_eq!(question["jsonrpc"], "2.0");
+    let question_id = question["id"].clone();
+    assert!(question_id.is_string(), "the server has to correlate our answer: {question}");
+    let message = question["params"]["message"].as_str().expect("a message");
+    assert!(message.contains("gore loc import"), "{message}");
+    assert!(message.contains("overwrite its input in place"), "{message}");
+    // Which file it would overwrite is the one thing this arm's reason cannot say — it is
+    // identified by the argument that was left out — so the command line has to carry it.
+    assert!(message.contains("absent.lcache"), "{message}");
+    // Two named choices, so nothing can be agreed to by submitting an untouched default.
+    let field = &question["params"]["requestedSchema"]["properties"]["decision"];
+    assert_eq!(field["enum"], json!(["run", "cancel"]), "{question}");
+
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": question_id,
+        "result": { "action": "accept", "content": { "decision": "run" } },
+    }));
+
+    let result = server.recv()["result"].clone();
+    // The command ran and failed on its missing input, which is a completely different thing from
+    // being refused: a refusal never reaches a process, so it shows no command line and no exit
+    // code. Both are the discriminator here.
+    let ran = result["content"][0]["text"].as_str().expect("a first block");
+    assert!(ran.contains("loc import"), "a run leads with the command line: {result}");
+    assert!(
+        result["content"].to_string().contains("exit code 1"),
+        "the command should have run and failed: {result}"
+    );
+
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "stderr was: {stderr}");
+}
+
+#[test]
+fn saying_no_leaves_the_command_unrun_and_the_session_healthy() {
+    let tmp = TempDir::new().unwrap();
+    let mut server = Server::spawn(tmp.path());
+    server.initialize_able_to_answer();
+
+    server.send(a_gated_call(31, tmp.path()));
+    let question = server.recv();
+    assert_eq!(question["method"], "elicitation/create");
+
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": question["id"].clone(),
+        "result": { "action": "decline" },
+    }));
+
+    let response = server.recv();
+    assert_eq!(response["id"], 31, "the answer settles the call it belonged to");
+    let result = &response["result"];
+    assert_eq!(result["isError"], json!(true), "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("refused:"), "nothing ran: {text}");
+    assert!(!text.contains("exit code"), "nothing ran, so there is no exit code: {text}");
+    // The answer is reported as what it was — an action on the wire — and not as a decision some
+    // person is claimed to have made, which from this side of the socket is unknowable.
+    assert!(text.contains("`decline`"), "{text}");
+    assert!(!text.contains("the user was asked"), "{text}");
+
+    // A declined call is not a broken session.
+    server.send(json!({ "jsonrpc": "2.0", "id": 32, "method": "ping" }));
+    assert_eq!(server.recv()["id"], 32);
+
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "stderr was: {stderr}");
+}
+
+#[test]
+fn a_client_that_answers_for_the_user_is_not_reported_as_the_user_deciding() {
+    // This is what Claude Code does when it is driven non-interactively: it advertises the
+    // `elicitation` capability, then answers within milliseconds without showing anybody anything.
+    // The refusal used to open "the user was asked about this call and said no" — a sentence that
+    // was simply untrue, and that had a real reader conclude they had dismissed a dialog they never
+    // saw. From here the two cases are indistinguishable, so the message must claim neither.
+    let tmp = TempDir::new().unwrap();
+    let mut server = Server::spawn(tmp.path());
+    server.initialize_able_to_answer();
+
+    server.send(a_gated_call(35, tmp.path()));
+    let question = server.recv();
+    assert_eq!(question["method"], "elicitation/create");
+
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": question["id"].clone(),
+        "result": { "action": "cancel" },
+    }));
+
+    let result = server.recv()["result"].clone();
+    let text = result["content"][0]["text"].as_str().unwrap();
+
+    assert!(text.contains("`cancel`"), "the raw answer is named: {text}");
+    assert!(text.contains("dismissed"), "{text}");
+    for claim in ["the user was asked", "the user said", "said no", "the user declined"] {
+        assert!(!text.contains(claim), "{claim:?} is not something this server can know: {text}");
+    }
+    // And it has to leave a way forward, because a dismissal may mean nobody was ever asked.
+    assert!(text.contains("gore mcp serve --allow-write"), "{text}");
+
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "stderr was: {stderr}");
+}
+
+#[test]
+fn a_relayed_approval_runs_the_command_without_putting_a_question() {
+    // The way out of the case above. A client that answers its own dialogs leaves the model one
+    // move: ask the user in the conversation, then send the call again carrying their words. No
+    // dialog is put — the point is precisely that a dialog reaches nobody here — and the result
+    // records that it ran on a claim.
+    let tmp = TempDir::new().unwrap();
+    let mut server = Server::spawn(tmp.path());
+    server.initialize_able_to_answer();
+
+    let mut call = a_gated_call(36, tmp.path());
+    call["params"]["arguments"]["user_approved"] = json!("ja, überschreib die Datei");
+    server.send(call);
+
+    // The next frame is the reply, not a question: had the server asked, this would be an
+    // `elicitation/create` and the id would not match.
+    let response = server.recv();
+    assert_eq!(response["id"], 36, "no question may precede this: {response}");
+    let result = &response["result"];
+
+    let ran = result["content"][0]["text"].as_str().expect("a first block");
+    assert!(ran.contains("loc import"), "a run leads with the command line: {result}");
+    assert!(
+        result["content"].to_string().contains("exit code 1"),
+        "the command should have run and failed on its missing input: {result}"
+    );
+    let recorded = result["content"].to_string();
+    assert!(recorded.contains("assertion"), "the result must record the claim: {recorded}");
+    assert!(recorded.contains("ja, überschreib die Datei"), "{recorded}");
+
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "stderr was: {stderr}");
+}
+
+#[test]
+fn what_the_client_says_while_a_question_is_open_is_answered_afterwards() {
+    // The server reads those frames off the wire to find its answer among them. Dropping one would
+    // leave the client waiting forever on a request it did send.
+    let tmp = TempDir::new().unwrap();
+    let mut server = Server::spawn(tmp.path());
+    server.initialize_able_to_answer();
+
+    server.send(a_gated_call(33, tmp.path()));
+    let question = server.recv();
+    assert_eq!(question["method"], "elicitation/create");
+
+    // Sent while the dialog is notionally open, i.e. before the answer.
+    server.send(json!({ "jsonrpc": "2.0", "id": 34, "method": "ping" }));
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": question["id"].clone(),
+        "result": { "action": "cancel" },
+    }));
+
+    // The tool call is settled first — it is what the server was in the middle of — and the ping it
+    // set aside is answered right after.
+    let first = server.recv();
+    assert_eq!(first["id"], 33, "the call that was in flight: {first}");
+    let second = server.recv();
+    assert_eq!(second["id"], 34, "the deferred ping still gets its reply: {second}");
+
+    let (code, stderr) = server.shutdown();
+    assert_eq!(code, Some(0), "stderr was: {stderr}");
+}
+
+#[test]
 fn a_destructive_command_is_refused_and_never_reaches_the_game() {
-    // `mgr reset` undeploys everything. Without --allow-write the server must refuse it before a
-    // process is spawned, and say what would unlock it.
+    // `mgr reset` undeploys everything. This client cannot be asked — it declared no `elicitation`
+    // capability — so the server must refuse before a process is spawned, and say what would
+    // let the user allow it.
     let tmp = TempDir::new().unwrap();
     let mut server = Server::spawn(tmp.path());
     server.initialize();
@@ -293,7 +512,7 @@ fn a_destructive_command_is_refused_and_never_reaches_the_game() {
     assert!(message.starts_with("refused:"), "{message}");
     assert!(message.contains("--allow-write"), "{message}");
     // A refusal never runs anything, so there is no exit code to report.
-    assert!(result.get("structuredContent").is_none(), "{result}");
+    assert!(!message.contains("exit code"), "{message}");
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0), "stderr was: {stderr}");
@@ -384,9 +603,11 @@ fn the_guide_tool_finds_a_page_without_touching_the_filesystem() {
     let result = server.recv()["result"].clone();
 
     assert_eq!(result["isError"], json!(false), "{result}");
-    let hits = result["structuredContent"]["hits"].as_array().unwrap();
-    assert!(!hits.is_empty());
-    assert_eq!(hits[0]["page"], "textures", "{hits:?}");
+    // Read out of the text, because that is the only channel every client passes to the model.
+    let hits = result["content"][0]["text"].as_str().expect("a text block");
+    assert!(hits.contains("read with:"), "{hits}");
+    assert!(hits.contains("textures#"), "the top hit is the textures page: {hits}");
+    assert!(result.get("structuredContent").is_none(), "{result}");
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0), "stderr was: {stderr}");

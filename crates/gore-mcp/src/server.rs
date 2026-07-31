@@ -1,20 +1,27 @@
 //! The MCP session: it turns JSON-RPC frames into MCP semantics.
 //!
-//! The loop is strictly sequential — one request is served to completion before the next is read.
-//! For this server that is a deliberate simplification rather than an oversight: every tool call
-//! runs a child `gore` process, and running several of those concurrently against one game
-//! installation is exactly the kind of thing the CLI's own install-mutation guard exists to
+//! The loop is strictly sequential — one request is served to completion before the next is
+//! handled. For this server that is a deliberate simplification rather than an oversight: every
+//! tool call runs a child `gore` process, and running several of those concurrently against one
+//! game installation is exactly the kind of thing the CLI's own install-mutation guard exists to
 //! prevent. The cost is that a long command (`texture index`, `as emit-all`) blocks the session
 //! until it finishes or hits its timeout; that is stated in the instructions primer so a client
 //! knows what to expect.
+//!
+//! Sequential does not mean the stream stands still. A call that needs the user's agreement sends a
+//! question and blocks on the answer, and anything the client says in the meantime is read off the
+//! wire and set aside rather than handled — otherwise a second tool call could start underneath the
+//! first. [`TransportPeer`] holds that queue; the loop drains it before reading further.
 
+use std::collections::VecDeque;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
 
+use crate::consent::{self, Decision, Needs, Peer, Policy, APPROVAL_FIELD};
 use crate::exec::{self, ProcessSpawn, Spawn};
-use crate::rpc::{errors, Frame, Request, Response, Transport, MAX_FRAME_BYTES};
+use crate::rpc::{errors, Frame, OutRequest, Request, Response, Transport, MAX_FRAME_BYTES};
 use crate::{argv, capabilities, resources, spec, tools};
 
 /// How the server was started. Everything the session needs that is not compile-time constant.
@@ -25,10 +32,18 @@ pub struct Options {
     pub exe: PathBuf,
     /// Version of that binary, reported as `serverInfo.version`.
     pub server_version: String,
-    /// Permit commands that modify the game installation or rewrite files in place.
+    /// Treat commands that modify the game installation or rewrite files in place as already
+    /// approved, so they run without asking. Off by default: they are not forbidden, they are
+    /// confirmed with the user (see [`crate::consent`]). Turn it on where nobody is watching —
+    /// CI, a batch run, an agent with its own approval layer.
     pub allow_write: bool,
-    /// Permit commands that launch the game executable.
+    /// The same pre-approval for commands that launch the game executable.
     pub allow_game_launch: bool,
+    /// Never put a question to the user; refuse anything that would need one.
+    ///
+    /// This is the strict posture, for a server exposed to something whose calls nobody reviews.
+    /// It cannot be combined usefully with the two flags above, which say the opposite.
+    pub never_ask: bool,
     /// Wall-clock cap applied to every command, overriding the per-command defaults. `0` keeps them.
     pub timeout_override_secs: u64,
     /// Cap on captured stdout per command.
@@ -46,9 +61,17 @@ impl Options {
             server_version: server_version.into(),
             allow_write: false,
             allow_game_launch: false,
+            never_ask: false,
             timeout_override_secs: 0,
             max_stdout_bytes: DEFAULT_MAX_STDOUT_BYTES,
         }
+    }
+
+    /// Whether the flags this server was started with already cover a call's requirements.
+    ///
+    /// Pre-approval, not permission: an uncovered call is not refused, it is put to the user.
+    pub fn pre_approves(&self, needs: &Needs) -> bool {
+        (!needs.write || self.allow_write) && (!needs.game_launch || self.allow_game_launch)
     }
 }
 
@@ -57,6 +80,11 @@ pub struct Session {
     spawn: Box<dyn Spawn>,
     protocol_version: &'static str,
     initialized: bool,
+    /// Whether the client declared the `elicitation` capability during `initialize`.
+    ///
+    /// Asking a client that never advertised it is a protocol violation, and in practice it also
+    /// hangs: nothing on the other side is listening for the question, so nothing ever answers.
+    client_can_elicit: bool,
 }
 
 impl Session {
@@ -73,6 +101,22 @@ impl Session {
             spawn,
             protocol_version: capabilities::LATEST_PROTOCOL_VERSION,
             initialized: false,
+            client_can_elicit: false,
+        }
+    }
+
+    /// How this session may treat a call that needs a person to agree.
+    ///
+    /// The server's own posture wins over the client's ability: someone who started with
+    /// `--no-consent-prompts` asked not to be interrupted, and a capable client does not override
+    /// that.
+    pub fn consent_policy(&self) -> Policy {
+        if self.opts.never_ask {
+            Policy::NeverAsk
+        } else if self.client_can_elicit {
+            Policy::Ask
+        } else {
+            Policy::CannotAsk
         }
     }
 
@@ -88,10 +132,10 @@ impl Session {
 
     /// Handle one message. `None` means "write nothing back".
     ///
-    /// Free of IO by construction, which makes it the primary unit-test seam: a test constructs a
-    /// `Request`, calls this, and inspects the `Response` without a pipe or a child process in
-    /// sight.
-    pub fn handle(&mut self, request: &Request) -> Option<Response> {
+    /// The only IO is through the two injected seams — `spawn` for child processes, `peer` for
+    /// questions put to the user — so a test constructs a `Request`, calls this, and inspects the
+    /// `Response` without a pipe or a child process in sight.
+    pub fn handle(&mut self, request: &Request, peer: &mut dyn Peer) -> Option<Response> {
         let id = request.response_id();
         let params = request.params_object();
 
@@ -114,7 +158,7 @@ impl Session {
             "ping" => Some(Response::ok(id, json!({}))),
 
             "tools/list" => Some(Response::ok(id, json!({ "tools": self.tool_definitions() }))),
-            "tools/call" => Some(self.call_tool(id, &params)),
+            "tools/call" => Some(self.call_tool(id, &params, peer)),
 
             "resources/list" => Some(Response::ok(id, json!({ "resources": self.resources() }))),
             "resources/templates/list" => {
@@ -133,11 +177,19 @@ impl Session {
     fn initialize(&mut self, params: &Map<String, Value>) -> Value {
         let requested = params.get("protocolVersion").and_then(Value::as_str);
         self.protocol_version = capabilities::negotiate_protocol_version(requested);
+        // Presence is the whole signal. The capability's value is an options object reserved for
+        // future use, and an empty one — which is what every client sends today — means supported.
+        self.client_can_elicit = params
+            .get("capabilities")
+            .and_then(|caps| caps.get("elicitation"))
+            .is_some_and(|value| !value.is_null());
         json!({
             "protocolVersion": self.protocol_version,
             "capabilities": capabilities::capabilities(),
             "serverInfo": capabilities::server_info(&self.opts.server_version),
-            "instructions": capabilities::instructions(&self.opts),
+            // Built after `client_can_elicit` is set above, so the primer describes what will
+            // actually happen on this connection rather than what usually happens.
+            "instructions": capabilities::instructions(&self.opts, self.consent_policy()),
         })
     }
 
@@ -160,7 +212,7 @@ impl Session {
     /// missing argument, a refusal, a command that exits non-zero — comes back as a successful
     /// response carrying `isError: true`, because those are exactly the failures a model can read
     /// and correct.
-    fn call_tool(&mut self, id: Value, params: &Map<String, Value>) -> Response {
+    fn call_tool(&mut self, id: Value, params: &Map<String, Value>, peer: &mut dyn Peer) -> Response {
         let Some(name) = params.get("name").and_then(Value::as_str) else {
             return Response::error(id, errors::INVALID_PARAMS, "`name` is required");
         };
@@ -190,16 +242,35 @@ impl Session {
         let group = spec::group(name).expect("checked above");
 
         for key in arguments.keys() {
-            if key != "subcommand" && key != "args" {
+            if key != "subcommand" && key != "args" && key != APPROVAL_FIELD {
                 return Response::ok(
                     id,
                     exec::to_error_result(format!(
-                        "`{key}` is not accepted here. Pass `subcommand` and put the command's own \
-                         arguments inside `args`."
+                        "`{key}` is not accepted here. Pass `subcommand`, put the command's own \
+                         arguments inside `args`, and use `{APPROVAL_FIELD}` only to relay \
+                         approval the user has already given you."
                     )),
                 );
             }
         }
+
+        // A claim quoting nobody is not a claim. A missing or null field is simply absent — some
+        // clients serialise an omitted optional that way — but anything else present and unusable
+        // is reported, because silently ignoring it would run the call as though nothing had been
+        // said about consent at all.
+        let approval = match arguments.get(APPROVAL_FIELD) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(words)) if !words.trim().is_empty() => Some(words.clone()),
+            Some(_) => {
+                return Response::ok(
+                    id,
+                    exec::to_error_result(format!(
+                        "`{APPROVAL_FIELD}` must be the user's own words approving this call, as a \
+                         non-empty string. Leave it out unless they answered you."
+                    )),
+                )
+            }
+        };
 
         let Some(subcommand) = arguments.get("subcommand").and_then(Value::as_str) else {
             return Response::ok(
@@ -218,8 +289,34 @@ impl Session {
         };
         let command = group.command(subcommand).expect("argv::build validated the subcommand");
 
+        // Between a complete command line and running it: the one question a person gets to answer.
+        // Nothing has been spawned yet, so a "no" here leaves every file exactly as it was.
+        let mut asserted = None;
+        if let Some(request) = &invocation.consent {
+            let decision =
+                consent::decide(request, self.consent_policy(), approval.as_deref(), peer);
+            if !decision.allows() {
+                return Response::ok(
+                    id,
+                    exec::to_error_result(consent::refusal(request, &decision)),
+                );
+            }
+            if let Decision::AllowedByAssertion(words) = decision {
+                asserted = Some(words);
+            }
+        }
+
         match self.spawn.run(&invocation) {
-            Ok(outcome) => Response::ok(id, exec::to_call_result(&invocation, command, &outcome)),
+            Ok(outcome) => {
+                let mut result = exec::to_call_result(&invocation, command, &outcome);
+                // Appended rather than prepended: the command line stays the first thing read, and
+                // no existing reader has to move. It belongs in the result either way — a run that
+                // nobody here confirmed should say so where the run itself is recorded.
+                if let Some(words) = &asserted {
+                    exec::append_note(&mut result, consent::assertion_note(words));
+                }
+                Response::ok(id, result)
+            }
             // Failing to start the process at all is our problem, not the model's: no change of
             // arguments makes a missing or unrunnable binary work.
             Err(error) => Response::error(
@@ -266,28 +363,153 @@ fn slugs_of(kind: crate::guide::Kind) -> String {
 pub fn serve<R: BufRead, W: Write>(opts: Options, reader: R, writer: W) -> io::Result<()> {
     let mut session = Session::new(opts);
     let mut transport = Transport::new(reader, writer);
+    // Frames read out of turn while a question was open. Drained before the stream, so the client
+    // is still served in the order it spoke.
+    let mut deferred: VecDeque<Frame> = VecDeque::new();
+    let mut questions_asked: u64 = 0;
 
-    while let Some(frame) = transport.read_frame()? {
+    loop {
+        let frame = match deferred.pop_front() {
+            Some(frame) => frame,
+            None => match transport.read_frame()? {
+                Some(frame) => frame,
+                None => return Ok(()),
+            },
+        };
+
         match frame {
             // A batch answers with an array of exactly the replies its members earned. If every
             // member was a notification there is nothing to say, and JSON-RPC 2.0 requires silence
             // rather than an empty array.
             Frame::Batch(members) => {
-                let replies: Vec<Response> =
-                    members.into_iter().filter_map(|member| reply_to(&mut session, member)).collect();
+                let mut replies: Vec<Response> = Vec::new();
+                for member in members {
+                    let mut peer = TransportPeer {
+                        call_id: correlation_id(&member),
+                        transport: &mut transport,
+                        deferred: &mut deferred,
+                        asked: &mut questions_asked,
+                    };
+                    if let Some(reply) = reply_to(&mut session, member, &mut peer) {
+                        replies.push(reply);
+                    }
+                }
                 if !replies.is_empty() {
                     transport.write_message(&replies)?;
                 }
             }
             single => {
-                if let Some(response) = reply_to(&mut session, single) {
+                let response = {
+                    let mut peer = TransportPeer {
+                        call_id: correlation_id(&single),
+                        transport: &mut transport,
+                        deferred: &mut deferred,
+                        asked: &mut questions_asked,
+                    };
+                    reply_to(&mut session, single, &mut peer)
+                };
+                if let Some(response) = response {
                     transport.write_message(&response)?;
                 }
             }
         }
     }
+}
 
-    Ok(())
+/// The request id a frame carries, for matching a cancellation against it.
+fn correlation_id(frame: &Frame) -> Value {
+    match frame {
+        Frame::Message(request) => request.response_id(),
+        _ => Value::Null,
+    }
+}
+
+/// Upper bound on frames set aside while one question is open.
+///
+/// A client has no reason to send hundreds of messages while it is showing a dialog, so reaching
+/// this means something is wrong on the other side. Abandoning the question is the bounded
+/// response: the deferred frames are still answered, and the tool call refuses rather than running.
+const MAX_DEFERRED_FRAMES: usize = 256;
+
+/// The live connection, seen as somewhere to put a question.
+///
+/// Reading from the same stream the main loop reads from is what makes this delicate. While an
+/// answer is outstanding, whatever else the client sends is set aside rather than handled, because
+/// handling it could start a second tool call underneath the first — one game installation, two
+/// writers. The loop drains what accumulated as soon as the question is settled.
+struct TransportPeer<'a, R: BufRead, W: Write> {
+    /// The `tools/call` this question belongs to. A cancellation naming it ends the wait.
+    call_id: Value,
+    transport: &'a mut Transport<R, W>,
+    deferred: &'a mut VecDeque<Frame>,
+    asked: &'a mut u64,
+}
+
+impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
+    fn request(&mut self, method: &'static str, params: Value) -> Result<Value, String> {
+        *self.asked += 1;
+        // Namespaced and counted. JSON-RPC keeps the two directions in separate id spaces, so a
+        // collision with a client's own id is harmless in principle — but a client that correlates
+        // by id alone would mismatch, and this costs nothing to rule out.
+        let id = Value::from(format!("gore-consent-{}", self.asked));
+
+        self.transport
+            .write_message(&OutRequest::new(id.clone(), method, params))
+            .map_err(|error| format!("the question could not be sent: {error}"))?;
+
+        loop {
+            let frame = match self.transport.read_frame() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => {
+                    return Err("the client closed the connection with the question open".into())
+                }
+                Err(error) => return Err(format!("the connection failed while waiting: {error}")),
+            };
+
+            if let Frame::Answer { id: answered, result, error } = &frame {
+                if *answered == id {
+                    if let Some(error) = error {
+                        return Err(describe_error(error));
+                    }
+                    return result
+                        .clone()
+                        .ok_or_else(|| "the answer carried neither a result nor an error".into());
+                }
+            }
+
+            if cancels(&frame, &self.call_id) {
+                return Err("the client cancelled the call with the question open".into());
+            }
+
+            if self.deferred.len() >= MAX_DEFERRED_FRAMES {
+                return Err(format!(
+                    "the client sent more than {MAX_DEFERRED_FRAMES} messages without answering"
+                ));
+            }
+            self.deferred.push_back(frame);
+        }
+    }
+}
+
+/// Whether a frame is the client withdrawing the request we are asking about.
+fn cancels(frame: &Frame, call_id: &Value) -> bool {
+    let Frame::Message(request) = frame else { return false };
+    if request.method != "notifications/cancelled" || call_id.is_null() {
+        return false;
+    }
+    request.params_object().get("requestId").is_some_and(|requested| requested == call_id)
+}
+
+/// A JSON-RPC error object, as one sentence.
+fn describe_error(error: &Value) -> String {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("the client rejected the question");
+    match error.get("code").and_then(Value::as_i64) {
+        Some(code) => format!("{message} (code {code})"),
+        None => message.to_string(),
+    }
 }
 
 /// Silence for a notification — but only when it really was one.
@@ -307,11 +529,11 @@ fn notification_reply(request: &Request, id: Value) -> Option<Response> {
 }
 
 /// The reply one frame earns, or `None` when it earns silence.
-fn reply_to(session: &mut Session, frame: Frame) -> Option<Response> {
+fn reply_to(session: &mut Session, frame: Frame, peer: &mut dyn Peer) -> Option<Response> {
     match frame {
         Frame::Message(request) => {
             let is_notification = request.is_notification();
-            let response = session.handle(&request);
+            let response = session.handle(&request, peer);
             // Belt and braces: whatever a handler returns, a message without an id gets no reply.
             // Answering one is a protocol violation that confuses strict clients.
             if is_notification {
@@ -332,6 +554,10 @@ fn reply_to(session: &mut Session, frame: Frame) -> Option<Response> {
             errors::INVALID_REQUEST,
             "a batch may not contain another batch",
         )),
+        // An answer to a question nobody is waiting for. JSON-RPC has no reply to a reply, so the
+        // only correct handling is to drop it — this is where a late answer lands after its call
+        // was cancelled, and answering it would put an uncorrelatable frame on the wire.
+        Frame::Answer { .. } => None,
     }
 }
 
@@ -342,6 +568,53 @@ mod tests {
 
     fn options() -> Options {
         Options::new(PathBuf::from("gore"), "0.1.0")
+    }
+
+    /// A peer that must never be reached.
+    ///
+    /// Most of what this server does needs nobody's permission, and a test that unexpectedly asks
+    /// for some is a test whose call was classified wrongly. Panicking names the culprit; a stub
+    /// that quietly said yes would let that slip through as a passing test.
+    struct NoOneToAsk;
+
+    impl Peer for NoOneToAsk {
+        fn request(&mut self, method: &'static str, params: Value) -> Result<Value, String> {
+            panic!("this call should not have asked anyone: {method} {params}");
+        }
+    }
+
+    /// A peer that answers every question the same way, and counts them.
+    struct Canned {
+        answer: Value,
+        asked: usize,
+    }
+
+    impl Canned {
+        fn allowing() -> Self {
+            Self { answer: json!({ "action": "accept", "content": { "decision": "run" } }), asked: 0 }
+        }
+
+        fn declining() -> Self {
+            Self { answer: json!({ "action": "decline" }), asked: 0 }
+        }
+    }
+
+    impl Peer for Canned {
+        fn request(&mut self, _method: &'static str, _params: Value) -> Result<Value, String> {
+            self.asked += 1;
+            Ok(self.answer.clone())
+        }
+    }
+
+    /// `handle` for the tests that are not about consent.
+    trait HandleUnasked {
+        fn handle_unasked(&mut self, request: &Request) -> Option<Response>;
+    }
+
+    impl HandleUnasked for Session {
+        fn handle_unasked(&mut self, request: &Request) -> Option<Response> {
+            self.handle(request, &mut NoOneToAsk)
+        }
     }
 
     /// Drive `serve` over in-memory pipes and return one parsed response per written line.
@@ -383,7 +656,7 @@ mod tests {
     fn initialize_reports_a_version_capabilities_identity_and_instructions() {
         let mut session = Session::new(options());
         let response = session
-            .handle(&request("initialize", json!({ "protocolVersion": "2025-11-25" })))
+            .handle_unasked(&request("initialize", json!({ "protocolVersion": "2025-11-25" })))
             .expect("initialize is answered");
         let result = response.result.expect("result");
 
@@ -401,7 +674,7 @@ mod tests {
     fn an_unsupported_protocol_version_is_answered_with_ours() {
         let mut session = Session::new(options());
         let response = session
-            .handle(&request("initialize", json!({ "protocolVersion": "1900-01-01" })))
+            .handle_unasked(&request("initialize", json!({ "protocolVersion": "1900-01-01" })))
             .expect("initialize is answered");
         assert_eq!(
             response.result.unwrap()["protocolVersion"],
@@ -420,7 +693,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert!(session.handle(&notification).is_none());
+        assert!(session.handle_unasked(&notification).is_none());
         assert!(session.is_initialized());
     }
 
@@ -433,20 +706,20 @@ mod tests {
             "params": { "requestId": 4 },
         }))
         .unwrap();
-        assert!(session.handle(&notification).is_none());
+        assert!(session.handle_unasked(&notification).is_none());
     }
 
     #[test]
     fn ping_answers_with_an_empty_result() {
         let mut session = Session::new(options());
-        let response = session.handle(&request("ping", json!({}))).expect("ping is answered");
+        let response = session.handle_unasked(&request("ping", json!({}))).expect("ping is answered");
         assert_eq!(response.result.unwrap(), json!({}));
     }
 
     #[test]
     fn an_unknown_method_is_a_protocol_error() {
         let mut session = Session::new(options());
-        let response = session.handle(&request("prompts/list", json!({}))).expect("answered");
+        let response = session.handle_unasked(&request("prompts/list", json!({}))).expect("answered");
         assert_eq!(response.error.unwrap().code, errors::METHOD_NOT_FOUND);
     }
 
@@ -460,7 +733,7 @@ mod tests {
     #[test]
     fn tools_list_advertises_every_group_with_a_schema_and_annotations() {
         let mut session = Session::new(options());
-        let response = session.handle(&request("tools/list", json!({}))).expect("answered");
+        let response = session.handle_unasked(&request("tools/list", json!({}))).expect("answered");
         let listed = response.result.unwrap()["tools"].as_array().unwrap().clone();
 
         // One tool per command group, plus the tools that only exist inside the server.
@@ -483,7 +756,7 @@ mod tests {
     fn the_guide_tool_is_reachable_through_tools_call() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({
                     "name": "gore_guide",
@@ -494,7 +767,7 @@ mod tests {
 
         let result = response.result.expect("a result");
         assert_eq!(result["isError"], json!(false));
-        assert!(!result["structuredContent"]["hits"].as_array().unwrap().is_empty());
+        assert!(result["content"][0]["text"].as_str().unwrap().contains("textures"));
         assert!(spawn.calls().is_empty(), "the guide is embedded; nothing is spawned");
     }
 
@@ -502,7 +775,7 @@ mod tests {
     fn a_tool_call_builds_the_command_line_and_returns_what_the_command_printed() {
         let (mut session, spawn) = faked(exec::Outcome::success("C:/x/gore/config.json\n"));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
             ))
@@ -526,7 +799,7 @@ mod tests {
     fn a_refused_command_is_a_tool_error_and_never_reaches_a_process() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({ "name": "gore_project", "arguments": { "subcommand": "deploy-shared" } }),
             ))
@@ -543,7 +816,7 @@ mod tests {
     fn a_bad_argument_is_a_tool_error_the_model_can_act_on() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({
                     "name": "gore_catalog",
@@ -563,7 +836,7 @@ mod tests {
     fn an_unknown_subcommand_is_a_tool_error_listing_the_real_ones() {
         let (mut session, _) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({ "name": "gore_config", "arguments": { "subcommand": "reset" } }),
             ))
@@ -578,7 +851,7 @@ mod tests {
     fn a_missing_subcommand_says_which_ones_exist() {
         let (mut session, _) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request("tools/call", json!({ "name": "gore_config", "arguments": {} })))
+            .handle_unasked(&request("tools/call", json!({ "name": "gore_config", "arguments": {} })))
             .expect("answered");
 
         let result = response.result.unwrap();
@@ -590,7 +863,7 @@ mod tests {
     fn stray_top_level_arguments_are_rejected_with_a_hint_about_args() {
         let (mut session, _) = faked(exec::Outcome::success(""));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({
                     "name": "gore_config",
@@ -607,7 +880,7 @@ mod tests {
     fn a_command_that_exits_non_zero_is_a_tool_error_not_a_protocol_error() {
         let (mut session, _) = faked(exec::Outcome::failure(1, "error: game-path is not set\n"));
         let response = session
-            .handle(&request(
+            .handle_unasked(&request(
                 "tools/call",
                 json!({
                     "name": "gore_config",
@@ -618,7 +891,10 @@ mod tests {
 
         let result = response.result.expect("still a result");
         assert_eq!(result["isError"], json!(true));
-        assert_eq!(result["structuredContent"]["exit_code"], 1);
+        assert!(
+            result["content"][1]["text"].as_str().unwrap().contains("exit code 1"),
+            "{result}"
+        );
     }
 
     #[test]
@@ -641,11 +917,11 @@ mod tests {
         // And the handshake is not advanced by a malformed one.
         let mut session = Session::new(options());
         let request = request_with_id("notifications/initialized", json!({}), json!(7));
-        assert!(session.handle(&request).is_some());
+        assert!(session.handle_unasked(&request).is_some());
         assert!(!session.is_initialized(), "state must not come from a malformed request");
 
         // The real notification still advances it, silently.
-        assert!(session.handle(&notification("notifications/initialized", json!({}))).is_none());
+        assert!(session.handle_unasked(&notification("notifications/initialized", json!({}))).is_none());
         assert!(session.is_initialized());
     }
 
@@ -755,7 +1031,7 @@ mod tests {
         let mut session = Session::new(options());
 
         let listed = session
-            .handle(&request("resources/list", json!({})))
+            .handle_unasked(&request("resources/list", json!({})))
             .expect("answered")
             .result
             .unwrap()["resources"]
@@ -765,7 +1041,7 @@ mod tests {
         assert_eq!(listed, crate::guide::PAGES.len());
 
         let templates = session
-            .handle(&request("resources/templates/list", json!({})))
+            .handle_unasked(&request("resources/templates/list", json!({})))
             .expect("answered")
             .result
             .unwrap()["resourceTemplates"]
@@ -780,7 +1056,7 @@ mod tests {
     fn a_guide_resource_reads_back_its_page() {
         let mut session = Session::new(options());
         let response = session
-            .handle(&request("resources/read", json!({ "uri": "gore://guide/bundles" })))
+            .handle_unasked(&request("resources/read", json!({ "uri": "gore://guide/bundles" })))
             .expect("answered");
 
         let contents = response.result.expect("a result")["contents"].clone();
@@ -793,7 +1069,7 @@ mod tests {
     fn an_unknown_resource_is_a_protocol_error_that_lists_the_real_pages() {
         let mut session = Session::new(options());
         let response = session
-            .handle(&request("resources/read", json!({ "uri": "gore://guide/nope" })))
+            .handle_unasked(&request("resources/read", json!({ "uri": "gore://guide/nope" })))
             .expect("answered");
 
         let error = response.error.expect("unknown resources are protocol errors");
@@ -805,7 +1081,7 @@ mod tests {
     fn an_unknown_tool_is_a_protocol_error_not_a_tool_error() {
         let mut session = Session::new(options());
         let response = session
-            .handle(&request("tools/call", json!({ "name": "gore_nonexistent" })))
+            .handle_unasked(&request("tools/call", json!({ "name": "gore_nonexistent" })))
             .expect("answered");
         let error = response.error.expect("unknown tools are protocol errors");
         assert_eq!(error.code, errors::INVALID_PARAMS);
@@ -860,5 +1136,408 @@ mod tests {
         let result = serve(options(), Cursor::new(Vec::new()), &mut output);
         assert!(result.is_ok());
         assert!(output.is_empty());
+    }
+
+    // ----------------------------------------------------------------------------------------- //
+    // Consent                                                                                    //
+    // ----------------------------------------------------------------------------------------- //
+
+    /// A `tools/call` for a command that overwrites the game's own localisation cache in place.
+    fn a_gated_call() -> Request {
+        request(
+            "tools/call",
+            json!({
+                "name": "gore_loc",
+                "arguments": {
+                    "subcommand": "import",
+                    "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                },
+            }),
+        )
+    }
+
+    fn initialize_with(session: &mut Session, capabilities: Value) {
+        session
+            .handle_unasked(&request(
+                "initialize",
+                json!({ "protocolVersion": "2025-11-25", "capabilities": capabilities }),
+            ))
+            .expect("initialize is answered");
+    }
+
+    #[test]
+    fn only_a_client_that_advertised_elicitation_is_ever_asked() {
+        // Sending a question to a client that never declared the capability is not merely impolite:
+        // nothing over there is listening for it, so the call would block until something times out.
+        let mut session = Session::new(options());
+        assert_eq!(session.consent_policy(), Policy::CannotAsk, "before initialize");
+
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        assert_eq!(session.consent_policy(), Policy::Ask);
+
+        let mut session = Session::new(options());
+        initialize_with(&mut session, json!({ "roots": { "listChanged": true } }));
+        assert_eq!(session.consent_policy(), Policy::CannotAsk, "a different capability is not this one");
+
+        let mut session = Session::new(options());
+        initialize_with(&mut session, json!({ "elicitation": null }));
+        assert_eq!(session.consent_policy(), Policy::CannotAsk, "an explicit null is not a declaration");
+    }
+
+    #[test]
+    fn the_server_own_posture_outranks_what_the_client_can_do() {
+        // --no-consent-prompts is someone saying "do not interrupt me". A capable client does not
+        // get to overrule that by advertising a dialog.
+        let mut opts = options();
+        opts.never_ask = true;
+        let mut session = Session::with_spawn(opts, Box::new(exec::FakeSpawn::new(exec::Outcome::success(""))));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        assert_eq!(session.consent_policy(), Policy::NeverAsk);
+    }
+
+    #[test]
+    fn a_gated_call_runs_only_after_the_user_agrees() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session =
+            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::allowing();
+        let result = session.handle(&a_gated_call(), &mut peer).expect("answered").result.unwrap();
+
+        assert_eq!(peer.asked, 1, "exactly one question for one call");
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1, "the command ran after the yes");
+    }
+
+    #[test]
+    fn a_declined_call_never_reaches_the_child_process() {
+        // The whole promise: saying no leaves every file exactly as it was. Nothing is spawned,
+        // so there is nothing to undo.
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session =
+            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let mut peer = Canned::declining();
+        let result = session.handle(&a_gated_call(), &mut peer).expect("answered").result.unwrap();
+
+        assert_eq!(peer.asked, 1);
+        assert!(spawn.calls().is_empty(), "a refusal must not run the command");
+        assert_eq!(result["isError"], json!(true), "the model has to see this as a failure");
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("`decline`"), "{text}");
+        assert!(!text.contains("the user was asked"), "the answer's author is unknowable: {text}");
+    }
+
+    #[test]
+    fn a_client_that_cannot_be_asked_gets_the_flag_it_would_take_instead() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("")));
+        let mut session =
+            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        // `NoOneToAsk` panics if reached, which is the assertion: no capability, no question.
+        let result =
+            session.handle_unasked(&a_gated_call()).expect("answered").result.unwrap();
+
+        assert!(spawn.calls().is_empty());
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("gore mcp serve --allow-write"), "{text}");
+    }
+
+    #[test]
+    fn a_pre_approved_call_is_never_put_to_anyone() {
+        // This is the headless posture. `NoOneToAsk` panicking is what proves the dialog is skipped
+        // rather than merely auto-answered.
+        let mut opts = options();
+        opts.allow_write = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let result = session.handle_unasked(&a_gated_call()).expect("answered").result.unwrap();
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+    }
+
+    /// The same call, carrying what the caller says the user already answered.
+    fn an_approved_call(words: &str) -> Request {
+        request(
+            "tools/call",
+            json!({
+                "name": "gore_loc",
+                "arguments": {
+                    "subcommand": "import",
+                    "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                    "user_approved": words,
+                },
+            }),
+        )
+    }
+
+    #[test]
+    fn an_asserted_approval_runs_the_call_and_the_result_says_whose_claim_it_was() {
+        // `NoOneToAsk` panicking is the assertion that no dialog was put: the claim replaces the
+        // question rather than preceding it, which is what makes it useful in a client that answers
+        // its own dialogs in four milliseconds.
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let result = session
+            .handle_unasked(&an_approved_call("ja, überschreib die Datei"))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(result["isError"], json!(false), "{result}");
+        assert_eq!(spawn.calls().len(), 1, "the command ran");
+
+        let blocks = result["content"].as_array().expect("content");
+        let spoken = blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>();
+        let note = spoken
+            .iter()
+            .find(|text| text.contains("assertion"))
+            .unwrap_or_else(|| panic!("no block records the claim: {spoken:?}"));
+        assert!(note.contains("ja, überschreib die Datei"), "{note}");
+    }
+
+    #[test]
+    fn an_assertion_does_not_move_a_server_that_was_told_never_to_ask() {
+        let mut opts = options();
+        opts.never_ask = true;
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let result =
+            session.handle_unasked(&an_approved_call("go ahead")).expect("answered").result.unwrap();
+
+        assert_eq!(result["isError"], json!(true));
+        assert!(spawn.calls().is_empty(), "nothing may run under --no-consent-prompts");
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("--no-consent-prompts"), "{text}");
+    }
+
+    #[test]
+    fn an_approval_that_is_not_words_is_reported_rather_than_believed() {
+        // A number, a boolean or an empty string quotes nobody. Reading any of them as agreement
+        // would make the emptiest possible claim the cheapest way past the gate.
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        for bogus in [json!(true), json!(1), json!(""), json!("   ")] {
+            let call = request(
+                "tools/call",
+                json!({
+                    "name": "gore_loc",
+                    "arguments": {
+                        "subcommand": "import",
+                        "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                        "user_approved": bogus,
+                    },
+                }),
+            );
+            let result = session.handle_unasked(&call).expect("answered").result.unwrap();
+
+            assert_eq!(result["isError"], json!(true), "{bogus} was accepted: {result}");
+            let text = result["content"][0]["text"].as_str().expect("text");
+            assert!(text.contains("user_approved"), "{bogus}: {text}");
+        }
+        assert!(spawn.calls().is_empty(), "nothing may run on a malformed claim");
+    }
+
+    #[test]
+    fn a_null_approval_is_read_as_no_approval_rather_than_as_a_mistake() {
+        // Clients differ on how they serialise an omitted optional. Reporting `null` as malformed
+        // would turn an ordinary question into a confusing error for callers that never set it.
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let call = request(
+            "tools/call",
+            json!({
+                "name": "gore_loc",
+                "arguments": {
+                    "subcommand": "import",
+                    "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                    "user_approved": null,
+                },
+            }),
+        );
+        let mut peer = Canned::declining();
+        let result = session.handle(&call, &mut peer).expect("answered").result.unwrap();
+
+        assert_eq!(peer.asked, 1, "the question is still put");
+        assert_eq!(result["isError"], json!(true));
+        assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn an_ordinary_read_asks_nobody() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("ok\n")));
+        let mut session =
+            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+
+        let response = session.handle_unasked(&request(
+            "tools/call",
+            json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
+        ));
+        assert_eq!(response.expect("answered").result.unwrap()["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+    }
+
+    // ----------------------------------------------------------------------------------------- //
+    // The transport half of asking                                                               //
+    // ----------------------------------------------------------------------------------------- //
+
+    /// Run one `TransportPeer` round trip over scripted input, returning the answer, everything
+    /// written to the client, and whatever frames were set aside.
+    fn ask_over(input: &str, call_id: Value) -> (Result<Value, String>, Vec<Value>, usize) {
+        let mut written = Vec::new();
+        let mut transport = Transport::new(Cursor::new(input.as_bytes().to_vec()), &mut written);
+        let mut deferred = VecDeque::new();
+        let mut asked = 0;
+
+        let outcome = {
+            let mut peer = TransportPeer {
+                call_id,
+                transport: &mut transport,
+                deferred: &mut deferred,
+                asked: &mut asked,
+            };
+            peer.request("elicitation/create", json!({ "message": "?" }))
+        };
+
+        let sent = String::from_utf8(written)
+            .expect("utf-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON value per line"))
+            .collect();
+        (outcome, sent, deferred.len())
+    }
+
+    #[test]
+    fn a_question_goes_out_as_a_request_and_its_answer_comes_back() {
+        let (answer, sent, deferred) = ask_over(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}\n",
+            json!(1),
+        );
+
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["method"], "elicitation/create");
+        assert_eq!(sent[0]["jsonrpc"], "2.0");
+        assert_eq!(sent[0]["id"], "gore-consent-1");
+        assert_eq!(answer.expect("an answer")["action"], "accept");
+        assert_eq!(deferred, 0);
+    }
+
+    #[test]
+    fn whatever_the_client_says_meanwhile_is_set_aside_rather_than_handled() {
+        // Handling it here would start a second tool call underneath the first — one game
+        // installation, two writers — so it waits its turn in the queue the loop drains.
+        let (answer, _, deferred) = ask_over(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n",
+                "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"decline\"}}\n",
+            ),
+            json!(1),
+        );
+
+        assert_eq!(answer.expect("an answer")["action"], "decline");
+        assert_eq!(deferred, 2, "both frames are kept for the loop to answer");
+    }
+
+    #[test]
+    fn an_answer_to_a_different_question_does_not_settle_this_one() {
+        let (answer, _, deferred) = ask_over(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-99\",\"result\":{\"action\":\"accept\"}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"decline\"}}\n",
+            ),
+            json!(1),
+        );
+
+        assert_eq!(answer.expect("an answer")["action"], "decline", "ours is the second one");
+        assert_eq!(deferred, 1);
+    }
+
+    #[test]
+    fn cancelling_the_call_ends_the_wait() {
+        // Without this the server sits on a question for a request the client has already given up
+        // on, and the session is wedged until somebody closes a pipe.
+        let (answer, _, _) = ask_over(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1}}\n",
+            json!(1),
+        );
+        match answer {
+            Err(detail) => assert!(detail.contains("cancelled"), "{detail}"),
+            Ok(value) => panic!("a cancellation is not an answer: {value}"),
+        }
+
+        // A cancellation naming a *different* request is somebody else's business.
+        let (answer, _, deferred) = ask_over(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":42}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}\n",
+            ),
+            json!(1),
+        );
+        assert_eq!(answer.expect("an answer")["action"], "accept");
+        assert_eq!(deferred, 1);
+    }
+
+    #[test]
+    fn a_client_that_hangs_up_mid_question_is_a_failure_not_a_yes() {
+        let (answer, _, _) = ask_over("", json!(1));
+        match answer {
+            Err(detail) => assert!(detail.contains("closed"), "{detail}"),
+            Ok(value) => panic!("end of input is not agreement: {value}"),
+        }
+    }
+
+    #[test]
+    fn an_error_response_to_the_question_is_reported_with_its_message() {
+        let (answer, _, _) = ask_over(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"error\":{\"code\":-32601,\"message\":\"no elicitation here\"}}\n",
+            json!(1),
+        );
+        match answer {
+            Err(detail) => {
+                assert!(detail.contains("no elicitation here"), "{detail}");
+                assert!(detail.contains("-32601"), "{detail}");
+            }
+            Ok(value) => panic!("an error is not an answer: {value}"),
+        }
+    }
+
+    #[test]
+    fn a_flood_of_unrelated_frames_ends_the_wait_instead_of_growing_without_bound() {
+        let mut input = String::new();
+        for id in 0..MAX_DEFERRED_FRAMES + 10 {
+            input.push_str(&format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n"));
+        }
+        let (answer, _, deferred) = ask_over(&input, json!("call"));
+
+        assert!(answer.is_err(), "the wait has to end somewhere");
+        assert!(deferred <= MAX_DEFERRED_FRAMES, "the queue stayed bounded: {deferred}");
+    }
+
+    #[test]
+    fn an_answer_nobody_is_waiting_for_is_dropped_rather_than_replied_to() {
+        // A late answer arrives here after its call was abandoned. JSON-RPC has no reply to a
+        // reply, so anything written back would be a frame the client cannot correlate.
+        let written = exchange(concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n",
+        ));
+
+        assert_eq!(written.len(), 1, "only the ping earns a reply");
+        assert_eq!(written[0]["id"], 3);
     }
 }

@@ -210,13 +210,18 @@ enum GuideAction {
 enum McpAction {
     /// Run the MCP server on stdin/stdout. Speaks JSON-RPC; it is not an interactive shell.
     Serve {
-        /// Allow commands that modify the game installation or rewrite files in place
-        /// (deploy/undeploy, mgr apply/reset, in-place loc/audio edits)
+        /// Pre-approve commands that change the game installation or overwrite an existing file,
+        /// so they run without confirming with you. Without this they are still allowed — the
+        /// agent's client asks you first. Use it where nobody is watching (CI, batch runs)
         #[arg(long)]
         allow_write: bool,
-        /// Allow commands that launch the game executable (`as compile`, `as compile-module`)
+        /// Pre-approve commands that launch the game executable (`as compile`, `as compile-module`)
         #[arg(long)]
         allow_game_launch: bool,
+        /// Never ask, and refuse anything that would need confirming. The strict posture, for a
+        /// server exposed to an agent whose calls nobody reviews
+        #[arg(long)]
+        no_consent_prompts: bool,
         /// Override every per-command wall-clock cap, in seconds (0 keeps the defaults)
         #[arg(long, default_value_t = 0, value_name = "SECS")]
         timeout_secs: u64,
@@ -481,9 +486,16 @@ fn run_cli() {
             McpAction::Serve {
                 allow_write,
                 allow_game_launch,
+                no_consent_prompts,
                 timeout_secs,
                 max_output_kib,
-            } => cmd::mcp::serve(allow_write, allow_game_launch, timeout_secs, max_output_kib),
+            } => cmd::mcp::serve(cmd::mcp::ServeOptions {
+                allow_write,
+                allow_game_launch,
+                no_consent_prompts,
+                timeout_secs,
+                max_output_kib,
+            }),
             McpAction::Tools => cmd::mcp::tools(),
         },
         Commands::Guide { action } => match action {

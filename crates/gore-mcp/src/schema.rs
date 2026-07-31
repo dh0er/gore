@@ -50,6 +50,18 @@ fn input_schema(group: &GroupSpec) -> Value {
                                 the tool description. Omit it for subcommands that take none.",
                 "additionalProperties": true,
             },
+            // Only reachable because it is declared: the schema closes itself to anything else, so
+            // an undeclared field would come back as an error rather than as consent.
+            crate::consent::APPROVAL_FIELD: {
+                "type": "string",
+                "description": "The user's own words approving this exact call, quoted verbatim. \
+                                Set it only after a call was refused for want of consent, you put \
+                                the command line in front of the user, and they agreed. Never set \
+                                it on your own initiative, and never paraphrase agreement the user \
+                                did not give: this server cannot check the claim, so the result \
+                                records that the command ran on your assertion rather than on a \
+                                confirmation anyone saw.",
+            },
         },
         "required": ["subcommand"],
         "additionalProperties": false,
@@ -199,6 +211,21 @@ mod tests {
         assert_eq!(schema["additionalProperties"], json!(false));
         // `args` itself must stay open: the argv builder, not the schema, validates its contents.
         assert_eq!(schema["properties"]["args"]["additionalProperties"], json!(true));
+    }
+
+    #[test]
+    fn the_schema_offers_an_approval_field_and_binds_how_it_may_be_used() {
+        // The field is the only route past the gate in a client whose dialog reaches nobody, so it
+        // has to be reachable — `additionalProperties: false` would otherwise reject it — and its
+        // description has to make plain that inventing one is not a use of it.
+        let schema = tool("gore_loc")["inputSchema"].clone();
+        let approval = &schema["properties"]["user_approved"];
+
+        assert_eq!(approval["type"], "string", "{schema}");
+        let description = approval["description"].as_str().expect("a description");
+        assert!(description.contains("verbatim"), "{description}");
+        assert!(description.contains("Never"), "{description}");
+        assert_eq!(schema["required"], json!(["subcommand"]), "approval is never required");
     }
 
     #[test]

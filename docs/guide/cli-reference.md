@@ -203,12 +203,15 @@ setup, the tool list, and how the guide is exposed.
 
 | Subcommand | Arguments and flags |
 |---|---|
-| `serve` | `--allow-write` · `--allow-game-launch` · `--timeout-secs <SECS>` · `--max-output-kib <KIB>` |
+| `serve` | `--allow-write` · `--allow-game-launch` · `--no-consent-prompts` · `--timeout-secs <SECS>` · `--max-output-kib <KIB>` |
 | `tools` | — (prints the tool definitions as JSON and exits) |
 
-`serve` speaks JSON-RPC on stdin/stdout; it is not interactive. Without
-`--allow-write` every command that changes the installation or rewrites a file
-in place is refused, and `as compile` additionally needs `--allow-game-launch`.
+`serve` speaks JSON-RPC on stdin/stdout; it is not interactive. Every command
+that changes the installation or rewrites a file in place is confirmed with you
+through your client before it runs, and `as compile` counts as both a launch and
+a write. The two `--allow-*` flags answer in advance for unattended use;
+`--no-consent-prompts` refuses instead of asking and cannot be combined with
+them.
 
 ## `guide`
 

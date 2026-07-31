@@ -6,5 +6,5 @@ pub mod errors;
 pub mod message;
 pub mod transport;
 
-pub use message::{Request, Response, RpcError};
+pub use message::{OutRequest, Request, Response, RpcError};
 pub use transport::{Frame, Transport, MAX_FRAME_BYTES};

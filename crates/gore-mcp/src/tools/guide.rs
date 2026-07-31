@@ -144,7 +144,6 @@ fn list() -> Value {
 
     json!({
         "content": [{ "type": "text", "text": text }],
-        "structuredContent": { "pages": structured },
         "isError": false,
     })
 }
@@ -166,11 +165,6 @@ fn read(arguments: &Map<String, Value>) -> Value {
     let Some(anchor) = arguments.get("section").and_then(Value::as_str) else {
         return json!({
             "content": [{ "type": "text", "text": page.markdown }],
-            "structuredContent": {
-                "page": page.slug,
-                "kind": page.kind.label(),
-                "title": page.title(),
-            },
             "isError": false,
         });
     };
@@ -189,12 +183,6 @@ fn read(arguments: &Map<String, Value>) -> Value {
 
     json!({
         "content": [{ "type": "text", "text": section.body }],
-        "structuredContent": {
-            "page": page.slug,
-            "kind": page.kind.label(),
-            "anchor": section.anchor,
-            "heading": section.heading,
-        },
         "isError": false,
     })
 }
@@ -226,7 +214,6 @@ fn run_search(arguments: &Map<String, Value>) -> Value {
                      call gore_guide with action \"list\" to see what the guide covers.",
                 ),
             }],
-            "structuredContent": { "hits": [] },
             "isError": false,
         });
     }
@@ -241,19 +228,6 @@ fn run_search(arguments: &Map<String, Value>) -> Value {
 
     json!({
         "content": [{ "type": "text", "text": text }],
-        "structuredContent": {
-            "hits": hits
-                .iter()
-                .map(|hit| json!({
-                    "page": hit.page,
-                    "kind": kind_of(hit.page),
-                    "anchor": hit.anchor,
-                    "heading": hit.heading,
-                    "score": hit.score,
-                    "snippet": hit.snippet,
-                }))
-                .collect::<Vec<_>>(),
-        },
         "isError": false,
     })
 }
@@ -291,10 +265,10 @@ mod tests {
         for page in guide::PAGES {
             assert!(text.contains(page.slug), "{} missing from the listing", page.slug);
         }
-        assert_eq!(
-            result["structuredContent"]["pages"].as_array().unwrap().len(),
-            guide::PAGES.len()
-        );
+        // One line per page in the listing itself; there is no second channel to check against.
+        for page in guide::PAGES {
+            assert!(text.contains(page.title()), "{} has no title line", page.slug);
+        }
     }
 
     #[test]
@@ -365,7 +339,7 @@ mod tests {
 
         let text = text_of(&result);
         assert!(text.contains("gore_guide{action:\"read\""), "{text}");
-        assert!(!result["structuredContent"]["hits"].as_array().unwrap().is_empty());
+        assert!(text.contains("textures"), "the top hit belongs in the text: {text}");
     }
 
     #[test]
@@ -379,11 +353,16 @@ mod tests {
 
     #[test]
     fn the_limit_is_honoured_and_clamped() {
+        // Counted from the rendered text, because that is what the model is handed. Each hit
+        // contributes exactly one "read with:" line.
+        let hits_in = |result: &Value| text_of(result).matches("read with:").count();
+
         let two = call_with(json!({ "action": "search", "query": "mod", "limit": 2 }));
-        assert_eq!(two["structuredContent"]["hits"].as_array().unwrap().len(), 2);
+        assert_eq!(hits_in(&two), 2);
+        assert!(text_of(&two).starts_with("2 sections match"), "{}", text_of(&two));
 
         let huge = call_with(json!({ "action": "search", "query": "mod", "limit": 9999 }));
-        assert!(huge["structuredContent"]["hits"].as_array().unwrap().len() <= MAX_LIMIT);
+        assert!(hits_in(&huge) <= MAX_LIMIT, "{}", hits_in(&huge));
     }
 
     #[test]

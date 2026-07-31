@@ -42,6 +42,12 @@ pub enum Frame {
     /// revisions, so a client is entitled to send one. Elements are parsed individually — a batch
     /// with one malformed member still answers the rest.
     Batch(Vec<Frame>),
+    /// The client answering a request *this server* sent, correlated by `id`.
+    ///
+    /// Exactly one of `result` / `error` is populated by a well-behaved peer; both are carried as
+    /// they arrived so the waiter decides what a malformed pair means. An answer is never replied
+    /// to — JSON-RPC has no response-to-a-response — so an unsolicited one is simply dropped.
+    Answer { id: Value, result: Option<Value>, error: Option<Value> },
 }
 
 pub struct Transport<R: BufRead, W: Write> {
@@ -165,6 +171,21 @@ fn parse_object(value: Value) -> Frame {
             };
         }
     }
+    // No `method`, but a `result` or an `error`: the client is answering something we asked, not
+    // sending a broken request. Checked before the `Request` parse, which would reject it for the
+    // missing `method` and report it as invalid — and replying with an error to a response is a
+    // frame the peer cannot correlate to anything.
+    //
+    // The `jsonrpc` member is deliberately not validated here. A wrong version would make this an
+    // `Invalid` frame, which earns an error *reply*; leaving it an answer means the worst case is
+    // that nobody is waiting for it and it is dropped.
+    if value.get("method").is_none() {
+        let result = value.get("result").cloned();
+        let error = value.get("error").cloned();
+        if result.is_some() || error.is_some() {
+            return Frame::Answer { id, result, error };
+        }
+    }
     match serde_json::from_value::<Request>(value) {
         Ok(mut request) if request.version_ok() => {
             request.id_present = id_present;
@@ -252,6 +273,43 @@ mod tests {
             // No `method`, so it is not a request — but the id is still recoverable.
             Some(Frame::Invalid { id, .. }) => assert_eq!(id, Value::from(9)),
             other => panic!("expected an invalid request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_no_method_but_a_result_or_an_error_is_an_answer() {
+        // This is how the client replies to an `elicitation/create` we sent. Reported as an invalid
+        // request it would earn an error reply, and a reply to a reply is a frame the peer has
+        // nothing to match it against.
+        let ok = "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}";
+        match parse_frame(ok.as_bytes()) {
+            Frame::Answer { id, result, error } => {
+                assert_eq!(id, Value::from("gore-consent-1"));
+                assert_eq!(result.unwrap()["action"], "accept");
+                assert!(error.is_none());
+            }
+            other => panic!("expected an answer, got {other:?}"),
+        }
+
+        let failed = "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"no\"}}";
+        match parse_frame(failed.as_bytes()) {
+            Frame::Answer { id, result, error } => {
+                assert_eq!(id, Value::from(4));
+                assert!(result.is_none());
+                assert_eq!(error.unwrap()["code"], -32601);
+            }
+            other => panic!("expected an answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_method_makes_it_a_request_even_alongside_a_result() {
+        // `method` is what distinguishes the two directions. A frame carrying both is malformed
+        // either way, but reading it as a request is the one that cannot swallow a real call.
+        let line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"result\":{}}";
+        match parse_frame(line.as_bytes()) {
+            Frame::Message(request) => assert_eq!(request.method, "ping"),
+            other => panic!("expected a request, got {other:?}"),
         }
     }
 

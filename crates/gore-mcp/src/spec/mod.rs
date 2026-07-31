@@ -366,8 +366,9 @@ pub enum JsonSupport {
     None,
     /// A boolean switch that makes the command print JSON to stdout.
     ///
-    /// The server passes it unconditionally and parses the result into `structuredContent`, so a
-    /// model gets machine-readable output without having to know the flag exists.
+    /// The server passes it unconditionally, so a model gets machine-readable output without having
+    /// to know the flag exists. The JSON is left in the stdout text block rather than parsed into a
+    /// `structuredContent` member — see `result_shape` in lib.rs for why that member is not used.
     Stdout,
     /// `--json <PATH>` writes a report file — only `as bytediff` behaves this way.
     ///

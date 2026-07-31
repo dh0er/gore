@@ -1,8 +1,12 @@
 //! JSON-RPC 2.0 wire types.
 //!
-//! Deliberately minimal: MCP only ever puts objects on the wire, and this server never sends
-//! requests of its own, so there is no client-side request type and no batching support (MCP
-//! removed JSON-RPC batching in the 2025-06-18 revision).
+//! Deliberately minimal: MCP only ever puts objects on the wire, so these are objects.
+//!
+//! Traffic runs both ways. The client sends [`Request`]s and this server answers them with
+//! [`Response`]s — but the server also asks questions of its own, as [`OutRequest`]s, and reads the
+//! client's replies back off the same stream. Consent for a destructive command is the only thing
+//! that does so today (see `consent.rs`), and it is why a frame with no `method` is not
+//! automatically a malformed request.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -79,6 +83,26 @@ impl Request {
             None => true,
             Some(version) => version == JSONRPC_VERSION,
         }
+    }
+}
+
+/// A request this server sends *to* the client.
+///
+/// The id is ours to choose and must not collide with one the client is using for its own calls.
+/// JSON-RPC keeps the two directions in separate id spaces — a client request `1` and a server
+/// request `1` are unrelated — but a client that correlates sloppily would still be confused by an
+/// overlap, so [`crate::consent`] draws from a namespace no client would mint.
+#[derive(Debug, Clone, Serialize)]
+pub struct OutRequest {
+    pub jsonrpc: &'static str,
+    pub id: Value,
+    pub method: &'static str,
+    pub params: Value,
+}
+
+impl OutRequest {
+    pub fn new(id: impl Into<Value>, method: &'static str, params: Value) -> Self {
+        Self { jsonrpc: JSONRPC_VERSION, id: id.into(), method, params }
     }
 }
 
