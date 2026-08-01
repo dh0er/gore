@@ -1,17 +1,21 @@
-//! Configuration, the catalog/reflection pipeline, and project scaffolding.
+//! Configuration, the catalog/reflection pipeline, the location lookup, and project scaffolding.
 //!
-//! Two of these three groups are synthetic. `gore` exposes eleven commands at its top level that
+//! Two of these four groups are synthetic. `gore` exposes twelve commands at its top level that
 //! have no subcommand of their own; giving each a tool would make the least-reached half of the
 //! CLI take up half the tool list. They are bundled here along the lines the guide already draws:
 //! the catalog pipeline is one page (`catalogs-and-models`), project scaffolding is another.
+//!
+//! `gore_location` is not one of those bundles: `gore location` is a real subcommand family, and
+//! it is the only tool here a model reaches for *while writing a mod* rather than while
+//! regenerating data, so it keeps its own name in the tool list.
 //!
 //! Every `summary` and `help` string below is copied verbatim from the corresponding clap doc
 //! comment so that a reviewer can diff this file against `crates/gore/src/main.rs` by eye.
 
 use crate::spec::{
     ArgForm::{Long, Positional},
-    ArgKind::{Enum, Path, Str},
-    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, Safety, T_FAST, T_NORMAL,
+    ArgKind::{Enum, Int, Path, Str},
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_NORMAL,
 };
 
 /// The single validated config key, from the `ConfigKey` value enum. clap renders variants in
@@ -148,6 +152,18 @@ const STORY_CATALOG_ARGS: &[ArgSpec] = &[
     ArgSpec::new("out", Long("out"), Path, "Output story_catalog.v1 JSON path.", true),
 ];
 
+const LOCATION_CATALOG_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "source",
+        Positional { order: 0 },
+        Path,
+        r"Path to G1R\Script\Map\MainMap\InteractionSpots.json (default: inside the resolved game)",
+        false,
+    )
+    .with_default("the InteractionSpots.json of the resolved game install"),
+    ArgSpec::new("out", Long("out"), Path, "Output location_catalog.json path", true),
+];
+
 const GUI_MODEL_ARGS: &[ArgSpec] = &[
     ArgSpec::new("model", Long("model"), Path, "Path to model.json (output of `dump`)", true),
     ArgSpec::new("catalog", Long("catalog"), Path, "Path to item_catalog.json", true),
@@ -226,6 +242,14 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
     )
     .guide("catalogs-and-models"),
     CommandSpec::new(
+        "location-catalog",
+        "Build the named-location catalog from the game's InteractionSpots.json",
+        LOCATION_CATALOG_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
         "gui-model",
         "Convert a gore reflection model into a gore-mod GUI shape JSON",
         GUI_MODEL_ARGS,
@@ -264,6 +288,76 @@ pub const CATALOG: GroupSpec = GroupSpec {
               regeneration steps, run once per game build, not per mod.",
     shape: GroupShape::Flat,
     commands: CATALOG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_location
+// ---------------------------------------------------------------------------------------------
+
+const LOCATION_RESOLVE_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "name",
+    Positional { order: 0 },
+    Str,
+    "Spot name, e.g. FP_OC_STAND_YARD_1 (case-insensitive)",
+    true,
+)];
+
+const LOCATION_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "area",
+        Long("area"),
+        Str,
+        "Keep only spots in this area code (e.g. OC). See the `areas` table of the catalog",
+        false,
+    ),
+    ArgSpec::new(
+        "prefix",
+        Long("prefix"),
+        Str,
+        "Keep only spots whose name starts with this (e.g. FP)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max names to print. The result says how many matched when it stops here",
+        false,
+    )
+    .with_default("200"),
+];
+
+const LOCATION_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "resolve",
+        "Look one spot name up: area, coordinates and yaw, or the near names it was not",
+        LOCATION_RESOLVE_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "list",
+        "List spot names, narrowed by area code and/or name prefix",
+        LOCATION_LIST_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("catalogs-and-models"),
+];
+
+pub const LOCATION: GroupSpec = GroupSpec {
+    tool: "gore_location",
+    title: "gore location lookup",
+    cli: "location",
+    summary: "Check a waypoint or interaction-spot name against the catalog bundled in this \
+              binary — no game install, no dump, no regeneration step. The teleport helpers \
+              resolve an unknown FName to nothing at all and log nothing, so a typo is a silent \
+              no-op in game; this is where it turns into an error instead.",
+    shape: GroupShape::Nested,
+    commands: LOCATION_COMMANDS,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -380,7 +474,8 @@ mod tests {
     #[test]
     fn the_group_sizes_match_the_cli() {
         assert_eq!(CONFIG.commands.len(), 6);
-        assert_eq!(CATALOG.commands.len(), 7);
+        assert_eq!(CATALOG.commands.len(), 8);
+        assert_eq!(LOCATION.commands.len(), 2);
         assert_eq!(PROJECT.commands.len(), 4);
     }
 
@@ -414,7 +509,7 @@ mod tests {
         // `<out>/<name from overrides.toml>`; `stubs` overwrites one `.lua` per class in its
         // output directory. None of those paths can be computed from the arguments, so all three
         // are gated outright rather than described as derived outputs.
-        let mutating: Vec<&str> = [CONFIG, CATALOG, PROJECT]
+        let mutating: Vec<&str> = [CONFIG, CATALOG, LOCATION, PROJECT]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())

@@ -60,6 +60,19 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Build the named-location catalog from the game's InteractionSpots.json
+    LocationCatalog {
+        /// Path to G1R\Script\Map\MainMap\InteractionSpots.json (default: inside the resolved game)
+        source: Option<PathBuf>,
+        /// Output location_catalog.json path
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Look named locations up in the bundled catalog (no game install needed)
+    Location {
+        #[command(subcommand)]
+        action: cmd::location::LocationAction,
+    },
     /// Convert a gore-cli reflection model into a gore-mod GUI shape JSON
     GuiModel {
         /// Path to model.json (output of `gore-cli dump`)
@@ -424,6 +437,8 @@ fn run_cli() {
             binds,
             out,
         } => cmd::story_catalog::run(exe, cache, binds, out),
+        Commands::LocationCatalog { source, out } => cmd::location_catalog::run(source, out),
+        Commands::Location { action } => cmd::location::run(action),
         Commands::GuiModel {
             model,
             catalog,

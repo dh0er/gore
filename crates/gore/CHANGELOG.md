@@ -8,8 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Added `gore mcp serve`: a Model Context Protocol server that exposes all 77
-  CLI leaf commands to AI assistants over stdio JSON-RPC, as eleven
+- Added `gore mcp serve`: a Model Context Protocol server that exposes all 80
+  CLI leaf commands to AI assistants over stdio JSON-RPC, as twelve
   command-family tools plus `gore_guide` and `gore_help`. The guide is compiled
   into the binary and served both as a search tool and as `gore://guide/<page>`
   resources.
@@ -107,6 +107,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   four embedded audio tracks, so replacing the per-line Ogg files under
   `Cutscenes/Intro/` lands correctly in the archive and stays inaudible. Both
   were found by building a mod that changed neither.
+- Added `gore location-catalog`, which builds the save editor's named-location
+  catalog from the game's loose `InteractionSpots.json`. It replaces
+  `scripts/build_location_catalog.py`, byte for byte, and takes the source path
+  from the configured game install when none is given.
+- Added `gore location resolve` and `gore location list`, an offline lookup over
+  the 10,075 named spots. The game resolves an unknown waypoint to nothing and
+  logs nothing, so a typo in a teleport call is a silent no-op; `resolve` exits
+  non-zero and suggests the near names instead. Both read a catalog compiled
+  into the binary, so they need no game install.
 
 ## [0.1.0] - 2026-06-19
 
