@@ -1,16 +1,16 @@
 //! `gore audio list` against real `.bank` files, through the built binary.
 //!
-//! Only this tier can prove the thing that broke: how much a caller actually receives. The banks
-//! the game ships are 260 MB and are never vendored here, so every bank below is built by
-//! `gore_fmod`'s `test-fixtures` builder — a genuine encrypted RIFF/`FEV ` wrapper the same reader
-//! walks, whose codec is PCM16 rather than the shipped Vorbis, so a `codec` field can only be right
-//! by being read.
+//! Only this tier can prove the thing that broke: how much a caller actually receives, and whether
+//! `replace` and `list` describe the same bank. The banks the game ships are 260 MB and are never
+//! vendored here, so every bank below is built by `gore_fmod`'s `test-fixtures` builder — a genuine
+//! encrypted RIFF/`FEV ` wrapper the same reader walks, whose codec is PCM16 rather than the
+//! shipped Vorbis, so a `codec` field can only be right by being read.
 
 use std::path::Path;
 
 use assert_cmd::Command;
 use gore_fmod::test_fixture::{numbered_pcm16_samples, pristine_bank_pcm16};
-use gore_fmod::{Pcm16Sample, GOTHIC_STUDIO_KEY};
+use gore_fmod::{wav_pcm16, Pcm16Sample, GOTHIC_STUDIO_KEY};
 use predicates::str::contains;
 use tempfile::TempDir;
 
@@ -332,6 +332,87 @@ fn the_agent_and_the_shell_user_read_the_same_help_for_every_flag_audio_list_dec
              {expected:?}\n  clap:  {help:?}"
         );
     }
+}
+
+#[test]
+fn a_replaced_sample_is_listed_as_the_replacement_and_not_as_the_audio_it_replaced() {
+    // The whole reason a deploy could not be checked. `replace` appends a second FSB5 and repoints
+    // the waveform at it — the game follows that repoint — but sub-bank 0 keeps the original audio
+    // byte for byte by design, and every reader here went there. So a user who replaced a 0.30 s
+    // click was shown the original's 32.70 s by the very command that had just written the file,
+    // and "the toolkit cannot read back its own output" was indistinguishable from "the write did
+    // nothing". Only this tier proves it, because `replace` and `list` are two separate runs of the
+    // binary over one file on disk.
+    let temp = TempDir::new().unwrap();
+    let bank = temp.path().join("SFX.bank");
+    let replaced = temp.path().join("SFX_modded.bank");
+    named_bank(
+        &bank,
+        &[
+            Pcm16Sample {
+                name: "SFX_UI_Action_Button_Click_01".into(),
+                freq: 22_050,
+                channels: 1,
+                pcm: vec![0i16; 2_205], // 0.10 s
+            },
+            Pcm16Sample {
+                name: "SFX_UI_Action_Button_Hover_01".into(),
+                freq: 22_050,
+                channels: 1,
+                pcm: vec![0i16; 4_410],
+            },
+        ],
+    );
+    // 0.75 s at a different rate, so neither the duration nor the rate can match by accident.
+    let wav = temp.path().join("click.wav");
+    std::fs::write(&wav, wav_pcm16(44_100, 1, &vec![0i16; 33_075])).unwrap();
+    let map = temp.path().join("map.json");
+    std::fs::write(
+        &map,
+        serde_json::json!({ "SFX_UI_Action_Button_Click_01": "click.wav" }).to_string(),
+    )
+    .unwrap();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "audio",
+            "replace",
+            "--map",
+            map.to_str().unwrap(),
+            "--bank",
+            bank.to_str().unwrap(),
+            "--out",
+            replaced.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(contains("1 sample(s) replaced"));
+
+    let value = list_json(&replaced, &[]);
+    let click = &value["samples"][0];
+    assert_eq!(click["name"], "SFX_UI_Action_Button_Click_01");
+    assert_eq!(
+        click["replaced"], true,
+        "a listing has to say which samples a replacement reached, got {value}"
+    );
+    assert_eq!(click["freq"], 44_100, "the replacement's rate, not the 22050 Hz it replaced");
+    assert_eq!(
+        click["seconds"].as_f64().unwrap(),
+        0.75,
+        "the replacement's length, not the 0.10 s it replaced"
+    );
+
+    let hover = &value["samples"][1];
+    assert_eq!(hover["replaced"], false, "the untouched sample must not read as replaced");
+    assert_eq!(hover["freq"], 22_050);
+
+    // And the human table, because that is what a person actually looks at after a deploy.
+    let human = list_stdout(&replaced, &["--filter", "click"]);
+    assert!(
+        human.contains("44100Hz") && human.contains("[replaced"),
+        "the table must mark the replacement, got {human:?}"
+    );
 }
 
 #[test]

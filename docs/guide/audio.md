@@ -72,6 +72,44 @@ written. Skips are reported to stderr once per *reason*, with a count and the
 first sample that hit it — a whole bank in the wrong codec is one root cause,
 not 7,218 of them.
 
+## Pick a sample the surface plays
+
+A sample is not a sound the game triggers. The game plays FMOD *events* —
+separate cooked assets under `/Game/FMOD/Events/…` — and an event draws on one
+or more of the bank's samples. The two name lists are kept apart and do not
+always agree: the game has an event `SFX_UI_Action_MenuButton_Hover` for which
+`SFX.bank` holds no sample of that name, and the bank holds
+`SFX_UI_Notify_ClickElement_01` for which there is no such event. A name that
+reads like the sound you are after is a hint, not a binding; the binding is in
+the cooked UI package, which names the event it plays among its imports.
+
+Where several near-identical names exist, that decides whether you hear anything
+at all. The main menu's buttons — and the pause menu's — play
+`SFX_UI_Action_MenuButton_Click`. The `SFX_UI_Action_Button_Click` samples
+sitting next to them in a `--filter Click` listing belong to inventory slots,
+sliders, spin boxes and the settings rows. Replace one of those, click through
+the main menu, and you hear the original — not because the replacement failed
+but because that surface never plays it.
+
+## Variant sets
+
+Most sounds are one take of several. 7,191 of `SFX.bank`'s 7,218 sample names
+end in a two-digit index, and 1,350 of the 2,135 groups those indices form hold
+more than one member — 6,406 samples between them. `SFX_UI_Action_Button_Click`
+has four takes; the largest groups have 26.
+
+The game plays one member per trigger, so replacing a single member changes the
+sound only when that member is the one picked, and the rest of the group still
+plays unaltered. Count the group before you replace anything, and replace all of
+it if the change has to be audible every time:
+
+```powershell
+gore audio list --bank "$SFX" --filter SFX_UI_Action_Button_Click
+```
+
+Which member a trigger picks is decided by the event's playlist inside the bank,
+which `gore audio` does not read.
+
 ## Replace
 
 Write a map of sample name → replacement WAV. Paths are resolved relative to
@@ -106,6 +144,32 @@ Undo an in-place replacement:
 ```powershell
 gore audio restore --bank "$GAME\...\SFX.bank"
 ```
+
+## What is proven, and by what
+
+Check your own work by listing the bank again. A sample whose waveform now points
+at the appended sub-bank is marked, and reports the injected rate, channels and
+length rather than the original's:
+
+```
+#2964   44100Hz 1ch   0.35s  SFX_UI_Action_Button_Click_01  [replaced, Pcm16]
+```
+
+That marker is a real readback: it resolves the waveform to whichever sub-bank it
+now names, so an absent marker after a successful `replace` means the repoint did
+not land. `--json` carries the same thing as `"replaced": true`.
+
+What it proves is that the bank names your audio where the original used to be —
+nothing more. It does not prove the surface you are about to test plays that
+sample (see [Pick a sample the surface plays](#pick-a-sample-the-surface-plays)),
+and it does not prove anyone will hear it.
+
+For the layer below that, the record is this: an injected bank loads in the
+game's own FMOD runtime and the event plays the injected audio. That was measured
+once, off-line, by rendering an event through FMOD's non-realtime writer from a
+pristine bank and from an injected one and comparing the results — not by anyone
+listening in game. Nothing in this toolkit ever observes the screen or the
+speakers, and no test in the suite checks either.
 
 ## Share a patch without shipping game audio
 

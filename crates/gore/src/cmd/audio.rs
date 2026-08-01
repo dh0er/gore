@@ -63,14 +63,17 @@ pub fn list(
     key: Option<String>,
 ) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let f0 = gore_fmod::bank_fsb0(&bytes, &key_bytes(key))
+    // `read_bank`, not `bank_fsb0`: a replacement appends a sub-bank and repoints the waveform at
+    // it rather than overwriting sub-bank 0, so a listing built from sub-bank 0 describes the audio
+    // a replacement replaced and calls it the bank's current contents.
+    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
-    let sample_count = f0.samples.len();
+    let sample_count = view.samples.len();
     // Filter first, cap second: `matched_count` is only meaningful if the cap never hides a
     // candidate the filter would have kept.
     let needle = filter.as_deref().map(str::to_lowercase);
-    let matched = f0
+    let matched = view
         .samples
         .iter()
         .enumerate()
@@ -90,12 +93,17 @@ pub fn list(
             .map(|(index, sample)| {
                 // The same spelling `gore-ffi`'s `audio_list` gives the mod studio, so the CLI and
                 // the GUI describe one sample the same way.
+                // `replaced` is the answer to the only question a deploy leaves open, and nothing
+                // else in the document can stand in for it: a replacement keeps the sample's name
+                // and index, so a caller comparing two listings sees a rate and a duration change
+                // and cannot tell that from having read the wrong bank.
                 serde_json::json!({
                     "index": index,
                     "name": sample.name,
                     "freq": sample.freq,
                     "channels": sample.channels,
                     "seconds": sample_seconds(sample),
+                    "replaced": sample.replaced,
                 })
             })
             .collect::<Vec<_>>();
@@ -106,7 +114,7 @@ pub fn list(
         // comparing counts.
         let mut document = serde_json::json!({
             "bank": bank.display().to_string(),
-            "codec": format!("{:?}", f0.codec),
+            "codec": format!("{:?}", view.codec()),
             "sample_count": sample_count,
             "matched_count": matched.len(),
             "listed_count": samples.len(),
@@ -128,10 +136,17 @@ pub fn list(
         Some(_) => format!(", {} matched --filter", matched.len()),
         None => String::new(),
     };
-    println!("{sample_count} samples, codec {:?}{narrowed}", f0.codec);
+    println!("{sample_count} samples, codec {:?}{narrowed}", view.codec());
     for (i, s) in listed {
+        // The marker carries the replacement's own codec because that is the fact `extract` turns
+        // on, and because a row that differs from the shipped bank in nothing but two numbers is
+        // otherwise indistinguishable from a mistyped `--bank`.
+        let replaced = match s.replaced {
+            true => format!("  [replaced, {:?}]", s.codec),
+            false => String::new(),
+        };
         println!(
-            "#{i:<5} {:6}Hz {}ch {:6.2}s  {}",
+            "#{i:<5} {:6}Hz {}ch {:6.2}s  {}{replaced}",
             s.freq,
             s.channels,
             sample_seconds(s),
@@ -148,7 +163,7 @@ pub fn list(
 
 /// Playing time of one sample. A bank can carry a zero frequency for a placeholder entry, and
 /// dividing by it would print `NaN`/`inf` into a JSON document that then fails to parse.
-fn sample_seconds(sample: &gore_fmod::Fsb5Sample) -> f64 {
+fn sample_seconds(sample: &gore_fmod::BankSample) -> f64 {
     if sample.freq > 0 {
         sample.num_samples as f64 / sample.freq as f64
     } else {
@@ -179,19 +194,23 @@ pub fn extract(
     key: Option<String>,
 ) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let (block, fsb) = gore_fmod::decrypt_fsb0(&bytes, &key_bytes(key))
+    // Through the view, so a replaced sample is read out of the sub-bank it was repointed at.
+    // Reading sub-bank 0 wrote the audio the replacement replaced into a file named after the
+    // replacement — the one failure mode a caller cannot detect, because the file is there and
+    // plays.
+    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
     std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
     // indices to extract
     let indices: Vec<usize> = match &sample {
-        Some(name) if name != "all" => vec![fsb
+        Some(name) if name != "all" => vec![view
             .samples
             .iter()
             .position(|s| &s.name == name)
             .with_context(|| format!("sample not found: {name}"))?],
-        _ => (0..fsb.samples.len()).collect(),
+        _ => (0..view.samples.len()).collect(),
     };
 
     // One line per distinct reason, not per sample. `extract_wav` decodes Vorbis, so a bank whose
@@ -202,11 +221,11 @@ pub fn extract(
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for i in indices {
-        match gore_fmod::extract_wav(&block, &fsb, i) {
+        match view.extract_wav(i) {
             Ok(wav) => {
                 // Prefix with the sample index so two names that sanitize to the same basename
                 // (e.g. differing only by punctuation) don't collide and silently overwrite.
-                let path = out.join(format!("{i}_{}.wav", sanitize(&fsb.samples[i].name)));
+                let path = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
                 std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;
@@ -221,7 +240,7 @@ pub fn extract(
     for (reason, (count, first)) in &skips {
         eprintln!(
             "skipped {count} sample(s), first #{first} {}: {reason}",
-            fsb.samples[*first].name
+            view.samples[*first].name
         );
     }
     println!(
