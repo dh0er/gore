@@ -18,7 +18,7 @@ use gore_story_catalog::{
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::err;
+use crate::{err, err_with_details, unsupported_generation_details};
 
 const MAX_GAME_ROOT_BYTES: usize = 32 * 1024;
 const MAX_RESPONSE_BYTES: usize = 24 * 1024 * 1024;
@@ -30,6 +30,9 @@ const REQUEST_BINDING_DOMAIN: &[u8] =
 struct Failure {
     code: &'static str,
     message: String,
+    /// Bounded structured facts, for the refusals that have any. Every other failure keeps the
+    /// two-key error object unchanged.
+    details: Option<Value>,
 }
 
 impl Failure {
@@ -37,11 +40,22 @@ impl Failure {
         Self {
             code,
             message: truncate_utf8(message.into(), MAX_ERROR_MESSAGE_BYTES),
+            details: None,
+        }
+    }
+
+    fn with_details(code: &'static str, message: impl Into<String>, details: Value) -> Self {
+        Self {
+            details: Some(details),
+            ..Self::new(code, message)
         }
     }
 
     fn response(self) -> Value {
-        err(self.code, self.message)
+        match self.details {
+            Some(details) => err_with_details(self.code, self.message, details),
+            None => err(self.code, self.message),
+        }
     }
 }
 
@@ -332,9 +346,12 @@ fn map_story_catalog_error(error: CatalogError) -> Failure {
         CatalogError::IdentityChanged(_) | CatalogError::SourceChanged { .. } => {
             input_changed_failure()
         }
-        CatalogError::UnsupportedGeneration { .. } => Failure::new(
+        // The observed triple and the supported ones travel with the error and stop here. Carry
+        // them: the sentence alone tells a user with an updated game nothing they can act on.
+        CatalogError::UnsupportedGeneration { supported, actual } => Failure::with_details(
             "AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION",
-            "the selected game does not match the supported pinned generation",
+            "the selected game does not match any supported pinned generation",
+            unsupported_generation_details(&supported, &actual),
         ),
         _ => input_unavailable_failure(),
     }

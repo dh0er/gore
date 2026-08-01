@@ -41,41 +41,12 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-/// This exact shipped Binds.Cache was audited together with the scalar default-site profile.
-/// Exhaustive native field rows are never accepted from an unknown build.
-const VERIFIED_DEFAULT_FIELD_BINDS_SHA256: [u8; 32] = [
-    0x46, 0xe6, 0x62, 0x9a, 0xd5, 0xca, 0xcc, 0x11, 0x2b, 0x99, 0x22, 0xd4, 0x8a, 0x1a, 0xa9, 0x48,
-    0xf4, 0x05, 0x72, 0xd7, 0x28, 0x57, 0x05, 0xb9, 0x81, 0xc3, 0xec, 0xa3, 0xdc, 0x61, 0x5f, 0xea,
-];
-/// Deterministic digest of the audited `(owner, field, value type)` mapping extracted from the
-/// sealed Binds.Cache above. A parser change cannot silently alter mutation evidence.
-const VERIFIED_DEFAULT_FIELD_MAP_SHA256: [u8; 32] = [
-    0x5d, 0xdf, 0x7f, 0xa6, 0xdf, 0x36, 0xac, 0x00, 0xd0, 0x7b, 0xd0, 0x68, 0xfc, 0xf1, 0x9a, 0xd6,
-    0x1a, 0x3f, 0x4b, 0x83, 0x61, 0x33, 0x51, 0x39, 0x66, 0xdc, 0x37, 0x9b, 0x24, 0x24, 0x17, 0x07,
-];
-/// Deterministic digest of every unambiguous `(AngelScript type, /Script/ path)` bridge found in
-/// the sealed Binds file. Native-default ancestry uses this only together with a sealed USMAP.
-const VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256: [u8; 32] = [
-    0xcf, 0xfb, 0xce, 0x6f, 0xeb, 0x2f, 0x8c, 0x14, 0xdc, 0x5f, 0x25, 0x19, 0x37, 0x41, 0xf5, 0x89,
-    0x51, 0xc1, 0x6f, 0x27, 0x0a, 0x76, 0x77, 0x31, 0x25, 0xd0, 0xe5, 0x07, 0xd3, 0x6e, 0x95, 0xc4,
-];
-/// Per-build GUIDs from the exact audited `PrecompiledScript_Shipping.Cache` headers that share
-/// this byte-identical Binds database. A sealed Binds file is not mutation evidence for any other
-/// script-cache build; the native-ancestry layer separately binds each GUID to its exact combined
-/// cache fingerprint.
-const VERIFIED_DEFAULT_SCRIPT_CACHE_GUID: [u8; 16] = [
-    0x45, 0x0d, 0x65, 0xc0, 0x4f, 0x0c, 0x01, 0x4f, 0xbe, 0xc5, 0x68, 0x01, 0x63, 0x78, 0xe6, 0x9a,
-];
-const VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID: [u8; 16] = [
-    0x43, 0x52, 0x1b, 0x38, 0x49, 0x7e, 0x98, 0x4f, 0x8a, 0xbb, 0xc0, 0x35, 0xeb, 0x4c, 0xb1, 0xd7,
-];
-
+/// Every audited `PrecompiledScript_Shipping.Cache` GUID, from the generation table. A sealed
+/// Binds file is not mutation evidence for any other script-cache build; the native-ancestry layer
+/// separately binds each GUID to its exact combined cache fingerprint, and the two layers stay
+/// separate on purpose.
 fn is_verified_default_script_cache_guid(script_cache_guid: &[u8; 16]) -> bool {
-    [
-        VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
-        VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
-    ]
-    .contains(script_cache_guid)
+    gore_generation::row_for_script_cache_guid(script_cache_guid).is_some()
 }
 
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
@@ -370,13 +341,13 @@ fn strong_record_type_name(data: &[u8], offset: usize) -> Option<&str> {
 
 fn verified_default_field_types(data: &[u8]) -> HashMap<(String, String), String> {
     let source_sha256: [u8; 32] = Sha256::digest(data).into();
-    if source_sha256 == VERIFIED_DEFAULT_FIELD_BINDS_SHA256 {
-        let fields = scan_plain_field_types(data);
-        if field_type_map_sha256(&fields) == VERIFIED_DEFAULT_FIELD_MAP_SHA256 {
-            fields
-        } else {
-            HashMap::new()
-        }
+    let Some((field_map_sha256, _)) = gore_generation::binds_digests_for_sha256(&source_sha256)
+    else {
+        return HashMap::new();
+    };
+    let fields = scan_plain_field_types(data);
+    if field_type_map_sha256(&fields) == field_map_sha256 {
+        fields
     } else {
         HashMap::new()
     }
@@ -389,12 +360,13 @@ fn verified_default_class_paths(
     Option<VerifiedDefaultClassProfileDigests>,
 ) {
     let source_sha256: [u8; 32] = Sha256::digest(data).into();
-    if source_sha256 != VERIFIED_DEFAULT_FIELD_BINDS_SHA256 {
+    let Some((_, class_path_map_sha256)) = gore_generation::binds_digests_for_sha256(&source_sha256)
+    else {
         return (HashMap::new(), None);
-    }
+    };
     let paths = scan_type_paths(data);
     let bridge_sha256 = string_map_sha256(&paths);
-    if bridge_sha256 == VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256 {
+    if bridge_sha256 == class_path_map_sha256 {
         (paths, Some((source_sha256, bridge_sha256)))
     } else {
         (HashMap::new(), None)
@@ -1042,25 +1014,21 @@ mod tests {
             &[("UItemDefinition", "m_Value", "int")],
             &[("UItemDefinition", "m_Value", "int")],
         );
-        let mut foreign_guid = VERIFIED_DEFAULT_SCRIPT_CACHE_GUID;
+        let mut foreign_guid = gore_generation::GENERATION_ROWS[0].script_cache_guid;
         foreign_guid[15] ^= 1;
 
-        assert_eq!(
-            api.verified_default_field_type(
-                &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
-                "UItemDefinition",
-                "m_Value",
-            ),
-            Some("int")
-        );
-        assert_eq!(
-            api.verified_default_field_type(
-                &VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
-                "UItemDefinition",
-                "m_Value",
-            ),
-            Some("int")
-        );
+        for row in gore_generation::rows() {
+            assert_eq!(
+                api.verified_default_field_type(
+                    &row.script_cache_guid,
+                    "UItemDefinition",
+                    "m_Value",
+                ),
+                Some("int"),
+                "every audited generation reads the sealed field map, {} did not",
+                row.id
+            );
+        }
         assert_eq!(
             api.verified_default_field_type(&foreign_guid, "UItemDefinition", "m_Value"),
             None,
@@ -1108,16 +1076,14 @@ mod tests {
         assert_eq!(api.field_type_count(), from_bytes.field_type_count());
         // Both construction routes must agree about the sealed state too — including agreeing
         // that there is none, which is what an unsealed generation looks like from here.
-        assert_eq!(
-            api.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID),
-            from_bytes.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
-        );
-        assert_eq!(
-            api.verified_default_class_profile_digests(&VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID),
-            from_bytes.verified_default_class_profile_digests(
-                &VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID
-            )
-        );
+        for row in gore_generation::rows() {
+            assert_eq!(
+                api.verified_default_class_profile_digests(&row.script_cache_guid),
+                from_bytes.verified_default_class_profile_digests(&row.script_cache_guid),
+                "the two construction routes disagree about {}",
+                row.id
+            );
+        }
 
         eprintln!("distinct (class,name) entries : {}", api.class_name_count());
         eprintln!("distinct by-name entries       : {}", api.name_count());
@@ -1159,10 +1125,10 @@ mod tests {
         );
     }
 
-    /// The provenance record for `VERIFIED_DEFAULT_FIELD_BINDS_SHA256` and
-    /// `VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256`: the digests this file pins are the ones the
-    /// audited shipped bytes actually produce. Point `GORE_AS_BINDS` at that generation's
-    /// `Binds.Cache` and run with `--ignored`.
+    /// The provenance record for `binds_cache.sha256` and `binds_class_path_map_sha256` in the
+    /// generation table: the digests those rows pin are the ones the audited shipped bytes
+    /// actually produce. Point `GORE_AS_BINDS` at one generation's `Binds.Cache` and run with
+    /// `--ignored`.
     #[test]
     #[ignore = "sealed provenance; set GORE_AS_BINDS to the audited generation's Binds.Cache"]
     fn the_sealed_class_profile_digests_match_the_audited_binds_generation() {
@@ -1183,11 +1149,21 @@ mod tests {
             return;
         }
         let api = NativeApi::load(&path).expect("load Binds.Cache");
-        let (source_sha256, bridge_sha256) = api
-            .verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
-            .expect("sealed Binds class-profile digests");
-        assert_eq!(source_sha256, VERIFIED_DEFAULT_FIELD_BINDS_SHA256);
-        assert_eq!(bridge_sha256, VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256);
+        let bytes = std::fs::read(&path).expect("read the configured Binds.Cache");
+        let file_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+        let mut audited = false;
+        for row in gore_generation::rows_for_binds_sha256(&file_sha256) {
+            let (source_sha256, bridge_sha256) = api
+                .verified_default_class_profile_digests(&row.script_cache_guid)
+                .expect("sealed Binds class-profile digests");
+            assert_eq!(source_sha256, row.binds_cache.sha256, "{}", row.id);
+            assert_eq!(bridge_sha256, row.binds_class_path_map_sha256, "{}", row.id);
+            audited = true;
+        }
+        assert!(
+            audited,
+            "the configured Binds.Cache belongs to no audited generation, so it seals nothing"
+        );
     }
 
     /// batch-25a: the in-crate `refs::native_field_type` table must MATCH the shipped
@@ -1352,19 +1328,17 @@ mod tests {
             ),
             ("URuneSpellContainer", "RequiredMagicCircleLevel", "int"),
         ];
-        for guid in [
-            VERIFIED_DEFAULT_SCRIPT_CACHE_GUID,
-            VERIFIED_HOTFIX_24169431_SCRIPT_CACHE_GUID,
-        ] {
+        for row in gore_generation::rows() {
             for (owner, field, value_type) in expected {
                 assert_eq!(
-                    api.verified_default_field_type(&guid, owner, field),
+                    api.verified_default_field_type(&row.script_cache_guid, owner, field),
                     Some(value_type),
-                    "sealed item field {owner}.{field} for GUID {guid:02x?}"
+                    "sealed item field {owner}.{field} for generation {}",
+                    row.id
                 );
             }
         }
-        let mut foreign_guid = VERIFIED_DEFAULT_SCRIPT_CACHE_GUID;
+        let mut foreign_guid = gore_generation::GENERATION_ROWS[0].script_cache_guid;
         foreign_guid[0] ^= 1;
         assert_eq!(
             api.verified_default_field_type(&foreign_guid, "UItemDefinition", "m_Value"),

@@ -263,21 +263,20 @@ mod tests {
         };
         let cache = std::fs::read(path).expect("read configured cache");
         let fingerprint = combined_default_cache_fingerprint(&cache).expect("combined fingerprint");
-        let supported_sha256 = [
-            [
-                0x01, 0xfe, 0x4e, 0x37, 0xcc, 0x3a, 0x5d, 0xee, 0x15, 0xc2, 0xbe, 0xb4, 0x9a, 0x3f,
-                0x40, 0x61, 0x10, 0x77, 0x4b, 0x5e, 0x30, 0x0f, 0x2d, 0xe4, 0xad, 0x81, 0x1d, 0x0d,
-                0xf9, 0xad, 0xdd, 0x6b,
-            ],
-            [
-                0x21, 0x21, 0x11, 0x87, 0xec, 0xa2, 0x88, 0x9f, 0x04, 0xe2, 0xba, 0xf9, 0x5d, 0xa2,
-                0x2d, 0x4e, 0x71, 0x88, 0x28, 0x73, 0x41, 0xb7, 0x6e, 0xde, 0xd1, 0x18, 0x8a, 0x1d,
-                0x08, 0x54, 0x34, 0xc5,
-            ],
-        ];
-        assert!(supported_sha256.contains(&fingerprint.sha256));
-        assert_eq!(fingerprint.scalar_operand_count, 26_339);
-        assert_eq!(fingerprint.tag_operand_count, 1_432);
+        // This used to carry its own copy of the audited fingerprints and its own copy of the two
+        // operand counts. The third generation is what made that a defect rather than duplication:
+        // the counts moved with the build, so an install the table admits was refused here, by a
+        // test whose whole subject is that the fingerprint is stable under a tag edit. The row is
+        // the list; what is asserted is that the configured cache is one of them.
+        let row = gore_generation::rows()
+            .iter()
+            .find(|row| row.script_cache_mutation_stable_sha256 == fingerprint.sha256)
+            .expect("the configured cache is an audited generation");
+        assert_eq!(fingerprint.scalar_operand_count, row.scalar_default_operand_count);
+        assert_eq!(
+            fingerprint.tag_operand_count,
+            row.gameplay_tag_float32_operand_count
+        );
 
         let report = super::super::default_tag_map::reference_proven_tag_map_sites(&cache)
             .expect("tag report");

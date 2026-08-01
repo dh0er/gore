@@ -1,0 +1,31 @@
+{
+  "generation_id": "g1r-steam-24340829",
+  "label": "Steam build 24340829 (2026-07-31 update)",
+  "native_ancestry_profile_id": "sha256:0c45197727b24cdcab7eb18e28ed248906f6e9dd1449f7e983eda59535eb1e4a",
+  "gameplay_tag_float32_map_proof_id": "sha256:18624b5b78f756af2820a928bec7a5607ad9b3d75c9a422790d81ddf8b87dc96",
+  "scalar_default_operand_count": 26399,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6582,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26399,
+  "witnesses": {
+    "native_ancestry_profile_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact (GORE_AS_BUILD_24340829_GAME)",
+    "gameplay_tag_float32_map_proof_id": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact",
+    "scalar_default_operand_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "gameplay_tag_float32_operand_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact",
+    "class_count": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_field_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "unresolved_fields_with_ancestry": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact",
+    "direct_windows": "crates/gore-as/tests/default_patch_test.rs::configured_build_24340829_profile_and_item_field_matrix_are_exact"
+  },
+  "notes": [
+    "First generation whose Binds.Cache and USMAP both moved, so none of its five parser-output digests is inherited. All five were derived in-crate against the files listed in the row, by the crate's own scan_plain_field_types / scan_type_paths / rows_sha256 / derived_profile_sha256 / map_proof_sha256.",
+    "The USMAP is G1R-5.4.3-171261-272ce2f8.usmap, re-dumped 2026-07-31 against this executable. The 168781 dump beside it is the previous generation's, still hashes to its seal, and names none of the 12 classes this build's Binds.Cache added; sealing from it would have produced a green profile over the wrong class graph.",
+    "USMAP delta against the previous generation, from the dump-to-dump audit recorded in docs/reference/game-updates.md: 6594 -> 6602 class rows (12 added, 4 removed), 21903 -> 21963 class-declared properties, 0 reparented edges and 0 properties moved between a class and its base. That is what makes this a re-seal rather than a re-audit: no previously audited default site resolves to a different owner.",
+    "Counts moved, and none fell. Bridged classes 6572 -> 6582: the twelve classes the USMAP added are all named by the new Binds.Cache, minus two entries the previous Binds resolved and this one does not. Which two is not decidable without the previous Binds.Cache, and neither is among the four classes the USMAP dropped. Scalar default windows 26339 -> 26399 (+60) with unresolved fields still 0. Tag-map operands 1432 and tag-map declarations 8, both unchanged, on the same seven owners at the same canonical paths.",
+    "Binds parser shape on the new file, from the tests in crates/gore-as/src/cache/binds.rs: 14469 record-parse (class, field) type rows, 9431 (class, name) arity rows, 14123 distinct by-name entries. All 20 sealed item-field rows reproduce for every generation GUID, and both unsealed hardcoded field-type tables in refs.rs still match the new bytes.",
+    "The six curated story modules the catalog seals were decompiled out of THIS cache with `gore as emit-all` and all six reproduce byte-identically against their recorded source seals — 460/2312e01b, 932/b728be66, 455/1a4c6caa, 932/dde3f35f, 96033/e49a3a5f, 856/5f5060a2 — so the record set moved identity only and not content.",
+    "The item-field matrix behind audited_item_generation is asserted in the same test: 918 qualified target classes and the per-field counts m_Value 906, m_MaxStack 641, m_Weight 109, m_Mass 2, unchanged from the previous generation."
+  ]
+}

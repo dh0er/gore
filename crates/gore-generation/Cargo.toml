@@ -1,0 +1,12 @@
+[package]
+name = "gore-generation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The audited game-generation table: one row per exact shipped Gothic 1 Remake build."
+
+[dependencies]
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"

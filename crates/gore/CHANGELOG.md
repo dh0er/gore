@@ -18,3 +18,5 @@ First release. Command-line toolkit for modding Gothic 1 Remake.
 - `mcp serve` — all 78 commands over the Model Context Protocol, with every
   installation change confirmed first.
 - `guide` — the manual, built into the binary and rendered to one HTML file.
+- Commands whose evidence is audited against a specific game build say which
+  build you have and which ones were audited, instead of quietly doing less.

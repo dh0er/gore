@@ -191,11 +191,16 @@ class ModFfi {
       );
     }
 
+    // Two keys, or exactly those two plus `details`. The third key is named, not merely counted:
+    // relaxing this to "any three keys" would let an unknown field ride along as if it were the
+    // documented payload.
     final error = r['error'];
     if (error is! Map ||
-        error.length != 2 ||
+        error.length < 2 ||
+        error.length > 3 ||
         !error.containsKey('code') ||
-        !error.containsKey('message')) {
+        !error.containsKey('message') ||
+        (error.length == 3 && !error.containsKey('details'))) {
       throw ModFfiException._malformed(
         command: cmd,
         reason: 'field error has an invalid schema',
@@ -220,7 +225,23 @@ class ModFfi {
         reason: 'field error.message is invalid',
       );
     }
-    throw ModFfiException(command: cmd, code: code, message: message);
+    Map<String, Object?>? details;
+    if (error.containsKey('details')) {
+      final raw = error['details'];
+      if (raw is! Map) {
+        throw ModFfiException._malformed(
+          command: cmd,
+          reason: 'field error.details is invalid',
+        );
+      }
+      details = Map<String, Object?>.unmodifiable(raw.cast<String, Object?>());
+    }
+    throw ModFfiException(
+      command: cmd,
+      code: code,
+      message: message,
+      details: details,
+    );
   }
 
   Future<List<AudioSampleInfo>> audioList(String bank, {String? key}) async {
@@ -2738,13 +2759,15 @@ class ModFfiException implements Exception {
     required this.command,
     required this.code,
     required this.message,
+    this.details,
   });
 
   const ModFfiException._malformed({
     required this.command,
     required String reason,
   }) : code = malformedNativeResponseCode,
-       message = 'malformed native response: $reason';
+       message = 'malformed native response: $reason',
+       details = null;
 
   /// Local code used when gore_ffi does not return its documented error shape.
   static const malformedNativeResponseCode = 'MALFORMED_NATIVE_RESPONSE';
@@ -2752,6 +2775,11 @@ class ModFfiException implements Exception {
   final String command;
   final String code;
   final String message;
+
+  /// Bounded structured facts behind the refusal, when the backend had any. An unsupported game
+  /// generation carries `{kind, actual, supported}` here so a screen can show which of the three
+  /// sealed inputs moved instead of repeating one sentence.
+  final Map<String, Object?>? details;
 
   @override
   String toString() => '$command: $message [$code]';

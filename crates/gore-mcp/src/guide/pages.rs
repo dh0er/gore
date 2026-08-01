@@ -57,6 +57,7 @@ pages! {
     // ---- Reference: the contracts behind those commands -----------------------------------
     Reference / "dataassets-internals"    => "reference/dataassets-internals.md",
     Reference / "angelscript-internals"   => "reference/angelscript-internals.md",
+    Reference / "game-updates"            => "reference/game-updates.md",
     Reference / "dialog-runtime"          => "reference/dialog-runtime.md",
     Reference / "studio-authoring"        => "reference/studio-authoring.md",
     Reference / "studio-voice"            => "reference/studio-voice.md",

@@ -1633,6 +1633,65 @@ fn native_shipping_game_process_running() -> Result<bool, String> {
     Ok(false)
 }
 
+/// The single place from which install-mutating code asks whether the game is open.
+///
+/// Why this seam exists: a compiler-transaction test is about the transaction — which locks it
+/// takes, which journal it leaves behind, which bytes it puts back — and a machine-global process
+/// check makes it about the machine instead, so the same code passes or fails depending on whether
+/// the developer happens to have Gothic running while the suite runs. Test builds therefore read
+/// the answer the fixture states with [`StatedGameProcess`] and never enumerate anything. The real
+/// inspection is the only implementation compiled into a shipped binary: there is no environment
+/// variable and no runtime switch that can answer for it or turn the guard off.
+#[cfg(not(test))]
+fn shipping_game_process_running() -> Result<bool, String> {
+    native_shipping_game_process_running()
+}
+
+#[cfg(test)]
+fn shipping_game_process_running() -> Result<bool, String> {
+    Ok(STATED_GAME_PROCESS.with(|stated| stated.get()).expect(
+        "this test reached the install-mutation game-process guard without stating whether the \
+         game is running; hold a StatedGameProcess for the duration of the fixture",
+    ))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The running test's stated answer; `None` means the test never said, which is a test defect
+    /// rather than a licence to consult the developer's desktop.
+    static STATED_GAME_PROCESS: std::cell::Cell<Option<bool>> = std::cell::Cell::new(None);
+}
+
+/// A test's stated answer to "is the game running?", in force until the guard is dropped.
+#[cfg(test)]
+struct StatedGameProcess {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl StatedGameProcess {
+    fn not_running() -> Self {
+        Self::state(false)
+    }
+
+    fn running() -> Self {
+        Self::state(true)
+    }
+
+    fn state(running: bool) -> Self {
+        let previous = STATED_GAME_PROCESS.with(|stated| stated.replace(Some(running)));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for StatedGameProcess {
+    fn drop(&mut self) {
+        let previous = self.previous;
+        STATED_GAME_PROCESS.with(|stated| stated.set(previous));
+    }
+}
+
 fn require_shipping_game_process_closed_with<C>(check_game_process: C) -> Result<(), String>
 where
     C: FnOnce() -> Result<bool, String>,
@@ -1656,7 +1715,7 @@ where
 /// close as possible to the first write and must not present it as proof that a later launch is
 /// impossible.
 pub fn require_shipping_game_process_closed() -> Result<(), String> {
-    require_shipping_game_process_closed_with(native_shipping_game_process_running)
+    require_shipping_game_process_closed_with(shipping_game_process_running)
 }
 
 fn probe_install_compile_state_with<C>(
@@ -1738,7 +1797,7 @@ where
 /// process, or present artifact sets `safe_to_compile` to false. The function is strictly
 /// read-only.
 pub fn probe_install_compile_state(game_dir: &Path) -> InstallCompileStateProbe {
-    probe_install_compile_state_with(game_dir, native_shipping_game_process_running)
+    probe_install_compile_state_with(game_dir, shipping_game_process_running)
 }
 
 /// Acquire the shared live-install guard before resolving any pristine compiler input.
@@ -1747,7 +1806,7 @@ pub fn probe_install_compile_state(game_dir: &Path) -> InstallCompileStateProbe 
 /// [`compile_module_with_diagnostics_report_with_guard`]. Holding it across pristine resolution and
 /// compiler use closes cross-tool deploy/undeploy races without recursively reacquiring the lock.
 pub fn acquire_compile_install_mutation(game_dir: &Path) -> Result<InstallMutationGuard, String> {
-    install_compile_preflight_with(game_dir, native_shipping_game_process_running)?;
+    install_compile_preflight_with(game_dir, shipping_game_process_running)?;
     InstallMutationGuard::acquire(game_dir, "gore-as:compile")
 }
 
@@ -3824,7 +3883,7 @@ where
     game_run_regen_with_install_report_and(
         game_dir,
         src_dir,
-        native_shipping_game_process_running,
+        shipping_game_process_running,
         CompileTransaction::begin_isolation,
         generate,
     )
@@ -3916,7 +3975,7 @@ where
                     g1r,
                     script_dir,
                     guard,
-                    native_shipping_game_process_running,
+                    shipping_game_process_running,
                 ) {
                     Ok(transaction) => Ok(transaction),
                     Err(failure) => {
@@ -4247,7 +4306,7 @@ where
 {
     precompile_with_generator_report_and_process_checker(
         opts,
-        native_shipping_game_process_running,
+        shipping_game_process_running,
         generate,
     )
 }
@@ -5938,6 +5997,7 @@ mod tests {
     fn one_preheld_guard_spans_authoritative_read_and_compiler_transaction() {
         let root = unique_test_root("preheld-guard-read-through-transaction");
         let (game, shipping) = fake_install(&root);
+        let _game_process = StatedGameProcess::not_running();
         let src = root.join("src");
         std::fs::create_dir(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"// staged\n").unwrap();
@@ -5976,6 +6036,7 @@ mod tests {
     fn after_restore_hook_discards_output_and_audits_before_same_guard_release() {
         let root = unique_test_root("after-restore-same-guard-audit");
         let (game, shipping) = fake_install(&root);
+        let _game_process = StatedGameProcess::not_running();
         let src = root.join("src");
         std::fs::create_dir(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"// staged\n").unwrap();
@@ -6019,6 +6080,73 @@ mod tests {
         assert!(audit_called.get());
         assert!(!install_mutation_lock_path(&game).exists());
         assert!(!src.join("regen.cache").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_running_game_refuses_the_install_mutation_and_leaves_every_byte_where_it_was() {
+        // Every other transaction test states a closed game, so this is the case that keeps the
+        // refusal honest: state the opposite and the whole sentence a user sees has to come back,
+        // with the generator never launched and not one file moved. Without it, softening the
+        // guard would break nothing in this suite.
+        let root = unique_test_root("stated-running-game-refusal");
+        let (game, shipping) = fake_install(&root);
+        let _game_process = StatedGameProcess::running();
+        let src = root.join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"// staged\n").unwrap();
+        let script = g1r_dir(&game).join("Script");
+
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let error = game_run_regen_with_install_report_with_guard(&game, &src, guard, |_, _, _| {
+            panic!("the generator must not launch while the game is running")
+        })
+        .expect_err("a running game must refuse the transaction outright");
+
+        assert_eq!(
+            error,
+            "refusing install mutation while G1R-Win64-Shipping.exe is running; close the game \
+             and retry",
+            "the refusal must name the executable and the remedy the user has to apply"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(
+            !script.join("Mod.as").exists(),
+            "a refused mutation must stage nothing into the install"
+        );
+        assert!(!src.join("regen.cache").exists());
+        assert!(
+            install_compile_artifact_paths(&game)
+                .into_iter()
+                .all(|(_, path)| !path.exists()),
+            "a refused mutation must leave no lock, journal or backup behind"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_shipped_process_inspection_still_answers_for_this_machine_without_touching_the_install() {
+        // The seam means no transaction test enumerates processes any more, so this is the only
+        // case left that runs the implementation a shipped binary actually uses. If it stopped
+        // compiling or began failing on a supported host, every real compile would be refused and
+        // nothing else here would notice.
+        let root = unique_test_root("native-process-inspection");
+        let (game, shipping) = fake_install(&root);
+
+        let answer = native_shipping_game_process_running();
+        assert!(
+            answer.is_ok(),
+            "the shipped inspection must answer on a supported host rather than fail: {answer:?}"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(
+            install_compile_artifact_paths(&game)
+                .into_iter()
+                .all(|(_, path)| !path.exists()),
+            "the inspection is strictly read-only"
+        );
+
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -7306,6 +7434,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"script").unwrap();
@@ -7427,6 +7556,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Broken.as"), b"void Broken( {").unwrap();
@@ -7462,6 +7592,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"script").unwrap();
@@ -7499,6 +7630,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&base);
         let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Broken.as"), b"void Broken( {").unwrap();

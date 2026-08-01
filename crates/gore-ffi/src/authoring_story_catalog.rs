@@ -10,7 +10,7 @@ use gore_story_catalog::{
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::err;
+use crate::{err, err_with_details, unsupported_generation_details};
 
 const MAX_SELECTION_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 32 * 1024;
@@ -368,10 +368,16 @@ fn map_build_error(error: CatalogError) -> Value {
             "AUTHORING_STORY_CATALOG_BUILD_INPUT_CHANGED",
             "a generation input changed while the catalog was being built",
         ),
-        CatalogError::UnsupportedGeneration { .. } => (
-            "AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION",
-            "the three inputs do not match the pinned supported game generation",
-        ),
+        // The error arrives by value, so the observed triple and the supported ones are right here.
+        // Flattening them into one sentence was the last place these facts existed before the
+        // surface, and the surface is exactly where somebody needs them.
+        CatalogError::UnsupportedGeneration { supported, actual } => {
+            return err_with_details(
+                "AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION",
+                "the three inputs do not match any supported game generation",
+                unsupported_generation_details(&supported, &actual),
+            );
+        }
         CatalogError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound => (
             "AUTHORING_STORY_CATALOG_BUILD_INPUT_MISSING",
             "a required generation input does not exist",

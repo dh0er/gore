@@ -6,6 +6,10 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use gore_as::cache::default_evidence::{
+    audited_builds, classify_candidate_failure, CandidateVerdict, EvidenceCounts,
+    NativeEvidenceStatus, ObservedBuild, UsmapCandidate, UsmapProof,
+};
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::splice::splice_auto;
@@ -544,7 +548,71 @@ struct DefaultSitesJson<'a> {
     cache: CacheProofJson,
     site_count: usize,
     stats: DefaultStatsJson,
+    evidence: DefaultEvidenceJson,
     sites: Vec<DefaultSiteJson<'a>>,
+}
+
+/// The native-evidence verdict as a document, so `--json` never has to be reconciled against what
+/// the same run printed on stderr.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum DefaultEvidenceJson {
+    Qualified {
+        generation_id: String,
+        generation_label: String,
+        ancestry_profile_id: String,
+        usmap: Option<UsmapProofJson>,
+    },
+    UnsupportedGeneration {
+        observed: ObservedBuildJson,
+        audited: Vec<AuditedBuildJson>,
+    },
+    UsmapMissing {
+        generation_id: Option<String>,
+        examined: Vec<UsmapCandidateJson>,
+    },
+    UsmapAmbiguous {
+        generation_id: String,
+        matched: Vec<String>,
+    },
+    BindsUnavailable {
+        reason: String,
+    },
+    SealDrift {
+        generation_id: Option<String>,
+        drift: String,
+    },
+    NotRequested,
+}
+
+#[derive(Serialize)]
+struct UsmapProofJson {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+struct ObservedBuildJson {
+    script_cache_guid: String,
+    script_cache_length: usize,
+    script_cache_sha256: String,
+    binds_length: Option<usize>,
+    binds_sha256: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AuditedBuildJson {
+    id: &'static str,
+    label: &'static str,
+    ancestry_profile_id: &'static str,
+    map_proof_id: &'static str,
+}
+
+#[derive(Serialize)]
+struct UsmapCandidateJson {
+    path: String,
+    sha256: Option<String>,
+    rejection: &'static str,
 }
 
 #[derive(Serialize)]
@@ -606,6 +674,7 @@ struct DefaultPatchJson<'a> {
     output: CacheProofJson,
     expected_hex: String,
     replacement_hex: String,
+    evidence: DefaultEvidenceJson,
     provenance: DefaultProvenanceJson<'a>,
 }
 
@@ -690,7 +759,15 @@ struct TagMapPatchJson<'a> {
 /// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
 /// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
 fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
-    load_native_api_with_proof(cache_file).map(|(api, _)| api)
+    load_native_api_with_proof(cache_file).map(|loaded| loaded.native)
+}
+
+/// A parsed `Binds.Cache` together with the measurements a refusal has to be able to quote.
+struct LoadedBinds {
+    native: gore_as::cache::binds::NativeApi,
+    proof: EvidenceFileProofJson,
+    len: usize,
+    sha256: [u8; 32],
 }
 
 fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
@@ -700,9 +777,7 @@ fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
     })
 }
 
-fn load_native_api_with_proof(
-    cache_file: &Path,
-) -> Option<(gore_as::cache::binds::NativeApi, EvidenceFileProofJson)> {
+fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
     let path = native_api_path(cache_file)?;
     let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
         Ok(bytes) => bytes,
@@ -723,9 +798,14 @@ fn load_native_api_with_proof(
     };
     let proof = evidence_file_proof(&path, &bytes);
     match gore_as::cache::binds::NativeApi::from_bytes(&bytes) {
-        Some(api) => {
+        Some(native) => {
             eprintln!("loaded native arities from {}", path.display());
-            Some((api, proof))
+            Some(LoadedBinds {
+                native,
+                proof,
+                len: bytes.len(),
+                sha256: Sha256::digest(&bytes).into(),
+            })
         }
         None => {
             eprintln!("warning: failed to parse {}", path.display());
@@ -739,12 +819,9 @@ struct DefaultMutationEvidence {
     ancestry: Option<gore_as::cache::default_ancestry::DefaultNativeAncestry>,
     binds: Option<EvidenceFileProofJson>,
     usmap: Option<EvidenceFileProofJson>,
-}
-
-#[derive(Clone, Copy)]
-enum DefaultEvidencePolicy {
-    ScalarFallback,
-    RequiredTagMap,
+    /// Why the sealed tuple did or did not qualify. Carried rather than printed here, so that every
+    /// command prints it exactly once, in its own place, with its own counts.
+    status: NativeEvidenceStatus,
 }
 
 /// Resolve USMAP candidates without trusting a Steam location or versioned filename. An explicit
@@ -901,20 +978,36 @@ fn evidence_file_proof(path: &Path, bytes: &[u8]) -> EvidenceFileProofJson {
 /// Load optional native mutation evidence. Every failure deliberately preserves the existing
 /// scalar-only path: the sealed Binds data may still prove direct native field types, while no
 /// native-grandparent ancestry is supplied.
-fn load_default_mutation_evidence(
-    cache_file: &Path,
-    cache: &[u8],
-    policy: DefaultEvidencePolicy,
-) -> DefaultMutationEvidence {
-    let Some((loaded_native, binds)) = load_native_api_with_proof(cache_file) else {
+///
+/// The verdict about the *build* is hoisted out of the USMAP loop. `from_schema_db` settles the
+/// script-cache identity before it reads a single USMAP byte, so the first candidate that answers
+/// "this is not an audited build" has answered for all of them — and printing that answer under a
+/// candidate's path is what used to make an unaudited build look like a bad reflection dump.
+fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMutationEvidence {
+    let Some(loaded) = load_native_api_with_proof(cache_file) else {
+        let reason = match native_api_path(cache_file) {
+            Some(path) => format!("no usable Binds.Cache at {}", path.display()),
+            None => "no Binds.Cache location could be derived for this script cache".to_owned(),
+        };
         return DefaultMutationEvidence {
             native: None,
             ancestry: None,
             binds: None,
             usmap: None,
+            status: NativeEvidenceStatus::BindsUnavailable { reason },
         };
     };
-    let native = Some(loaded_native);
+    let observed = ObservedBuild {
+        // Every caller proves the outer header first; an all-zero GUID here would be a header this
+        // command already refused to walk.
+        script_cache_guid: CacheHeader::parse(cache).map_or([0u8; 16], |header| header.hash),
+        script_cache_len: cache.len(),
+        script_cache_sha256: Sha256::digest(cache).into(),
+        binds_len: Some(loaded.len),
+        binds_sha256: Some(loaded.sha256),
+    };
+    let binds = loaded.proof;
+    let native = Some(loaded.native);
     let native_ref = native.as_ref().expect("just populated native evidence");
     let configured = std::env::var_os("GORE_AS_USMAP").map(PathBuf::from);
     let candidates = match default_usmap_candidates(cache_file, configured) {
@@ -924,60 +1017,103 @@ fn load_default_mutation_evidence(
             Vec::new()
         }
     };
+
     let mut matches = Vec::new();
+    let mut examined = Vec::new();
+    let mut verdict = None;
     for path in candidates {
-        let result = (|| -> Result<_> {
-            let bytes = read_default_usmap(&path)?;
-            let proof = evidence_file_proof(&path, &bytes);
-            let schemas = gore_asset::SchemaDb::from_usmap(&bytes)
-                .map_err(anyhow::Error::from)
-                .context("AS_DEFAULT_USMAP: parsing sealed schema map")?;
-            let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
-                native_ref, cache, &schemas,
-            )
-            .map_err(anyhow::Error::from)
-            .context("AS_DEFAULT_ANCESTRY: validating cache/Binds/USMAP tuple")?;
-            Ok((profile, proof))
-        })();
-        match result {
-            Ok((profile, proof)) => matches.push((path, profile, proof)),
-            Err(error) => eprintln!(
-                "warning: {} is not usable native-default evidence: {error:#}",
-                path.display()
-            ),
+        if verdict.is_some() {
+            break;
+        }
+        let display = path.display().to_string();
+        let bytes = match read_default_usmap(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("warning: AS_DEFAULT_USMAP: {error:#}");
+                examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: None,
+                    rejection: "could not be read",
+                });
+                continue;
+            }
+        };
+        let proof = evidence_file_proof(&path, &bytes);
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let schemas = match gore_asset::SchemaDb::from_usmap(&bytes) {
+            Ok(schemas) => schemas,
+            Err(error) => {
+                eprintln!("warning: AS_DEFAULT_USMAP: parsing {display}: {error}");
+                examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: Some(digest),
+                    rejection: "is not a parseable schema map",
+                });
+                continue;
+            }
+        };
+        match gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+            native_ref, cache, &schemas,
+        ) {
+            Ok(profile) => matches.push((display, profile, proof, digest)),
+            Err(error) => match classify_candidate_failure(&error) {
+                CandidateVerdict::UnsupportedCache => {
+                    verdict = Some(NativeEvidenceStatus::UnsupportedGeneration {
+                        observed: observed.clone(),
+                        audited: audited_builds(),
+                    });
+                }
+                CandidateVerdict::UnsupportedBinds => {
+                    verdict = Some(NativeEvidenceStatus::BindsUnavailable {
+                        reason: error.to_string(),
+                    });
+                }
+                CandidateVerdict::SealDrift(drift) => {
+                    verdict = Some(NativeEvidenceStatus::SealDrift {
+                        generation_id: None,
+                        drift,
+                    });
+                }
+                CandidateVerdict::Rejected(rejection) => examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: Some(digest),
+                    rejection,
+                }),
+            },
         }
     }
-    let (ancestry, usmap) = match matches.len() {
-        1 => {
-            let (path, profile, proof) = matches.pop().expect("one match");
-            eprintln!(
-                "loaded sealed native-default ancestry {} from {}",
+
+    let (ancestry, usmap, status) = match (verdict, matches.len()) {
+        (Some(status), _) => (None, None, status),
+        (None, 1) => {
+            let (path, profile, proof, sha256) = matches.pop().expect("one match");
+            let status = NativeEvidenceStatus::qualified(
                 profile.profile_id(),
-                path.display()
+                Some(UsmapProof { path, sha256 }),
             );
-            (Some(profile), Some(proof))
+            (Some(profile), Some(proof), status)
         }
-        0 => {
-            match policy {
-                DefaultEvidencePolicy::ScalarFallback => eprintln!(
-                    "native-default ancestry unavailable; using strict scalar-only fallback"
-                ),
-                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
-                    "warning: sealed native-default ancestry required for tag-map operation but unavailable"
-                ),
-            }
-            (None, None)
-        }
-        count => {
-            match policy {
-                DefaultEvidencePolicy::ScalarFallback => eprintln!(
-                    "warning: {count} sealed USMAP candidates matched; refusing ambiguous native-default ancestry"
-                ),
-                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
-                    "warning: {count} sealed USMAP candidates matched; tag-map operation requires exactly one"
-                ),
-            }
-            (None, None)
+        (None, 0) => (
+            None,
+            None,
+            NativeEvidenceStatus::UsmapMissing {
+                generation_id: None,
+                examined,
+            },
+        ),
+        (None, _) => {
+            let generation_id = NativeEvidenceStatus::generation_id_for_profile_id(
+                matches[0].1.profile_id(),
+            );
+            let matched = matches.into_iter().map(|(path, ..)| path).collect();
+            (
+                None,
+                None,
+                NativeEvidenceStatus::UsmapAmbiguous {
+                    generation_id,
+                    matched,
+                },
+            )
         }
     };
     DefaultMutationEvidence {
@@ -985,6 +1121,16 @@ fn load_default_mutation_evidence(
         ancestry,
         binds: Some(binds),
         usmap,
+        status,
+    }
+}
+
+/// Print the native-evidence verdict once, above whatever the command is about to emit. Sites go to
+/// stdout and this goes to stderr, so `--json` keeps a clean document and still states the cause.
+fn print_native_evidence(status: &NativeEvidenceStatus, counts: Option<EvidenceCounts>) {
+    let banner = status.banner(counts);
+    if !banner.is_empty() {
+        eprintln!("{banner}");
     }
 }
 
@@ -998,8 +1144,10 @@ fn load_required_tag_map_evidence(
     cache_file: &Path,
     cache: &[u8],
 ) -> Result<RequiredTagMapEvidence> {
-    let evidence =
-        load_default_mutation_evidence(cache_file, cache, DefaultEvidencePolicy::RequiredTagMap);
+    let evidence = load_default_mutation_evidence(cache_file, cache);
+    // Say what was refused before saying that the command needs it. Without this, a tag-map run on
+    // an unaudited build reports only that evidence is required, never that the build is the reason.
+    print_native_evidence(&evidence.status, None);
     Ok(RequiredTagMapEvidence {
         ancestry: evidence.ancestry.context(
             "AS_TAG_MAP_ANCESTRY: sealed cache/Binds/USMAP evidence is required; refusing fallback",
@@ -1028,6 +1176,81 @@ fn default_provenance_json(
         instruction_offset_dwords: site.instruction_offset_dw,
         operand_offset: site.operand_offset,
         length: site.encoding.width(),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    gore_as::cache::default_patch::encode_hex(bytes)
+}
+
+fn default_evidence_json(status: &NativeEvidenceStatus) -> DefaultEvidenceJson {
+    match status {
+        NativeEvidenceStatus::Qualified {
+            generation_id,
+            generation_label,
+            ancestry_profile_id,
+            usmap,
+        } => DefaultEvidenceJson::Qualified {
+            generation_id: (*generation_id).to_owned(),
+            generation_label: (*generation_label).to_owned(),
+            ancestry_profile_id: (*ancestry_profile_id).to_owned(),
+            usmap: usmap.as_ref().map(|proof| UsmapProofJson {
+                path: proof.path.clone(),
+                sha256: hex(&proof.sha256),
+            }),
+        },
+        NativeEvidenceStatus::UnsupportedGeneration { observed, audited } => {
+            DefaultEvidenceJson::UnsupportedGeneration {
+                observed: ObservedBuildJson {
+                    script_cache_guid: hex(&observed.script_cache_guid),
+                    script_cache_length: observed.script_cache_len,
+                    script_cache_sha256: hex(&observed.script_cache_sha256),
+                    binds_length: observed.binds_len,
+                    binds_sha256: observed.binds_sha256.as_ref().map(|sha| hex(sha)),
+                },
+                audited: audited
+                    .iter()
+                    .map(|build| AuditedBuildJson {
+                        id: build.id,
+                        label: build.label,
+                        ancestry_profile_id: build.ancestry_profile_id,
+                        map_proof_id: build.map_proof_id,
+                    })
+                    .collect(),
+            }
+        }
+        NativeEvidenceStatus::UsmapMissing {
+            generation_id,
+            examined,
+        } => DefaultEvidenceJson::UsmapMissing {
+            generation_id: generation_id.map(str::to_owned),
+            examined: examined
+                .iter()
+                .map(|candidate| UsmapCandidateJson {
+                    path: candidate.path.clone(),
+                    sha256: candidate.sha256.as_ref().map(|sha| hex(sha)),
+                    rejection: candidate.rejection,
+                })
+                .collect(),
+        },
+        NativeEvidenceStatus::UsmapAmbiguous {
+            generation_id,
+            matched,
+        } => DefaultEvidenceJson::UsmapAmbiguous {
+            generation_id: (*generation_id).to_owned(),
+            matched: matched.clone(),
+        },
+        NativeEvidenceStatus::BindsUnavailable { reason } => DefaultEvidenceJson::BindsUnavailable {
+            reason: reason.clone(),
+        },
+        NativeEvidenceStatus::SealDrift {
+            generation_id,
+            drift,
+        } => DefaultEvidenceJson::SealDrift {
+            generation_id: generation_id.map(str::to_owned),
+            drift: (*drift).to_owned(),
+        },
+        NativeEvidenceStatus::NotRequested => DefaultEvidenceJson::NotRequested,
     }
 }
 
@@ -1520,17 +1743,25 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             // Ahead of evidence loading: a non-cache input otherwise draws a `not usable
             // native-default evidence` warning before anything names the real mismatch.
             validate_module_cache(&cache, &bytes, "AS_DEFAULT_INPUT")?;
-            let evidence = load_default_mutation_evidence(
-                &cache,
-                &bytes,
-                DefaultEvidencePolicy::ScalarFallback,
-            );
-            let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+            let evidence = load_default_mutation_evidence(&cache, &bytes);
+            let report = gore_as::cache::default_patch::default_sites_with_evidence(
                 &bytes,
                 evidence.native,
                 evidence.ancestry,
+                Some(evidence.status),
             )
             .context("AS_DEFAULT_INSPECT")?;
+            // The counts are the whole report, so the reason for them belongs above them and above
+            // the sites, not folded into a per-file warning further up.
+            print_native_evidence(
+                &report.evidence,
+                Some(EvidenceCounts {
+                    editable_sites: report.sites.len(),
+                    direct_windows: report.stats.direct_windows,
+                    unresolved_fields: report.stats.unresolved_fields,
+                    unresolved_types: report.stats.unresolved_types,
+                }),
+            );
             let sites: Vec<_> = report
                 .sites
                 .iter()
@@ -1564,10 +1795,18 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         unsupported_types: report.stats.unsupported_types,
                         ambiguous_fields: report.stats.ambiguous_fields,
                     },
+                    evidence: default_evidence_json(&report.evidence),
                     sites: sites.iter().map(|site| default_site_json(site)).collect(),
                 };
                 println!("{}", serde_json::to_string_pretty(&document)?);
             } else {
+                if module.is_some() || class.is_some() || field.is_some() {
+                    eprintln!(
+                        "the counts above are for the whole cache; {} of them match the active \
+                         --module/--class/--field filter",
+                        sites.len()
+                    );
+                }
                 for site in &sites {
                     let selector =
                         serde_json::to_string(&DefaultSelectorJson::from_core(&site.selector))?;
@@ -1619,20 +1858,18 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let input = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
             validate_module_cache(&cache, &input, "AS_DEFAULT_INPUT")?;
-            let evidence = load_default_mutation_evidence(
-                &cache,
-                &input,
-                DefaultEvidencePolicy::ScalarFallback,
-            );
-            let patch = gore_as::cache::default_patch::patch_default_with_native_ancestry(
+            let evidence = load_default_mutation_evidence(&cache, &input);
+            let patch = gore_as::cache::default_patch::patch_default_with_evidence(
                 &input,
                 evidence.native,
                 evidence.ancestry,
+                Some(evidence.status),
                 &selector,
                 &expected,
                 &replacement,
             )
             .context("AS_DEFAULT_PATCH")?;
+            print_native_evidence(&patch.evidence, None);
             let persisted_output = publish_default_cache_noclobber(&out, &patch.bytes)?;
 
             if json {
@@ -1646,6 +1883,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     replacement_hex: gore_as::cache::default_patch::encode_hex(
                         &patch.after.expected,
                     ),
+                    evidence: default_evidence_json(&patch.evidence),
                     provenance: default_provenance_json(&patch.after),
                 };
                 println!("{}", serde_json::to_string_pretty(&document)?);

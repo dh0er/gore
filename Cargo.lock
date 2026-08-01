@@ -945,6 +945,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "gore-asset",
+ "gore-generation",
  "libc",
  "sha2",
  "thiserror 2.0.18",
@@ -1006,6 +1007,7 @@ dependencies = [
  "gore-asset",
  "gore-authoring",
  "gore-fmod",
+ "gore-generation",
  "gore-loc",
  "gore-mod",
  "gore-modgen",
@@ -1033,6 +1035,14 @@ name = "gore-fmod"
 version = "0.0.0"
 dependencies = [
  "lewton",
+]
+
+[[package]]
+name = "gore-generation"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1154,6 +1164,7 @@ dependencies = [
 name = "gore-story-catalog"
 version = "0.0.0"
 dependencies = [
+ "gore-generation",
  "libc",
  "serde",
  "serde_json",

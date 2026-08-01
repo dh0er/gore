@@ -384,6 +384,52 @@ fn err(code: &str, msg: impl Into<String>) -> Value {
     json!({"ok": false, "error": {"code": code, "message": msg.into()}})
 }
 
+/// Hard bound on the serialized `error.details` object. Messages are separately bounded at 4096
+/// bytes by each command's own `Failure`; details is a larger, separate budget because it carries
+/// whole generation seals rather than prose.
+const MAX_ERROR_DETAILS_BYTES: usize = 8 * 1024;
+
+/// At most this many supported generations are named. The list is a closed registry of three or so
+/// rows; a cap keeps one growing table from ever deciding the size of an error response.
+const MAX_ERROR_DETAILS_SUPPORTED_ENTRIES: usize = 16;
+
+/// `err`, plus one bounded machine-readable object.
+///
+/// Deliberately a second function rather than a parameter on `err`: the other ~38 local `Failure`
+/// types have nothing structured to say, and a refusal that carries no facts must keep emitting the
+/// exact two-key object every consumer already validates. Details that do not fit the bound are
+/// dropped rather than truncated — half a seal is worse than a sentence.
+fn err_with_details(code: &str, msg: impl Into<String>, details: Value) -> Value {
+    let fits = details.is_object()
+        && serde_json::to_string(&details).is_ok_and(|wire| wire.len() <= MAX_ERROR_DETAILS_BYTES);
+    if !fits {
+        return err(code, msg);
+    }
+    json!({"ok": false, "error": {"code": code, "message": msg.into(), "details": details}})
+}
+
+/// The structured facts behind `CatalogError::UnsupportedGeneration`.
+///
+/// The error has carried both the observed triple and the supported ones all along; every consumer
+/// received one sentence naming neither, so a user whose game updated could not see which of the
+/// three inputs had moved. The seals serialize as themselves — `{byte_len, sha256}` per input —
+/// which is the same shape the catalog document uses.
+fn unsupported_generation_details(
+    supported: &[gore_story_catalog::GameGenerationSeal],
+    actual: &gore_story_catalog::GameGenerationSeal,
+) -> Value {
+    let supported: Vec<Value> = supported
+        .iter()
+        .take(MAX_ERROR_DETAILS_SUPPORTED_ENTRIES)
+        .map(|seal| serde_json::to_value(seal).unwrap_or(Value::Null))
+        .collect();
+    json!({
+        "kind": "unsupported_generation",
+        "actual": serde_json::to_value(actual).unwrap_or(Value::Null),
+        "supported": supported,
+    })
+}
+
 const MAX_DISPATCH_COMMAND_BYTES: usize = 256;
 const MAX_JSON_ENCODED_COMMAND_BYTES: usize = MAX_DISPATCH_COMMAND_BYTES * 6;
 const MAX_DISPATCH_SCAN_DEPTH: usize = 128;

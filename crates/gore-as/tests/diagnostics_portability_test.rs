@@ -1,44 +1,52 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use gore_as::cache::default_patch::encode_hex;
 use gore_as::diagnostics::probe_executable;
+use gore_generation::{file_seal, FileSeal};
 
 struct ReleaseFixture {
     version: &'static str,
-    byte_len: u64,
-    sha256: &'static str,
+    /// Length and SHA-256 of the archived executable. The last two rows read the generation
+    /// table's own executable seal rather than restating it, so an archive can never describe a
+    /// build the table has re-sealed; the three older ones predate the table and carry their own.
+    seal: FileSeal,
     callback_rva: u64,
 }
 
 const RELEASE_FIXTURES: &[ReleaseFixture] = &[
     ReleaseFixture {
         version: "1.0.0",
-        byte_len: 171_437_056,
-        sha256: "740abfa9fbaae95beb5378c472ef4454df66205c140c3574eb5ba3695be53c55",
+        seal: file_seal(
+            171_437_056,
+            "740abfa9fbaae95beb5378c472ef4454df66205c140c3574eb5ba3695be53c55",
+        ),
         callback_rva: 0x467e760,
     },
     ReleaseFixture {
         version: "1.0.1",
-        byte_len: 171_482_112,
-        sha256: "77f3d48ccde47756a6fa94b4b031f0ad58e2b57dcba93451415a5ed1af03f4ab",
+        seal: file_seal(
+            171_482_112,
+            "77f3d48ccde47756a6fa94b4b031f0ad58e2b57dcba93451415a5ed1af03f4ab",
+        ),
         callback_rva: 0x467ea50,
     },
     ReleaseFixture {
         version: "1.0.2",
-        byte_len: 171_627_008,
-        sha256: "d9f45c72e624f6e27032379a7c3e51454562fd58a7eb9ac9cdaf6574c398afa9",
+        seal: file_seal(
+            171_627_008,
+            "d9f45c72e624f6e27032379a7c3e51454562fd58a7eb9ac9cdaf6574c398afa9",
+        ),
         callback_rva: 0x467e200,
     },
     ReleaseFixture {
         version: "1.0.3 Hotfix 1",
-        byte_len: 171_698_176,
-        sha256: "f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5",
+        seal: gore_generation::ROW_G1R_1_0_3.executable,
         callback_rva: 0x467f5b0,
     },
     ReleaseFixture {
         version: "1.0.3 Hotfix 2",
-        byte_len: 171_704_320,
-        sha256: "b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d",
+        seal: gore_generation::ROW_G1R_24169431.executable,
         callback_rva: 0x467fcd0,
     },
 ];
@@ -84,7 +92,7 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
         );
         let byte_len = std::fs::metadata(&exe).unwrap().len();
         assert_eq!(
-            byte_len, fixture.byte_len,
+            byte_len, fixture.seal.byte_len,
             "archived release {} byte length changed",
             fixture.version
         );
@@ -100,7 +108,8 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
             probe.callback_shape_verified
         );
         assert_eq!(
-            probe.sha256, fixture.sha256,
+            probe.sha256,
+            encode_hex(&fixture.seal.sha256),
             "archived release {} SHA-256 changed",
             fixture.version
         );

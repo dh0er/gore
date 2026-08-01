@@ -21,14 +21,11 @@ use gore_authoring::{
     WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
     MAX_REVISION3_ITEM_PATCH_REQUEST_JSON_BYTES_V1,
 };
+use gore_generation::FileSeal;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-
-use gore_story_catalog::{
-    known_generation_v1, known_generation_v2, ContentSeal as StoryContentSeal,
-};
 
 use crate::authoring_store_root_guard::{RetainedStoreRoot, RetainedStoreRootError};
 use crate::err;
@@ -49,8 +46,6 @@ const ITEM_INTEGER_32_MIN: i64 = i32::MIN as i64;
 const ITEM_INTEGER_32_MAX: i64 = i32::MAX as i64;
 const ITEM_FLOAT_32_MAX: f64 = f32::MAX as f64;
 const ITEM_CATALOG_AUTHORITY: &str = "audited_binds_ancestry_manifest_v1";
-const AUDITED_GENERATION_V1: &str = "g1r-steam-generation-v1";
-const AUDITED_GENERATION_V2: &str = "g1r-steam-hotfix-24169431";
 // Offline audit output: every embedded item class was joined to the sealed Binds field owners
 // through the reviewed native class-ancestry evidence for both registered generations. This seal
 // commits to the complete sorted `(vanilla class, field, native scalar type)` projection, not just
@@ -785,24 +780,22 @@ fn native_item_catalog() -> Result<&'static NativeItemCatalog, Failure> {
     }
 }
 
+/// A project anchor holds the executable and nothing else, so the executable is the only key
+/// available here. `rows_are_pairwise_distinct` in `gore-generation` is what keeps that key
+/// unambiguous; widening it to the full triple would be a separate behaviour change.
 fn audited_item_generation(target: &GameGenerationAnchor) -> Result<&'static str, Failure> {
-    let generation_v1 = known_generation_v1();
-    if same_executable_seal(&target.executable, &generation_v1.executable) {
-        return Ok(AUDITED_GENERATION_V1);
-    }
-    let generation_v2 = known_generation_v2();
-    if same_executable_seal(&target.executable, &generation_v2.executable) {
-        return Ok(AUDITED_GENERATION_V2);
-    }
-    Err(Failure::new(
-        "AUTHORING_REVISION3_ITEM_PATCH_TARGET_UNSUPPORTED",
-        "the project target has no audited embedded Item schema generation",
-    ))
-}
-
-fn same_executable_seal(authoring: &ContentSeal, catalog: &StoryContentSeal) -> bool {
-    authoring.byte_len == catalog.byte_len
-        && authoring.sha256.as_bytes() == catalog.sha256.as_bytes()
+    let executable = FileSeal {
+        byte_len: target.executable.byte_len,
+        sha256: *target.executable.sha256.as_bytes(),
+    };
+    gore_generation::row_for_executable(&executable)
+        .map(|row| row.audited_item_generation)
+        .ok_or_else(|| {
+            Failure::new(
+                "AUTHORING_REVISION3_ITEM_PATCH_TARGET_UNSUPPORTED",
+                "the project target has no audited embedded Item schema generation",
+            )
+        })
 }
 
 fn validate_project_item_patches_against_catalog(
@@ -1385,6 +1378,9 @@ mod tests {
     use gore_authoring::{
         AssetStoreIndex, EntityId, FormatV2, ItemPatchV1, ProjectId, ProjectMeta, Revision3Entity,
         SchemaRevisionV3, WorkingStoreFormat,
+    };
+    use gore_story_catalog::{
+        known_generation_v1, known_generation_v2, ContentSeal as StoryContentSeal,
     };
     use tempfile::TempDir;
 
