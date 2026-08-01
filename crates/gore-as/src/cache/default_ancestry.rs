@@ -10,8 +10,12 @@ use std::collections::{HashMap, HashSet};
 
 use gore_asset::schema::ExactDeclaredPropertyShape;
 use gore_asset::{SchemaDb, SchemaError, SchemaId, SchemaKind};
+// The digest three of this profile's five sealed values are taken over. It lives in the generation
+// crate rather than here because a qualification run derives those same three for a build that has
+// no row yet; two copies of one digest function is exactly the drift the table exists to catch, and
+// it is the kind that hides — each copy would agree with itself and with nothing else.
+use gore_generation::qualify::canonical_rows_sha256 as rows_sha256;
 use gore_generation::{expected_id_sha256, map_proof_sha256, GenerationRow, ProfileComponents};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::binds::NativeApi;
@@ -19,19 +23,6 @@ use super::default_fingerprint::{
     combined_default_cache_fingerprint, DefaultCacheFingerprint, DEFAULT_CACHE_FINGERPRINT_FORMAT,
 };
 use super::header::CacheHeader;
-
-/// Aliases for the first two audited generations, kept because they are named directly by the CLI,
-/// by `default_patch`'s tests and by two integration suites. A third generation deliberately gets
-/// no alias: new call sites read `gore_generation::rows()` instead of adding a pair of constants
-/// per build, which is the whole point of the table.
-pub const DEFAULT_NATIVE_ANCESTRY_PROFILE_ID: &str =
-    gore_generation::ROW_G1R_1_0_3.native_ancestry_profile_id;
-pub const DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID: &str =
-    gore_generation::ROW_G1R_1_0_3.gameplay_tag_float32_map_proof_id;
-pub const HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID: &str =
-    gore_generation::ROW_G1R_24169431.native_ancestry_profile_id;
-pub const HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID: &str =
-    gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id;
 
 fn cache_fingerprint(fingerprint: &DefaultCacheFingerprint) -> gore_generation::CacheFingerprint {
     gore_generation::CacheFingerprint {
@@ -494,18 +485,6 @@ impl DefaultNativeAncestry {
     }
 }
 
-fn rows_sha256<const N: usize>(rows: &mut Vec<[String; N]>) -> [u8; 32] {
-    rows.sort_unstable();
-    let mut hash = Sha256::new();
-    for row in rows {
-        for value in row {
-            hash.update((value.len() as u32).to_le_bytes());
-            hash.update(value.as_bytes());
-        }
-    }
-    hash.finalize().into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,7 +521,7 @@ mod tests {
         );
         assert_eq!(
             map_profile.proves_gameplay_tag_float32_map("UNativeLeaf", "Damage"),
-            Some(DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID)
+            Some(row.gameplay_tag_float32_map_proof_id)
         );
         assert_eq!(
             map_profile.proves_gameplay_tag_float32_map("UNativeLeaf", "damage"),

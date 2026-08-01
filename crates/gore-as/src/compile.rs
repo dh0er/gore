@@ -1800,13 +1800,63 @@ pub fn probe_install_compile_state(game_dir: &Path) -> InstallCompileStateProbe 
     probe_install_compile_state_with(game_dir, shipping_game_process_running)
 }
 
+/// [`probe_install_compile_state`] with the game-process answer supplied by the caller.
+///
+/// For crates that layer their own install mutation on this probe and test it against temporary
+/// fixture trees. They link this crate compiled *without* `cfg(test)`, so the in-crate seam our own
+/// fixtures use cannot reach them, and the real process list would answer instead — making their
+/// deploy tests depend on whether a developer has the game open rather than on the transaction
+/// under test. Production has no way to reach this: every shipped path goes through the wrapper
+/// above.
+pub fn probe_install_compile_state_with_stated_game_process<C>(
+    game_dir: &Path,
+    check_game_process: C,
+) -> InstallCompileStateProbe
+where
+    C: FnOnce() -> Result<bool, String>,
+{
+    probe_install_compile_state_with(game_dir, check_game_process)
+}
+
 /// Acquire the shared live-install guard before resolving any pristine compiler input.
 ///
 /// The returned guard must be passed to
 /// [`compile_module_with_diagnostics_report_with_guard`]. Holding it across pristine resolution and
 /// compiler use closes cross-tool deploy/undeploy races without recursively reacquiring the lock.
 pub fn acquire_compile_install_mutation(game_dir: &Path) -> Result<InstallMutationGuard, String> {
-    install_compile_preflight_with(game_dir, shipping_game_process_running)?;
+    acquire_compile_install_mutation_with_stated_game_process(
+        game_dir,
+        shipping_game_process_running,
+    )
+}
+
+/// TEST-ONLY entry point: acquire the same guard with the one machine-global question answered by
+/// the caller instead of by the machine the suite happens to run on.
+///
+/// Why a sibling rather than a parameter on [`acquire_compile_install_mutation`]: that function is
+/// what every production call site uses, and its shape — a game directory in, a guard out, nobody
+/// answering the process question for it — is a property a reader can check by looking at the call.
+/// Widening it would let any of those call sites answer for the machine without saying so. Keeping
+/// it parameterless means a caller that answers has to spell this name to do it, so the shipped
+/// paths are the ones that cannot, and this name appears in test code only.
+///
+/// This exists because `gore-as`'s own fixtures reach the seam through `#[cfg(test)]`, and a crate
+/// that links `gore-as` compiled without `cfg(test)` — `gore-ffi` — cannot. Its transaction tests
+/// would otherwise inherit the developer's desktop: the same code passing or failing on whether
+/// Gothic happens to be open, which is not what those tests are named for.
+///
+/// `check_game_process` replaces exactly one question and nothing else. Recovery artifacts, the
+/// cross-tool install-mutation lock, the order they are checked in and every refusal message are
+/// the same code path the default entry point runs.
+#[doc(hidden)]
+pub fn acquire_compile_install_mutation_with_stated_game_process<C>(
+    game_dir: &Path,
+    check_game_process: C,
+) -> Result<InstallMutationGuard, String>
+where
+    C: FnOnce() -> Result<bool, String>,
+{
+    install_compile_preflight_with(game_dir, check_game_process)?;
     InstallMutationGuard::acquire(game_dir, "gore-as:compile")
 }
 
@@ -6146,6 +6196,90 @@ mod tests {
                 .all(|(_, path)| !path.exists()),
             "the inspection is strictly read-only"
         );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_stated_running_game_refuses_the_acquisition_in_the_words_the_shipped_path_uses() {
+        // The stated-answer acquisition is the only one another crate's tests can reach, so it is
+        // the one that could quietly drift into a softer guard than the shipped path. Ask both the
+        // same question and compare the whole sentence rather than a substring: a reworded or
+        // downgraded refusal in either is then a failure here instead of a surprise in production.
+        let root = unique_test_root("stated-process-entry-point-refusal");
+        let (game, shipping) = fake_install(&root);
+
+        let stated = acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(true))
+            .expect_err("a stated running game must refuse the acquisition");
+        let shipped = {
+            let _game_process = StatedGameProcess::running();
+            acquire_compile_install_mutation(&game)
+                .expect_err("a running game must refuse the acquisition")
+        };
+        assert_eq!(
+            stated, shipped,
+            "the stated-answer entry point must refuse in the same words as the shipped one"
+        );
+        assert_eq!(
+            stated,
+            "refusing AngelScript compile while G1R-Win64-Shipping.exe is running; close the game \
+             and retry"
+        );
+
+        let failed = acquire_compile_install_mutation_with_stated_game_process(&game, || {
+            Err("injected Toolhelp failure".to_owned())
+        })
+        .expect_err("a stated inspection failure must fail closed");
+        assert_eq!(
+            failed,
+            "refusing AngelScript compile because native game-process inspection failed: injected \
+             Toolhelp failure"
+        );
+
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(
+            install_compile_artifact_paths(&game)
+                .into_iter()
+                .all(|(_, path)| !path.exists()),
+            "a refused acquisition must leave no lock, journal or backup behind"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stating_the_game_closed_does_not_excuse_the_rest_of_the_install_preflight() {
+        // Stating an answer states one fact about the machine, not that the install is safe to
+        // touch. This is what would notice if the stated-answer path ever shortcut the artifact
+        // scan or handed back something weaker than the cross-tool lock: a leftover recovery
+        // journal must still refuse, and the guard a foreign test holds must still block a deploy.
+        let root = unique_test_root("stated-closed-game-still-preflights");
+        let (game, _shipping) = fake_install(&root);
+        let journal = recovery_journal_path(&game);
+
+        std::fs::write(&journal, b"{}").unwrap();
+        let refused = acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false))
+            .expect_err("a leftover recovery journal must refuse the acquisition");
+        assert!(
+            refused.contains("compile recovery journal already exists"),
+            "got: {refused}"
+        );
+        std::fs::remove_file(&journal).unwrap();
+
+        let lock = install_mutation_lock_path(&game);
+        {
+            let guard =
+                acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false))
+                    .expect("a stated closed game and a clean install must acquire the guard");
+            assert_eq!(guard.path(), lock);
+            let contender = InstallMutationGuard::acquire(&game, "gore-mod:deploy")
+                .expect_err("a stated-answer guard must still block every other install mutation");
+            assert!(
+                contender.contains("install mutation is active"),
+                "got: {contender}"
+            );
+        }
+        assert!(!lock.exists(), "dropping the guard must release the lock");
 
         std::fs::remove_dir_all(root).unwrap();
     }

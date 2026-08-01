@@ -1017,6 +1017,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use gore_as::compile::acquire_compile_install_mutation_with_stated_game_process;
     use gore_authoring::{
         AssetStoreIndex, FormatV2, GameGenerationAnchor, NpcParentClassInput, ProjectId,
         ProjectMeta, Revision3Entity, Revision3NpcDraft, Revision3NpcDraftInput,
@@ -1482,7 +1483,12 @@ mod tests {
         };
         let game = temp.path().join("offline-game");
         fs::create_dir_all(&game).unwrap();
-        let guard = acquire_compile_install_mutation(&game).unwrap();
+        // The stated answer is what keeps this test about the structured failure and the released
+        // ownership. `gore-ffi` links `gore-as` compiled without `cfg(test)`, so the seam its own
+        // fixtures use is out of reach here and the real process inspection would answer instead —
+        // passing or failing on whether the developer happens to have Gothic open.
+        let guard =
+            acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false)).unwrap();
         let response = release_after_preflight(
             selection,
             guard,

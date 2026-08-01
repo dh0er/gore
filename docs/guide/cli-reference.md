@@ -160,6 +160,7 @@ Output directories must not exist and are never placed in the game tree.
 | `patch-default <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
 | `tag-map-sites <CACHE>` | `--module` · `--class` · `--field` · `--tag` · `--json` |
 | `patch-tag-map <CACHE>` | `--selector <JSON>` · `--expected-hex` · `--replacement-hex` · `-o, --out` · `--json` |
+| `qualify` | `--game` · `--usmap <FILE>` · `--catalog <JSON>` · `--id <ID>` · `--label <TEXT>` · `--json` |
 | `diagnostics-check` | `--exe <EXE>` · `--game <GAME>` |
 | `compile [SRC]` | `-o, --out` · `--game` · `--no-backup` · `--no-diagnostics` · `--diagnostics-hook <DLL>` · `--diagnostics-inject-delay-ms <MS>` |
 | `compile-module` | `--op add\|edit` · `--module` · `--rel-path` · `--source` · `--work-dir` · `--allow-new-symbols` · `-o, --out` · `--game` · diagnostics flags |

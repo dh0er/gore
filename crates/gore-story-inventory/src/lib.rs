@@ -827,7 +827,7 @@ mod tests {
         QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER_V2,
         REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
     };
-    use gore_story_catalog::{known_generation_v1, known_generation_v2};
+    use gore_story_catalog::known_supported_generations;
     use sha2::Sha256;
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
@@ -910,52 +910,63 @@ mod tests {
     }
 
     #[test]
-    fn supported_hotfix_generation_is_accepted_only_as_an_exact_triple() {
-        let generation = known_generation_v2();
-        assert_ne!(generation, known_generation_v1());
-        assert!(is_supported_generation(&generation));
+    fn every_audited_generation_is_accepted_only_as_an_exact_triple() {
+        // This named the second generation and asserted it differed from the first, so it proved
+        // nothing about any build added later. Reading the whole supported set instead means a new
+        // audited generation is covered here the moment it is admitted anywhere.
+        let audited = known_supported_generations();
+        assert!(
+            audited.len() >= 2,
+            "one generation would make the distinctness check below vacuous"
+        );
+        for (index, generation) in audited.iter().enumerate() {
+            for other in audited.iter().skip(index + 1) {
+                assert_ne!(generation, other, "audited generations must be distinct");
+            }
+            assert!(is_supported_generation(generation));
 
-        let artifact = artifact_for_generation(
-            generation.clone(),
-            seal(b"trusted supported-v2 Story catalog"),
-        );
-        assert_eq!(artifact.generation(), &generation);
-        assert_eq!(
-            artifact.wire.inventory.source.shipping_cache,
-            generation.shipping_cache
-        );
-        assert_eq!(
-            artifact.wire.inventory.source.binds_cache,
-            generation.binds_cache
-        );
-        validate_wire(&artifact.wire).unwrap();
+            let artifact = artifact_for_generation(
+                generation.clone(),
+                seal(b"trusted supported Story catalog"),
+            );
+            assert_eq!(artifact.generation(), generation);
+            assert_eq!(
+                artifact.wire.inventory.source.shipping_cache,
+                generation.shipping_cache
+            );
+            assert_eq!(
+                artifact.wire.inventory.source.binds_cache,
+                generation.binds_cache
+            );
+            validate_wire(&artifact.wire).unwrap();
 
-        let mut source_drift = artifact.wire.clone();
-        source_drift.inventory.source.binds_cache.sha256 = Sha256Digest::from_bytes([0x5c; 32]);
-        let payload = canonical_json(&source_drift.inventory, "source-drift payload").unwrap();
-        source_drift.payload_seal = seal_bytes(&payload);
-        assert!(matches!(
-            validate_wire(&source_drift),
-            Err(StoryInventoryError::Invariant(_))
-        ));
+            let mut source_drift = artifact.wire.clone();
+            source_drift.inventory.source.binds_cache.sha256 = Sha256Digest::from_bytes([0x5c; 32]);
+            let payload = canonical_json(&source_drift.inventory, "source-drift payload").unwrap();
+            source_drift.payload_seal = seal_bytes(&payload);
+            assert!(matches!(
+                validate_wire(&source_drift),
+                Err(StoryInventoryError::Invariant(_))
+            ));
 
-        let mut nearby_unknown = artifact.wire.clone();
-        nearby_unknown.inventory.generation.executable.sha256 =
-            Sha256Digest::from_bytes([0xa5; 32]);
-        assert_eq!(
-            nearby_unknown.inventory.generation.edition,
-            generation.edition
-        );
-        assert!(!is_supported_generation(
-            &nearby_unknown.inventory.generation
-        ));
-        let payload =
-            canonical_json(&nearby_unknown.inventory, "unknown-generation payload").unwrap();
-        nearby_unknown.payload_seal = seal_bytes(&payload);
-        assert!(matches!(
-            validate_wire(&nearby_unknown),
-            Err(StoryInventoryError::UnsupportedGeneration)
-        ));
+            let mut nearby_unknown = artifact.wire.clone();
+            nearby_unknown.inventory.generation.executable.sha256 =
+                Sha256Digest::from_bytes([0xa5; 32]);
+            assert_eq!(
+                nearby_unknown.inventory.generation.edition,
+                generation.edition
+            );
+            assert!(!is_supported_generation(
+                &nearby_unknown.inventory.generation
+            ));
+            let payload =
+                canonical_json(&nearby_unknown.inventory, "unknown-generation payload").unwrap();
+            nearby_unknown.payload_seal = seal_bytes(&payload);
+            assert!(matches!(
+                validate_wire(&nearby_unknown),
+                Err(StoryInventoryError::UnsupportedGeneration)
+            ));
+        }
     }
 
     fn authoring_seal(seal: &ContentSeal) -> AuthoringContentSeal {

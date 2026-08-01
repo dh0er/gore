@@ -88,28 +88,40 @@ moved**. That is what made it a transcription job rather than an audit.
 `Binds.Cache` should name the classes the new USMAP added and none of those it
 removed. If the two disagree, one of them is from the wrong build.
 
-**5. Verify the curated records still say what they said.** The story catalog
-seals the emitted source of specific script modules. Decompile each one out of the
-new cache and compare against its recorded seal. If they all reproduce, the
-content did not move and only the identity did. If one diverges, read the diff —
-that is a real content change and it is not a transcription job.
+**5. Run `gore as qualify --game "$GAME"`.** It derives every value a generation
+row needs, in-crate against the crate's own parsers, and prints the row plus a
+qualification record naming the test behind each number.
 
-**6. Derive the mechanical values.** Do this **in-crate**, against the crate's own
-parsers. Do not port the logic to a script to compute a hash faster: a
-reimplementation that is subtly wrong produces a seal that is perfectly
-self-consistent and describes nothing. Every seal that is a digest over parsed
-output — not over raw file bytes — has this property.
+It derives; it does not admit. The row it prints is a draft — putting it in the
+binary is still a person's decision, which is the point.
 
-**7. Sanity-check the counts before accepting them.** A digest cannot tell you a
-parser silently dropped rows. Compare the row counts against the previous
-generation and against each other: the two independent Binds parsers should agree
-on their overlap, the unsealed hardcoded field tables should still match, and the
-sealed item-field rows should reproduce. A count that fell is a signal; a count
-that moved by a handful is normal.
+It refuses rather than guessing, and each refusal is one of the traps above:
 
-**8. Add the generation and re-run everything.** Then confirm on the running game
-that a default patch still lands where it should — the seals prove the evidence
-is the evidence, never that the game agrees.
+| refusal | what it caught |
+|---|---|
+| no dump can be tied to this executable | the USMAP problem — a dump is only accepted when the executable actually spells the class names it declares |
+| two dumps fit equally well | a tie is not a coin flip |
+| a count fell | a digest cannot tell you a parser dropped rows; a count can |
+| a curated module stopped reproducing | content moved, not just identity — this is no longer a transcription job |
+| the sealed ancestry does not qualify against the dump this run sealed | the seal would have been self-consistent and wrong |
+
+Two things it will not do, deliberately. It never re-implements a parser to go
+faster: a copy that is subtly wrong produces a seal that is perfectly
+self-consistent and describes nothing, and every seal that digests *parsed
+output* rather than raw bytes has that property. And it never writes into the
+generation table.
+
+**6. Read what it refused, if it refused.** A fallen count or a diverged module is
+the finding, not an obstacle. Both mean the update changed something the previous
+audit had checked, and the answer is to look at what changed rather than to pass
+`--usmap` until the command stops complaining.
+
+**7. Add the row and re-run the suite.** One struct literal, one qualification
+file. The tests make the row re-derive its own published ids from its own
+components, so a mistyped digest fails there rather than in the field.
+
+**8. Confirm on the running game.** A seal proves the evidence is the evidence,
+never that the game agrees with it. Patch one default you can see and look.
 
 ## What is deliberately not automated
 

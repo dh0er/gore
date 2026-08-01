@@ -14,8 +14,14 @@
 //! `every_row_has_a_committed_qualification_artifact` proves somebody committed the measurement
 //! that produced it. Only a human reading that artifact proves the row is *true*. Adding a row is a
 //! governance act, not a table edit.
+//!
+//! [`qualify`] is the machine-side half of that governance: the pure derivations `gore as qualify`
+//! runs against an installation so that the numbers in a new row are measured rather than typed. It
+//! proposes; it never admits.
 
 use sha2::{Digest, Sha256};
+
+pub mod qualify;
 
 /// Versioned combined script-cache fingerprint format. It is one of the nine components of a row's
 /// derived profile ID, so it lives beside the rows rather than where it is computed: a format bump

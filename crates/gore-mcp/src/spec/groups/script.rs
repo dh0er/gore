@@ -225,6 +225,43 @@ const PATCH_TAG_MAP_ARGS: &[ArgSpec] = &[
     OUT_CACHE,
 ];
 
+const QUALIFY_ARGS: &[ArgSpec] = &[
+    GAME,
+    ArgSpec::new(
+        "usmap",
+        Long("usmap"),
+        Path,
+        "Exact `.usmap` reflection dump to qualify against. Omit to select one from the install, \
+         which refuses rather than choosing when two dumps both fit this executable.",
+        false,
+    ),
+    ArgSpec::new(
+        "catalog",
+        Long("catalog"),
+        Path,
+        "A previously published `story_catalog.v1` document, used to name the curated script \
+         modules and their sealed source. Omit when the build is already audited; the catalog is \
+         then built from the install itself.",
+        false,
+    ),
+    ArgSpec::new(
+        "id",
+        Long("id"),
+        Str,
+        "Proposed `GenerationRow::id` for the draft.",
+        false,
+    )
+    .with_default("`g1r-steam-<script cache GUID prefix>`, a placeholder"),
+    ArgSpec::new(
+        "label",
+        Long("label"),
+        Str,
+        "Proposed `GenerationRow::label`, the banner a person reads.",
+        false,
+    )
+    .with_default("derived from the id"),
+];
+
 const DIAGNOSTICS_CHECK_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "exe",
@@ -602,6 +639,18 @@ const AS_COMMANDS: &[CommandSpec] = &[
     )
     .json(JsonSupport::Stdout)
     .guide("angelscript-defaults"),
+    // Reads the installation and writes nothing — not even the row it proposes, which is why a
+    // maintainer still has to paste it. `Safety::read()` is therefore exact rather than generous.
+    CommandSpec::new(
+        "qualify",
+        "Derive an installed build's generation row and qualification artifact. Reads the game and \
+         writes nothing: it proposes a row for a person to add, and says what it could not measure.",
+        QUALIFY_ARGS,
+        Safety::read(),
+        T_LONG,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("angelscript-defaults"),
     CommandSpec::new(
         "diagnostics-check",
         "Offline-check whether the optional diagnostics hook has one safe AOB match. Does not \
@@ -701,7 +750,7 @@ mod tests {
 
     #[test]
     fn the_group_size_matches_the_cli() {
-        assert_eq!(AS.commands.len(), 20);
+        assert_eq!(AS.commands.len(), 21);
     }
 
     #[test]

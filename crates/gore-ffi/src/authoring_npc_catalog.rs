@@ -395,7 +395,7 @@ fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_story_catalog::{known_generation_v1, known_generation_v2, Sha256Digest};
+    use gore_story_catalog::{known_supported_generations, Sha256Digest};
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -519,6 +519,27 @@ mod tests {
         assert!(!response.to_string().contains(private));
     }
 
+    /// Measured NPC catalog response digests, keyed by `gore_generation::GenerationRow::id`.
+    ///
+    /// A build with no row here is not the same failure as a build with no row in the generation
+    /// table, and the test below says which one happened. These three digests cannot be derived
+    /// offline — each line is one recorded run against that exact installation — so a newly audited
+    /// generation legitimately arrives with no entry until somebody measures it.
+    const REAL_NPC_CATALOG_GOLDENS: &[(&str, &str, &str, &str)] = &[
+        (
+            "g1r-steam-1.0.3",
+            "aaeabcbee66bfd7402d88282827e76393fbbcb03d9a9e8f8f8eae4d38c056dd4",
+            "bc84dd8023a2df28e280e385e363748884fe5a49a94e78c990aacfe6271c6d7d",
+            "b7f1f08f1c10b38a461af45724d9e722c670e67cad49e00356851a85cda46ec1",
+        ),
+        (
+            "g1r-steam-24169431",
+            "42a6794e68610572f91ef1c41d5e8a661107fa689e7f0a41c65c302a784d665b",
+            "d11c6025e2ced4e376adb0ffdcafe8f5a7f9efd2ec6bf800f271be047b6fb9f8",
+            "342ec6bc1b1acefdd4f34ae652b141ee89a5e20d94679f10c3001b7e77f04946",
+        ),
+    ];
+
     #[test]
     #[ignore = "requires the explicitly configured pinned game generation"]
     fn configured_real_game_catalog_golden_is_stable() {
@@ -528,22 +549,24 @@ mod tests {
             build_for_game_root_v1_inner(&json!({"game_root": game_root}), MAX_RESPONSE_BYTES)
                 .expect("build pinned native NPC catalog");
         let generation = &response["generation"];
-        let (source_pair_sha256, payload_sha256, catalog_sha256) =
-            if generation == &json!(known_generation_v1()) {
-                (
-                    "aaeabcbee66bfd7402d88282827e76393fbbcb03d9a9e8f8f8eae4d38c056dd4",
-                    "bc84dd8023a2df28e280e385e363748884fe5a49a94e78c990aacfe6271c6d7d",
-                    "b7f1f08f1c10b38a461af45724d9e722c670e67cad49e00356851a85cda46ec1",
+        // The two named accessors this used to compare against knew two builds, so a third one
+        // reached the `else` arm and reported "unregistered generation" for a build the table had
+        // already admitted. The lookup now goes through the table and the two answers are separate.
+        let row = known_supported_generations()
+            .iter()
+            .position(|seal| generation == &json!(seal))
+            .map(|index| gore_generation::rows()[index])
+            .unwrap_or_else(|| panic!("real NPC golden returned an unregistered generation"));
+        let &(_, source_pair_sha256, payload_sha256, catalog_sha256) = REAL_NPC_CATALOG_GOLDENS
+            .iter()
+            .find(|golden| golden.0 == row.id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} is audited but no golden has been measured against it — run this once on \
+                     that install and add its three digests to REAL_NPC_CATALOG_GOLDENS",
+                    row.id
                 )
-            } else if generation == &json!(known_generation_v2()) {
-                (
-                    "42a6794e68610572f91ef1c41d5e8a661107fa689e7f0a41c65c302a784d665b",
-                    "d11c6025e2ced4e376adb0ffdcafe8f5a7f9efd2ec6bf800f271be047b6fb9f8",
-                    "342ec6bc1b1acefdd4f34ae652b141ee89a5e20d94679f10c3001b7e77f04946",
-                )
-            } else {
-                panic!("real NPC golden returned an unregistered generation")
-            };
+            });
         assert_eq!(response["ok"], true);
         assert_eq!(response["record_count"], 634);
         assert_eq!(response["rejection_count"], 416);

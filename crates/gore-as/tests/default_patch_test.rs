@@ -1296,11 +1296,11 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
     assert_eq!(profile.class_count(), 6_572);
     assert_eq!(
         profile.profile_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+        gore_generation::ROW_G1R_24169431.native_ancestry_profile_id
     );
     assert_eq!(
         profile.gameplay_tag_float32_map_proof_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
     );
 
     let tag_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(&cache, &profile)
@@ -1308,11 +1308,11 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
     assert_eq!(tag_report.site_count(), 1_432);
     assert_eq!(
         tag_report.ancestry_profile_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+        gore_generation::ROW_G1R_24169431.native_ancestry_profile_id
     );
     assert_eq!(
         tag_report.map_proof_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
     );
 
     let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
@@ -1363,7 +1363,7 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
         if let Some(ancestry_profile) = site.selector.ancestry_profile.as_deref() {
             assert_eq!(
                 ancestry_profile,
-                gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+                gore_generation::ROW_G1R_24169431.native_ancestry_profile_id,
                 "{field}"
             );
             *native_counts.entry(field).or_insert(0usize) += 1;

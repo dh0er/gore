@@ -8,7 +8,7 @@ pub mod decompile;
 pub mod default_ancestry;
 pub(crate) mod default_class_hierarchy;
 pub mod default_evidence;
-pub(crate) mod default_fingerprint;
+pub mod default_fingerprint;
 pub mod default_patch;
 pub(crate) mod default_patterns;
 pub(crate) mod default_tag_map;

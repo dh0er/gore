@@ -20,3 +20,5 @@ First release. Command-line toolkit for modding Gothic 1 Remake.
 - `guide` — the manual, built into the binary and rendered to one HTML file.
 - Commands whose evidence is audited against a specific game build say which
   build you have and which ones were audited, instead of quietly doing less.
+- `as qualify` derives everything a new game build needs to be audited, and
+  refuses rather than guessing when the evidence does not hold together.

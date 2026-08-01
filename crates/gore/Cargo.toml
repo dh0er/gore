@@ -17,6 +17,7 @@ gore-modgen = { path = "../gore-modgen" }
 gore-as = { path = "../gore-as" }
 gore-asset = { path = "../gore-asset" }
 gore-fmod = { path = "../gore-fmod" }
+gore-generation = { path = "../gore-generation" }
 gore-mod = { path = "../gore-mod" }
 gore-story-catalog = { path = "../gore-story-catalog" }
 gore-tex = { path = "../gore-tex" }

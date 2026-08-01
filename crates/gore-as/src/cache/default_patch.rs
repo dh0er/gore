@@ -1189,7 +1189,7 @@ mod tests {
         assert_eq!(
             hierarchy.proves_ancestry("UApple", "UNativeOwner"),
             Some(AncestryProof::Native(
-                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+                gore_generation::GENERATION_ROWS[0].native_ancestry_profile_id
             ))
         );
 
@@ -1200,7 +1200,7 @@ mod tests {
             field: "Value".into(),
             value_type: "int".into(),
             ancestry_profile: Some(
-                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID.into(),
+                gore_generation::GENERATION_ROWS[0].native_ancestry_profile_id.into(),
             ),
         };
         let mut stale = current.clone();

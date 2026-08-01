@@ -915,6 +915,7 @@ dependencies = [
  "gore-asset",
  "gore-catalog",
  "gore-fmod",
+ "gore-generation",
  "gore-loc",
  "gore-mcp",
  "gore-mod",

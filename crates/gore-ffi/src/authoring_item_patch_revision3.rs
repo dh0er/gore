@@ -1379,9 +1379,7 @@ mod tests {
         AssetStoreIndex, EntityId, FormatV2, ItemPatchV1, ProjectId, ProjectMeta, Revision3Entity,
         SchemaRevisionV3, WorkingStoreFormat,
     };
-    use gore_story_catalog::{
-        known_generation_v1, known_generation_v2, ContentSeal as StoryContentSeal,
-    };
+    use gore_story_catalog::{known_supported_generations, ContentSeal as StoryContentSeal};
     use tempfile::TempDir;
 
     use super::*;
@@ -1408,7 +1406,7 @@ mod tests {
     }
 
     fn project(revision: u64) -> ProjectRevision3 {
-        let generation = known_generation_v1();
+        let generation = known_supported_generations()[0].clone();
         ProjectRevision3 {
             format: FormatV2,
             schema_revision: SchemaRevisionV3,
@@ -1595,7 +1593,9 @@ mod tests {
         assert_eq!(v1_response["ok"], true, "{v1_response:#}");
 
         let mut v2_project = project(2);
-        v2_project.target = authoring_target(&known_generation_v2().executable);
+        // Any second audited target: what this proves is that the authority seal moves with the
+        // target, not which build sits on the other side of it.
+        v2_project.target = authoring_target(&known_supported_generations()[1].executable);
         let v2 = published_project(v2_project);
         let v2_response = read_revision3_item_catalog_v1_raw(&catalog_wire(&v2));
         assert_eq!(v2_response["ok"], true, "{v2_response:#}");

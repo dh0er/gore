@@ -3744,12 +3744,57 @@ fn install_compile_state_detail(state: &gore_as::compile::InstallCompileStatePro
 /// Acquire cross-tool ownership only after the read-only gore-as process/recovery probe says the
 /// install is safe. Both functions normalize `G1R/` callers to the same semantic parent so gore-as
 /// compile, single-mod deploy, manager apply, and undeploy contend on exactly one lock path.
+/// Whether this build asks the operating system whether the game is running.
+///
+/// Production does. A test build answers "closed" unless a test says otherwise, because these
+/// fixtures are temporary directories: the installed game cannot be running *in* one of them, so
+/// "nothing has this tree open" is the honest answer rather than a convenient one. Asking the real
+/// process list here would make every deploy and apply test depend on whether a developer happens
+/// to have Gothic open while the suite runs — a fact about the desktop, not about the transaction
+/// being tested. A test that is *about* the refusal states it, with [`StatedGameProcess`].
+#[cfg(not(test))]
+fn probe_install_state(install_root: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    gore_as::compile::probe_install_compile_state(install_root)
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATED_GAME_PROCESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn probe_install_state(install_root: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    let running = STATED_GAME_PROCESS.with(|stated| stated.get());
+    gore_as::compile::probe_install_compile_state_with_stated_game_process(install_root, move || {
+        Ok(running)
+    })
+}
+
+/// States, for the rest of this test, that the game is running. Restores the previous answer on
+/// drop so one test cannot leak its premise into the next.
+#[cfg(test)]
+struct StatedGameProcess(bool);
+
+#[cfg(test)]
+impl StatedGameProcess {
+    fn running() -> Self {
+        Self(STATED_GAME_PROCESS.with(|stated| stated.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for StatedGameProcess {
+    fn drop(&mut self) {
+        STATED_GAME_PROCESS.with(|stated| stated.set(self.0));
+    }
+}
+
 fn acquire_live_install_mutation(
     game_root: &Path,
     owner: &str,
 ) -> Result<gore_as::compile::InstallMutationGuard> {
     let install_root = record_root(game_root);
-    let state = gore_as::compile::probe_install_compile_state(&install_root);
+    let state = probe_install_state(&install_root);
     if !state.safe_to_compile {
         return Err(ModError::Other(format!(
             "INSTALL_MUTATION_BLOCKED: {}",
@@ -9285,6 +9330,24 @@ mod tests {
         .unwrap();
         let deployed = game.join("G1R/Binaries/Win64/ue4ss/Mods/LockProbe");
         (game, bundle, deployed, shipping)
+    }
+
+    #[test]
+    fn a_running_game_blocks_the_deploy_before_anything_is_written() {
+        // The other half of the seam above. Every other test in this file states that nothing has
+        // the tree open, so this is the one that proves the refusal still exists and still comes
+        // before the first write — otherwise "state it closed" would be indistinguishable from
+        // having quietly removed the check.
+        let temp = tempfile::tempdir().unwrap();
+        let (game, bundle, deployed, _) = install_mutation_fixture(temp.path());
+
+        let _game_process = StatedGameProcess::running();
+        let error = deploy(&bundle, &game).unwrap_err().to_string();
+
+        assert!(error.contains("INSTALL_MUTATION_BLOCKED"), "got: {error}");
+        assert!(error.contains("close the game"), "got: {error}");
+        assert!(!deployed.exists(), "a refused deploy published a file");
+        assert!(!record_path(&game).exists(), "a refused deploy left a record");
     }
 
     #[test]

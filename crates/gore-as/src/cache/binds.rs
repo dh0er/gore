@@ -373,6 +373,45 @@ fn verified_default_class_paths(
     }
 }
 
+/// Everything a `Binds.Cache` says about itself that a generation row seals, derived from any file
+/// rather than only from a sealed one.
+///
+/// [`BindsProfile::class_paths`] is the same map [`NativeApi::verified_default_class_paths`] hands
+/// to the ancestry join — but that accessor answers for an audited script-cache GUID only, and
+/// this one answers for anything. Both are true statements about the bytes; they differ in what
+/// they license. Nothing built from this may mutate a game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindsProfile {
+    pub field_map_sha256: [u8; 32],
+    pub class_path_map_sha256: [u8; 32],
+    /// Exact AngelScript type name to qualified Unreal class/struct path.
+    pub class_paths: HashMap<String, String>,
+    pub field_row_count: usize,
+    pub class_path_row_count: usize,
+}
+
+/// Derive the two parser-output digests a generation row pins, and the row counts that are the only
+/// evidence a parser did not silently stop recognising a record shape.
+///
+/// This exists so that qualifying a new build reads the digests out of the parser that produces
+/// them rather than out of a second implementation written to compute the same hash faster: a
+/// reimplementation that is subtly wrong mints a seal that is perfectly self-consistent and
+/// describes nothing (`docs/reference/game-updates.md` step 6). It runs the same
+/// [`scan_plain_field_types`] and [`scan_type_paths`] passes the sealed accessors run, through the
+/// same two digest functions, and differs from them in exactly one way: it does not ask the
+/// generation table for permission first.
+pub fn derive_binds_profile(data: &[u8]) -> BindsProfile {
+    let fields = scan_plain_field_types(data);
+    let class_paths = scan_type_paths(data);
+    BindsProfile {
+        field_map_sha256: field_type_map_sha256(&fields),
+        class_path_map_sha256: string_map_sha256(&class_paths),
+        field_row_count: fields.len(),
+        class_path_row_count: class_paths.len(),
+        class_paths,
+    }
+}
+
 fn string_map_sha256(values: &HashMap<String, String>) -> [u8; 32] {
     let mut rows: Vec<_> = values.iter().collect();
     rows.sort_unstable_by(|left, right| left.0.cmp(right.0));
@@ -1005,6 +1044,104 @@ mod tests {
         assert!(
             verified_default_field_types(&data).is_empty(),
             "heuristic rows from an unknown Binds identity must never become mutation evidence"
+        );
+    }
+
+    /// A syntactically valid `Binds.Cache` that no generation seals: two records, one plain field
+    /// each, with the wide zero metadata slot the real file carries after a field.
+    fn unsealed_binds_fixture() -> Vec<u8> {
+        fn push_cstr(data: &mut Vec<u8>, value: &str) {
+            let len = u32::try_from(value.len() + 1).unwrap();
+            data.extend_from_slice(&len.to_le_bytes());
+            data.extend_from_slice(value.as_bytes());
+            data.push(0);
+        }
+
+        let mut data = 2u32.to_le_bytes().to_vec();
+        for (class, path, field, value_type) in [
+            (
+                "UItemDefinition",
+                "/Script/G1R.ItemDefinition",
+                "m_Value",
+                "int",
+            ),
+            (
+                "UWeaponDefinition",
+                "/Script/G1R.WeaponDefinition",
+                "m_CriticalMultiplier",
+                "float32",
+            ),
+        ] {
+            push_cstr(&mut data, class);
+            push_cstr(&mut data, path);
+            data.extend_from_slice(&1u32.to_le_bytes());
+            push_cstr(&mut data, &format!("{value_type} {field}"));
+            push_cstr(&mut data, field);
+            data.extend(std::iter::repeat_n(0u8, 32));
+        }
+        data
+    }
+
+    #[test]
+    fn an_unsealed_binds_file_is_fully_described_and_still_admits_nothing() {
+        // The line this file has to hold, asserted on one buffer at one moment so that no reading
+        // of it can be charitable. `gore as qualify` must be able to read everything a brand new
+        // Binds.Cache produces — that is what qualifying one *is* — while every accessor that can
+        // reach a mutation goes on answering "unknown" for those same bytes. Widening the second
+        // into the first is one `pub` away and the damage would be invisible: an unaudited file
+        // would supply field types and a class bridge that agree with themselves perfectly and
+        // describe a build nobody looked at.
+        let data = unsealed_binds_fixture();
+        let source_sha256: [u8; 32] = Sha256::digest(&data).into();
+        assert!(
+            gore_generation::binds_digests_for_sha256(&source_sha256).is_none(),
+            "the fixture has to be a file the table does not seal, or this test proves nothing"
+        );
+
+        let profile = derive_binds_profile(&data);
+        assert_eq!(profile.field_row_count, 2);
+        assert_eq!(profile.class_path_row_count, 2);
+        assert_eq!(
+            profile.class_paths.get("UItemDefinition").map(String::as_str),
+            Some("/Script/G1R.ItemDefinition"),
+            "the class bridge a qualification run reads is the whole map, not a sealed subset"
+        );
+        assert_ne!(profile.field_map_sha256, [0; 32]);
+        assert_ne!(profile.class_path_map_sha256, [0; 32]);
+
+        assert!(
+            verified_default_field_types(&data).is_empty(),
+            "heuristic rows from an unknown Binds identity must never become mutation evidence"
+        );
+        assert_eq!(
+            verified_default_class_paths(&data),
+            (HashMap::new(), None),
+            "an unsealed class bridge must not reach the ancestry join, digests or map"
+        );
+        let api = NativeApi::from_bytes(&data).expect("an unsealed file still parses");
+        for row in gore_generation::rows() {
+            assert_eq!(
+                api.verified_default_field_type(&row.script_cache_guid, "UItemDefinition", "m_Value"),
+                None,
+                "{} admitted a field type from a file it does not seal",
+                row.id
+            );
+            assert!(
+                api.verified_default_class_paths(&row.script_cache_guid).is_none(),
+                "{} admitted a class bridge from a file it does not seal",
+                row.id
+            );
+            assert!(
+                api.verified_default_class_profile_digests(&row.script_cache_guid)
+                    .is_none(),
+                "{} admitted profile digests from a file it does not seal",
+                row.id
+            );
+        }
+        assert_eq!(
+            api.field_type("UItemDefinition", "m_Value"),
+            Some("int"),
+            "the gate must not narrow generic decompiler field evidence either"
         );
     }
 

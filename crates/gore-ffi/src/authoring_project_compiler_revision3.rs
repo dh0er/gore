@@ -1190,6 +1190,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
 
+    use gore_as::compile::acquire_compile_install_mutation_with_stated_game_process;
     use gore_authoring::{
         AssetMeta, AssetStoreIndex, FormatV2, GameGenerationAnchor, NpcParentClassInput, ProjectId,
         ProjectMeta, QuestCollisionArtifactRef, QuestCollisionCatalogInput, Revision3Entity,
@@ -1874,10 +1875,15 @@ mod tests {
 
     #[test]
     fn release_failure_dominates_post_guard_preflight_failure() {
+        // The stated answer is what keeps this test about which failure dominates the other.
+        // `gore-ffi` links `gore-as` compiled without `cfg(test)`, so the seam its own fixtures use
+        // is out of reach here and the real process inspection would answer instead — passing or
+        // failing on whether the developer happens to have Gothic open while the suite runs.
         let temp = TempDir::new().unwrap();
         let game = temp.path().join("game");
         fs::create_dir_all(&game).unwrap();
-        let guard = acquire_compile_install_mutation(&game).unwrap();
+        let guard =
+            acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false)).unwrap();
         let failure = Failure::new(
             "AUTHORING_REVISION3_PROJECT_COMPILER_SOURCE_DRIFT",
             "injected primary source failure",
