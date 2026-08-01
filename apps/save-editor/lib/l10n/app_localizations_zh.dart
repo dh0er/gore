@@ -620,6 +620,36 @@ class AppLocalizationsZh extends AppLocalizations {
   String get rotationRoll => '旋转翻滚';
 
   @override
+  String get spawnPositionSection => '出生位置（参考）';
+
+  @override
+  String get resetToSpawnPosition => '重置为出生位置';
+
+  @override
+  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
+
+  @override
+  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
+
+  @override
+  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+
+  @override
+  String get pickLocation => '选择地点…';
+
+  @override
+  String get pickLocationDialogTitle => '选择地点';
+
+  @override
+  String get applySpotRotation => '同时应用该地点的朝向';
+
+  @override
+  String get locationAreaOther => '其他';
+
+  @override
+  String get locationCatalogUnavailable => '无法加载地点目录。';
+
+  @override
   String get invalid => '无效';
 
   @override
@@ -2171,6 +2201,11 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return '加载 NPC 属性失败：$details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return '加载 NPC 位置失败：$details';
   }
 
   @override
@@ -3142,6 +3177,36 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get rotationRoll => '旋转翻滚';
 
   @override
+  String get spawnPositionSection => '出生位置（参考）';
+
+  @override
+  String get resetToSpawnPosition => '重置为出生位置';
+
+  @override
+  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
+
+  @override
+  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
+
+  @override
+  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+
+  @override
+  String get pickLocation => '选择地点…';
+
+  @override
+  String get pickLocationDialogTitle => '选择地点';
+
+  @override
+  String get applySpotRotation => '同时应用该地点的朝向';
+
+  @override
+  String get locationAreaOther => '其他';
+
+  @override
+  String get locationCatalogUnavailable => '无法加载地点目录。';
+
+  @override
   String get invalid => '无效';
 
   @override
@@ -4693,6 +4758,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String editorNpcAttributesFailed(String details) {
     return '加载 NPC 属性失败：$details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return '加载 NPC 位置失败：$details';
   }
 
   @override

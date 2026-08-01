@@ -6,17 +6,16 @@ import 'package:goresave/l10n/app_localizations.dart';
 
 import '../../../support/l10n_test_app.dart';
 
-/// Stateful probe standing in for the transform editor: its TextField draft
-/// lives in widget state, so losing state across sidebar switches is visible.
-class _StatefulTransformProbe extends StatefulWidget {
-  const _StatefulTransformProbe();
+/// Stateful probe standing in for a pane's editor: its TextField draft lives in
+/// widget state, so losing state across sidebar switches is visible.
+class _StatefulPaneProbe extends StatefulWidget {
+  const _StatefulPaneProbe();
 
   @override
-  State<_StatefulTransformProbe> createState() =>
-      _StatefulTransformProbeState();
+  State<_StatefulPaneProbe> createState() => _StatefulPaneProbeState();
 }
 
-class _StatefulTransformProbeState extends State<_StatefulTransformProbe> {
+class _StatefulPaneProbeState extends State<_StatefulPaneProbe> {
   final _controller = TextEditingController();
 
   @override
@@ -84,7 +83,7 @@ HeroStatsCard _card({
   bool editable = true,
   Object reloadKey = 'save-1',
   Widget? fallback,
-  Widget? transformCard,
+  Widget? skillsSection,
   AttributeLabelResolver? attributeLabel,
 }) {
   return HeroStatsCard(
@@ -94,7 +93,7 @@ HeroStatsCard _card({
     editable: editable,
     reloadKey: reloadKey,
     fallback: fallback,
-    transformCard: transformCard,
+    skillsSection: skillsSection,
     attributeLabel: attributeLabel,
   );
 }
@@ -209,40 +208,11 @@ void main() {
     expect(_heroBaseField('MaxHealth'), findsNothing);
   });
 
-  testWidgets('hero transform entry shown when transformCard provided', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      _wrap(
-        _card(
-          load: () async => HeroAttributesResult(
-            attributes: [
-              _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
-            ],
-          ),
-          transformCard: const Text('transform content'),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // Sidebar entry present.
-    expect(find.text('Position'), findsOneWidget);
-    // Detail area currently shows Main stats (default selection).
-    expect(_heroBaseField('MaxHealth'), findsOneWidget);
-    expect(find.text('transform content'), findsNothing);
-
-    // Tap transform entry.
-    await tester.tap(find.text('Position'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('transform content'), findsOneWidget);
-    expect(_heroBaseField('MaxHealth'), findsNothing);
-  });
-
-  testWidgets('hero transform not shown when transformCard is null', (
-    tester,
-  ) async {
+  // The player's transform editor moved OUT of this card into the Charaktere →
+  // Position sub-tab (PositionDetail). It must have exactly one live copy: two
+  // would both drive the single 'transform' pending key. Guard that this card
+  // never hosts a Position pane again.
+  testWidgets('hero sidebar has no Position entry', (tester) async {
     await tester.pumpWidget(
       _wrap(
         _card(
@@ -257,6 +227,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Position'), findsNothing);
+    expect(_heroBaseField('MaxHealth'), findsOneWidget);
   });
 
   testWidgets('Advanced is a regular sidebar entry (no ExpansionTile)', (
@@ -632,7 +603,7 @@ void main() {
     expect(find.textContaining('MaxHealth is empty'), findsOneWidget);
   });
 
-  testWidgets('transform editor state survives switching sidebar entries', (
+  testWidgets('injected pane state survives switching sidebar entries', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -643,13 +614,13 @@ void main() {
               _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
             ],
           ),
-          transformCard: const _StatefulTransformProbe(),
+          skillsSection: const _StatefulPaneProbe(),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Position'));
+    await tester.tap(find.text('Skills'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'probe'), '123');
     await tester.pump();
@@ -658,7 +629,7 @@ void main() {
     // text backs a registered pending edit that would otherwise go stale.
     await tester.tap(find.text('Main stats'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Position'));
+    await tester.tap(find.text('Skills'));
     await tester.pumpAndSettle();
 
     expect(

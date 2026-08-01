@@ -6,8 +6,12 @@ import 'grouped_attribute_sidebar.dart';
 
 /// Describes one entry in the player-tab sidebar. Entries appear in enum
 /// declaration order in the sidebar: core, combat, resistances, thieving,
-/// transform (when present), advanced.
-enum _SidebarEntry { core, combat, resistances, thieving, transform, advanced }
+/// advanced.
+///
+/// The player's transform used to be a sixth entry here. It now lives in the
+/// Charaktere → Position sub-tab (PositionDetail), its ONLY home: two mounted
+/// copies would both drive the single 'transform' pending key.
+enum _SidebarEntry { core, combat, resistances, thieving, advanced }
 
 /// Grouped editors for every hero gameplay attribute. Data arrives through
 /// [load] (typed property search) and leaves through [onPendingChanged]
@@ -16,12 +20,10 @@ enum _SidebarEntry { core, combat, resistances, thieving, transform, advanced }
 /// pending edits are dropped and the card reloads.
 ///
 /// Renders a master-detail layout: a slim left sidebar for navigation and a
-/// right detail area showing the selected group's attribute rows. Pass
-/// [transformCard] to inject the hero-transform editor as the first sidebar
-/// entry.
+/// right detail area showing the selected group's attribute rows.
 ///
 /// Fallback behaviour (typed parse failed or no attributes): renders [fallback]
-/// (and [transformCard] when provided) in the legacy stacked layout.
+/// in the legacy stacked layout.
 class HeroStatsCard extends StatefulWidget {
   const HeroStatsCard({
     super.key,
@@ -31,7 +33,6 @@ class HeroStatsCard extends StatefulWidget {
     required this.reloadKey,
     this.initialPending,
     this.fallback,
-    this.transformCard,
     this.skillsSection,
     this.attributeLabel,
   });
@@ -59,10 +60,6 @@ class HeroStatsCard extends StatefulWidget {
   /// Rendered instead of the group editors when loading finished with an error
   /// or zero attributes, so callers can keep a legacy editing surface available.
   final Widget? fallback;
-
-  /// When provided, a "Hero transform" entry is prepended to the sidebar and
-  /// this widget is shown in the detail area for that entry.
-  final Widget? transformCard;
 
   /// When provided, the learned-skills editor is appended to the "Talente"
   /// (thieving) group's detail — the hero's GameplayEffect skills rendered in
@@ -151,12 +148,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     }
     // Fall back to first available entry in sidebar order.
     for (final entry in _SidebarEntry.values) {
-      if (entry == _SidebarEntry.transform) {
-        if (widget.transformCard != null) return entry;
-      } else {
-        final group = _entryToGroup(entry);
-        if (group != null && byGroup[group]?.isNotEmpty == true) return entry;
-      }
+      final group = _entryToGroup(entry);
+      if (group != null && byGroup[group]?.isNotEmpty == true) return entry;
     }
     return null;
   }
@@ -253,10 +246,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
               ),
             // Same order as the legacy stacked path: attributes first.
             widget.fallback!,
-            if (widget.transformCard != null) ...[
-              const SizedBox(height: 16),
-              widget.transformCard!,
-            ],
             // Skills load independently of the typed attribute search, so keep
             // them visible even when attributes fell back to the legacy editor.
             if (widget.skillsSection != null) ...[
@@ -268,10 +257,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       );
     }
 
-    if ((_loadFailed || _attributes.isEmpty) &&
-        (widget.transformCard != null || widget.skillsSection != null)) {
-      // No stats and no fallback — just show transform and/or skills (which
-      // load independently of the typed attribute search).
+    if ((_loadFailed || _attributes.isEmpty) && widget.skillsSection != null) {
+      // No stats and no fallback — just show the skills editor (which loads
+      // independently of the typed attribute search).
       return SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -284,11 +272,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                   style: TextStyle(color: theme.colorScheme.error),
                 ),
               ),
-            if (widget.transformCard != null) widget.transformCard!,
-            if (widget.skillsSection != null) ...[
-              if (widget.transformCard != null) const SizedBox(height: 16),
-              widget.skillsSection!,
-            ],
+            if (widget.skillsSection != null) widget.skillsSection!,
           ],
         ),
       );
@@ -298,12 +282,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final byGroup = _byGroup(_attributes);
 
     // Build sidebar entries in display order (enum declaration order).
-    // transform is included between thieving and advanced when provided.
     final sidebarEntries = <_SidebarEntry>[];
     for (final entry in _SidebarEntry.values) {
-      if (entry == _SidebarEntry.transform) {
-        if (widget.transformCard != null) sidebarEntries.add(entry);
-      } else if (entry == _SidebarEntry.thieving) {
+      if (entry == _SidebarEntry.thieving) {
         // "Talente": show whenever there are thieving attributes OR a skills
         // editor to host, so a hero with no thieving attribute rows still gets
         // the skills entry.
@@ -346,12 +327,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
     // Build the detail content for one entry.
     Widget detailFor(_SidebarEntry entry) {
-      if (entry == _SidebarEntry.transform) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [?errorRow, widget.transformCard!],
-        );
-      }
       // The rows render bare — the tab body already provides the single main
       // card, and the selected sidebar tile already names the group (no inner
       // card, no duplicate group title).
@@ -371,9 +346,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
     // Delegate the master-detail shell to the shared GroupedAttributeSidebar.
     // Each sidebar entry becomes a pane keyed by the _SidebarEntry enum value;
-    // panes stay mounted (Offstage) inside the shell so the transform editor's
-    // unsaved field drafts — which back a registered pending edit — survive
-    // switching entries.
+    // panes stay mounted (Offstage) inside the shell so a pane's unsaved field
+    // drafts — which back a registered pending edit — survive switching
+    // entries.
     return GroupedAttributeSidebar(
       selected: effectiveSelected,
       onSelect: (id) {
@@ -399,7 +374,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.resistances => HeroAttributeGroup.resistances,
       _SidebarEntry.thieving => HeroAttributeGroup.thieving,
       _SidebarEntry.advanced => HeroAttributeGroup.advanced,
-      _SidebarEntry.transform => null,
     };
   }
 
@@ -409,7 +383,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
   String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
-      _SidebarEntry.transform => l10n.heroEntryHeroTransform,
       _SidebarEntry.core => l10n.heroGroupMainStats,
       _SidebarEntry.combat => l10n.heroGroupCombatSkills,
       _SidebarEntry.resistances => l10n.heroGroupResistances,
@@ -420,7 +393,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
   IconData _entryIcon(_SidebarEntry entry) {
     return switch (entry) {
-      _SidebarEntry.transform => Icons.explore_outlined,
       _SidebarEntry.core => Icons.favorite_border,
       _SidebarEntry.combat => Icons.shield_outlined,
       _SidebarEntry.resistances => Icons.security_outlined,

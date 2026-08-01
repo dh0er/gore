@@ -1220,6 +1220,66 @@ abstract class AppLocalizations {
   /// **'Rotation roll'**
   String get rotationRoll;
 
+  /// No description provided for @spawnPositionSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Spawn position (reference)'**
+  String get spawnPositionSection;
+
+  /// No description provided for @resetToSpawnPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset to spawn position'**
+  String get resetToSpawnPosition;
+
+  /// No description provided for @positionOutOfRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Value must be between −10,000,000 and 10,000,000'**
+  String get positionOutOfRange;
+
+  /// No description provided for @positionNotEditable.
+  ///
+  /// In en, this message translates to:
+  /// **'The stored position could not be read for this character, so it cannot be edited.'**
+  String get positionNotEditable;
+
+  /// No description provided for @positionNeverPlaced.
+  ///
+  /// In en, this message translates to:
+  /// **'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.'**
+  String get positionNeverPlaced;
+
+  /// No description provided for @pickLocation.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose location…'**
+  String get pickLocation;
+
+  /// No description provided for @pickLocationDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a location'**
+  String get pickLocationDialogTitle;
+
+  /// No description provided for @applySpotRotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Also apply the spot\'s orientation'**
+  String get applySpotRotation;
+
+  /// No description provided for @locationAreaOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get locationAreaOther;
+
+  /// No description provided for @locationCatalogUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The location catalog could not be loaded.'**
+  String get locationCatalogUnavailable;
+
   /// No description provided for @invalid.
   ///
   /// In en, this message translates to:
@@ -3823,6 +3883,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'NPC attributes failed: {details}'**
   String editorNpcAttributesFailed(String details);
+
+  /// No description provided for @editorNpcPositionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the NPC position failed: {details}'**
+  String editorNpcPositionFailed(String details);
 
   /// No description provided for @editorNpcInventoryFailed.
   ///

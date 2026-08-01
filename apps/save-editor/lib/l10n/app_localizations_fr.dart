@@ -642,6 +642,40 @@ class AppLocalizationsFr extends AppLocalizations {
   String get rotationRoll => 'Roulis (roll)';
 
   @override
+  String get spawnPositionSection => 'Position d’apparition (référence)';
+
+  @override
+  String get resetToSpawnPosition => 'Réinitialiser à la position d’apparition';
+
+  @override
+  String get positionOutOfRange =>
+      'La valeur doit être comprise entre −10 000 000 et 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'La position enregistrée de ce personnage n’a pas pu être lue ; elle ne peut donc pas être modifiée.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Ce personnage n’a jamais été placé dans le monde (position 0, 0, 0) — le jeu peut ignorer la position enregistrée.';
+
+  @override
+  String get pickLocation => 'Choisir un lieu…';
+
+  @override
+  String get pickLocationDialogTitle => 'Choisir un lieu';
+
+  @override
+  String get applySpotRotation => 'Appliquer aussi l’orientation du lieu';
+
+  @override
+  String get locationAreaOther => 'Autres';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Le catalogue des lieux n’a pas pu être chargé.';
+
+  @override
   String get invalid => 'Invalide';
 
   @override
@@ -2273,6 +2307,11 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Échec du chargement des attributs du PNJ : $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Échec du chargement de la position du PNJ : $details';
   }
 
   @override

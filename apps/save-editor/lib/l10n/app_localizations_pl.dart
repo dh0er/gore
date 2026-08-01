@@ -639,6 +639,40 @@ class AppLocalizationsPl extends AppLocalizations {
   String get rotationRoll => 'Przechylenie';
 
   @override
+  String get spawnPositionSection => 'Pozycja odrodzenia (odniesienie)';
+
+  @override
+  String get resetToSpawnPosition => 'Przywróć pozycję odrodzenia';
+
+  @override
+  String get positionOutOfRange =>
+      'Wartość musi mieścić się w zakresie od −10 000 000 do 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'Nie udało się odczytać zapisanej pozycji tej postaci, więc nie można jej edytować.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Ta postać nigdy nie została umieszczona w świecie (pozycja 0, 0, 0) — gra może zignorować zapisaną pozycję.';
+
+  @override
+  String get pickLocation => 'Wybierz miejsce…';
+
+  @override
+  String get pickLocationDialogTitle => 'Wybierz miejsce';
+
+  @override
+  String get applySpotRotation => 'Zastosuj też orientację miejsca';
+
+  @override
+  String get locationAreaOther => 'Inne';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Nie udało się wczytać katalogu miejsc.';
+
+  @override
   String get invalid => 'Nieprawidłowe';
 
   @override
@@ -2275,6 +2309,11 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Nie udało się wczytać atrybutów NPC: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Nie udało się wczytać pozycji NPC: $details';
   }
 
   @override

@@ -640,6 +640,39 @@ class AppLocalizationsRu extends AppLocalizations {
   String get rotationRoll => 'Крен';
 
   @override
+  String get spawnPositionSection => 'Точка появления (справочно)';
+
+  @override
+  String get resetToSpawnPosition => 'Вернуть к точке появления';
+
+  @override
+  String get positionOutOfRange =>
+      'Значение должно быть от −10 000 000 до 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'Сохранённую позицию этого персонажа не удалось прочитать, поэтому её нельзя изменить.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Этот персонаж ни разу не был размещён в мире (позиция 0, 0, 0) — игра может игнорировать сохранённую позицию.';
+
+  @override
+  String get pickLocation => 'Выбрать место…';
+
+  @override
+  String get pickLocationDialogTitle => 'Выбор места';
+
+  @override
+  String get applySpotRotation => 'Также применить ориентацию точки';
+
+  @override
+  String get locationAreaOther => 'Прочее';
+
+  @override
+  String get locationCatalogUnavailable => 'Не удалось загрузить каталог мест.';
+
+  @override
   String get invalid => 'Недопустимо';
 
   @override
@@ -2269,6 +2302,11 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Не удалось загрузить атрибуты NPC: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Не удалось загрузить позицию NPC: $details';
   }
 
   @override

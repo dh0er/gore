@@ -639,6 +639,40 @@ class AppLocalizationsEs extends AppLocalizations {
   String get rotationRoll => 'Alabeo';
 
   @override
+  String get spawnPositionSection => 'Posición de aparición (referencia)';
+
+  @override
+  String get resetToSpawnPosition => 'Restablecer a la posición de aparición';
+
+  @override
+  String get positionOutOfRange =>
+      'El valor debe estar entre −10.000.000 y 10.000.000';
+
+  @override
+  String get positionNotEditable =>
+      'No se pudo leer la posición guardada de este personaje, por lo que no se puede editar.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Este personaje nunca ha sido colocado en el mundo (posición 0, 0, 0): es posible que el juego ignore la posición guardada.';
+
+  @override
+  String get pickLocation => 'Elegir ubicación…';
+
+  @override
+  String get pickLocationDialogTitle => 'Elegir una ubicación';
+
+  @override
+  String get applySpotRotation => 'Aplicar también la orientación del punto';
+
+  @override
+  String get locationAreaOther => 'Otros';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'No se pudo cargar el catálogo de ubicaciones.';
+
+  @override
   String get invalid => 'No válido';
 
   @override
@@ -2258,6 +2292,11 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'No se pudieron cargar los atributos del PNJ: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'No se pudo cargar la posición del PNJ: $details';
   }
 
   @override

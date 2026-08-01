@@ -11,6 +11,7 @@ import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
+import 'package:goresave/features/editor/domain/npc_position.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
@@ -193,8 +194,13 @@ class EditorState {
     for (final key in invalidEditKeys) {
       if (key.startsWith('npc.attributes:')) return key;
       // Older callers were allowed to use an arbitrary pending key. Preserve
-      // that round-trip while excluding the one known non-NPC validation key.
-      if (key != storyStatePendingKey) legacyFallback ??= key;
+      // that round-trip while excluding validation keys owned by surfaces that
+      // key themselves through `setEditInvalid`: returning one here would let
+      // `setNpcEditInvalid`'s `..remove(invalidNpcEditKey)` clear another
+      // surface's block as a side effect.
+      if (key != storyStatePendingKey && !key.startsWith('npc.position:')) {
+        legacyFallback ??= key;
+      }
     }
     return legacyFallback;
   }
@@ -846,9 +852,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.selectedActor == actor) return;
     // Switching actor abandons any in-progress invalid NPC field, so drop the
     // validation block — the previous NPC's stored (valid) draft survives.
+    // `npc.position:` is swept alongside `npc.attributes:` because the Position
+    // sub-tab keys itself through `setEditInvalid` (see position_detail.dart);
+    // without this, a stale block from the previous NPC would outlive the
+    // switch and disable Save for an actor whose fields are all valid.
     final invalid = Set<String>.from(state.invalidEditKeys)
       ..remove(state.invalidNpcEditKey)
-      ..removeWhere((key) => key.startsWith('npc.attributes:'));
+      ..removeWhere(
+        (key) =>
+            key.startsWith('npc.attributes:') || key.startsWith('npc.position:'),
+      );
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
 
@@ -2840,6 +2853,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// GlobalId can exist in two saves.
   final Map<String, Future<NpcAttributesResult>> _npcAttributesCache = {};
   final Map<String, Future<NpcInventoryResult>> _npcInventoryCache = {};
+  final Map<String, Future<NpcPoseResult>> _npcPositionCache = {};
 
   /// The save path the per-NPC detail memos were populated for. `selectedPath`
   /// changes at the START of a slot switch, but [_invalidateNpcCache] only runs
@@ -2855,6 +2869,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (_npcDetailCacheForPath != path) {
       _npcAttributesCache.clear();
       _npcInventoryCache.clear();
+      _npcPositionCache.clear();
       _npcDetailCacheForPath = path;
     }
   }
@@ -2867,6 +2882,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFor = null;
     _npcAttributesCache.clear();
     _npcInventoryCache.clear();
+    _npcPositionCache.clear();
     _npcDetailCacheForPath = null;
   }
 
@@ -2965,6 +2981,48 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }();
     _npcAttributesCache[id] = future;
+    return future;
+  }
+
+  /// Load a single NPC's saved pose (by GlobalId) from the core
+  /// `private.npc.position` command for the currently selected save: the
+  /// character location/rotation plus the spawn location/rotation reference,
+  /// each paired with the FULL typed path `private.typed.setValue` resolves —
+  /// so the position editor registers its edits through the same pending
+  /// mechanism the attribute editor uses (only the value is a struct, not a
+  /// scalar). Rotations arrive as `{pitch, yaw, roll}`.
+  ///
+  /// Memoized per (save, GlobalId) exactly like [loadNpcAttributes]; a failed
+  /// load is NOT cached so a transient error can retry.
+  Future<NpcPoseResult> loadNpcPosition(String id) {
+    final path = state.selectedPath;
+    if (path == null) {
+      return Future.value(NpcPoseResult(error: _l10n.editorNoSaveSelected));
+    }
+    _guardNpcDetailCache(path);
+    final cached = _npcPositionCache[id];
+    if (cached != null) return cached;
+    final future = () async {
+      try {
+        final response = await _execute(
+          'private.npc.position',
+          payload: {'path': path, 'id': id},
+        );
+        if (response['ok'] != true) {
+          _npcPositionCache.remove(id);
+          return NpcPoseResult(
+            error: _l10n.editorNpcPositionFailed(_errorDetails(response)),
+          );
+        }
+        return NpcPoseResult.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        );
+      } catch (error) {
+        _npcPositionCache.remove(id);
+        return NpcPoseResult(error: _l10n.editorNpcPositionFailed('$error'));
+      }
+    }();
+    _npcPositionCache[id] = future;
     return future;
   }
 

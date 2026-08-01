@@ -6,6 +6,18 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Added a "Position" tab to Characters. The hero's position moved there from the
+  Attributes tab, and NPC positions can now be edited too.
+- Positions can be picked from a list of 10,075 named locations from the game,
+  grouped by region, instead of typing coordinates. Applying a location's
+  facing is optional and off by default.
+- An NPC's spawn position is shown for reference, with a button to move the NPC
+  back to it.
+
 ## [1.2.0] - 2026-07-15
 
 ### Added

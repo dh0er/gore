@@ -628,6 +628,37 @@ class AppLocalizationsJa extends AppLocalizations {
   String get rotationRoll => '回転ロール';
 
   @override
+  String get spawnPositionSection => 'スポーン位置（参考）';
+
+  @override
+  String get resetToSpawnPosition => 'スポーン位置に戻す';
+
+  @override
+  String get positionOutOfRange => '値は −10,000,000 から 10,000,000 の間で指定してください';
+
+  @override
+  String get positionNotEditable => 'このキャラクターの保存された位置を読み取れなかったため、編集できません。';
+
+  @override
+  String get positionNeverPlaced =>
+      'このキャラクターはワールドに配置されたことがありません（位置 0, 0, 0）。ゲームは保存された位置を無視する場合があります。';
+
+  @override
+  String get pickLocation => '場所を選択…';
+
+  @override
+  String get pickLocationDialogTitle => '場所を選択';
+
+  @override
+  String get applySpotRotation => '地点の向きも適用する';
+
+  @override
+  String get locationAreaOther => 'その他';
+
+  @override
+  String get locationCatalogUnavailable => '場所カタログを読み込めませんでした。';
+
+  @override
   String get invalid => '無効';
 
   @override
@@ -2199,6 +2230,11 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'NPC の属性の読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'NPC の位置の読み込みに失敗しました: $details';
   }
 
   @override

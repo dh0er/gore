@@ -636,6 +636,40 @@ class AppLocalizationsEn extends AppLocalizations {
   String get rotationRoll => 'Rotation roll';
 
   @override
+  String get spawnPositionSection => 'Spawn position (reference)';
+
+  @override
+  String get resetToSpawnPosition => 'Reset to spawn position';
+
+  @override
+  String get positionOutOfRange =>
+      'Value must be between −10,000,000 and 10,000,000';
+
+  @override
+  String get positionNotEditable =>
+      'The stored position could not be read for this character, so it cannot be edited.';
+
+  @override
+  String get positionNeverPlaced =>
+      'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.';
+
+  @override
+  String get pickLocation => 'Choose location…';
+
+  @override
+  String get pickLocationDialogTitle => 'Choose a location';
+
+  @override
+  String get applySpotRotation => 'Also apply the spot\'s orientation';
+
+  @override
+  String get locationAreaOther => 'Other';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'The location catalog could not be loaded.';
+
+  @override
   String get invalid => 'Invalid';
 
   @override
@@ -2244,6 +2278,11 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'NPC attributes failed: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Loading the NPC position failed: $details';
   }
 
   @override

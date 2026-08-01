@@ -639,6 +639,40 @@ class AppLocalizationsIt extends AppLocalizations {
   String get rotationRoll => 'Rollio (roll)';
 
   @override
+  String get spawnPositionSection => 'Posizione di generazione (riferimento)';
+
+  @override
+  String get resetToSpawnPosition => 'Ripristina alla posizione di generazione';
+
+  @override
+  String get positionOutOfRange =>
+      'Il valore deve essere compreso tra −10.000.000 e 10.000.000';
+
+  @override
+  String get positionNotEditable =>
+      'Non è stato possibile leggere la posizione salvata di questo personaggio, quindi non può essere modificata.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Questo personaggio non è mai stato posizionato nel mondo (posizione 0, 0, 0): il gioco potrebbe ignorare la posizione salvata.';
+
+  @override
+  String get pickLocation => 'Scegli una posizione…';
+
+  @override
+  String get pickLocationDialogTitle => 'Scegli una posizione';
+
+  @override
+  String get applySpotRotation => 'Applica anche l’orientamento del punto';
+
+  @override
+  String get locationAreaOther => 'Altro';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Impossibile caricare il catalogo delle posizioni.';
+
+  @override
   String get invalid => 'Non valido';
 
   @override
@@ -2264,6 +2298,11 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Caricamento degli attributi del PNG non riuscito: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Caricamento della posizione del PNG non riuscito: $details';
   }
 
   @override
