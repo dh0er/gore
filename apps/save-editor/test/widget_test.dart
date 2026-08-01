@@ -159,11 +159,12 @@ void main() {
     await tester.pump();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.text('Position'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
+    // The player's transform editor now lives in the Charaktere → Position
+    // sub-tab (its only home; two copies would both drive the one 'transform'
+    // pending key). It renders there regardless of privateTypedVerified, so
+    // this legacy fixture still reaches it.
+    await tester.tap(find.widgetWithText(Tab, 'Position'));
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Location X'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Y'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Z'), findsOneWidget);

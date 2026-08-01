@@ -640,6 +640,56 @@ class AppLocalizationsRu extends AppLocalizations {
   String get rotationRoll => 'Крен';
 
   @override
+  String get spawnPositionSection => 'Точка появления (справочно)';
+
+  @override
+  String get positionNotReadable =>
+      'Сохранённую позицию этого персонажа не удалось прочитать.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Игра восстанавливает позицию NPC из уровня, а не из сохранения, поэтому эти значения можно прочитать, но не изменить.';
+
+  @override
+  String get pickLocation => 'Выбрать место…';
+
+  @override
+  String get pickLocationDialogTitle => 'Выбор места';
+
+  @override
+  String get applySpotRotation => 'Также применить ориентацию точки';
+
+  @override
+  String get locationAreaOther => 'Прочее';
+
+  @override
+  String get locationAreaCavalornValley => 'Долина Кавалорна';
+
+  @override
+  String get locationAreaEastForest => 'Восточный лес';
+
+  @override
+  String get locationAreaFogTower => 'Туманная башня';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Подпольные травники';
+
+  @override
+  String get locationAreaOrcArena => 'Орочья арена';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Орочий склеп';
+
+  @override
+  String get locationAreaShipwreck => 'Место кораблекрушения';
+
+  @override
+  String get locationAreaTundra => 'Тундра';
+
+  @override
+  String get locationCatalogUnavailable => 'Не удалось загрузить каталог мест.';
+
+  @override
   String get invalid => 'Недопустимо';
 
   @override
@@ -2269,6 +2319,11 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Не удалось загрузить атрибуты NPC: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Не удалось загрузить позицию NPC: $details';
   }
 
   @override

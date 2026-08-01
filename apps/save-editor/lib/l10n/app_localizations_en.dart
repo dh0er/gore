@@ -636,6 +636,57 @@ class AppLocalizationsEn extends AppLocalizations {
   String get rotationRoll => 'Rotation roll';
 
   @override
+  String get spawnPositionSection => 'Spawn position (reference)';
+
+  @override
+  String get positionNotReadable =>
+      'The stored position could not be read for this character.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'The game restores an NPC\'s position from the level, not from the savegame, so these values can be read but not changed.';
+
+  @override
+  String get pickLocation => 'Choose location…';
+
+  @override
+  String get pickLocationDialogTitle => 'Choose a location';
+
+  @override
+  String get applySpotRotation => 'Also apply the spot\'s orientation';
+
+  @override
+  String get locationAreaOther => 'Other';
+
+  @override
+  String get locationAreaCavalornValley => 'Cavalorn Valley';
+
+  @override
+  String get locationAreaEastForest => 'East Forest';
+
+  @override
+  String get locationAreaFogTower => 'Fog Tower';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Illegal Weed Mixers';
+
+  @override
+  String get locationAreaOrcArena => 'Orc Arena';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Orc Graveyard';
+
+  @override
+  String get locationAreaShipwreck => 'Shipwreck';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'The location catalog could not be loaded.';
+
+  @override
   String get invalid => 'Invalid';
 
   @override
@@ -2244,6 +2295,11 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'NPC attributes failed: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Loading the NPC position failed: $details';
   }
 
   @override

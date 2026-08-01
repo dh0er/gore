@@ -639,6 +639,57 @@ class AppLocalizationsPl extends AppLocalizations {
   String get rotationRoll => 'Przechylenie';
 
   @override
+  String get spawnPositionSection => 'Pozycja odrodzenia (odniesienie)';
+
+  @override
+  String get positionNotReadable =>
+      'Nie udało się odczytać zapisanej pozycji tej postaci.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Gra odtwarza pozycję NPC z poziomu, a nie z zapisu gry, więc te wartości można odczytać, ale nie zmienić.';
+
+  @override
+  String get pickLocation => 'Wybierz miejsce…';
+
+  @override
+  String get pickLocationDialogTitle => 'Wybierz miejsce';
+
+  @override
+  String get applySpotRotation => 'Zastosuj też orientację miejsca';
+
+  @override
+  String get locationAreaOther => 'Inne';
+
+  @override
+  String get locationAreaCavalornValley => 'Dolina Cavalorna';
+
+  @override
+  String get locationAreaEastForest => 'Wschodni Las';
+
+  @override
+  String get locationAreaFogTower => 'Mglista Wieża';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Nielegalni mieszacze ziela';
+
+  @override
+  String get locationAreaOrcArena => 'Arena Orków';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cmentarzysko Orków';
+
+  @override
+  String get locationAreaShipwreck => 'Wrak statku';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Nie udało się wczytać katalogu miejsc.';
+
+  @override
   String get invalid => 'Nieprawidłowe';
 
   @override
@@ -2275,6 +2326,11 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Nie udało się wczytać atrybutów NPC: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Nie udało się wczytać pozycji NPC: $details';
   }
 
   @override

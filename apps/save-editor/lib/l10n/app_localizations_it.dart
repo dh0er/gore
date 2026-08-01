@@ -639,6 +639,57 @@ class AppLocalizationsIt extends AppLocalizations {
   String get rotationRoll => 'Rollio (roll)';
 
   @override
+  String get spawnPositionSection => 'Posizione di generazione (riferimento)';
+
+  @override
+  String get positionNotReadable =>
+      'Non è stato possibile leggere la posizione salvata di questo personaggio.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Il gioco ripristina la posizione di un PNG dal livello, non dal salvataggio: questi valori si possono leggere ma non modificare.';
+
+  @override
+  String get pickLocation => 'Scegli una posizione…';
+
+  @override
+  String get pickLocationDialogTitle => 'Scegli una posizione';
+
+  @override
+  String get applySpotRotation => 'Applica anche l’orientamento del punto';
+
+  @override
+  String get locationAreaOther => 'Altro';
+
+  @override
+  String get locationAreaCavalornValley => 'Valle di Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Foresta Orientale';
+
+  @override
+  String get locationAreaFogTower => 'Torre della Nebbia';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Mescolatori d\'erba illegali';
+
+  @override
+  String get locationAreaOrcArena => 'Arena degli orchi';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cimitero degli orchi';
+
+  @override
+  String get locationAreaShipwreck => 'Relitto';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Impossibile caricare il catalogo delle posizioni.';
+
+  @override
   String get invalid => 'Non valido';
 
   @override
@@ -2264,6 +2315,11 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'Caricamento degli attributi del PNG non riuscito: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'Caricamento della posizione del PNG non riuscito: $details';
   }
 
   @override

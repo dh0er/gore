@@ -628,6 +628,55 @@ class AppLocalizationsJa extends AppLocalizations {
   String get rotationRoll => '回転ロール';
 
   @override
+  String get spawnPositionSection => 'スポーン位置（参考）';
+
+  @override
+  String get positionNotReadable => 'このキャラクターの保存された位置を読み取れませんでした。';
+
+  @override
+  String get npcPositionReadOnly =>
+      'ゲームは NPC の位置をセーブデータではなくレベルから復元します。そのため、これらの値は読み取れますが変更できません。';
+
+  @override
+  String get pickLocation => '場所を選択…';
+
+  @override
+  String get pickLocationDialogTitle => '場所を選択';
+
+  @override
+  String get applySpotRotation => '地点の向きも適用する';
+
+  @override
+  String get locationAreaOther => 'その他';
+
+  @override
+  String get locationAreaCavalornValley => 'カヴァロンの谷';
+
+  @override
+  String get locationAreaEastForest => '東の森';
+
+  @override
+  String get locationAreaFogTower => '霧の塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '違法スワンプウィード調合師';
+
+  @override
+  String get locationAreaOrcArena => 'オークのアリーナ';
+
+  @override
+  String get locationAreaOrcGraveyard => 'オークの墓地';
+
+  @override
+  String get locationAreaShipwreck => '難破船';
+
+  @override
+  String get locationAreaTundra => '凍原';
+
+  @override
+  String get locationCatalogUnavailable => '場所カタログを読み込めませんでした。';
+
+  @override
   String get invalid => '無効';
 
   @override
@@ -2199,6 +2248,11 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'NPC の属性の読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'NPC の位置の読み込みに失敗しました: $details';
   }
 
   @override

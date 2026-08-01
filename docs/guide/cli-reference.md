@@ -27,6 +27,8 @@ gore --version
 | `as` | see [below](#as) | AngelScript precompiled-cache tooling (experimental). | [scripts](scripts.md) |
 | `catalog` | — | Generate an item/npc/knowledge catalog from a UE4SS object dump. | [catalogs](catalogs-and-models.md) |
 | `story-catalog` | — | Build a generation-sealed NPC and quest-parent catalog. | [catalogs](catalogs-and-models.md) |
+| `location-catalog` | — | Build the named-location catalog from the game's `InteractionSpots.json`. | [catalogs](catalogs-and-models.md) |
+| `location` | `resolve` · `list` | Look a waypoint/spot name up in the bundled catalog — offline, no install. | [catalogs](catalogs-and-models.md#checking-a-spot-name-before-the-game-swallows-it) |
 | `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. | [catalogs](catalogs-and-models.md) |
 | `stubs` | — | Emit LuaLS/EmmyLua type stubs from `model.json`. | [catalogs](catalogs-and-models.md) |
 | `gui-model` | — | Convert a reflection model into the GUI shape JSON. | [catalogs](catalogs-and-models.md) |
@@ -192,6 +194,9 @@ fails closed.
 |---|---|
 | `catalog <DUMP>` | `--kind item\|npc\|knowledge` · `--script-cache <CACHE>` · `-o, --out` |
 | `story-catalog` | `--exe` · `--cache` · `--binds` · `-o, --out` |
+| `location-catalog [SOURCE]` | `-o, --out` (SOURCE defaults to the resolved game install) |
+| `location resolve <NAME>` | `--json` |
+| `location list` | `--area` · `--prefix` · `--max` · `--json` |
 | `dump <SDK_DIR>` | `-o, --out` |
 | `stubs <MODEL>` | `-o, --out <DIR>` · `--filter <PREFIX>` |
 | `gui-model` | `--model` · `--catalog` · `-o, --out` |

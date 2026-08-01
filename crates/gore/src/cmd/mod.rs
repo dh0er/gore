@@ -10,6 +10,8 @@ pub mod gen;
 pub mod gui_model;
 pub mod guide;
 pub mod loc;
+pub mod location;
+pub mod location_catalog;
 pub mod mcp;
 pub mod mgr;
 pub mod modcmd;

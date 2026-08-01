@@ -639,6 +639,57 @@ class AppLocalizationsPt extends AppLocalizations {
   String get rotationRoll => 'Rotação (roll)';
 
   @override
+  String get spawnPositionSection => 'Posição de nascimento (referência)';
+
+  @override
+  String get positionNotReadable =>
+      'Não foi possível ler a posição guardada desta personagem.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'O jogo restaura a posição de um NPC a partir do nível e não do jogo guardado, pelo que estes valores podem ser lidos, mas não alterados.';
+
+  @override
+  String get pickLocation => 'Escolher local…';
+
+  @override
+  String get pickLocationDialogTitle => 'Escolher um local';
+
+  @override
+  String get applySpotRotation => 'Aplicar também a orientação do local';
+
+  @override
+  String get locationAreaOther => 'Outros';
+
+  @override
+  String get locationAreaCavalornValley => 'Vale de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Floresta do Leste';
+
+  @override
+  String get locationAreaFogTower => 'Torre da Névoa';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Misturadores ilegais de erva';
+
+  @override
+  String get locationAreaOrcArena => 'Arena dos Orcs';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cemitério dos Orcs';
+
+  @override
+  String get locationAreaShipwreck => 'Naufrágio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Não foi possível carregar o catálogo de locais.';
+
+  @override
   String get invalid => 'Inválido';
 
   @override
@@ -2262,6 +2313,11 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'O carregamento da posição do NPC falhou: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'O carregamento do inventário do NPC falhou: $details';
   }
@@ -3247,6 +3303,57 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get rotationRoll => 'Rotação (roll)';
+
+  @override
+  String get spawnPositionSection => 'Posição de spawn (referência)';
+
+  @override
+  String get positionNotReadable =>
+      'Não foi possível ler a posição salva deste personagem.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'O jogo restaura a posição de um NPC a partir da fase e não do jogo salvo, portanto esses valores podem ser lidos, mas não alterados.';
+
+  @override
+  String get pickLocation => 'Escolher local…';
+
+  @override
+  String get pickLocationDialogTitle => 'Escolher um local';
+
+  @override
+  String get applySpotRotation => 'Aplicar também a orientação do ponto';
+
+  @override
+  String get locationAreaOther => 'Outros';
+
+  @override
+  String get locationAreaCavalornValley => 'Vale de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Floresta do Leste';
+
+  @override
+  String get locationAreaFogTower => 'Torre da Névoa';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Misturadores ilegais de erva';
+
+  @override
+  String get locationAreaOrcArena => 'Arena dos Orcs';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cemitério dos Orcs';
+
+  @override
+  String get locationAreaShipwreck => 'Naufrágio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Não foi possível carregar o catálogo de locais.';
 
   @override
   String get invalid => 'Inválido';
@@ -4868,6 +4975,11 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'O carregamento dos atributos do NPC falhou: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'O carregamento da posição do NPC falhou: $details';
   }
 
   @override

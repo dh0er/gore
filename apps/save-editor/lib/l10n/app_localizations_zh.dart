@@ -620,6 +620,54 @@ class AppLocalizationsZh extends AppLocalizations {
   String get rotationRoll => '旋转翻滚';
 
   @override
+  String get spawnPositionSection => '出生位置（参考）';
+
+  @override
+  String get positionNotReadable => '无法读取该角色已保存的位置。';
+
+  @override
+  String get npcPositionReadOnly => '游戏会从关卡而非存档中恢复 NPC 的位置，因此这些数值可以查看，但无法修改。';
+
+  @override
+  String get pickLocation => '选择地点…';
+
+  @override
+  String get pickLocationDialogTitle => '选择地点';
+
+  @override
+  String get applySpotRotation => '同时应用该地点的朝向';
+
+  @override
+  String get locationAreaOther => '其他';
+
+  @override
+  String get locationAreaCavalornValley => '卡瓦隆山谷';
+
+  @override
+  String get locationAreaEastForest => '东部森林';
+
+  @override
+  String get locationAreaFogTower => '雾塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '非法沼泽烟草调配者';
+
+  @override
+  String get locationAreaOrcArena => '兽人竞技场';
+
+  @override
+  String get locationAreaOrcGraveyard => '兽人墓地';
+
+  @override
+  String get locationAreaShipwreck => '沉船残骸';
+
+  @override
+  String get locationAreaTundra => '苔原';
+
+  @override
+  String get locationCatalogUnavailable => '无法加载地点目录。';
+
+  @override
   String get invalid => '无效';
 
   @override
@@ -2171,6 +2219,11 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return '加载 NPC 属性失败：$details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return '加载 NPC 位置失败：$details';
   }
 
   @override
@@ -3142,6 +3195,54 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get rotationRoll => '旋转翻滚';
 
   @override
+  String get spawnPositionSection => '出生位置（参考）';
+
+  @override
+  String get positionNotReadable => '无法读取该角色已保存的位置。';
+
+  @override
+  String get npcPositionReadOnly => '游戏会从关卡而非存档中恢复 NPC 的位置，因此这些数值可以查看，但无法修改。';
+
+  @override
+  String get pickLocation => '选择地点…';
+
+  @override
+  String get pickLocationDialogTitle => '选择地点';
+
+  @override
+  String get applySpotRotation => '同时应用该地点的朝向';
+
+  @override
+  String get locationAreaOther => '其他';
+
+  @override
+  String get locationAreaCavalornValley => '卡瓦隆山谷';
+
+  @override
+  String get locationAreaEastForest => '东部森林';
+
+  @override
+  String get locationAreaFogTower => '雾塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '非法沼泽烟草调配者';
+
+  @override
+  String get locationAreaOrcArena => '兽人竞技场';
+
+  @override
+  String get locationAreaOrcGraveyard => '兽人墓地';
+
+  @override
+  String get locationAreaShipwreck => '沉船残骸';
+
+  @override
+  String get locationAreaTundra => '苔原';
+
+  @override
+  String get locationCatalogUnavailable => '无法加载地点目录。';
+
+  @override
   String get invalid => '无效';
 
   @override
@@ -4693,6 +4794,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String editorNpcAttributesFailed(String details) {
     return '加载 NPC 属性失败：$details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return '加载 NPC 位置失败：$details';
   }
 
   @override

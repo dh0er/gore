@@ -639,6 +639,57 @@ class AppLocalizationsEs extends AppLocalizations {
   String get rotationRoll => 'Alabeo';
 
   @override
+  String get spawnPositionSection => 'Posición de aparición (referencia)';
+
+  @override
+  String get positionNotReadable =>
+      'No se pudo leer la posición guardada de este personaje.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'El juego restaura la posición de un PNJ desde el nivel, no desde la partida guardada, por lo que estos valores se pueden leer pero no modificar.';
+
+  @override
+  String get pickLocation => 'Elegir ubicación…';
+
+  @override
+  String get pickLocationDialogTitle => 'Elegir una ubicación';
+
+  @override
+  String get applySpotRotation => 'Aplicar también la orientación del punto';
+
+  @override
+  String get locationAreaOther => 'Otros';
+
+  @override
+  String get locationAreaCavalornValley => 'Valle de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Bosque del Este';
+
+  @override
+  String get locationAreaFogTower => 'Torre de la Niebla';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Mezcladores ilegales de hierba';
+
+  @override
+  String get locationAreaOrcArena => 'Arena de los orcos';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cementerio orco';
+
+  @override
+  String get locationAreaShipwreck => 'Naufragio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'No se pudo cargar el catálogo de ubicaciones.';
+
+  @override
   String get invalid => 'No válido';
 
   @override
@@ -2258,6 +2309,11 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String editorNpcAttributesFailed(String details) {
     return 'No se pudieron cargar los atributos del PNJ: $details';
+  }
+
+  @override
+  String editorNpcPositionFailed(String details) {
+    return 'No se pudo cargar la posición del PNJ: $details';
   }
 
   @override

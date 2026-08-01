@@ -196,6 +196,7 @@ TOOLS
   gore_help      The CLI's own `--help` for any command: exact flags, always current.
   gore_config    The shared configuration, above all where the game is installed.
   gore_catalog   Regenerate reflection models and item/NPC/knowledge catalogs from a game dump.
+  gore_location  Check a waypoint or spot name before a script uses it. Offline, no install.
   gore_project   Scaffold, compile and package a UE4SS Lua mod; install the shared Lua SDK.
   gore_loc       Localized text: decrypt the .lcache to JSON, edit it, re-encrypt.
   gore_audio     FMOD sound banks: list samples, extract to WAV, inject replacements, ship patches.
@@ -206,7 +207,7 @@ TOOLS
   gore_mgr       Run several mods at once: library, load order, conflict report, composed apply.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
 
-Each of the last eleven wraps a family of subcommands. Choose one with `subcommand` and put its
+Each of the last twelve wraps a family of subcommands. Choose one with `subcommand` and put its
 arguments in `args`; the tool description lists every subcommand and what it accepts.
 
 BEFORE YOU ACT

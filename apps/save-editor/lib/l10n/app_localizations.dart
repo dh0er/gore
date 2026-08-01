@@ -1220,6 +1220,102 @@ abstract class AppLocalizations {
   /// **'Rotation roll'**
   String get rotationRoll;
 
+  /// No description provided for @spawnPositionSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Spawn position (reference)'**
+  String get spawnPositionSection;
+
+  /// No description provided for @positionNotReadable.
+  ///
+  /// In en, this message translates to:
+  /// **'The stored position could not be read for this character.'**
+  String get positionNotReadable;
+
+  /// No description provided for @npcPositionReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'The game restores an NPC\'s position from the level, not from the savegame, so these values can be read but not changed.'**
+  String get npcPositionReadOnly;
+
+  /// No description provided for @pickLocation.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose location…'**
+  String get pickLocation;
+
+  /// No description provided for @pickLocationDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a location'**
+  String get pickLocationDialogTitle;
+
+  /// No description provided for @applySpotRotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Also apply the spot\'s orientation'**
+  String get applySpotRotation;
+
+  /// No description provided for @locationAreaOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get locationAreaOther;
+
+  /// No description provided for @locationAreaCavalornValley.
+  ///
+  /// In en, this message translates to:
+  /// **'Cavalorn Valley'**
+  String get locationAreaCavalornValley;
+
+  /// No description provided for @locationAreaEastForest.
+  ///
+  /// In en, this message translates to:
+  /// **'East Forest'**
+  String get locationAreaEastForest;
+
+  /// No description provided for @locationAreaFogTower.
+  ///
+  /// In en, this message translates to:
+  /// **'Fog Tower'**
+  String get locationAreaFogTower;
+
+  /// No description provided for @locationAreaIllegalWeedMixers.
+  ///
+  /// In en, this message translates to:
+  /// **'Illegal Weed Mixers'**
+  String get locationAreaIllegalWeedMixers;
+
+  /// No description provided for @locationAreaOrcArena.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Arena'**
+  String get locationAreaOrcArena;
+
+  /// No description provided for @locationAreaOrcGraveyard.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Graveyard'**
+  String get locationAreaOrcGraveyard;
+
+  /// No description provided for @locationAreaShipwreck.
+  ///
+  /// In en, this message translates to:
+  /// **'Shipwreck'**
+  String get locationAreaShipwreck;
+
+  /// No description provided for @locationAreaTundra.
+  ///
+  /// In en, this message translates to:
+  /// **'Tundra'**
+  String get locationAreaTundra;
+
+  /// No description provided for @locationCatalogUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The location catalog could not be loaded.'**
+  String get locationCatalogUnavailable;
+
   /// No description provided for @invalid.
   ///
   /// In en, this message translates to:
@@ -3823,6 +3919,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'NPC attributes failed: {details}'**
   String editorNpcAttributesFailed(String details);
+
+  /// No description provided for @editorNpcPositionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the NPC position failed: {details}'**
+  String editorNpcPositionFailed(String details);
 
   /// No description provided for @editorNpcInventoryFailed.
   ///

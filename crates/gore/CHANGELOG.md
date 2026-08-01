@@ -15,7 +15,9 @@ First release. Command-line toolkit for modding Gothic 1 Remake.
 - `loc`, `audio`, `voice`, `texture`, `asset`, `as` — edit localized text, FMOD
   banks, voice-over archives, IoStore textures, cooked DataAssets and the
   AngelScript cache.
-- `mcp serve` — all 78 commands over the Model Context Protocol, with every
+- `location-catalog` and `location` — build the named-location catalog, and look
+  a waypoint or spot name up in it offline.
+- `mcp serve` — all 82 commands over the Model Context Protocol, with every
   installation change confirmed first.
 - `guide` — the manual, built into the binary and rendered to one HTML file.
 - Commands whose evidence is audited against a specific game build say which

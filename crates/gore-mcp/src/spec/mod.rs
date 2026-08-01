@@ -505,7 +505,7 @@ impl GroupSpec {
 
 /// Wall-clock caps. Three tiers rather than a number per command: the distinction that matters is
 /// "prints something", "rewrites some files" and "walks the entire game", and inventing a precise
-/// budget for each of 79 commands would be false precision.
+/// budget for each of 82 commands would be false precision.
 pub const T_FAST: u64 = 60;
 pub const T_NORMAL: u64 = 300;
 pub const T_LONG: u64 = 1800;
@@ -527,6 +527,7 @@ pub const T_COMPILE: u64 = 2700;
 pub const GROUPS: &[GroupSpec] = &[
     groups::core::CONFIG,
     groups::core::CATALOG,
+    groups::core::LOCATION,
     groups::core::PROJECT,
     groups::files::LOC,
     groups::files::AUDIO,
@@ -542,7 +543,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 79;
+pub const EXPECTED_LEAF_COUNT: usize = 82;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -561,7 +562,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 11);
+        assert_eq!(GROUPS.len(), 12);
     }
 
     #[test]
@@ -844,6 +845,7 @@ mod tests {
             ("gore_catalog", "catalog", &["out"]),
             ("gore_catalog", "dump", &["out"]),
             ("gore_catalog", "gui-model", &["out"]),
+            ("gore_catalog", "location-catalog", &["out"]),
             ("gore_catalog", "story-catalog", &["out"]),
             ("gore_catalog", "sync", &["out"]),
             ("gore_loc", "export", &["out"]),
