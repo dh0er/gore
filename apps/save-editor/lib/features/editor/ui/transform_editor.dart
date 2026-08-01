@@ -148,7 +148,7 @@ class _PlayerTransformEditorState extends State<PlayerTransformEditor> {
             onPressed: widget.editable ? _pickLocation : null,
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 20),
         LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < 700;

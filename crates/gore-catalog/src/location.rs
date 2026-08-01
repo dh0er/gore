@@ -83,8 +83,11 @@ const AREA_ALIASES: &[(&str, &str)] = &[
 /// the token regex — is what decides whether a token is an area.
 ///
 /// The loc ids are not mechanically derivable from the code, hence the explicit
-/// mapping. Areas without one keep their English label; the editor resolves
-/// `locCatalog[area.locId]?[lang] ?? area.label`, so no new ARB keys are needed.
+/// mapping. The eight areas left with `None` are the ones the game has no clean
+/// label for anywhere in its 43,851 strings — only quest titles and dialogue
+/// lines mention them — so the editor names those itself, from its own ARB
+/// (`locationArea*`), and falls back to the English label here only for an area
+/// nobody has translated yet.
 ///
 /// Left as one line per area on purpose: this is a hand-curated table that is
 /// read and re-checked as a table after every game patch, and rustfmt breaks
@@ -111,7 +114,7 @@ const AREAS: &[(&str, &str, Option<&str>)] = &[
     ("OM",    "Old Mine",            Some("area_oldmine_interior_notification")),
     ("OT",    "Orc Territory",       Some("area_orcterritory_notification")),
     ("OTOWN", "Orc Enclave",         Some("area_orcenclave_notification")),
-    ("OW",    "Overworld",           None),
+    ("OW",    "Overworld",           Some("ui_map_valleyofmines")),
     ("SC",    "Swamp Camp",          Some("area_swampcamp_notification")),
     ("SNT",   "Sunken Tower",        Some("area_xardassunkentower_notification")),
     ("ST",    "Sleeper Temple",      Some("area_sleepertemple_notification")),
@@ -804,7 +807,7 @@ mod tests {
             !build.report.dead_loc_ids.is_empty(),
             "every other curated id is unknown here"
         );
-        assert_eq!(build.report.verified_loc_ids, Some(17));
+        assert_eq!(build.report.verified_loc_ids, Some(18));
     }
 
     #[test]

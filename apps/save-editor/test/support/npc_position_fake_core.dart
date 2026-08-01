@@ -282,9 +282,10 @@ Future<LocationCatalog> loadBundledCatalog(WidgetTester tester) async {
   return catalog;
 }
 
-/// Open the shared location picker from the button above the position fields
+/// Open the location picker from the button above the PLAYER's transform fields
 /// and choose the spot named [spotName], optionally ticking the opt-in
-/// "apply the spot's orientation" box first.
+/// "apply the spot's orientation" box first. The NPC panel has no picker — its
+/// pose is read-only (see NpcPositionPanel).
 Future<void> pickLocationSpot(
   WidgetTester tester,
   String spotName, {
@@ -323,17 +324,6 @@ Future<void> openPositionTab(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(Tab, 'Position'));
   await tester.pumpAndSettle();
 }
-
-/// Finder for one of the six editable position fields, e.g. `location:x`.
-Finder positionField(String id) => find.byKey(ValueKey('npc-position:$id'));
-
-/// The live text of one position field.
-String positionFieldText(WidgetTester tester, String id) => tester
-    .widget<EditableText>(
-      find.descendant(of: positionField(id), matching: find.byType(EditableText)),
-    )
-    .controller
-    .text;
 
 /// The live editor state (for asserting on pending-registry KEYS).
 ProviderContainer positionContainer(WidgetTester tester) =>

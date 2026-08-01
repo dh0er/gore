@@ -623,16 +623,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get spawnPositionSection => '出生位置（参考）';
 
   @override
-  String get resetToSpawnPosition => '重置为出生位置';
+  String get positionNotReadable => '无法读取该角色已保存的位置。';
 
   @override
-  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
-
-  @override
-  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
-
-  @override
-  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+  String get npcPositionReadOnly => '游戏会从关卡而非存档中恢复 NPC 的位置，因此这些数值可以查看，但无法修改。';
 
   @override
   String get pickLocation => '选择地点…';
@@ -645,6 +639,30 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get locationAreaOther => '其他';
+
+  @override
+  String get locationAreaCavalornValley => '卡瓦隆山谷';
+
+  @override
+  String get locationAreaEastForest => '东部森林';
+
+  @override
+  String get locationAreaFogTower => '雾塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '非法沼泽烟草调配者';
+
+  @override
+  String get locationAreaOrcArena => '兽人竞技场';
+
+  @override
+  String get locationAreaOrcGraveyard => '兽人墓地';
+
+  @override
+  String get locationAreaShipwreck => '沉船残骸';
+
+  @override
+  String get locationAreaTundra => '苔原';
 
   @override
   String get locationCatalogUnavailable => '无法加载地点目录。';
@@ -3180,16 +3198,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get spawnPositionSection => '出生位置（参考）';
 
   @override
-  String get resetToSpawnPosition => '重置为出生位置';
+  String get positionNotReadable => '无法读取该角色已保存的位置。';
 
   @override
-  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
-
-  @override
-  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
-
-  @override
-  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+  String get npcPositionReadOnly => '游戏会从关卡而非存档中恢复 NPC 的位置，因此这些数值可以查看，但无法修改。';
 
   @override
   String get pickLocation => '选择地点…';
@@ -3202,6 +3214,30 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get locationAreaOther => '其他';
+
+  @override
+  String get locationAreaCavalornValley => '卡瓦隆山谷';
+
+  @override
+  String get locationAreaEastForest => '东部森林';
+
+  @override
+  String get locationAreaFogTower => '雾塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '非法沼泽烟草调配者';
+
+  @override
+  String get locationAreaOrcArena => '兽人竞技场';
+
+  @override
+  String get locationAreaOrcGraveyard => '兽人墓地';
+
+  @override
+  String get locationAreaShipwreck => '沉船残骸';
+
+  @override
+  String get locationAreaTundra => '苔原';
 
   @override
   String get locationCatalogUnavailable => '无法加载地点目录。';

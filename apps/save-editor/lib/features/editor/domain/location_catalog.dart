@@ -2,8 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
-/// One named interaction spot of the main map: a place a character can be moved
+/// One named interaction spot of the main map: a place the hero can be moved
 /// to, addressed by the same name the save file uses in `UsedSpot > Spotname`.
+///
+/// The hero ONLY. An NPC's placement comes from the level, not from the save,
+/// so there is no NPC destination to pick — see `NpcPositionPanel`.
 ///
 /// Only [yaw] is carried. Pitch and roll are deliberately absent from both the
 /// asset and this model: a spot's pitch would visibly tilt a standing pawn, so
@@ -37,9 +40,9 @@ class LocationSpot {
 }
 
 /// A named region of the map. [locId] resolves to a localized name through the
-/// shared localization catalog; areas without one fall back to their English
-/// [label], which is why area names need no ARB keys of their own:
-/// `locCatalog[area.locId]?[lang] ?? area.label`.
+/// shared localization catalog; the areas the game has no string for are named
+/// by the editor's own ARB instead (`appAreaLabel` in the location picker), and
+/// [label] is the English safety net behind both.
 class LocationArea {
   const LocationArea({
     required this.id,

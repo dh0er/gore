@@ -645,19 +645,12 @@ class AppLocalizationsFr extends AppLocalizations {
   String get spawnPositionSection => 'Position d’apparition (référence)';
 
   @override
-  String get resetToSpawnPosition => 'Réinitialiser à la position d’apparition';
+  String get positionNotReadable =>
+      'La position enregistrée de ce personnage n’a pas pu être lue.';
 
   @override
-  String get positionOutOfRange =>
-      'La valeur doit être comprise entre −10 000 000 et 10 000 000';
-
-  @override
-  String get positionNotEditable =>
-      'La position enregistrée de ce personnage n’a pas pu être lue ; elle ne peut donc pas être modifiée.';
-
-  @override
-  String get positionNeverPlaced =>
-      'Ce personnage n’a jamais été placé dans le monde (position 0, 0, 0) — le jeu peut ignorer la position enregistrée.';
+  String get npcPositionReadOnly =>
+      'Le jeu restaure la position d’un PNJ à partir du niveau et non de la sauvegarde : ces valeurs peuvent être lues, mais pas modifiées.';
 
   @override
   String get pickLocation => 'Choisir un lieu…';
@@ -670,6 +663,30 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'Autres';
+
+  @override
+  String get locationAreaCavalornValley => 'Vallée de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Forêt de l\'Est';
+
+  @override
+  String get locationAreaFogTower => 'Tour de brume';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Mélangeurs d\'herbe clandestins';
+
+  @override
+  String get locationAreaOrcArena => 'Arène des orques';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cimetière orc';
+
+  @override
+  String get locationAreaShipwreck => 'Épave';
+
+  @override
+  String get locationAreaTundra => 'Toundra';
 
   @override
   String get locationCatalogUnavailable =>

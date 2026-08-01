@@ -642,19 +642,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get spawnPositionSection => 'Pozycja odrodzenia (odniesienie)';
 
   @override
-  String get resetToSpawnPosition => 'Przywróć pozycję odrodzenia';
+  String get positionNotReadable =>
+      'Nie udało się odczytać zapisanej pozycji tej postaci.';
 
   @override
-  String get positionOutOfRange =>
-      'Wartość musi mieścić się w zakresie od −10 000 000 do 10 000 000';
-
-  @override
-  String get positionNotEditable =>
-      'Nie udało się odczytać zapisanej pozycji tej postaci, więc nie można jej edytować.';
-
-  @override
-  String get positionNeverPlaced =>
-      'Ta postać nigdy nie została umieszczona w świecie (pozycja 0, 0, 0) — gra może zignorować zapisaną pozycję.';
+  String get npcPositionReadOnly =>
+      'Gra odtwarza pozycję NPC z poziomu, a nie z zapisu gry, więc te wartości można odczytać, ale nie zmienić.';
 
   @override
   String get pickLocation => 'Wybierz miejsce…';
@@ -667,6 +660,30 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'Inne';
+
+  @override
+  String get locationAreaCavalornValley => 'Dolina Cavalorna';
+
+  @override
+  String get locationAreaEastForest => 'Wschodni Las';
+
+  @override
+  String get locationAreaFogTower => 'Mglista Wieża';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Nielegalni mieszacze ziela';
+
+  @override
+  String get locationAreaOrcArena => 'Arena Orków';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cmentarzysko Orków';
+
+  @override
+  String get locationAreaShipwreck => 'Wrak statku';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
 
   @override
   String get locationCatalogUnavailable =>

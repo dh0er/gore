@@ -963,6 +963,16 @@ pub struct Rot3 {
 /// `{mapKey}` for map keys), rooted at the private root — exactly like
 /// [`NpcAttributeRow`]'s `base_path`/`current_path`.
 ///
+/// **This pose is a SNAPSHOT, not an input.** `private.typed.setValue` can
+/// address these leaves and the bytes do change, but the game discards them on
+/// load: a UE4SS runtime probe rewrote `CharacterLocation`, `SpawnLocation` and
+/// `DailyRoutineClass` for two NPCs (one streamed out, one simulated), loaded
+/// the byte-verified save, and read back the ORIGINAL pre-edit values in every
+/// field. Placement authority is the level's WorldPointActor named in the NPC's
+/// GlobalId. NPC *attributes* in the same `{CharacterStates}` blob do apply, so
+/// the blob is read — these records are simply never used. Reading stays
+/// worthwhile (CLI, MCP, diagnostics); do not build a mover on top of it.
+///
 /// **Why the rotations are renamed here and nowhere else.** The generic property
 /// parser collapses BOTH the `Vector` and the `Rotator` descriptor into the same
 /// `StructValue::Vector3 { x, y, z }` variant (see `read_struct_value` in

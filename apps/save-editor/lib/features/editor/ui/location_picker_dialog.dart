@@ -12,9 +12,11 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 /// user asked for its orientation to be applied as well.
 ///
 /// Deliberately WRITE-AGNOSTIC — it carries no command, no path and no pending
-/// key. The player editor turns it into a `private.player.setTransform` edit and
-/// the NPC panel into a `private.typed.setValue` edit; the dialog knows about
-/// neither, which is what lets ONE dialog serve both callers.
+/// key. Its one caller today, the player transform editor, turns it into a
+/// `private.player.setTransform` edit; the dialog knows nothing about that.
+/// (It once served the NPC panel too. That panel is read-only now: the game
+/// restores an NPC's placement from the level and discards the saved pose — see
+/// `NpcPositionPanel`.)
 class LocationPick {
   const LocationPick({required this.spot, required this.applyRotation});
 
@@ -41,6 +43,32 @@ Future<LocationPick?> showLocationPickerDialog(
     builder: (_) => _LocationPickerDialog(catalogOverride: catalogOverride),
   );
 }
+
+/// Our own name for an area the game itself does not name, or null when the
+/// area is not one of them.
+///
+/// The catalog gives every area an English `label` and gives 18 of the 26 a
+/// `locId` into the game's own strings. The other eight have no clean label
+/// anywhere in the game's 43,851 ids — only quest titles, item names and
+/// dialogue lines mention them — so their names are the editor's own and live
+/// in the ARB like any other piece of UI text.
+///
+/// An explicit `switch` rather than "whatever the ARB happens to contain": an
+/// area added to the catalog without a translation lands on `_` and is named by
+/// `location_picker_dialog_test`, instead of silently rendering English inside
+/// an otherwise German sidebar — which is the bug this table exists to close.
+@visibleForTesting
+String? appAreaLabel(String areaId, AppLocalizations l10n) => switch (areaId) {
+  'CV' => l10n.locationAreaCavalornValley,
+  'EF' => l10n.locationAreaEastForest,
+  'FT' => l10n.locationAreaFogTower,
+  'HC' => l10n.locationAreaTundra,
+  'IWM' => l10n.locationAreaIllegalWeedMixers,
+  'OA' => l10n.locationAreaOrcArena,
+  'OG' => l10n.locationAreaOrcGraveyard,
+  'SW' => l10n.locationAreaShipwreck,
+  _ => null,
+};
 
 class _LocationPickerDialog extends ConsumerStatefulWidget {
   const _LocationPickerDialog({this.catalogOverride});
@@ -88,8 +116,8 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
   int _offset = 0;
 
   /// Opt-in, and off by default: a spot's yaw is the heading of someone USING
-  /// that spot (facing the anvil, the ladder), not a sensible facing for a
-  /// character merely relocated there.
+  /// that spot (facing the anvil, the ladder), not a sensible facing for
+  /// someone merely relocated there.
   bool _applyRotation = false;
 
   // Grouping is O(spots); cache it against the catalog instance so it runs once
@@ -128,8 +156,11 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
     return groups;
   }
 
-  /// Localized area name: the game's own notification string when the catalog
-  /// carries a loc id, else the generated English [LocationArea.label].
+  /// Localized area name, in this order: the game's own notification string
+  /// when the catalog carries a loc id, then our [appAreaLabel] for the areas
+  /// the game does not name, and only then the generated English
+  /// [LocationArea.label] — a safety net for an area added to the catalog
+  /// before anyone translated it, never the normal outcome.
   ///
   /// NOTE on German: for this `area_*` family the real string sits in the
   /// `german` set and `german_new` is NULL — inverted versus the rest of the
@@ -151,7 +182,7 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
       final localized = resolveGameText(locCatalog, locId, lang);
       if (localized != null && localized.trim().isNotEmpty) return localized;
     }
-    return area.label;
+    return appAreaLabel(areaId, l10n) ?? area.label;
   }
 
   void _onSearchChanged(String _) {
@@ -266,7 +297,10 @@ class _LocationPickerDialogState extends ConsumerState<_LocationPickerDialog> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               SizedBox(
-                width: 200,
+                // Wide enough for the longest area label plus its spot count
+                // without ellipsis ("Illegal Weed Mixers (109)"); the German
+                // and Russian labels run longer still.
+                width: 260,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surfaceContainerLow,

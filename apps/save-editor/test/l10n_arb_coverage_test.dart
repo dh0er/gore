@@ -65,6 +65,20 @@ void main() {
       'memoryEventAction',
       'memoryEventFact',
       'memoryEventGameTime',
+      // Map areas the game has no string of its own for. These are the ones
+      // that used to leak English into every other language's sidebar, so an
+      // English copy here is the exact regression to catch.
+      //
+      // `locationAreaTundra` is deliberately NOT listed: German, Spanish,
+      // Italian, Polish and Portuguese all spell the tundra "Tundra", and a
+      // rule that forbids the correct word is worse than no rule.
+      'locationAreaCavalornValley',
+      'locationAreaEastForest',
+      'locationAreaFogTower',
+      'locationAreaIllegalWeedMixers',
+      'locationAreaOrcArena',
+      'locationAreaOrcGraveyard',
+      'locationAreaShipwreck',
     };
     final template = _readArb(templateFile);
     final localeFiles = l10nDirectory.listSync().whereType<File>().where(

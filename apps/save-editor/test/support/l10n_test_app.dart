@@ -16,10 +16,13 @@ const List<LocalizationsDelegate<dynamic>> testLocalizationsDelegates = [
 /// Wraps [home] in a [ProviderScope] + [MaterialApp] that supplies the app's
 /// localization delegates (default locale: English), so localized widgets
 /// render with their English values in tests.
-Widget wrapWithL10n(Widget home) {
+///
+/// Pass [locale] to pump the same widget in another language — the only way to
+/// catch a string that renders English inside a translated screen.
+Widget wrapWithL10n(Widget home, {Locale locale = const Locale('en')}) {
   return ProviderScope(
     child: MaterialApp(
-      locale: const Locale('en'),
+      locale: locale,
       localizationsDelegates: testLocalizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
       home: home,

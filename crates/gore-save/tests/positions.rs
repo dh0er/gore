@@ -1,6 +1,12 @@
-//! NPC saved-pose read + edit roundtrip against a real save. Requires a real
-//! GSAV save via GORE_SAVE; skips otherwise. The save is COPIED into a temp dir
-//! first — the tests never touch the original.
+//! NPC saved-pose read + byte-level write roundtrip against a real save.
+//! Requires a real GSAV save via GORE_SAVE; skips otherwise. The save is COPIED
+//! into a temp dir first — the tests never touch the original.
+//!
+//! NOTE: the write tests below prove the BYTES change and read back, nothing
+//! more. The game restores an NPC's placement from the level's WorldPointActor
+//! and discards these records on load — a runtime probe read back the original
+//! pre-edit values afterwards — so a moved pose here does not move an NPC in
+//! game. See the `NpcPose` doc in `src/npc.rs`.
 //!   GORE_SAVE='C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames\G1R-035.sav' \
 //!     cargo test -p gore-save --test positions -- --nocapture
 use serde_json::{Value, json};

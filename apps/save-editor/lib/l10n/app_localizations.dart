@@ -1226,29 +1226,17 @@ abstract class AppLocalizations {
   /// **'Spawn position (reference)'**
   String get spawnPositionSection;
 
-  /// No description provided for @resetToSpawnPosition.
+  /// No description provided for @positionNotReadable.
   ///
   /// In en, this message translates to:
-  /// **'Reset to spawn position'**
-  String get resetToSpawnPosition;
+  /// **'The stored position could not be read for this character.'**
+  String get positionNotReadable;
 
-  /// No description provided for @positionOutOfRange.
+  /// No description provided for @npcPositionReadOnly.
   ///
   /// In en, this message translates to:
-  /// **'Value must be between −10,000,000 and 10,000,000'**
-  String get positionOutOfRange;
-
-  /// No description provided for @positionNotEditable.
-  ///
-  /// In en, this message translates to:
-  /// **'The stored position could not be read for this character, so it cannot be edited.'**
-  String get positionNotEditable;
-
-  /// No description provided for @positionNeverPlaced.
-  ///
-  /// In en, this message translates to:
-  /// **'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.'**
-  String get positionNeverPlaced;
+  /// **'The game restores an NPC\'s position from the level, not from the savegame, so these values can be read but not changed.'**
+  String get npcPositionReadOnly;
 
   /// No description provided for @pickLocation.
   ///
@@ -1273,6 +1261,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Other'**
   String get locationAreaOther;
+
+  /// No description provided for @locationAreaCavalornValley.
+  ///
+  /// In en, this message translates to:
+  /// **'Cavalorn Valley'**
+  String get locationAreaCavalornValley;
+
+  /// No description provided for @locationAreaEastForest.
+  ///
+  /// In en, this message translates to:
+  /// **'East Forest'**
+  String get locationAreaEastForest;
+
+  /// No description provided for @locationAreaFogTower.
+  ///
+  /// In en, this message translates to:
+  /// **'Fog Tower'**
+  String get locationAreaFogTower;
+
+  /// No description provided for @locationAreaIllegalWeedMixers.
+  ///
+  /// In en, this message translates to:
+  /// **'Illegal Weed Mixers'**
+  String get locationAreaIllegalWeedMixers;
+
+  /// No description provided for @locationAreaOrcArena.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Arena'**
+  String get locationAreaOrcArena;
+
+  /// No description provided for @locationAreaOrcGraveyard.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Graveyard'**
+  String get locationAreaOrcGraveyard;
+
+  /// No description provided for @locationAreaShipwreck.
+  ///
+  /// In en, this message translates to:
+  /// **'Shipwreck'**
+  String get locationAreaShipwreck;
+
+  /// No description provided for @locationAreaTundra.
+  ///
+  /// In en, this message translates to:
+  /// **'Tundra'**
+  String get locationAreaTundra;
 
   /// No description provided for @locationCatalogUnavailable.
   ///

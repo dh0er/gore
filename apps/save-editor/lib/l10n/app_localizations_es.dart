@@ -642,19 +642,12 @@ class AppLocalizationsEs extends AppLocalizations {
   String get spawnPositionSection => 'Posición de aparición (referencia)';
 
   @override
-  String get resetToSpawnPosition => 'Restablecer a la posición de aparición';
+  String get positionNotReadable =>
+      'No se pudo leer la posición guardada de este personaje.';
 
   @override
-  String get positionOutOfRange =>
-      'El valor debe estar entre −10.000.000 y 10.000.000';
-
-  @override
-  String get positionNotEditable =>
-      'No se pudo leer la posición guardada de este personaje, por lo que no se puede editar.';
-
-  @override
-  String get positionNeverPlaced =>
-      'Este personaje nunca ha sido colocado en el mundo (posición 0, 0, 0): es posible que el juego ignore la posición guardada.';
+  String get npcPositionReadOnly =>
+      'El juego restaura la posición de un PNJ desde el nivel, no desde la partida guardada, por lo que estos valores se pueden leer pero no modificar.';
 
   @override
   String get pickLocation => 'Elegir ubicación…';
@@ -667,6 +660,30 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'Otros';
+
+  @override
+  String get locationAreaCavalornValley => 'Valle de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Bosque del Este';
+
+  @override
+  String get locationAreaFogTower => 'Torre de la Niebla';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Mezcladores ilegales de hierba';
+
+  @override
+  String get locationAreaOrcArena => 'Arena de los orcos';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cementerio orco';
+
+  @override
+  String get locationAreaShipwreck => 'Naufragio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
 
   @override
   String get locationCatalogUnavailable =>

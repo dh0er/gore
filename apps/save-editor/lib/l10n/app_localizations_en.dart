@@ -639,19 +639,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get spawnPositionSection => 'Spawn position (reference)';
 
   @override
-  String get resetToSpawnPosition => 'Reset to spawn position';
+  String get positionNotReadable =>
+      'The stored position could not be read for this character.';
 
   @override
-  String get positionOutOfRange =>
-      'Value must be between −10,000,000 and 10,000,000';
-
-  @override
-  String get positionNotEditable =>
-      'The stored position could not be read for this character, so it cannot be edited.';
-
-  @override
-  String get positionNeverPlaced =>
-      'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.';
+  String get npcPositionReadOnly =>
+      'The game restores an NPC\'s position from the level, not from the savegame, so these values can be read but not changed.';
 
   @override
   String get pickLocation => 'Choose location…';
@@ -664,6 +657,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'Other';
+
+  @override
+  String get locationAreaCavalornValley => 'Cavalorn Valley';
+
+  @override
+  String get locationAreaEastForest => 'East Forest';
+
+  @override
+  String get locationAreaFogTower => 'Fog Tower';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Illegal Weed Mixers';
+
+  @override
+  String get locationAreaOrcArena => 'Orc Arena';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Orc Graveyard';
+
+  @override
+  String get locationAreaShipwreck => 'Shipwreck';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
 
   @override
   String get locationCatalogUnavailable =>

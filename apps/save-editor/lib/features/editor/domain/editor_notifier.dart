@@ -198,7 +198,7 @@ class EditorState {
       // key themselves through `setEditInvalid`: returning one here would let
       // `setNpcEditInvalid`'s `..remove(invalidNpcEditKey)` clear another
       // surface's block as a side effect.
-      if (key != storyStatePendingKey && !key.startsWith('npc.position:')) {
+      if (key != storyStatePendingKey) {
         legacyFallback ??= key;
       }
     }
@@ -852,16 +852,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.selectedActor == actor) return;
     // Switching actor abandons any in-progress invalid NPC field, so drop the
     // validation block — the previous NPC's stored (valid) draft survives.
-    // `npc.position:` is swept alongside `npc.attributes:` because the Position
-    // sub-tab keys itself through `setEditInvalid` (see position_detail.dart);
-    // without this, a stale block from the previous NPC would outlive the
-    // switch and disable Save for an actor whose fields are all valid.
     final invalid = Set<String>.from(state.invalidEditKeys)
       ..remove(state.invalidNpcEditKey)
-      ..removeWhere(
-        (key) =>
-            key.startsWith('npc.attributes:') || key.startsWith('npc.position:'),
-      );
+      ..removeWhere((key) => key.startsWith('npc.attributes:'));
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
 
@@ -2986,11 +2979,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Load a single NPC's saved pose (by GlobalId) from the core
   /// `private.npc.position` command for the currently selected save: the
-  /// character location/rotation plus the spawn location/rotation reference,
-  /// each paired with the FULL typed path `private.typed.setValue` resolves —
-  /// so the position editor registers its edits through the same pending
-  /// mechanism the attribute editor uses (only the value is a struct, not a
-  /// scalar). Rotations arrive as `{pitch, yaw, roll}`.
+  /// character location/rotation plus the spawn location/rotation. Rotations
+  /// arrive as `{pitch, yaw, roll}`.
+  ///
+  /// READ-ONLY. The game restores an NPC's placement from the level, not from
+  /// the save — a runtime probe read back the original pre-edit values after
+  /// loading a save whose pose records had all been rewritten — so this pose is
+  /// displayed and never written (see `NpcPositionPanel`).
   ///
   /// Memoized per (save, GlobalId) exactly like [loadNpcAttributes]; a failed
   /// load is NOT cached so a transient error can retry.

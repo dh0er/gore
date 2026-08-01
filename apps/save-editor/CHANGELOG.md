@@ -11,12 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Added a "Position" tab to Characters. The hero's position moved there from the
-  Attributes tab, and NPC positions can now be edited too.
-- Positions can be picked from a list of 10,075 named locations from the game,
-  grouped by region, instead of typing coordinates. Applying a location's
-  facing is optional and off by default.
-- An NPC's spawn position is shown for reference, with a button to move the NPC
-  back to it.
+  Attributes tab and can be picked from a list of 10,075 named locations from
+  the game, grouped by region, instead of typing coordinates. Applying a
+  location's facing is optional and off by default.
+- An NPC's position and spawn position are shown but cannot be changed: the
+  game restores an NPC's placement from the level, not from the savegame.
 
 ## [1.2.0] - 2026-07-15
 

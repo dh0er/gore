@@ -631,17 +631,11 @@ class AppLocalizationsJa extends AppLocalizations {
   String get spawnPositionSection => 'スポーン位置（参考）';
 
   @override
-  String get resetToSpawnPosition => 'スポーン位置に戻す';
+  String get positionNotReadable => 'このキャラクターの保存された位置を読み取れませんでした。';
 
   @override
-  String get positionOutOfRange => '値は −10,000,000 から 10,000,000 の間で指定してください';
-
-  @override
-  String get positionNotEditable => 'このキャラクターの保存された位置を読み取れなかったため、編集できません。';
-
-  @override
-  String get positionNeverPlaced =>
-      'このキャラクターはワールドに配置されたことがありません（位置 0, 0, 0）。ゲームは保存された位置を無視する場合があります。';
+  String get npcPositionReadOnly =>
+      'ゲームは NPC の位置をセーブデータではなくレベルから復元します。そのため、これらの値は読み取れますが変更できません。';
 
   @override
   String get pickLocation => '場所を選択…';
@@ -654,6 +648,30 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'その他';
+
+  @override
+  String get locationAreaCavalornValley => 'カヴァロンの谷';
+
+  @override
+  String get locationAreaEastForest => '東の森';
+
+  @override
+  String get locationAreaFogTower => '霧の塔';
+
+  @override
+  String get locationAreaIllegalWeedMixers => '違法スワンプウィード調合師';
+
+  @override
+  String get locationAreaOrcArena => 'オークのアリーナ';
+
+  @override
+  String get locationAreaOrcGraveyard => 'オークの墓地';
+
+  @override
+  String get locationAreaShipwreck => '難破船';
+
+  @override
+  String get locationAreaTundra => '凍原';
 
   @override
   String get locationCatalogUnavailable => '場所カタログを読み込めませんでした。';

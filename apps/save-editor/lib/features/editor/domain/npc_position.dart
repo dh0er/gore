@@ -1,11 +1,12 @@
-/// Domain types for the NPC position editor (`private.npc.position`).
+/// Domain types for the NPC position READER (`private.npc.position`).
 ///
-/// The attribute editor's [NpcTypedEdit] carries a single `double` and so can
-/// only address a scalar leaf. A saved pose is a NATIVE STRUCT leaf — the whole
-/// `CharacterLocation` / `CharacterRotation` triplet is written in one go — so
-/// these types carry a `Map<String, double>` value instead
-/// ([NpcStructEdit]). The write itself still travels through the existing
-/// `private.typed.setValue` command; only the value shape differs.
+/// Read-only by design, not by omission. The save's per-NPC pose is a snapshot
+/// written at save time and discarded on load — a UE4SS runtime probe rewrote
+/// `CharacterLocation`, `SpawnLocation` and `DailyRoutineClass` for two NPCs,
+/// loaded the byte-verified save, and read back the ORIGINAL pre-edit values in
+/// every field. Placement authority is the level's WorldPointActor named in the
+/// NPC's GlobalId. So these types carry no write payload and no typed paths:
+/// there is nothing here to address with `private.typed.setValue`.
 library;
 
 /// A location triplet (`{x, y, z}`), as the core reports it for
@@ -27,13 +28,6 @@ class Vec3 {
   final double x;
   final double y;
   final double z;
-
-  /// The `private.typed.setValue` value payload for a Vector descriptor.
-  Map<String, double> toValue() => {'x': x, 'y': y, 'z': z};
-
-  /// True when every axis is exactly zero — the marker for "this actor was
-  /// never placed in the world" (see [NpcPose.neverPlaced]).
-  bool get isZero => x == 0 && y == 0 && z == 0;
 
   @override
   bool operator ==(Object other) =>
@@ -66,11 +60,6 @@ class Rot3 {
   final double yaw;
   final double roll;
 
-  /// The `private.typed.setValue` value payload for a Rotator descriptor — the
-  /// core accepts pitch/yaw/roll there and maps them back onto the struct's
-  /// memory order.
-  Map<String, double> toValue() => {'pitch': pitch, 'yaw': yaw, 'roll': roll};
-
   @override
   bool operator ==(Object other) =>
       other is Rot3 &&
@@ -85,34 +74,20 @@ class Rot3 {
   String toString() => 'Rot3($pitch, $yaw, $roll)';
 }
 
-/// One pending `private.typed.setValue` edit whose value is a STRUCT (a whole
-/// location or rotation triplet), not a scalar. The Map-valued sibling of
-/// [NpcTypedEdit] in npc_attributes.dart.
-class NpcStructEdit {
-  const NpcStructEdit({required this.path, required this.value});
-
-  /// Full typed path to the struct leaf, as returned by the core.
-  final List<String> path;
-
-  /// `{x, y, z}` for a location, `{pitch, yaw, roll}` for a rotation.
-  final Map<String, double> value;
-}
-
 /// One NPC's saved pose as returned by `private.npc.position`.
 ///
-/// Each leaf is nullable (the member may be absent, or not a triplet) while its
-/// typed path is always reported, so a caller can tell "absent leaf" from
-/// "absent NPC" (an absent NPC is an error, not an empty pose).
+/// Each leaf is nullable: the member may be absent, or not a triplet. An absent
+/// NPC is an error and never reaches this type, so "no members" means "this
+/// entry stores nothing", not "no such NPC".
+///
+/// The core also reports a typed path per member. The editor ignores them: they
+/// address a record the game discards on load, so there is no write to make.
 class NpcPose {
   const NpcPose({
     this.location,
     this.rotation,
     this.spawnLocation,
     this.spawnRotation,
-    this.locationPath = const [],
-    this.rotationPath = const [],
-    this.spawnLocationPath = const [],
-    this.spawnRotationPath = const [],
   });
 
   factory NpcPose.fromJson(Map<String, Object?> json) {
@@ -121,10 +96,6 @@ class NpcPose {
       rotation: Rot3.fromJson(json['rotation']),
       spawnLocation: Vec3.fromJson(json['spawnLocation']),
       spawnRotation: Rot3.fromJson(json['spawnRotation']),
-      locationPath: _stringList(json['locationPath']),
-      rotationPath: _stringList(json['rotationPath']),
-      spawnLocationPath: _stringList(json['spawnLocationPath']),
-      spawnRotationPath: _stringList(json['spawnRotationPath']),
     );
   }
 
@@ -132,29 +103,6 @@ class NpcPose {
   final Rot3? rotation;
   final Vec3? spawnLocation;
   final Rot3? spawnRotation;
-
-  final List<String> locationPath;
-  final List<String> rotationPath;
-  final List<String> spawnLocationPath;
-  final List<String> spawnRotationPath;
-
-  /// The one signal that this pose is writable: there is no per-NPC `writable`
-  /// list, so "the core resolved a path" IS the permission. An empty path means
-  /// the leaf cannot be addressed by `private.typed.setValue`.
-  bool get locationWritable => locationPath.isNotEmpty;
-  bool get rotationWritable => rotationPath.isNotEmpty;
-  bool get editable => locationWritable || rotationWritable;
-
-  /// True when the stored location is exactly the origin: the NPC has never
-  /// been placed in the world, so the game most likely ignores this entry and
-  /// spawns it from its level placement instead. Editing stays allowed — the
-  /// UI only warns.
-  bool get neverPlaced => location?.isZero ?? false;
-
-  static List<String> _stringList(Object? value) {
-    if (value is! List) return const [];
-    return value.whereType<String>().toList(growable: false);
-  }
 }
 
 /// Result of loading one NPC's pose. Carries an inline [error] instead of

@@ -643,19 +643,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get spawnPositionSection => 'Точка появления (справочно)';
 
   @override
-  String get resetToSpawnPosition => 'Вернуть к точке появления';
+  String get positionNotReadable =>
+      'Сохранённую позицию этого персонажа не удалось прочитать.';
 
   @override
-  String get positionOutOfRange =>
-      'Значение должно быть от −10 000 000 до 10 000 000';
-
-  @override
-  String get positionNotEditable =>
-      'Сохранённую позицию этого персонажа не удалось прочитать, поэтому её нельзя изменить.';
-
-  @override
-  String get positionNeverPlaced =>
-      'Этот персонаж ни разу не был размещён в мире (позиция 0, 0, 0) — игра может игнорировать сохранённую позицию.';
+  String get npcPositionReadOnly =>
+      'Игра восстанавливает позицию NPC из уровня, а не из сохранения, поэтому эти значения можно прочитать, но не изменить.';
 
   @override
   String get pickLocation => 'Выбрать место…';
@@ -668,6 +661,30 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get locationAreaOther => 'Прочее';
+
+  @override
+  String get locationAreaCavalornValley => 'Долина Кавалорна';
+
+  @override
+  String get locationAreaEastForest => 'Восточный лес';
+
+  @override
+  String get locationAreaFogTower => 'Туманная башня';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Подпольные травники';
+
+  @override
+  String get locationAreaOrcArena => 'Орочья арена';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Орочий склеп';
+
+  @override
+  String get locationAreaShipwreck => 'Место кораблекрушения';
+
+  @override
+  String get locationAreaTundra => 'Тундра';
 
   @override
   String get locationCatalogUnavailable => 'Не удалось загрузить каталог мест.';
