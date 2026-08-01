@@ -25,6 +25,9 @@ use crate::properties::{
 
 const ATTRIBUTES_TYPE: &str = "CharacterStateSaveGameData_Attributes";
 const INVENTORY_TYPE: &str = "CharacterStateSaveGameData_Inventory";
+/// The saved-pose map (`PositionByGlobalId`). Same map family as
+/// `_Attributes`/`_Inventory`, so [`find_character_map_path`] finds it unchanged.
+const POSITION_TYPE: &str = "CharacterStateSaveGameData_Position";
 
 /// Per-character personal relationship records. Values are inline
 /// `CharacterStateSaveGameData_Relationship` structs whose
@@ -933,6 +936,99 @@ pub fn npc_attributes(root: &RootObject, id: &str) -> Result<Vec<NpcAttributeRow
     let mut rows = Vec::new();
     collect_attribute_rows(value, &mut path, &mut rows);
     Ok(rows)
+}
+
+/// A world-space point read from a `Vector`-descriptor native struct.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Vec3 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+/// An orientation read from a `Rotator`-descriptor native struct, in the order
+/// the engine serialises it: Pitch, Yaw, Roll.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Rot3 {
+    pub pitch: f64,
+    pub yaw: f64,
+    pub roll: f64,
+}
+
+/// One NPC's saved pose, with the full typed paths `private.typed.setValue`
+/// needs to write each of the four leaves.
+///
+/// The `*_path` fields are segment lists in the form
+/// [`crate::properties::parse_path`] accepts (property names verbatim,
+/// `{mapKey}` for map keys), rooted at the private root — exactly like
+/// [`NpcAttributeRow`]'s `base_path`/`current_path`.
+///
+/// **Why the rotations are renamed here and nowhere else.** The generic property
+/// parser collapses BOTH the `Vector` and the `Rotator` descriptor into the same
+/// `StructValue::Vector3 { x, y, z }` variant (see `read_struct_value` in
+/// `properties.rs`), so by the time a value reaches a generic consumer the
+/// descriptor — the only thing that says "this triplet is an orientation" — is
+/// gone. A *curated* command like [`npc_position`] still knows which member it
+/// asked for, so it is the right and only place to restore the engine's names:
+/// x=Pitch, y=Yaw, z=Roll, matching the memory order `private_rotator_ref_at`
+/// reads in `lib.rs`. The generic All-Data browse path deliberately keeps
+/// `x/y/z`. Any future curated command that surfaces a `Rotator` must do the
+/// same renaming itself — there is no shared layer that can do it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NpcPose {
+    pub location: Option<Vec3>,
+    pub rotation: Option<Rot3>,
+    pub spawn_location: Option<Vec3>,
+    pub spawn_rotation: Option<Rot3>,
+    pub location_path: Vec<String>,
+    pub rotation_path: Vec<String>,
+    pub spawn_location_path: Vec<String>,
+    pub spawn_rotation_path: Vec<String>,
+}
+
+/// Read NPC `id`'s saved pose out of the `_Position` map, each leaf paired with
+/// the typed path `private.typed.setValue` resolves against the private root.
+///
+/// Errors if the `_Position` map is absent; errors with a not-found message if
+/// the map exists but holds no entry for `id`. A member that is missing (or is
+/// not a triplet native struct) comes back as `None` while its path is still
+/// reported, so a caller can tell "absent leaf" from "absent NPC".
+pub fn npc_position(root: &RootObject, id: &str) -> Result<NpcPose, CoreError> {
+    let (entries, mut path) = find_character_map_path(root, POSITION_TYPE)
+        .ok_or_else(|| CoreError::Parse(format!("no {POSITION_TYPE} map found in save")))?;
+    let value = lookup_entry(entries, id)
+        .ok_or_else(|| CoreError::Parse(format!("NPC {id:?} not found in {POSITION_TYPE} map")))?;
+
+    // The entry is addressed by its map key; descend from there.
+    path.push(map_key_segment(id));
+    let member_path = |name: &str| {
+        let mut p = path.clone();
+        p.push(name.to_string());
+        p
+    };
+    // `Vector` and `Rotator` both parse to Vector3 (f64) — or to Vector3f when
+    // the save stores the compact f32 form; accept either.
+    let triplet = |name: &str| match struct_member(value, name) {
+        Some(PropertyValue::Struct(StructValue::Vector3 { x, y, z })) => Some((*x, *y, *z)),
+        Some(PropertyValue::Struct(StructValue::Vector3f { x, y, z })) => {
+            Some((*x as f64, *y as f64, *z as f64))
+        }
+        _ => None,
+    };
+    let point = |name: &str| triplet(name).map(|(x, y, z)| Vec3 { x, y, z });
+    let rotation = |name: &str| triplet(name).map(|(pitch, yaw, roll)| Rot3 { pitch, yaw, roll });
+
+    Ok(NpcPose {
+        location: point("CharacterLocation"),
+        rotation: rotation("CharacterRotation"),
+        spawn_location: point("SpawnLocation"),
+        spawn_rotation: rotation("SpawnRotation"),
+        location_path: member_path("CharacterLocation"),
+        rotation_path: member_path("CharacterRotation"),
+        spawn_location_path: member_path("SpawnLocation"),
+        spawn_rotation_path: member_path("SpawnRotation"),
+    })
 }
 
 /// Full typed path (from the private root) to NPC `id`'s inventory container —

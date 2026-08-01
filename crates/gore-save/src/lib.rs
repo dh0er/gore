@@ -446,6 +446,12 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             npc_attributes_command(&path, &payload, codec_backend)
         }
+        "private.npc.position" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            npc_position_command(&path, &payload, codec_backend)
+        }
         "private.npc.inventory" => {
             let path = required_path(&payload)?;
             let kraken_backend = codec_backend::KrakenBackend::default();
@@ -5850,6 +5856,32 @@ fn npc_attributes_command(
     Ok(json!({ "attributes": attributes }))
 }
 
+/// `private.npc.position`: one NPC's saved pose (character + spawn location and
+/// rotation), each leaf paired with the full typed path `private.typed.setValue`
+/// resolves. Read-only; decodes through the same path as
+/// [`npc_attributes_command`].
+///
+/// Payload: `{ path, id }`. Returns `{ pose: NpcPose }`. Rotations come back as
+/// `{pitch, yaw, roll}` — see [`npc::NpcPose`] for why the rename happens here.
+fn npc_position_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading an NPC position requires a working codec backend".to_string())
+    })?;
+    let id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::InvalidRequest("missing payload.id".to_string()))?;
+
+    let root = decode_private_root_cached(path, backend)?;
+
+    let pose = npc::npc_position(&root, id)?;
+    Ok(json!({ "pose": pose }))
+}
+
 /// Build the inventory summary for one actor's MainContainer from a parsed
 /// typed root. `actor_id` is `None` for the controlled player or `Some(id)` for
 /// an NPC (resolved via [`npc::npc_inventory_path`]). Mirrors the player
@@ -9237,6 +9269,22 @@ fn coerce_native_struct_value(
                 ))
             })
     };
+    // A `Rotator` parses into the very same `Vector3`/`Vector3f` variant as a
+    // `Vector` — the descriptor is the only thing that says the triplet is an
+    // orientation — so on a Rotator accept the engine's component names as
+    // aliases for x/y/z, in serialised order (Pitch, Yaw, Roll). Same
+    // key-then-alias idiom as `parse_private_f64_member_alias`. A `Vector`
+    // stays strict x/y/z.
+    let rotator_alias = |axis: &str| match (descriptor, axis) {
+        ("Rotator", "x") => Some("pitch"),
+        ("Rotator", "y") => Some("yaw"),
+        ("Rotator", "z") => Some("roll"),
+        _ => None,
+    };
+    let triplet = |map: &serde_json::Map<String, Value>, axis: &str| match rotator_alias(axis) {
+        Some(alias) if !map.contains_key(axis) => component(map, alias),
+        _ => component(map, axis),
+    };
     let ensure_descriptor = |allowed: &[&str]| {
         if allowed.contains(&descriptor) {
             Ok(())
@@ -9272,9 +9320,9 @@ fn coerce_native_struct_value(
             ensure_size(24)?;
             let map = object()?;
             let mut bytes = Vec::with_capacity(24);
-            bytes.extend_from_slice(&component(map, "x")?.to_le_bytes());
-            bytes.extend_from_slice(&component(map, "y")?.to_le_bytes());
-            bytes.extend_from_slice(&component(map, "z")?.to_le_bytes());
+            bytes.extend_from_slice(&triplet(map, "x")?.to_le_bytes());
+            bytes.extend_from_slice(&triplet(map, "y")?.to_le_bytes());
+            bytes.extend_from_slice(&triplet(map, "z")?.to_le_bytes());
             Ok(bytes)
         }
         properties::PropertyValue::Struct(StructValue::Vector3f { .. }) => {
@@ -9283,7 +9331,7 @@ fn coerce_native_struct_value(
             let map = object()?;
             let mut bytes = Vec::with_capacity(12);
             for name in ["x", "y", "z"] {
-                let number = component(map, name)?;
+                let number = triplet(map, name)?;
                 let number = number as f32;
                 if !number.is_finite() {
                     return Err(CoreError::InvalidRequest(format!(
@@ -16853,6 +16901,7 @@ mod tests {
             payload.extend_from_slice(&int_property("Health", 42));
             payload.extend_from_slice(&private_str_array_property("Names", &["Hero", "Diego"]));
             payload.extend_from_slice(&native_struct_property("Location", "Vector", &vector));
+            payload.extend_from_slice(&native_struct_property("Rotation", "Rotator", &vector));
             payload.extend_from_slice(&opaque_property("LocalizedText", &[1, 2, 3, 4]));
             payload.extend_from_slice(&fstring("None"));
             payload.extend_from_slice(&7u32.to_le_bytes());
@@ -16922,6 +16971,18 @@ mod tests {
         assert_eq!(vector["kind"], "nativeStruct");
         assert_eq!(vector["editable"], true);
         assert_eq!(vector["editValue"], json!({"x": 1.0, "y": 2.0, "z": 3.0}));
+        // A `Rotator` descriptor deliberately keeps x/y/z on the GENERIC browse
+        // path: the parser collapses Vector and Rotator into one variant, so
+        // nothing here knows the triplet is an orientation. Only a curated
+        // command (`private.npc.position`) renames it to pitch/yaw/roll. The
+        // writer still accepts both spellings for a Rotator.
+        let rotator = rows
+            .iter()
+            .find(|row| row["display"] == "Rotation")
+            .unwrap();
+        assert_eq!(rotator["kind"], "nativeStruct");
+        assert_eq!(rotator["editable"], true);
+        assert_eq!(rotator["editValue"], json!({"x": 1.0, "y": 2.0, "z": 3.0}));
         assert!(
             rows.iter()
                 .filter(|row| row["source"] == "public")
@@ -16987,6 +17048,9 @@ mod tests {
             "GameplayTagContainer",
             &tags,
         ));
+        // A 24-byte `Vector` — same parsed variant as the `Rotator` above, so it
+        // pins that only the descriptor decides whether pitch/yaw/roll is legal.
+        payload.extend_from_slice(&native_struct_property("V3v", "Vector", &vector3));
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes());
 
@@ -17059,6 +17123,52 @@ mod tests {
         };
         assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &invalid).is_err());
         assert_eq!(payload, before, "failed native edits must be atomic");
+
+        // A `Rotator` also accepts the engine's component names, in serialised
+        // order (pitch=x, yaw=y, roll=z) — writing them must produce byte-identical
+        // output to writing x/y/z.
+        let mut by_axis = payload.clone();
+        let mut by_name = payload.clone();
+        for (target, value) in [
+            (&mut by_axis, json!({"x": 5.0, "y": 6.0, "z": 7.0})),
+            (&mut by_name, json!({"pitch": 5.0, "yaw": 6.0, "roll": 7.0})),
+        ] {
+            apply_private_typed_set_value_edit_to_payload(
+                target,
+                &PrivateTypedSetValueEdit {
+                    path: properties::parse_path(&["V3".to_string()]).unwrap(),
+                    value,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            by_axis, by_name,
+            "Rotator pitch/yaw/roll must encode exactly like x/y/z"
+        );
+
+        // ...but a `Vector` descriptor stays strict: pitch/yaw/roll is not a
+        // point, and silently accepting it would hide a caller's mix-up. Both the
+        // f64 (`V3v`) and the compact f32 (`V3f`) form must reject it — `V3v`
+        // parses to the very same variant as the `Rotator` above.
+        for name in ["V3v", "V3f"] {
+            let mut vector_payload = payload.clone();
+            let wrong_names = PrivateTypedSetValueEdit {
+                path: properties::parse_path(&[name.to_string()]).unwrap(),
+                value: json!({"pitch": 5.0, "yaw": 6.0, "roll": 7.0}),
+            };
+            let err =
+                apply_private_typed_set_value_edit_to_payload(&mut vector_payload, &wrong_names)
+                    .unwrap_err();
+            assert!(
+                err.to_string().contains("Vector.x"),
+                "{name}: unexpected error: {err}"
+            );
+            assert_eq!(
+                vector_payload, payload,
+                "{name}: failed native edits must be atomic"
+            );
+        }
     }
 
     #[test]
@@ -18954,6 +19064,330 @@ mod tests {
         );
         assert!(health["currentPath"].is_array());
         assert!(health.get("base_path").is_none(), "must be camelCase only");
+    }
+
+    // ── private.npc.position ─────────────────────────────────────────────────
+
+    /// One `_Position` entry value: a struct proplist holding the four native
+    /// pose leaves (two `Vector`, two `Rotator`), terminated by "None".
+    fn npc_position_entry_value(
+        location: [f64; 3],
+        rotation: [f64; 3],
+        spawn_location: [f64; 3],
+        spawn_rotation: [f64; 3],
+    ) -> Vec<u8> {
+        fn triplet(values: [f64; 3]) -> Vec<u8> {
+            let mut out = Vec::with_capacity(24);
+            for value in values {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+            out
+        }
+        let mut out = Vec::new();
+        for (name, struct_type, values) in [
+            ("CharacterLocation", "Vector", location),
+            ("CharacterRotation", "Rotator", rotation),
+            ("SpawnLocation", "Vector", spawn_location),
+            ("SpawnRotation", "Rotator", spawn_rotation),
+        ] {
+            out.extend_from_slice(&native_struct_property(name, struct_type, &triplet(values)));
+        }
+        out.extend_from_slice(&fstring("None")); // end of entry proplist
+        out
+    }
+
+    /// A private-root payload with a single
+    /// `MapProperty<StrProperty, StructProperty(CharacterStateSaveGameData_Position)>`
+    /// named `PositionByGlobalId`, keyed by NPC id.
+    fn npc_position_map_payload(npcs: &[(&str, [f64; 3], [f64; 3])]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&(npcs.len() as u32).to_le_bytes()); // count
+        for (id, location, rotation) in npcs {
+            map_body.extend_from_slice(&fstring(id));
+            // Spawn pose deliberately differs from the current pose so a test
+            // that mixes the two up fails loudly.
+            map_body.extend_from_slice(&npc_position_entry_value(
+                *location,
+                *rotation,
+                [
+                    location[0] + 1000.0,
+                    location[1] + 1000.0,
+                    location[2] + 1000.0,
+                ],
+                [rotation[0] + 1.0, rotation[1] + 1.0, rotation[2] + 1.0],
+            ));
+        }
+
+        let mut prop = fstring("PositionByGlobalId");
+        prop.extend_from_slice(&fstring("MapProperty"));
+        prop.extend_from_slice(&2u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StrProperty")); // key type
+        prop.extend_from_slice(&0u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StructProperty")); // value type
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("CharacterStateSaveGameData_Position"));
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("/Script/G1R"));
+        prop.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        prop.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        prop.push(0); // tag_flags
+        prop.extend_from_slice(&map_body);
+
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&prop);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    /// Write `private_payload` into a GSAV file and hand back the matching
+    /// stub codec backend.
+    fn position_save(
+        dir: &std::path::Path,
+        name: &str,
+        private_payload: Vec<u8>,
+    ) -> (PathBuf, PrefixCodecBackend) {
+        let path = dir.join(name);
+        let seed_compressed = format!("seed-{name}").into_bytes();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        (
+            path,
+            PrefixCodecBackend {
+                seed_compressed,
+                seed_uncompressed: private_payload,
+            },
+        )
+    }
+
+    #[test]
+    fn npc_position_reads_pose_and_typed_paths() {
+        let dir = tempdir().unwrap();
+        let first = "OC_VLK_Herek_511-WorldPointActor_Herek";
+        let second = "OC_STT_Diego";
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-positions.sav",
+            npc_position_map_payload(&[
+                (first, [1.0, 2.0, 3.0], [10.0, 20.0, 30.0]),
+                (second, [4.0, 5.0, 6.0], [40.0, 50.0, 60.0]),
+            ]),
+        );
+
+        let pose =
+            npc_position_command(&path, &json!({ "id": first }), Some(&backend)).unwrap()["pose"]
+                .clone();
+        assert_eq!(pose["location"], json!({"x": 1.0, "y": 2.0, "z": 3.0}));
+        assert_eq!(
+            pose["rotation"],
+            json!({"pitch": 10.0, "yaw": 20.0, "roll": 30.0})
+        );
+        assert_eq!(
+            pose["spawnLocation"],
+            json!({"x": 1001.0, "y": 1002.0, "z": 1003.0})
+        );
+        assert_eq!(
+            pose["spawnRotation"],
+            json!({"pitch": 11.0, "yaw": 21.0, "roll": 31.0})
+        );
+        // Every path ends at the map key segment plus the member name; the
+        // dashed GlobalId survives as one `{...}` segment.
+        for (field, member) in [
+            ("locationPath", "CharacterLocation"),
+            ("rotationPath", "CharacterRotation"),
+            ("spawnLocationPath", "SpawnLocation"),
+            ("spawnRotationPath", "SpawnRotation"),
+        ] {
+            assert_eq!(
+                pose[field],
+                json!(["PositionByGlobalId", format!("{{{first}}}"), member]),
+                "{field}"
+            );
+        }
+        assert!(
+            pose.get("location_path").is_none(),
+            "must be camelCase only"
+        );
+
+        // The second entry is addressed by its own key, not the first one's.
+        let other = npc_position_command(&path, &json!({ "id": second }), Some(&backend)).unwrap()
+            ["pose"]
+            .clone();
+        assert_eq!(other["location"], json!({"x": 4.0, "y": 5.0, "z": 6.0}));
+        assert_eq!(
+            other["locationPath"],
+            json!([
+                "PositionByGlobalId",
+                format!("{{{second}}}"),
+                "CharacterLocation"
+            ])
+        );
+    }
+
+    #[test]
+    fn npc_position_rotation_uses_pitch_yaw_roll() {
+        let dir = tempdir().unwrap();
+        let id = "OC_STT_Diego";
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-rot.sav",
+            npc_position_map_payload(&[(id, [1.0, 2.0, 3.0], [10.0, 20.0, 30.0])]),
+        );
+        let pose =
+            npc_position_command(&path, &json!({ "id": id }), Some(&backend)).unwrap()["pose"]
+                .clone();
+
+        // The parser cannot tell Vector from Rotator; this curated command can,
+        // so a rotation is reported with the engine's component names only.
+        let rotation = pose["rotation"].as_object().unwrap();
+        assert_eq!(rotation["pitch"], 10.0);
+        assert_eq!(rotation["yaw"], 20.0);
+        assert_eq!(rotation["roll"], 30.0);
+        assert!(rotation.get("x").is_none(), "rotation must not carry x/y/z");
+        assert!(rotation.get("y").is_none());
+        assert!(rotation.get("z").is_none());
+        // ...while a location keeps x/y/z.
+        let location = pose["location"].as_object().unwrap();
+        assert!(location.get("pitch").is_none(), "a point is not a rotation");
+        assert_eq!(location["x"], 1.0);
+    }
+
+    #[test]
+    fn npc_position_errors_for_unknown_id() {
+        let dir = tempdir().unwrap();
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-unknown.sav",
+            npc_position_map_payload(&[("OC_STT_Diego", [1.0, 2.0, 3.0], [0.0, 0.0, 0.0])]),
+        );
+        let err = npc_position_command(&path, &json!({ "id": "OC_NOT_THERE" }), Some(&backend))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not found in")
+                && err
+                    .to_string()
+                    .contains("CharacterStateSaveGameData_Position"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn npc_position_errors_for_missing_map() {
+        let dir = tempdir().unwrap();
+        // An attributes-only save: the NPC exists, the position map does not.
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-nomap.sav",
+            npc_attributes_map_payload(&[("OC_STT_Diego", 100.0, 120.0)]),
+        );
+        let err = npc_position_command(&path, &json!({ "id": "OC_STT_Diego" }), Some(&backend))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("no CharacterStateSaveGameData_Position map found in save"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn position_paths_resolve_through_typed_set_value() {
+        let dir = tempdir().unwrap();
+        let id = "OC_VLK_Herek_511-WorldPointActor_Herek";
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-setpos.sav",
+            npc_position_map_payload(&[(id, [1.0, 2.0, 3.0], [10.0, 20.0, 30.0])]),
+        );
+        let output_path = dir.path().join("G1R-setpos-out.sav");
+
+        // Feed the command's OWN path straight back into the writer.
+        let pose =
+            npc_position_command(&path, &json!({ "id": id }), Some(&backend)).unwrap()["pose"]
+                .clone();
+        write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": pose["locationPath"], "value": {"x": 7.5, "y": 8.5, "z": 9.5} }
+                }),
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": pose["rotationPath"],
+                               "value": {"pitch": 15.0, "yaw": 25.0, "roll": 35.0} }
+                }),
+            ],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+
+        let after = npc_position_command(&output_path, &json!({ "id": id }), Some(&backend))
+            .unwrap()["pose"]
+            .clone();
+        assert_eq!(after["location"], json!({"x": 7.5, "y": 8.5, "z": 9.5}));
+        assert_eq!(
+            after["rotation"],
+            json!({"pitch": 15.0, "yaw": 25.0, "roll": 35.0})
+        );
+        // The untouched spawn pose is unchanged.
+        assert_eq!(
+            after["spawnLocation"],
+            json!({"x": 1001.0, "y": 1002.0, "z": 1003.0})
+        );
+    }
+
+    #[test]
+    fn two_npc_positions_batch_in_one_write() {
+        let dir = tempdir().unwrap();
+        let first = "OC_VLK_Herek_511-WorldPointActor_Herek";
+        let second = "OC_STT_Diego";
+        let (path, backend) = position_save(
+            dir.path(),
+            "G1R-batchpos.sav",
+            npc_position_map_payload(&[
+                (first, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0]),
+                (second, [4.0, 5.0, 6.0], [0.0, 0.0, 0.0]),
+            ]),
+        );
+        let output_path = dir.path().join("G1R-batchpos-out.sav");
+
+        // Two same-size in-place native-struct patches: neither structural guard
+        // list applies, so they may travel in one write.
+        let path_of = |id: &str| {
+            npc_position_command(&path, &json!({ "id": id }), Some(&backend)).unwrap()["pose"]
+                ["locationPath"]
+                .clone()
+        };
+        write_save_with_codec_backend(
+            &path,
+            &[
+                json!({ "path": "private.typed.setValue",
+                        "value": { "path": path_of(first), "value": {"x": 11.0, "y": 12.0, "z": 13.0} } }),
+                json!({ "path": "private.typed.setValue",
+                        "value": { "path": path_of(second), "value": {"x": 21.0, "y": 22.0, "z": 23.0} } }),
+            ],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+
+        for (id, expected) in [
+            (first, json!({"x": 11.0, "y": 12.0, "z": 13.0})),
+            (second, json!({"x": 21.0, "y": 22.0, "z": 23.0})),
+        ] {
+            let pose = npc_position_command(&output_path, &json!({ "id": id }), Some(&backend))
+                .unwrap()["pose"]
+                .clone();
+            assert_eq!(pose["location"], expected, "{id}");
+        }
     }
 
     // ── Task 17 (private.npc.inventory) ──────────────────────────────────────
