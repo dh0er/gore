@@ -33,14 +33,35 @@ Claude Desktop, or any client with a JSON config:
 }
 ```
 
-### As a Claude Code plugin
+### As a plugin
 
 `plugins/gore/` in this repository is a plugin that registers the server *and*
 installs the `gore-modding` skill, so a client gets the tools and the workflow
-around them in one step instead of two. Its `.mcp.json` invokes `gore` by name,
-so `gore.exe` has to be on `PATH` — that is the one thing the plugin cannot do
-for you, since the binary is a Rust build rather than something a package manager
-fetches on demand.
+around them in one step instead of two. The repository is its own marketplace:
+
+```powershell
+claude plugin marketplace add dh0er/gore
+claude plugin install gore@gore
+```
+
+In the Claude desktop app, the same thing without a terminal: the **+** button
+beside the prompt box, then **Plugins → Add plugin**. The browser lists what your
+configured marketplaces offer, so the `marketplace add` above still has to happen
+once. **Manage plugins** in that menu enables, disables and uninstalls.
+
+To run it straight from a checkout, with no marketplace and no install:
+
+```powershell
+claude --plugin-dir path\to\gore\plugins\gore
+```
+
+Codex and Cursor read their own manifests, which the plugin also carries
+(`.codex-plugin/`, `.cursor-plugin/`). Those cover the skill; each client
+registers MCP servers its own way.
+
+Its `.mcp.json` invokes `gore` by name, so `gore.exe` has to be on `PATH` — that
+is the one thing the plugin cannot do for you, since the binary is a Rust build
+rather than something a package manager fetches on demand.
 
 The skill deliberately carries no asset paths, ids or sample names. Everything
 factual lives in this guide, which ships inside the binary and is therefore always

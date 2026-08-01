@@ -10,6 +10,14 @@ them; the facts live in the guide, which ships with the binary and is always
 current for the installed version. Read the guide rather than trusting anything
 remembered.
 
+## If the tools are not there
+
+If no `gore_*` tool exists, the server did not start, and the overwhelmingly
+likely reason is that `gore.exe` is not on `PATH` — this plugin starts it as
+`gore mcp serve`, by name. Say so plainly rather than working around it: no
+`gore` command can be reached, and `gore --version` in a terminal is the check.
+Nothing below applies until that is fixed.
+
 ## Before you touch anything
 
 Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
