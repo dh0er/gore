@@ -14,9 +14,10 @@ import 'support/npc_position_fake_core.dart';
 /// pre-edit values in every field. The game restores an NPC's placement from
 /// the level's WorldPointActor, not from the savegame.
 ///
-/// So the panel shows the four triplets and offers NO way to change them. If a
-/// future change re-introduces a field, a picker or a pending edit here, this
-/// test fails — which is the point.
+/// So the panel shows the four triplets in the same fields the player editor
+/// uses, all DISABLED, and offers no way to change them. If a future change
+/// re-enables a field, adds a picker or queues a pending edit here, this test
+/// fails — which is the point.
 void main() {
   NpcPositionCoreService buildCore() => NpcPositionCoreService({
     'Lizard-A': const FakePose(
@@ -39,21 +40,19 @@ void main() {
   ) async {
     await openNpc(tester, buildCore());
 
-    // CharacterLocation / CharacterRotation …
-    expect(find.text('Location X: 11'), findsOneWidget);
-    expect(find.text('Location Y: 12'), findsOneWidget);
-    expect(find.text('Location Z: 13'), findsOneWidget);
-    expect(find.text('Rotation pitch: 14'), findsOneWidget);
-    expect(find.text('Rotation yaw: 15'), findsOneWidget);
-    expect(find.text('Rotation roll: 16'), findsOneWidget);
-    // … and SpawnLocation / SpawnRotation, under their own heading.
+    // Twelve fields: CharacterLocation/Rotation and SpawnLocation/Rotation.
+    final values = tester
+        .widgetList<TextField>(find.byType(TextField))
+        .map((f) => f.controller?.text)
+        .toList();
+    expect(
+      values,
+      containsAllInOrder(<String>[
+        '11', '12', '13', '14', '15', '16', // current pose
+        '21', '22', '23', '24', '25', '26', // spawn reference
+      ]),
+    );
     expect(find.text('Spawn position (reference)'), findsOneWidget);
-    expect(find.text('Location X: 21'), findsOneWidget);
-    expect(find.text('Location Y: 22'), findsOneWidget);
-    expect(find.text('Location Z: 23'), findsOneWidget);
-    expect(find.text('Rotation pitch: 24'), findsOneWidget);
-    expect(find.text('Rotation yaw: 25'), findsOneWidget);
-    expect(find.text('Rotation roll: 26'), findsOneWidget);
 
     // The reason is stated, not left for the user to guess at.
     expect(
@@ -72,15 +71,15 @@ void main() {
     final panel = find.byType(NpcPositionPanel);
     expect(panel, findsOneWidget);
 
-    // No input fields — not even disabled ones, which read as "temporarily
-    // locked" rather than "not a thing the save can do".
-    expect(
+    // The fields look like the player editor's, but every one is disabled.
+    final fields = tester.widgetList<TextField>(
       find.descendant(of: panel, matching: find.byType(TextField)),
-      findsNothing,
     );
+    expect(fields, hasLength(12));
     expect(
-      find.descendant(of: panel, matching: find.byType(EditableText)),
-      findsNothing,
+      fields.every((f) => f.enabled == false),
+      isTrue,
+      reason: 'a single enabled field would be a silent write path',
     );
     // No picker, no "reset to spawn", no action of any kind.
     expect(

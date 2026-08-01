@@ -134,10 +134,41 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
   // Epoch counter used to discard results from superseded reload calls.
   int _reloadEpoch = 0;
 
+  /// X/Y/Z + Pitch/Yaw/Roll, in the order the player editor lays them out.
+  /// Held in state rather than built per frame: a controller created inside
+  /// `build` is never disposed and is replaced on every rebuild.
+  final List<TextEditingController> _current = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
+  final List<TextEditingController> _spawn = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
+
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    for (final c in [..._current, ..._spawn]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Seed one group's six fields. A missing leaf leaves its fields blank rather
+  /// than showing a fabricated zero.
+  void _fill(List<TextEditingController> fields, Vec3? loc, Rot3? rot) {
+    fields[0].text = loc == null ? '' : formatHeroValue(loc.x);
+    fields[1].text = loc == null ? '' : formatHeroValue(loc.y);
+    fields[2].text = loc == null ? '' : formatHeroValue(loc.z);
+    fields[3].text = rot == null ? '' : formatHeroValue(rot.pitch);
+    fields[4].text = rot == null ? '' : formatHeroValue(rot.yaw);
+    fields[5].text = rot == null ? '' : formatHeroValue(rot.roll);
   }
 
   @override
@@ -156,6 +187,9 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       _error = result.error;
       _loadFailed = result.error != null || result.pose == null;
       _pose = result.pose;
+      final pose = result.pose;
+      _fill(_current, pose?.location, pose?.rotation);
+      _fill(_spawn, pose?.spawnLocation, pose?.spawnRotation);
     });
   }
 
@@ -187,22 +221,15 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       );
     }
 
-    final current = <String>[
-      ..._locationValues(l10n, pose.location),
-      ..._rotationValues(l10n, pose.rotation),
-    ];
-    final spawn = <String>[
-      ..._locationValues(l10n, pose.spawnLocation),
-      ..._rotationValues(l10n, pose.spawnRotation),
-    ];
+    final hasCurrent = pose.location != null || pose.rotation != null;
+    final hasSpawn = pose.spawnLocation != null || pose.spawnRotation != null;
 
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _sectionHeader(theme, Icons.place_outlined, l10n.heroTransform),
-          const SizedBox(height: 8),
-          // The one thing this panel exists to say.
+          // Above the heading on purpose: the reader must know the fields are
+          // read-only BEFORE meeting a row of input fields, not after.
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -220,40 +247,82 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
               ),
             ],
           ),
-          if (current.isEmpty && spawn.isEmpty) ...[
-            const SizedBox(height: 12),
+          const SizedBox(height: 16),
+          _sectionHeader(theme, Icons.place_outlined, l10n.heroTransform),
+          const SizedBox(height: 12),
+          if (!hasCurrent && !hasSpawn)
             Text(
               l10n.positionNotReadable,
               style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-            ),
-          ] else ...[
-            const SizedBox(height: 12),
-            _values(theme, current),
+            )
+          else ...[
+            _fieldGrid(l10n, _current),
             const SizedBox(height: 20),
             _sectionHeader(theme, Icons.flag_outlined, l10n.spawnPositionSection),
-            const SizedBox(height: 8),
-            _values(theme, spawn),
+            const SizedBox(height: 12),
+            _fieldGrid(l10n, _spawn),
           ],
         ],
       ),
     );
   }
 
-  List<String> _locationValues(AppLocalizations l10n, Vec3? location) => [
-    if (location != null) ...[
-      '${l10n.locationX}: ${formatHeroValue(location.x)}',
-      '${l10n.locationY}: ${formatHeroValue(location.y)}',
-      '${l10n.locationZ}: ${formatHeroValue(location.z)}',
-    ],
-  ];
+  /// The six values in the same disabled [TransformNumberField]s and the same
+  /// responsive 3+3 layout the player editor uses, so both actors read alike.
+  Widget _fieldGrid(
+    AppLocalizations l10n,
+    List<TextEditingController> controllers,
+  ) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final labels = [
+          l10n.locationX,
+          l10n.locationY,
+          l10n.locationZ,
+          l10n.rotationPitch,
+          l10n.rotationYaw,
+          l10n.rotationRoll,
+        ];
+        final fields = [
+          for (var i = 0; i < 6; i++)
+            TransformNumberField(
+              controller: controllers[i],
+              label: labels[i],
+              enabled: false,
+            ),
+        ];
+        if (constraints.maxWidth < 700) {
+          return Column(
+            children: [
+              for (final field in fields) ...[
+                field,
+                if (field != fields.last) const SizedBox(height: 8),
+              ],
+            ],
+          );
+        }
+        Widget row(Iterable<Widget> group) {
+          final list = group.toList();
+          return Row(
+            children: [
+              for (final field in list) ...[
+                Expanded(child: field),
+                if (field != list.last) const SizedBox(width: 8),
+              ],
+            ],
+          );
+        }
 
-  List<String> _rotationValues(AppLocalizations l10n, Rot3? rotation) => [
-    if (rotation != null) ...[
-      '${l10n.rotationPitch}: ${formatHeroValue(rotation.pitch)}',
-      '${l10n.rotationYaw}: ${formatHeroValue(rotation.yaw)}',
-      '${l10n.rotationRoll}: ${formatHeroValue(rotation.roll)}',
-    ],
-  ];
+        return Column(
+          children: [
+            row(fields.take(3)),
+            const SizedBox(height: 8),
+            row(fields.skip(3)),
+          ],
+        );
+      },
+    );
+  }
 
   Widget _sectionHeader(ThemeData theme, IconData icon, String title) {
     return Row(
@@ -265,25 +334,4 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
     );
   }
 
-  /// A pose group as plain text — the style the spawn reference always used,
-  /// deliberately NOT disabled input fields, which read as "temporarily locked".
-  Widget _values(ThemeData theme, List<String> values) {
-    if (values.isEmpty) return const SizedBox.shrink();
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Wrap(
-        spacing: 20,
-        runSpacing: 6,
-        children: [
-          for (final value in values)
-            Text(
-              value,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 }
