@@ -197,6 +197,10 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because(
+        "writes the rewritten `.uasset` and `.uexp` into the mod dir and deletes the sibling \
+         `.ubulk`, replacing whatever an earlier replace of the same asset left there",
+    )
     .guide("textures"),
     CommandSpec::new(
         "pack",
@@ -214,6 +218,10 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         TEXTURE_DEPLOY_ARGS,
         Safety::mutate(),
         T_NORMAL,
+    )
+    .gated_because(
+        "copies the triplet into the game's `~mods` folder, which is the installation the game \
+         loads from on the next start",
     )
     .guide("textures"),
     // A full walk of every container in the installation. Slow by nature, and the output is large.
@@ -236,6 +244,7 @@ const TEXTURE_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because("deletes the deployed triplet out of the game's `~mods` folder")
     .guide("textures"),
 ];
 
@@ -469,6 +478,10 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_LONG,
     )
+    .gated_because(
+        "deletes and rebuilds the bundle folder named inside the spec file, so a name that \
+         collides erases what was there. It writes nowhere near the game installation",
+    )
     .guide("bundles"),
     CommandSpec::new(
         "deploy",
@@ -477,6 +490,10 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_LONG,
     )
+    .gated_because(
+        "installs the bundle into the game, backing up every file it replaces so that `undeploy` \
+         can put them back",
+    )
     .guide("bundles"),
     CommandSpec::new(
         "undeploy",
@@ -484,6 +501,10 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         MOD_UNDEPLOY_ARGS,
         Safety::mutate(),
         T_NORMAL,
+    )
+    .gated_because(
+        "removes the deployed bundle from the game and restores the files it backed up when it \
+         was deployed",
     )
     .guide("bundles"),
 ];
@@ -562,6 +583,10 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because(
+        "supersedes the library entry of the same name, and the version it replaces is deleted \
+         for good the next time the loadout is applied",
+    )
     .guide("mod-manager"),
     CommandSpec::new(
         "list",
@@ -586,6 +611,10 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         MGR_ID_ARGS,
         Safety::destructive(),
         T_FAST,
+    )
+    .gated_because(
+        "deletes the mod from the library and drops it from the loadout, and nothing here puts it \
+         back: it has to be imported again from wherever it came from",
     )
     .guide("mod-manager"),
     CommandSpec::new(
@@ -632,6 +661,10 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_LONG,
     )
+    .gated_because(
+        "deploys the whole enabled loadout into the game installation, replacing what is deployed \
+         there now",
+    )
     .guide("mod-manager"),
     CommandSpec::new(
         "status",
@@ -649,6 +682,10 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         MGR_RESET_ARGS,
         Safety::destructive(),
         T_LONG,
+    )
+    .gated_because(
+        "undeploys every mod the manager has active and restores the pristine installation, so \
+         nothing this manager deployed is left in the game",
     )
     .guide("mod-manager"),
 ];

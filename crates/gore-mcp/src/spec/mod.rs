@@ -396,6 +396,22 @@ pub struct CommandSpec {
     pub timeout_secs: u64,
     /// The guide page to read first, surfaced in descriptions and in failure messages.
     pub guide: Option<&'static str>,
+    /// Why *this* command needs a person to agree, completing "`gore <path>` …".
+    ///
+    /// Required of every [`Class::Mutate`] and [`Class::Destructive`] command, and checked by a
+    /// test in this module. One sentence used to answer for all of them — "changes the game
+    /// installation or the shared catalogs the tools read" — and for several it was simply untrue:
+    /// `audio extract` aimed at a temp directory changes neither, and an assistant that had read
+    /// the arguments had to contradict its own server in front of the user.
+    ///
+    /// The true reason was never missing, only unpublished: it is the comment above each of these
+    /// entries, explaining what the command overwrites and why the gate cannot preflight it. This
+    /// field is that comment, written for the person in the dialog.
+    ///
+    /// The other gate arms compute their reason from the call — an omitted `out`, an occupied
+    /// path, a destination inside the game tree — and say something this field cannot, because they
+    /// can name the file. They are left alone.
+    pub gated_because: Option<&'static str>,
     /// Sets from which exactly one argument must be supplied.
     ///
     /// Mirrors clap's `required_unless_present` + `conflicts_with` pairs — `voice extract` takes
@@ -425,6 +441,7 @@ impl CommandSpec {
             forced_argv: &[],
             timeout_secs,
             guide: None,
+            gated_because: None,
             exactly_one_of: &[],
             at_most_one_of: &[],
         }
@@ -452,6 +469,12 @@ impl CommandSpec {
 
     pub const fn guide(mut self, page: &'static str) -> Self {
         self.guide = Some(page);
+        self
+    }
+
+    /// State what this command does that a person has to agree to. See [`Self::gated_because`].
+    pub const fn gated_because(mut self, reason: &'static str) -> Self {
+        self.gated_because = Some(reason);
         self
     }
 
@@ -996,6 +1019,49 @@ mod tests {
             let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
             for (arg, _) in *entries {
                 assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+            }
+        }
+    }
+
+    #[test]
+    fn every_command_gated_outright_says_what_it_does_in_its_own_words() {
+        // One sentence used to answer for all of them, and it was false for the ones that write
+        // only where the caller pointed them: `gore audio extract --out <temp dir>` was refused
+        // with "changes the game installation or the shared catalogs the tools read", which the
+        // assistant reading the arguments had to contradict in front of its own user. A reason that
+        // is wrong is worse than a gate that is strict.
+        for group in GROUPS {
+            for command in group.commands {
+                if matches!(command.safety.base, Class::Mutate | Class::Destructive) {
+                    assert!(
+                        command.gated_because.is_some(),
+                        "`gore {} {}` is gated outright but states no reason. Add \
+                         .gated_because(\"…\") saying what it overwrites — the comment above the \
+                         entry usually already says it.",
+                        group.cli,
+                        command.sub
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_gate_reason_completes_the_sentence_it_is_rendered_into() {
+        // It is pasted into "`gore audio extract` <reason>." — in a dialog, in front of a person.
+        // A capital or a full stop of its own turns that into two broken sentences, and a doubled
+        // space is what a `\` continuation leaves behind when the next line is indented one column
+        // too far.
+        for group in GROUPS {
+            for command in group.commands {
+                let Some(reason) = command.gated_because else { continue };
+                let label = format!("{} {}", group.tool, command.sub);
+                assert!(!reason.ends_with('.'), "{label}: the renderer adds the full stop");
+                assert!(!reason.contains("  "), "{label}: doubled space in {reason:?}");
+                assert!(
+                    reason.starts_with(|first: char| first.is_lowercase()),
+                    "{label}: {reason:?} must continue a sentence, not start one"
+                );
             }
         }
     }

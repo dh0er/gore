@@ -30,6 +30,14 @@ written as bare filenames beside the spec, whatever directory you run `gore mod
 build` from; absolute paths are used as written. This is the same rule
 [`gore audio replace --map`](audio.md) uses for its WAVs.
 
+**`audio.bank` is a bare file name, never a path.** It names one bank in the
+install's `G1R\Content\FMOD\Desktop` — `SFX.bank`, `Music.bank` — and deploy
+resolves it against that directory itself. `gore mod build` refuses anything
+else and names the rule, so an absolute path fails while you are still building
+instead of surviving to a deploy that was always going to reject it.
+`voice.archive` has the same shape for `G1R\Story\VoiceOver` — see
+[below](#voice-packaging-details).
+
 Every section is optional; `delay_ms` may be set alongside `overrides` to defer
 the CDO patch. Each section maps to the domain guide of the same name:
 [items](items.md), [text](text-and-dialogs.md), [audio](audio.md),

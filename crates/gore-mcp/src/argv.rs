@@ -324,7 +324,7 @@ fn check_argument_sets(
 /// can see.
 ///
 /// The arms are ordered most-specific-first and the first match wins. A command that trips arm two
-/// would also trip arm four, but "changes the game installation" is the truer sentence than "the
+/// would also trip arm four, but what the command itself does is the truer sentence than "the
 /// output file already exists", and only one question gets asked.
 fn consent_for(
     command: &CommandSpec,
@@ -369,11 +369,13 @@ fn consent_for(
                 needs,
             );
         }
-        return question(
-            "changes the game installation or the shared catalogs the tools read".into(),
-            None,
-            needs,
-        );
+        // The command's own sentence, from the table. The fallback is only reachable for a command
+        // that escalated into this arm without a base class the spec test covers; every command
+        // classified as a mutation carries its own.
+        let reason = command
+            .gated_because
+            .unwrap_or("changes the game installation or the shared catalogs the tools read");
+        return question(reason.into(), None, needs);
     }
 
     // Some outputs are only harmless because of where they usually point. Aim one at the game tree
@@ -955,6 +957,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_question_states_what_this_command_does_and_not_what_the_family_does() {
+        // The refusal a real session produced: `audio extract --out <a temp folder>` came back as
+        // "changes the game installation or the shared catalogs the tools read". It changes
+        // neither, and the assistant — which had read the arguments — had to contradict its own
+        // server to the user it was working for. The truth was in the table all along, as a comment
+        // above the entry.
+        let raised = question(
+            "gore_audio",
+            "extract",
+            json!({ "bank": "SFX.bank", "out": "T:/scratch/mudmod" }),
+            &options(),
+        )
+        .expect("extracting into a directory it cannot preflight is asked about");
+
+        assert!(
+            !raised.reason.contains("changes the game installation or the shared catalogs"),
+            "the one-size-fits-all reason is back: {}",
+            raised.reason
+        );
+        assert!(raised.reason.contains("output directory"), "{}", raised.reason);
+
+        // And a command that really does touch the installation still says so, in its own terms.
+        let deploy = question("gore_mod", "deploy", json!({ "bundle": "b" }), &options())
+            .expect("deploying is asked about");
+        assert!(deploy.reason.contains("installs the bundle into the game"), "{}", deploy.reason);
+        assert_ne!(deploy.reason, raised.reason, "two commands, two reasons");
     }
 
     #[test]

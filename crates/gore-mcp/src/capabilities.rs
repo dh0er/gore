@@ -214,7 +214,8 @@ BEFORE YOU ACT
 Read the guide page for whatever you are about to touch. These commands have sharp edges that a
 flag list does not convey — receipts that must match, caches that must be regenerated first, steps
 whose order matters. Call gore_guide with action "search"; it ranks individual sections, so the
-follow-up read stays small.
+follow-up read stays small. A page too long for one result comes back in numbered parts, each
+naming what the others hold: ask for the next `part` rather than reading the page again.
 
 gore_guide covers two bodies and labels every hit. The guide says which command to reach for; the
 reference records what a receipt seals and why a command refuses something, so read a reference

@@ -1,4 +1,8 @@
-//! `gore guide html` — render the embedded guide into one self-contained HTML file.
+//! `gore guide` — the embedded guide, rendered for a browser or ranked for a shell.
+//!
+//! # `html`
+//!
+//! Render the embedded guide into one self-contained HTML file.
 //!
 //! The release zip ships the guide as Markdown beside `gore.exe`, which is fine for `grep` and for
 //! the MCP server but poor for actually reading: Windows has no default handler for `.md`, so a
@@ -12,6 +16,18 @@
 //!
 //! The source is the same `include_str!`-embedded guide the MCP server serves
 //! (`gore_mcp::guide`), so the rendered document cannot drift from the pages in `docs/guide/`.
+//!
+//! # `search`
+//!
+//! Run the MCP server's own section ranker from a shell.
+//!
+//! The primer tells an agent to start every task with `gore_guide` `search`, which made that
+//! ranking the single most-used thing in the server — and until this subcommand existed there was
+//! no way to exercise it without speaking JSON-RPC to a running server. A ranking nobody can watch
+//! is a ranking nobody fixes: the two defects this command was added alongside had both been live
+//! for months and were found by reading the code, not by running it.
+//!
+//! It calls `gore_mcp::guide::search` directly, so what a shell sees is what an agent gets.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +45,14 @@ const REPO_WEB_BASE: &str = "https://github.com/dh0er/gore";
 /// Where the guide pages live, relative to the repo root. Outbound `../` links are resolved against
 /// this, exactly as `stage_docs` in `build.py` does for the Markdown copies.
 const GUIDE_DIR: &str = "docs/guide";
+
+/// Default for `gore guide search --limit`. The same number the MCP tool defaults to, so the two
+/// answer a query with the same list.
+pub const DEFAULT_SEARCH_LIMIT: usize = 8;
+
+/// Ceiling for `--limit`, clamped rather than refused — also the MCP tool's, for the same reason:
+/// past this the list is longer than the page it is pointing at.
+pub const MAX_SEARCH_LIMIT: usize = 25;
 
 pub fn html_file(out: PathBuf, repo_ref: &str) -> Result<()> {
     let document = render(repo_ref);
@@ -48,6 +72,44 @@ pub fn html_file(out: PathBuf, repo_ref: &str) -> Result<()> {
         document.len().div_ceil(1024)
     );
     Ok(())
+}
+
+/// Rank guide and reference sections against a query and print them, best first.
+///
+/// `terms` are the bare words as clap collected them; they are joined because the ranker takes one
+/// string and splits it itself. Accepting several is what lets a query be typed without quoting.
+pub fn search(terms: &[String], limit: usize) -> Result<()> {
+    let query = terms.join(" ");
+    let hits = guide::search::search(&query, limit.clamp(1, MAX_SEARCH_LIMIT));
+
+    println!("{}", search_listing(&query, &hits));
+    Ok(())
+}
+
+/// The human-readable listing. Separate from printing it so a test can read what a user reads.
+fn search_listing(query: &str, hits: &[guide::search::Hit]) -> String {
+    // Not an error and not a bail: an empty result set is a real answer to a real question, and
+    // the useful thing to say is what to try instead.
+    if hits.is_empty() {
+        return format!(
+            "nothing in the guide matches {query:?}\n\
+             try fewer or more general words, or 'gore guide html' to browse the whole thing"
+        );
+    }
+
+    let mut text = format!("{} section(s) match {query:?}, best first:", hits.len());
+    for hit in hits {
+        let page = guide::page(hit.page);
+        let kind = page.map(|page| page.kind.label()).unwrap_or("guide");
+        let file = page.map(|page| format!("docs/{}", page.file)).unwrap_or_default();
+        // The score is printed because this command exists to debug the ranking, and a list
+        // without the numbers cannot answer why one hit beat another.
+        text.push_str(&format!(
+            "\n\n[{}] {}#{} — {}\n     {kind} · {file}\n     {}",
+            hit.score, hit.page, hit.anchor, hit.heading, hit.snippet
+        ));
+    }
+    text
 }
 
 /// One entry in the navigation sidebar.
@@ -688,5 +750,51 @@ mod tests {
     #[test]
     fn sidebar_titles_are_escaped() {
         assert_eq!(escape("a & b <c>"), "a &amp; b &lt;c&gt;");
+    }
+
+    #[test]
+    fn a_search_listing_says_where_each_hit_is_and_why_it_won() {
+        // This subcommand exists to make the ranking inspectable from a shell, so the two things a
+        // listing must carry are the score that decided the order and the file the hit is in.
+        let query = "replace a texture";
+        let hits = guide::search::search(query, 3);
+        let listing = search_listing(query, &hits);
+
+        assert!(listing.starts_with("3 section(s) match"), "{listing}");
+        assert!(listing.contains("docs/guide/textures.md"), "{listing}");
+        assert!(listing.contains(&format!("[{}]", hits[0].score)), "{listing}");
+        assert!(listing.contains(&format!("{}#{}", hits[0].page, hits[0].anchor)), "{listing}");
+    }
+
+    #[test]
+    fn a_search_that_matches_nothing_says_what_to_try_instead() {
+        // Rather than printing an empty list, which reads as a broken command, or failing, which
+        // this is not: the guide genuinely does not cover everything.
+        let listing = search_listing("zzzznotawordanywhere", &[]);
+        assert!(listing.contains("nothing in the guide matches"), "{listing}");
+        assert!(listing.contains("gore guide html"), "{listing}");
+    }
+
+    #[test]
+    fn a_reference_hit_is_labelled_as_reference_and_not_as_guide() {
+        // The two bodies answer different questions, and a shell user picking a hit off this list
+        // is entitled to know which one they are about to open: the guide says which command to
+        // reach for, the reference says why one refused.
+        let query = "npc authoring";
+        let hits = guide::search::search(query, 8);
+        let listing = search_listing(query, &hits);
+        assert!(listing.contains("reference · docs/reference/"), "{listing}");
+    }
+
+    #[test]
+    fn several_words_are_one_query_rather_than_several() {
+        // `gore guide search click sound music menu` has to mean what the MCP tool means by the
+        // same string, or the shell form is debugging something else.
+        let terms: Vec<String> =
+            ["click", "sound", "music", "menu"].iter().map(|word| word.to_string()).collect();
+        assert_eq!(
+            guide::search::search(&terms.join(" "), 5),
+            guide::search::search("click sound music menu", 5)
+        );
     }
 }

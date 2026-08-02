@@ -66,10 +66,19 @@ gore voice extract --archive "$VO" --path "NPC/Quest/DIA_X.ogg" -o extracted
 `-o` is an extraction root; the archive path is preserved below it. Extract
 never overwrites an existing file.
 
-## Resolving a localization id
+## Add and replace
 
-When you know a localization id and want to know whether a recording for it
-exists — without extracting anything:
+### Step 1 — resolve the path, do not guess it
+
+`replace` and a bundle's `voice` entry both take the **exact, case-sensitive**
+stored path, and the archive holds near-identical names under different
+speakers. `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg` and
+`german_new/HERO/INFO_DIEGO_GAMESTART_15_01.ogg` are both real members and both
+plausible guesses for "Diego's first line" — one of them is the hero's. A
+guessed path either fails loudly or edits the wrong take.
+
+If you have a localization id, `match-line` turns it into the real member
+without extracting anything:
 
 ```powershell
 gore voice match-line --archive "$VO" --loc-id info_some_line
@@ -78,9 +87,10 @@ gore voice match-line --archive "$VO" --loc-id info_some_line --json
 
 `--loc-id` is a trimmed ASCII id **without** the `.ogg` suffix; the command
 resolves the exact `${loc_id}.ogg` basename inside the archive. This is the
-lookup the Studio Voice workflow uses to bind a take to a dialog line.
+lookup the Studio Voice workflow uses to bind a take to a dialog line. Without
+an id, narrow with [`list --filter`](#index) and read the path off the listing.
 
-## Add and replace
+### Step 2 — build the edited archive
 
 Both commands read the input archive, build a **new** archive, and publish it
 only after full validation:

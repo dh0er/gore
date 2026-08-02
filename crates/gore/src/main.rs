@@ -208,6 +208,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum GuideAction {
+    /// Rank guide and reference sections against a query, best first — the ranking the MCP server serves
+    Search {
+        /// Words to search for; several words are one query, so no quoting is needed
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+        /// Maximum number of hits. Clamped to 25, as in the MCP tool
+        #[arg(long, default_value_t = cmd::guide::DEFAULT_SEARCH_LIMIT, value_name = "N")]
+        limit: usize,
+    },
     /// Write the whole guide as one self-contained HTML file — sidebar, filter, no external assets
     Html {
         /// Output path
@@ -373,9 +382,10 @@ enum LocAction {
     Status,
     /// Decrypt the .lcache and write {id:{language:value}} JSON (all languages)
     Export {
-        /// Path to AlkimiaLocalization_*.lcache
+        /// Path to AlkimiaLocalization_*.lcache, the game dir, or a Steam library (else
+        /// auto-detect)
         #[arg(long)]
-        lcache: PathBuf,
+        lcache: Option<PathBuf>,
         /// Output loc_catalog.json
         #[arg(short = 'o', long)]
         out: PathBuf,
@@ -385,13 +395,13 @@ enum LocAction {
     },
     /// Apply {id:{language:value}} edits and re-encrypt the .lcache
     Import {
-        /// Path to the .lcache to edit
+        /// Path to the .lcache to edit, the game dir, or a Steam library (else auto-detect)
         #[arg(long)]
-        lcache: PathBuf,
+        lcache: Option<PathBuf>,
         /// Path to edits JSON ({id:{language:value}})
         #[arg(long)]
         edits: PathBuf,
-        /// Output .lcache (defaults to overwriting --lcache)
+        /// Output .lcache (defaults to overwriting the cache that was read)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
         /// Add ids absent from the input .lcache (default: reject them)
@@ -530,6 +540,7 @@ fn run_cli() {
             McpAction::Tools => cmd::mcp::tools(),
         },
         Commands::Guide { action } => match action {
+            GuideAction::Search { query, limit } => cmd::guide::search(&query, limit),
             GuideAction::Html { out, repo_ref } => cmd::guide::html_file(out, &repo_ref),
         },
     };

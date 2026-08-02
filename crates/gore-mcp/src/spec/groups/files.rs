@@ -26,7 +26,15 @@ const LOC_EXTRACT_ARGS: &[ArgSpec] = &[ArgSpec::new(
 .with_default("auto-detect from the configured game path")];
 
 const LOC_EXPORT_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("lcache", Long("lcache"), Path, "Path to AlkimiaLocalization_*.lcache", true),
+    ArgSpec::new(
+        "lcache",
+        Long("lcache"),
+        Path,
+        "Path to AlkimiaLocalization_*.lcache, the game dir, or a Steam library (else \
+         auto-detect)",
+        false,
+    )
+    .with_default("auto-detect from the configured game path"),
     ArgSpec::new("out", Long("out"), Path, "Output loc_catalog.json", true),
     ArgSpec::new(
         "keep_empty",
@@ -38,13 +46,20 @@ const LOC_EXPORT_ARGS: &[ArgSpec] = &[
 ];
 
 const LOC_IMPORT_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("lcache", Long("lcache"), Path, "Path to the .lcache to edit", true),
+    ArgSpec::new(
+        "lcache",
+        Long("lcache"),
+        Path,
+        "Path to the .lcache to edit, the game dir, or a Steam library (else auto-detect)",
+        false,
+    )
+    .with_default("auto-detect from the configured game path"),
     ArgSpec::new("edits", Long("edits"), Path, "Path to edits JSON ({id:{language:value}})", true),
     ArgSpec::new(
         "out",
         Long("out"),
         Path,
-        "Output .lcache. Omitting this overwrites the input .lcache in place, re-encrypted.",
+        "Output .lcache (defaults to overwriting the cache that was read)",
         false,
     ),
     ArgSpec::new(
@@ -74,6 +89,11 @@ const LOC_COMMANDS: &[CommandSpec] = &[
         // cannot see it: an already-extracted catalog would otherwise be replaced ungated.
         Safety::mutate(),
         T_LONG,
+    )
+    .gated_because(
+        "replaces the shared `gore/loc_catalog.json` that the save editor and mod studio read \
+         too, and the CLI's own y/N confirmation is suppressed here, so this question takes its \
+         place",
     )
     .forced(&["--yes"])
     .guide("text-and-dialogs"),
@@ -225,6 +245,11 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because(
+        "writes one WAV per sample into the output directory and overwrites any file already \
+         there, including an edited one; the filenames come from the bank, so they cannot be \
+         checked first. It changes nothing in the game installation",
+    )
     .guide("audio"),
     CommandSpec::new(
         "replace",
@@ -241,6 +266,10 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         AUDIO_RESTORE_ARGS,
         Safety::mutate(),
         T_NORMAL,
+    )
+    .gated_because(
+        "overwrites the bank in place with its `*.gore-bak` backup, discarding whatever is in the \
+         bank now",
     )
     .guide("audio"),
     CommandSpec::new(
@@ -412,6 +441,12 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
     )
     .json(JsonSupport::Stdout)
     .guide("voice"),
+    // Aimed at the same scratch directory, `voice extract` runs and `audio extract` asks. The
+    // difference is not the destination but what each can promise about it: this one extracts one
+    // named entry to one named path and refuses that path if it exists (`gore-vo` writes
+    // copy-on-write), while `audio extract` writes a file per sample under names it only learns
+    // from the bank. Only the second is unpreflightable, and the reason each command now states is
+    // what makes the pair legible from outside.
     CommandSpec::new(
         "extract",
         "Extract one entry without overwriting an existing file",

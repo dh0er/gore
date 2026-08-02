@@ -42,6 +42,68 @@ fn spec_dir_with_asset(root: &Path, wav: Option<&[u8]>) -> std::path::PathBuf {
     dir
 }
 
+/// The same spec, with the audio bank field written the way a user who copied it out of a file
+/// picker writes it. Everything else about it is valid.
+fn spec_dir_with_bank(root: &Path, bank: &str) -> std::path::PathBuf {
+    let dir = root.join("authoring");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("spec.json"),
+        format!(
+            r#"{{
+  "meta": {{ "name": "MyMod", "version": "1.0.0", "author": "tester" }},
+  "audio": [ {{ "bank": "{bank}", "sample": "Click", "wav_path": "click.wav" }} ]
+}}
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("click.wav"), b"WAV-BYTES").unwrap();
+    dir
+}
+
+#[test]
+fn a_bank_written_as_a_full_path_fails_the_build_instead_of_the_deploy() {
+    // What this rules out: `build` printing "built bundle: … (4 components, 9 files)" for a spec
+    // the deploy planner will always refuse. That ordering cost a real session four calls — the
+    // deploy, the edit, the removal of the half-useful bundle, the rebuild — and the refusal it
+    // eventually printed said only "unsafe bank name", which reads as a security verdict rather
+    // than as "this field takes a bare file name".
+    let tmp = TempDir::new().unwrap();
+    let spec_dir = spec_dir_with_bank(
+        tmp.path(),
+        r"D:\\SteamLibrary\\steamapps\\common\\Gothic 1 Remake\\G1R\\Content\\FMOD\\Desktop\\Music.bank",
+    );
+    let out = tmp.path().join("out");
+
+    let output = gore(tmp.path())
+        .arg("mod")
+        .arg("build")
+        .arg("--spec")
+        .arg(spec_dir.join("spec.json"))
+        .arg("-o")
+        .arg(&out)
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8_lossy(&output);
+
+    assert!(
+        stderr.contains("Music.bank"),
+        "the failure must quote the value it refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("G1R/Content/FMOD/Desktop") && stderr.contains("SFX.bank"),
+        "the failure must name the constraint and a spelling that works: {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "a refused spec must leave no bundle behind for a deploy to be tried against"
+    );
+}
+
 #[test]
 fn a_spec_relative_asset_is_found_from_an_unrelated_working_directory() {
     let tmp = TempDir::new().unwrap();

@@ -662,6 +662,7 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
     if !spec.audio.is_empty() {
         let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for (i, a) in spec.audio.iter().enumerate() {
+            validate_bank_name(&a.bank)?;
             let source = resolve_spec_path(base, &a.wav_path);
             let wav = std::fs::read(&source)
                 .map_err(io(&format!("reading audio[{i}] wav {}", source.display())))?;
@@ -2112,6 +2113,23 @@ pub(crate) fn validate_loose_game_path(game_path: &str) -> Result<()> {
              G1R/Content or G1R/Config qualify, and not the pak containers, a *.gore-bak backup, \
              or a file that already has its own deploy mechanism (.lcache, FMOD bank, script \
              cache, voice ZIP)"
+        )));
+    }
+    Ok(())
+}
+
+/// Accept one authored audio `bank` field, or say why it is refused.
+///
+/// Deploy joins this straight onto the install's `G1R/Content/FMOD/Desktop`, so the only spelling
+/// that can ever work is a bare file name. The check runs twice on purpose: at build time, where
+/// the rest of the spec is validated, so a spec that can never deploy does not first print
+/// "built bundle"; and again in the deploy planner, which also accepts bundles this process did
+/// not build.
+pub(crate) fn validate_bank_name(bank: &str) -> Result<()> {
+    if !is_safe_filename(bank) {
+        return Err(ModError::Other(format!(
+            "invalid audio bank name {bank:?}: must be the bare file name of a bank in the \
+             install's G1R/Content/FMOD/Desktop, not a path — e.g. \"SFX.bank\""
         )));
     }
     Ok(())
@@ -5525,9 +5543,7 @@ fn prepare(
                 // known constant.
                 let fmod_key = resolve_fmod_key(gp);
                 for (bank, samples) in &map {
-                    if !is_safe_filename(bank) {
-                        return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
-                    }
+                    validate_bank_name(bank)?;
                     let bank_path = gp.fmod_desktop.join(bank);
                     let (pristine, drifted) =
                         read_pristine_bounded(&bank_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
@@ -9976,6 +9992,37 @@ mod tests {
 
         let bundle = build_bundle_relative_to(&spec, base.path()).unwrap();
         assert_eq!(bundle.files["audio/0_SFX_bank__Foo.wav"], b"WAV-BYTES");
+    }
+
+    #[test]
+    fn a_bank_named_by_a_full_path_is_refused_by_build_rather_than_by_deploy() {
+        // The session this exists for: a spec whose bank read
+        // "D:\SteamLibrary\...\FMOD\Desktop\Music.bank" built happily and printed "built bundle:
+        // … (4 components, 9 files)". Only the deploy refused it, four calls later. The planner
+        // keeps its own copy of the guard for bundles this process did not build; this one stops
+        // a spec that can never deploy from reporting a successful build.
+        let assets = tempfile::tempdir().unwrap();
+        write_test_bare_assets(assets.path());
+        let mut spec = test_spec_with_bare_asset_names("BankByPath");
+        spec.audio[0].bank =
+            r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Content\FMOD\Desktop\Music.bank"
+                .into();
+
+        let error = build_bundle_relative_to(&spec, assets.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Music.bank"),
+            "the refusal must quote what it was given: {error}"
+        );
+        assert!(
+            error.contains("G1R/Content/FMOD/Desktop"),
+            "the refusal must name the constraint, not just call the value unsafe: {error}"
+        );
+        assert!(
+            error.contains("SFX.bank"),
+            "the refusal must show a spelling that works: {error}"
+        );
     }
 
     #[test]

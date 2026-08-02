@@ -40,11 +40,19 @@ none of those is reachable through the texture commands. Read
 is in. A bundle's `files` section replaces a loose file; `texture` replaces a
 cooked one. Using the wrong one deploys cleanly and changes nothing.
 
-Two specific traps the guide documents, both found by shipping a mod that changed
-neither: the mouse cursor does not come from the cooked cursor texture, and the
-pre-rendered intro movie plays its own embedded audio, so replacing the intro's
-voice lines is correct and inaudible. If you want a fast audible proof, use a real
-in-engine conversation line instead.
+Three specific traps the guide documents, each found by shipping a mod that
+changed nothing. The mouse cursor does not come from the cooked cursor texture.
+The pre-rendered intro movie plays its own embedded audio, so replacing the
+intro's voice lines is correct and inaudible — for a fast audible proof use a
+real in-engine conversation line instead. And a sound sample is not a sound the
+game triggers: the game plays events, several samples often share one trigger,
+and near-identical names belong to different surfaces. Before you tell the user
+where to listen, confirm the sample you replaced is one that surface plays and
+whether it is one of a numbered set — the audio guide says how.
+
+Then read your own work back. Every write path in this toolkit can be re-read:
+a replaced sample lists as replaced, a bundle records a hash per file. Do that
+before reporting success, and say which items you could not check.
 
 ## The consent gate
 

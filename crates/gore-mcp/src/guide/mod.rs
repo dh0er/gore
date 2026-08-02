@@ -105,6 +105,11 @@ pub struct Section<'a> {
     pub anchor: String,
     pub heading: &'a str,
     pub level: u8,
+    /// Byte offset of the heading line inside the page.
+    ///
+    /// Sections nest, so their bodies overlap and cannot be used to cut a page into pieces. These
+    /// offsets can: every heading in the page, at any level, is a place a long read may be split.
+    pub start: usize,
     /// The section text, including its own heading line.
     pub body: &'a str,
 }
@@ -180,7 +185,7 @@ pub fn sections(markdown: &str) -> Vec<Section<'_>> {
         }
         used.push(anchor.clone());
 
-        sections.push(Section { anchor, heading, level, body: &markdown[start..end] });
+        sections.push(Section { anchor, heading, level, start, body: &markdown[start..end] });
     }
 
     sections
@@ -269,6 +274,23 @@ mod tests {
     fn a_section_body_includes_its_own_heading() {
         let sections = sections("# One\nbody\n");
         assert!(sections[0].body.starts_with("# One"));
+    }
+
+    #[test]
+    fn every_section_says_where_in_the_page_it_starts() {
+        // What makes a long page splittable. A reader asking for part two has to be given the text
+        // between two headings, and the bodies cannot supply it: `## Two` is contained in `# One`.
+        for page in PAGES {
+            for section in page.sections() {
+                assert_eq!(
+                    &page.markdown[section.start..section.start + section.body.len()],
+                    section.body,
+                    "{}#{} does not start where it says it does",
+                    page.slug,
+                    section.anchor
+                );
+            }
+        }
     }
 
     #[test]

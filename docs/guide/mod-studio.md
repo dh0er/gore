@@ -72,6 +72,22 @@ only. With an installation configured, the same dialog offers a separate
 evidence-only compiler check of the generated source against your exact
 installed game.
 
+## Spawn and placement
+
+Putting a character into the world, or moving one that is already standing in
+it, has no supported path anywhere in GORE — vanilla or authored, Studio or
+CLI. What is proven is offline only: an authored NPC class chain compiles and
+composes into the script cache, and a Draft persists in a project, while class
+residence, a spawn hook, and a distinct save identity all remain open questions
+— and calling a *vanilla* spawn definition a second time would only produce
+another body sharing the vanilla identity, not a new character
+([the contract](../reference/studio-authoring.md#remaining-runtime-gates)).
+`gore location resolve` confirms that a waypoint name exists, which is not the
+same as being able to send anyone to it. The one thing that does move a
+character is the [save editor](../../apps/save-editor/README.md), which edits a
+position already recorded in an existing save; there is no hook that places
+anybody in a new game.
+
 ## Quests
 
 The **Create Quest** wizard captures the human-facing name, technical

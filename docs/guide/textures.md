@@ -177,14 +177,17 @@ seen — once each, recorded in a commit message and nowhere else — is that su
 a container mounts and renders in game: first an uncompressed one, and after the
 compressed-writer fix a fully compressed multi-block one too. The most recent
 sighting is the one with a date on it: on BuildID 24340829, a triplet deployed
-into `~mods\` by `gore mod deploy` put its replacement art on the main menu, in
-the same launch that showed the loose cursor edit changing nothing. That is what
-establishes that `~mods\` mounts on this build — and it is still one person
-looking at one screen. There is no screenshot, and nothing in the test suite
-checks any of it. A *deployed* triplet is verified by SHA-256 and by nothing
-else: `deploy` records a hash per file and confirms the bytes arrived. Nothing
-in this toolkit ever observes the screen, so a successful deploy means the file
-is in place — never that anything changed.
+into `~mods\` by `gore mod deploy` replaced
+`/Game/UI/Textures/Common/T_LogoRemake` — 512×180 `PF_DXT5`, the logo on the
+main menu — and the new art was on screen, in the same launch that showed the
+loose cursor edit changing nothing. That one asset is the known-good target to
+retest with — `T_Logo` sits beside it in the same folder and has never been
+looked at. The sighting is what establishes that `~mods\` mounts on this build,
+and it is still one person looking at one screen: there is no screenshot, and
+nothing in the test suite checks any of it. A *deployed* triplet is verified by
+SHA-256 and by nothing else: `deploy` records a hash per file and confirms the
+bytes arrived. Nothing in this toolkit ever observes the screen, so a successful
+deploy means the file is in place — never that anything changed.
 
 ## Flag summary
 

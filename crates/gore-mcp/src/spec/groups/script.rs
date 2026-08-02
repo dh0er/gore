@@ -576,6 +576,10 @@ const AS_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_LONG,
     )
+    .gated_because(
+        "writes every decompiled module into the output tree and overwrites hand edits there; the \
+         paths come from the cache being read, so nothing here can check for them first",
+    )
     .guide("scripts"),
     CommandSpec::new(
         "emit",

@@ -224,6 +224,10 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because(
+        "overwrites one `.lua` file per class in the output directory, and cannot name them \
+         beforehand because they come from the model file",
+    )
     .guide("catalogs-and-models"),
     CommandSpec::new(
         "catalog",
@@ -436,6 +440,10 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         Safety::mutate(),
         T_NORMAL,
     )
+    .gated_because(
+        "rewrites the `enabled.txt` and `Scripts/main.lua` of the mod folder named inside \
+         overrides.toml, whether that mod was generated or written by hand",
+    )
     .guide("items"),
     CommandSpec::new(
         "package",
@@ -453,6 +461,10 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         DEPLOY_SHARED_ARGS,
         Safety::mutate(),
         T_NORMAL,
+    )
+    .gated_because(
+        "copies the shared Lua SDK into the game's own `ue4ss/Mods/shared`, replacing the copy \
+         installed there",
     )
     .guide("items"),
 ];

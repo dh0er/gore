@@ -15,7 +15,7 @@ gore --version
 |---------|-------------|---------|-------|
 | `config` | `set` · `get` · `unset` · `list` · `path` · `detect` | Persist shared settings (the game path) so other commands can omit `--game`. | [getting-started](getting-started.md#point-gore-at-the-game) |
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
-| `guide` | `html` | Render this guide into one self-contained HTML file for offline reading. | [below](#guide) |
+| `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, conflicts, composed deploy. | [mod-manager](mod-manager.md) |
@@ -90,10 +90,15 @@ All subcommands except `reset` accept `--library <DIR>` and `--loadout <FILE>`.
 
 | Subcommand | Flags |
 |---|---|
-| `extract` | `--lcache <PATH>` (`.lcache`, game dir, or Steam library; else auto-detect) · `-y, --yes` |
+| `extract` | `--lcache <PATH>` · `-y, --yes` |
 | `status` | — |
 | `export` | `--lcache <PATH>` · `-o, --out <OUT>` · `--keep-empty` |
 | `import` | `--lcache <PATH>` · `--edits <EDITS>` · `-o, --out <OUT>` · `--add-missing` |
+
+`--lcache` is optional on all three: it accepts a `.lcache`, a game dir or a
+Steam library, and without it the configured game path and then Steam
+auto-detect are tried. The installed cache is
+`G1R\Story\Cache\AlkimiaLocalization_00000000.lcache`, with a generated suffix.
 
 ## `audio`
 
@@ -230,19 +235,28 @@ them.
 
 ## `guide`
 
-The whole guide is compiled into `gore.exe`. `guide html` writes it out as a
-single browsable file — every page, its stylesheet and its script inlined, no
-external requests — so it can be opened by double-click from anywhere. Only the
-guide is rendered; the [reference](../reference/README.md) is embedded for the
-[MCP server](mcp.md) but is not part of the browsable document.
+The whole guide is compiled into `gore.exe`, and so is the
+[reference](../reference/README.md). `guide search` ranks single **sections** of
+both against your words and prints page, anchor and a snippet, best first —
+the same ranking the [MCP server](mcp.md)'s `gore_guide` tool serves, reachable
+from a shell so it can be tried and argued with. `guide html` writes the guide
+out as a single browsable file — every page, its stylesheet and its script
+inlined, no external requests — so it can be opened by double-click from
+anywhere. Only the guide is rendered; the reference is embedded but is not part
+of the browsable document.
 
 | Subcommand | Arguments and flags |
 |---|---|
+| `search <QUERY>` | `--limit <N>` (default 8, max 25) |
 | `html` | `-o, --out <PATH>` (default `guide.html`) · `--repo-ref <REF>` (default `main`) |
 
 ```powershell
+gore guide search "click sound music menu"
 gore guide html -o guide.html
 ```
+
+A handful of specific words beats a natural-language question; words every page
+of a modding guide contains (`game`, `mod`, `file`) carry almost no signal.
 
 The release zip already contains a rendered `docs\guide.html` beside the
 Markdown pages; regenerating is only needed after editing the guide yourself.

@@ -92,11 +92,19 @@ name does nothing, logs nothing and fails nothing — the character simply stays
 put. A typo in a mod script is swallowed whole. `resolve` exits non-zero on a
 miss and suggests the near names, which is the cheap place to catch it.
 
+Knowing a name is not the same as being able to use it. Neither subcommand
+places, spawns or moves anybody — they only say whether a spot exists, for a
+script that is going to name it. What the toolkit can and cannot do about
+putting a character somewhere is [Spawn and
+placement](mod-studio.md#spawn-and-placement).
+
 Both subcommands read the catalog compiled into `gore.exe`, so they answer with
 no game install, no dump and no regeneration step. Names are compared
 case-insensitively because `FName` comparison in the game is, and the spellings
 drift: the same waypoint is `WP_ExF_…` in AngelScript and `WP_EXf_…` in a save.
-`list` stops at `--max` names and says how many it left out.
+`list` stops at `--max` names and says how many it left out, and a `--prefix`
+nothing starts with comes back with the prefixes that do exist in that scope —
+an empty listing on its own cannot be told apart from an empty area.
 
 ## The story catalog
 
