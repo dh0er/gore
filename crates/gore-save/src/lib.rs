@@ -11767,10 +11767,12 @@ fn apply_private_inventory_repair_slots_to_payload(payload: &mut Vec<u8>) -> Res
         .map(|(path, _)| path)
         .collect();
     drop(root);
+    // Idempotent: nothing misaligned means nothing to do. A queued repair often
+    // runs after an addItem/removeItem in the same save, and those already
+    // re-align the container they touch — failing here would report a broken
+    // save when the earlier sub-writes had in fact just fixed it.
     if damaged.is_empty() {
-        return Err(CoreError::Validation(
-            "this save has no misaligned inventory slots; nothing to repair".to_string(),
-        ));
+        return Ok(());
     }
     let mut patched = payload.clone();
     for slots_path in &damaged {
@@ -24972,15 +24974,53 @@ mod tests {
     }
 
     #[test]
-    fn repair_slots_refuses_a_healthy_save() {
+    fn repair_slots_is_a_no_op_on_a_healthy_save() {
         let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
         let before = payload.clone();
-        let err = apply_private_inventory_repair_slots_to_payload(&mut payload).unwrap_err();
-        assert!(
-            err.to_string().contains("nothing to repair"),
-            "unexpected error: {err}"
+        apply_private_inventory_repair_slots_to_payload(&mut payload).unwrap();
+        assert_eq!(
+            payload, before,
+            "a repair with nothing to do must not write"
         );
-        assert_eq!(payload, before, "a refused repair must not touch the save");
+    }
+
+    #[test]
+    fn a_repair_queued_behind_a_structural_edit_still_succeeds() {
+        // A queued repair runs after the addItem/removeItem of the same save,
+        // and those already re-align the container they touch. If that was the
+        // only damage, the trailing repair must succeed as a no-op instead of
+        // failing a save whose earlier sub-writes are already on disk.
+        let damaged_main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                9,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &damaged_main);
+        apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                count: 1,
+                actor_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+
+        let before = payload.clone();
+        apply_private_inventory_repair_slots_to_payload(&mut payload).unwrap();
+        assert_eq!(payload, before);
     }
 
     #[test]
