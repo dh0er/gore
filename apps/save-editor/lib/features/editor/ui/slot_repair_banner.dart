@@ -101,45 +101,23 @@ class SlotRepairBanner extends ConsumerWidget {
               FilledButton.icon(
                 icon: const Icon(Icons.healing_outlined, size: 18),
                 label: Text(l10n.slotRepairAction),
-                onPressed: () => _confirmAndQueue(context, l10n),
+                // No confirmation step: the button only QUEUES the repair, the
+                // banner already states what it does, and Discard takes it back
+                // before anything reaches the save.
+                onPressed: () => notifier.setPendingEdit(
+                  pendingKey,
+                  const PendingSaveEdit(
+                    edits: [
+                      {
+                        'path': 'private.inventory.repairSlots',
+                        'value': <String, Object?>{},
+                      },
+                    ],
+                  ),
+                ),
               ),
           ],
         ),
-      ),
-    );
-  }
-
-  Future<void> _confirmAndQueue(
-    BuildContext context,
-    AppLocalizations l10n,
-  ) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(l10n.slotRepairTitle),
-        content: Text(l10n.slotRepairConfirm(misalignedSlots)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text(l10n.cancel),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(l10n.slotRepairAction),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    notifier.setPendingEdit(
-      pendingKey,
-      const PendingSaveEdit(
-        edits: [
-          {
-            'path': 'private.inventory.repairSlots',
-            'value': <String, Object?>{},
-          },
-        ],
       ),
     );
   }

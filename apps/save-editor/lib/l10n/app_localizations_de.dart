@@ -2674,7 +2674,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt. Im Spiel verschwindet dadurch beim Ablegen ein anderes Item.';
+    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt — im Spiel verschwindet dadurch beim Ablegen ein anderes Item. Die Reparatur passt nur die Ids an: kein Item wird hinzugefügt, entfernt oder verändert.';
   }
 
   @override
@@ -2686,11 +2686,6 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Verwerfen';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return '$count Inventar-Slots reparieren? Es werden nur die Slot-Ids an ihre Position angepasst — kein Item wird hinzugefügt, entfernt oder verändert. Ein Backup wird wie üblich angelegt.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

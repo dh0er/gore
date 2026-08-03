@@ -2688,7 +2688,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position. Dans le jeu, jeter un tel objet en supprime un autre.';
+    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position — dans le jeu, jeter un tel objet en supprime un autre. La réparation ne réécrit que les identifiants : aucun objet n’est ajouté, supprimé ni modifié.';
   }
 
   @override
@@ -2700,11 +2700,6 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Annuler';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Réparer $count emplacements d’inventaire ? Seuls les identifiants sont réécrits pour correspondre à leur position — aucun objet n’est ajouté, supprimé ni modifié. Une sauvegarde de secours est créée.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

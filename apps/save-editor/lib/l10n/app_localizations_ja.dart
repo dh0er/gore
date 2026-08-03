@@ -2612,7 +2612,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。';
+    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。修復はスロット ID を書き直すだけで、アイテムの追加・削除・変更は行いません。';
   }
 
   @override
@@ -2623,11 +2623,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => '取り消す';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return '$count 個のインベントリスロットを修復しますか？ スロット ID を位置に合わせて書き直すだけで、アイテムの追加・削除・変更は行いません。バックアップは通常どおり作成されます。';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

@@ -2659,7 +2659,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'This savegame holds $count inventory slots whose id no longer matches their position. In the game, dropping such an item removes a different one instead.';
+    return 'This savegame holds $count inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed.';
   }
 
   @override
@@ -2670,11 +2670,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Discard';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Repair $count inventory slots? Only the slot ids are rewritten to match their positions — no item is added, removed or changed. A backup is created as usual.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

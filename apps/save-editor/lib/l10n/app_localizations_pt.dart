@@ -2674,7 +2674,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição. No jogo, largar um desses itens remove outro.';
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado.';
   }
 
   @override
@@ -2685,11 +2685,6 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Descartar';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>
@@ -5365,7 +5360,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String slotRepairBody(int count) {
-    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição. No jogo, largar um desses itens remove outro.';
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado.';
   }
 
   @override
@@ -5376,11 +5371,6 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get slotRepairDiscard => 'Descartar';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

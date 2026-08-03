@@ -2583,7 +2583,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配。在游戏中丢弃这类物品时，会误删另一件物品。';
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。';
   }
 
   @override
@@ -2594,11 +2594,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => '放弃';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return '修复 $count 个物品栏槽位？仅重写槽位 ID 使其与位置一致，不会添加、删除或更改任何物品。将照常创建备份。';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>
@@ -5184,7 +5179,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String slotRepairBody(int count) {
-    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配。在游戏中丢弃这类物品时，会误删另一件物品。';
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。';
   }
 
   @override
@@ -5195,11 +5190,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get slotRepairDiscard => '放弃';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return '修复 $count 个物品栏槽位？仅重写槽位 ID 使其与位置一致，不会添加、删除或更改任何物品。将照常创建备份。';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

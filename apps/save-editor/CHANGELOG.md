@@ -18,7 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   game restores an NPC's placement from the level, not from the savegame.
 - A savegame damaged by an earlier version is now recognised on load: the
   overview and the inventory show a warning with the number of affected slots
-  and a repair button, applied with the next save.
+  and a repair button, applied with the next save. Repairing can be taken back
+  until then.
 
 ### Fixed
 

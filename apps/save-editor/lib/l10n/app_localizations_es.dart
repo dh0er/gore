@@ -2673,7 +2673,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición. En el juego, soltar uno de esos objetos elimina otro distinto.';
+    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición: en el juego, soltar uno de esos objetos elimina otro distinto. La reparación solo reescribe los id: no se añade, elimina ni cambia ningún objeto.';
   }
 
   @override
@@ -2684,11 +2684,6 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Descartar';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return '¿Reparar $count ranuras de inventario? Solo se reescriben los id de las ranuras para que coincidan con su posición: no se añade, elimina ni cambia ningún objeto. Se crea una copia de seguridad.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

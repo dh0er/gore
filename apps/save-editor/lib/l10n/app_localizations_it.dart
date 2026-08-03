@@ -2679,7 +2679,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione. Nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro.';
+    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione: nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro. La riparazione riscrive solo gli id: nessun oggetto viene aggiunto, rimosso o modificato.';
   }
 
   @override
@@ -2690,11 +2690,6 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Annulla';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Riparare $count slot dell’inventario? Vengono riscritti solo gli id degli slot per farli corrispondere alla posizione: nessun oggetto viene aggiunto, rimosso o modificato. Viene creato un backup.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

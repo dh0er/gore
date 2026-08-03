@@ -2683,7 +2683,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции. В игре при выбрасывании такого предмета исчезает другой.';
+    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции: в игре при выбрасывании такого предмета исчезает другой. Восстановление переписывает только идентификаторы: ни один предмет не добавляется, не удаляется и не изменяется.';
   }
 
   @override
@@ -2695,11 +2695,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Отменить';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Восстановить $count слотов инвентаря? Переписываются только идентификаторы слотов, чтобы соответствовать их позиции: ни один предмет не добавляется, не удаляется и не изменяется. Резервная копия создаётся как обычно.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>

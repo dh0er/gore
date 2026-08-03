@@ -4089,7 +4089,7 @@ abstract class AppLocalizations {
   /// No description provided for @slotRepairBody.
   ///
   /// In en, this message translates to:
-  /// **'This savegame holds {count} inventory slots whose id no longer matches their position. In the game, dropping such an item removes a different one instead.'**
+  /// **'This savegame holds {count} inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed.'**
   String slotRepairBody(int count);
 
   /// No description provided for @slotRepairQueued.
@@ -4109,12 +4109,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Discard'**
   String get slotRepairDiscard;
-
-  /// No description provided for @slotRepairConfirm.
-  ///
-  /// In en, this message translates to:
-  /// **'Repair {count} inventory slots? Only the slot ids are rewritten to match their positions — no item is added, removed or changed. A backup is created as usual.'**
-  String slotRepairConfirm(int count);
 
   /// No description provided for @editorInventorySlotRepairConflict.
   ///

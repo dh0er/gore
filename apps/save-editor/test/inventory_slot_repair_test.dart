@@ -54,17 +54,10 @@ void main() {
       findsOneWidget,
     );
 
-    // Repair asks first — the user confirms before anything is queued.
+    // One press queues it — no confirmation step, Discard takes it back.
     await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsOneWidget);
-    await tester.tap(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Repair'),
-      ),
-    );
-    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
     expect(find.textContaining('Repair queued'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
@@ -113,13 +106,6 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Repair'),
-      ),
-    );
-    await tester.pumpAndSettle();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
     await openPlayerInventory(tester);
@@ -151,13 +137,6 @@ void main() {
     await openPlayerInventory(tester);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.descendant(
-        of: find.byType(AlertDialog),
-        matching: find.widgetWithText(FilledButton, 'Repair'),
-      ),
-    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Lizard-A'));

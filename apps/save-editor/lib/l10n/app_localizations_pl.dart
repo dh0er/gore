@@ -2690,7 +2690,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji. W grze wyrzucenie takiego przedmiotu usuwa inny.';
+    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji — w grze wyrzucenie takiego przedmiotu usuwa inny. Naprawa zmienia wyłącznie identyfikatory: żaden przedmiot nie zostanie dodany, usunięty ani zmieniony.';
   }
 
   @override
@@ -2702,11 +2702,6 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get slotRepairDiscard => 'Odrzuć';
-
-  @override
-  String slotRepairConfirm(int count) {
-    return 'Naprawić $count slotów ekwipunku? Zmieniane są wyłącznie identyfikatory slotów, aby pasowały do pozycji — żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Kopia zapasowa zostanie utworzona.';
-  }
 
   @override
   String get editorInventorySlotRepairConflict =>
