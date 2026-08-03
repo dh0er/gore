@@ -45,22 +45,39 @@ claude --plugin-dir path\to\gore\plugins\gore
 ```
 
 Codex and Cursor read their own manifests, which the plugin also carries
-(`.codex-plugin/`, `.cursor-plugin/`).
+(`.codex-plugin/`, `.cursor-plugin/`). Neither is as settled as Claude Code, so
+what follows is the half that is certain: both have a supported home for a
+server and a supported home for a skill, and neither needs this plugin to use
+them.
 
-**Codex needs the server added separately.** `codex plugin` and `codex mcp` are
-two different things there: servers live in `~/.codex/config.toml` under
-`[mcp_servers.*]`, and no Codex plugin carries an `.mcp.json` at all. So the
-manifest here gives Codex the skill, and the server is one more command:
+**Codex.** `codex plugin` and `codex mcp` are two different things there —
+servers live in `~/.codex/config.toml` under `[mcp_servers.*]`, and no installed
+Codex plugin carries an `.mcp.json` at all — so the server is its own command.
+Codex takes a local marketplace, which is the shortest route to the skill:
 
 ```powershell
 codex mcp add gore -- gore mcp serve
+codex plugin marketplace add C:\path\to\gore
+codex plugin add gore@gore
 ```
 
-Cursor looks like it does read the `.mcp.json` — plugins in its own cache ship
-one, including at least one that carries no `.cursor-plugin/` manifest and
-nothing but the Claude-format files beside it. That is evidence rather than a
-test result, so if the `gore_*` tools do not appear there, add the server by hand
-with the JSON below.
+**Cursor** has no command-line install for plugins; that lives in the app. Its
+plugin cache does hold Claude-format plugins complete with `.mcp.json` and
+`skills/`, at least one of them carrying no `.cursor-plugin/` manifest at all —
+evidence that it reads the whole Claude layout, but not a test result. The route
+that needs no plugin at all is two steps:
+
+```powershell
+cursor --add-mcp '{"name":"gore","command":"gore","args":["mcp","serve"]}'
+New-Item -ItemType Junction -Path $HOME\.cursor\skills\gore-modding `
+         -Target C:\path\to\gore\plugins\gore\skills\gore-modding
+```
+
+A junction rather than a copy, so the skill tracks the checkout instead of
+becoming a second version of itself. `~/.cursor/skills/` is the documented place
+for a personal skill and `.cursor/skills/` for one shared through a repository;
+`~/.cursor/skills-cursor/` is Cursor's own and must be left alone. The same
+shape works for Codex under `~/.codex/skills/`.
 
 ### `gore.exe` has to be on `PATH`
 
