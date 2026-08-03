@@ -2740,4 +2740,9 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'Reparieren ist gerade nicht möglich — dieser Spielstand lässt sich nicht schreiben.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup gelöscht: $path — sein Name konnte nicht entfernt werden: $details';
+  }
 }

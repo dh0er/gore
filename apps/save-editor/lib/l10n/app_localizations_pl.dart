@@ -2756,4 +2756,9 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'Naprawa nie jest teraz możliwa — tego zapisu gry nie da się zapisać.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Usunięto kopię zapasową: $path — nie udało się usunąć jej nazwy: $details';
+  }
 }

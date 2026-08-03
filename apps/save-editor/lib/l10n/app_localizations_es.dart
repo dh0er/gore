@@ -2738,4 +2738,9 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'Ahora mismo no se puede reparar: esta partida guardada no se puede escribir.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Copia de seguridad eliminada: $path: no se pudo quitar su nombre: $details';
+  }
 }

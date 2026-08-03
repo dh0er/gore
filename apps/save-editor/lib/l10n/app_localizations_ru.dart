@@ -2749,4 +2749,9 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'Восстановление сейчас невозможно — в это сохранение нельзя записать.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Копия удалена: $path — её название убрать не удалось: $details';
+  }
 }

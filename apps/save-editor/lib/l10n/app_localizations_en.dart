@@ -2724,4 +2724,9 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'Repairing is not possible right now — this savegame cannot be written.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup deleted: $path — its name could not be removed: $details';
+  }
 }

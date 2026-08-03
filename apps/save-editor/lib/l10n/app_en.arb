@@ -1221,5 +1221,7 @@
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Could not name the backup: {details}",
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
-  "slotRepairUnavailable": "Repairing is not possible right now — this savegame cannot be written."
+  "slotRepairUnavailable": "Repairing is not possible right now — this savegame cannot be written.",
+  "editorDeletedBackupWithLabelWarning": "Backup deleted: {path} — its name could not be removed: {details}",
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
 }

@@ -79,6 +79,30 @@ void main() {
     expect(request.payload['name'], 'before the boss');
   });
 
+  testWidgets('a name the core could not drop is reported, not swallowed', (
+    tester,
+  ) async {
+    // The core deletes first and tidies the name afterwards, so a name it could
+    // not drop rides along with a successful response. Silence would let the
+    // leftover be inherited by the next backup under that file name.
+    await openBackups(
+      tester,
+      _BackupCoreService(labelWarning: 'backup_names.json is read-only'),
+    );
+
+    await tester.tap(find.byIcon(Icons.delete_outline));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Delete'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('read-only'), findsOneWidget);
+  });
+
   testWidgets('the rename helper is readable with a long file name', (
     tester,
   ) async {
@@ -146,12 +170,19 @@ class _RecordedRequest {
 
 /// One save with exactly one backup, optionally carrying a label.
 class _BackupCoreService implements GoresaveCoreService {
-  _BackupCoreService({this.name, this.fileName = 'G1R-001.sav.bak.100'});
+  _BackupCoreService({
+    this.name,
+    this.fileName = 'G1R-001.sav.bak.100',
+    this.labelWarning,
+  });
 
   final String? name;
 
   /// Real backup names carry a unix timestamp and get long.
   final String fileName;
+
+  /// What the core reports when it deleted the file but could not drop its name.
+  final String? labelWarning;
   final requests = <_RecordedRequest>[];
 
   static const _backupPath = r'C:\tmp\saves\G1R-001.sav.bak.100';
@@ -267,7 +298,11 @@ class _BackupCoreService implements GoresaveCoreService {
       case 'delete_backup':
         return {
           'ok': true,
-          'data': {'path': _backupPath, 'deleted': true},
+          'data': {
+            'path': _backupPath,
+            'deleted': true,
+            'labelWarning': labelWarning,
+          },
         };
       case 'rename_backup':
         return {

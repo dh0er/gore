@@ -2379,8 +2379,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         );
         return;
       }
+      // The core deletes first and tidies the name afterwards, so a name it
+      // could not drop comes back as a warning on an otherwise successful
+      // response. Say so: the leftover would otherwise be inherited unannounced
+      // by the next backup that lands under the same file name.
+      final warning = (response['data'] as Map?)?['labelWarning'];
       state = state.copyWith(
-        lastWriteMessage: _l10n.editorDeletedBackup(backupPath),
+        lastWriteMessage: warning is String && warning.isNotEmpty
+            ? _l10n.editorDeletedBackupWithLabelWarning(backupPath, warning)
+            : _l10n.editorDeletedBackup(backupPath),
       );
       await refreshBackups();
     }, failureMessage: (details) => _l10n.editorDeleteBackupFailed(details));

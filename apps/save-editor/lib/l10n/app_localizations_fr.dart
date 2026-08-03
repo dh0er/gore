@@ -2754,4 +2754,9 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'La réparation n’est pas possible pour l’instant — cette sauvegarde ne peut pas être écrite.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Sauvegarde supprimée : $path — son nom n’a pas pu être supprimé : $details';
+  }
 }

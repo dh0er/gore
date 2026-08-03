@@ -4193,6 +4193,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Repairing is not possible right now — this savegame cannot be written.'**
   String get slotRepairUnavailable;
+
+  /// No description provided for @editorDeletedBackupWithLabelWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup deleted: {path} — its name could not be removed: {details}'**
+  String editorDeletedBackupWithLabelWarning(String path, String details);
 }
 
 class _AppLocalizationsDelegate

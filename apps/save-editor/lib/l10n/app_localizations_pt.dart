@@ -2739,6 +2739,11 @@ class AppLocalizationsPt extends AppLocalizations {
   @override
   String get slotRepairUnavailable =>
       'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5475,4 +5480,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get slotRepairUnavailable =>
       'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
 }

@@ -704,5 +704,7 @@
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "无法为备份命名：{details}",
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
-  "slotRepairUnavailable": "目前无法修复 — 无法写入此存档。"
+  "slotRepairUnavailable": "目前无法修复 — 无法写入此存档。",
+  "editorDeletedBackupWithLabelWarning": "已删除备份：{path} — 但无法移除其名称：{details}",
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
 }

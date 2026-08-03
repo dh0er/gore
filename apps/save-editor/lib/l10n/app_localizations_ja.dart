@@ -2676,4 +2676,9 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get slotRepairUnavailable => '現在は修復できません。このセーブデータには書き込めません。';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'バックアップを削除しました: $path — その名前は削除できませんでした: $details';
+  }
 }

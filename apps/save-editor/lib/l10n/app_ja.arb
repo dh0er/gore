@@ -704,5 +704,7 @@
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "バックアップに名前を付けられませんでした: {details}",
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
-  "slotRepairUnavailable": "現在は修復できません。このセーブデータには書き込めません。"
+  "slotRepairUnavailable": "現在は修復できません。このセーブデータには書き込めません。",
+  "editorDeletedBackupWithLabelWarning": "バックアップを削除しました: {path} — その名前は削除できませんでした: {details}",
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
 }

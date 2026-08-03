@@ -697,5 +697,7 @@
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Не удалось задать название копии: {details}",
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
-  "slotRepairUnavailable": "Восстановление сейчас невозможно — в это сохранение нельзя записать."
+  "slotRepairUnavailable": "Восстановление сейчас невозможно — в это сохранение нельзя записать.",
+  "editorDeletedBackupWithLabelWarning": "Копия удалена: {path} — её название убрать не удалось: {details}",
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
 }
