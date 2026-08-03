@@ -2668,6 +2668,28 @@ class AppLocalizationsPt extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição. No jogo, largar um desses itens remove outro.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
+  }
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5332,5 +5354,27 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'other': '$fallback',
     });
     return '$_temp0';
+  }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição. No jogo, largar um desses itens remove outro.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
   }
 }

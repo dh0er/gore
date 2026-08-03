@@ -2577,6 +2577,28 @@ class AppLocalizationsZh extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => '物品栏槽位损坏';
+
+  @override
+  String slotRepairBody(int count) {
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配。在游戏中丢弃这类物品时，会误删另一件物品。';
+  }
+
+  @override
+  String get slotRepairQueued => '修复已加入待保存列表 — 保存后生效。';
+
+  @override
+  String get slotRepairAction => '修复';
+
+  @override
+  String get slotRepairDiscard => '放弃';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return '修复 $count 个物品栏槽位？仅重写槽位 ID 使其与位置一致，不会添加、删除或更改任何物品。将照常创建备份。';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -5151,5 +5173,27 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       'other': '$fallback',
     });
     return '$_temp0';
+  }
+
+  @override
+  String get slotRepairTitle => '物品栏槽位损坏';
+
+  @override
+  String slotRepairBody(int count) {
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配。在游戏中丢弃这类物品时，会误删另一件物品。';
+  }
+
+  @override
+  String get slotRepairQueued => '修复已加入待保存列表 — 保存后生效。';
+
+  @override
+  String get slotRepairAction => '修复';
+
+  @override
+  String get slotRepairDiscard => '放弃';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return '修复 $count 个物品栏槽位？仅重写槽位 ID 使其与位置一致，不会添加、删除或更改任何物品。将照常创建备份。';
   }
 }

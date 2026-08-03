@@ -6,7 +6,7 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.2.1] - 2026-08-03
 
 ### Added
 
@@ -16,6 +16,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   location's facing is optional and off by default.
 - An NPC's position and spawn position are shown but cannot be changed: the
   game restores an NPC's placement from the level, not from the savegame.
+- A savegame damaged by an earlier version is now recognised on load: the
+  inventory shows a warning with the number of affected slots and a one-click
+  repair, applied with the next save.
+
+### Fixed
+
+- Renaming a savegame could make the game drop it from the load list. The name
+  is now written so the game can still read the save's metadata, and a rename
+  that would leave it unreadable is refused instead of written.
+- Items added to an inventory could not be dropped in the game afterwards, and
+  dropping one made a different item vanish instead. Added items now go into a
+  free inventory slot, and removing an item frees its slot instead of deleting
+  it — the way the game does it. Adding or removing an item also repairs a
+  savegame an earlier version left in that state.
+- Large inventories were cut off at 200 entries, so a newly added item was
+  missing from the list while the picker already refused to offer it again.
+- Queued additions and removals now show the item's localized name.
 
 ## [1.2.0] - 2026-07-15
 

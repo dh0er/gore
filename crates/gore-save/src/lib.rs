@@ -1107,36 +1107,6 @@ fn persistent_public_data_ref_bounds(refs: &[FStringRef]) -> Option<(usize, usiz
     Some((public_data_idx, end_idx))
 }
 
-fn persistent_slot_ref_range(refs: &[FStringRef], slot: &str) -> Option<(usize, usize)> {
-    let (public_data_idx, end_idx) = persistent_public_data_ref_bounds(refs)?;
-    let mut idx = public_data_idx + 1;
-    while idx < end_idx {
-        if !looks_slot_name(&refs[idx].value)
-            || refs.get(idx + 1).map(|reference| reference.value.as_str()) != Some("m_SlotName")
-        {
-            idx += 1;
-            continue;
-        }
-        let block_end = refs
-            .iter()
-            .enumerate()
-            .take(end_idx)
-            .skip(idx + 1)
-            .find(|(candidate_idx, reference)| {
-                looks_slot_name(&reference.value)
-                    && refs.get(candidate_idx + 1).map(|next| next.value.as_str())
-                        == Some("m_SlotName")
-            })
-            .map(|(candidate_idx, _)| candidate_idx)
-            .unwrap_or(end_idx);
-        if refs[idx].value == slot {
-            return Some((idx, block_end));
-        }
-        idx = block_end;
-    }
-    None
-}
-
 fn persistent_metadata_from_ref_range(
     payload: &[u8],
     refs: &[FStringRef],
@@ -4338,11 +4308,17 @@ fn inspect_private_payload(
                 .as_ref()
                 .and_then(|r| r.as_ref().ok())
                 .and_then(|r| armor_slot_summary(r));
+            let misaligned = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .map(|r| misaligned_slot_containers(r))
+                .unwrap_or_default();
             let inventory = summarize_private_inventory_payload(
                 &payload,
                 &refs,
                 main_container.as_ref(),
                 armor_slot.as_ref(),
+                &misaligned,
             );
             let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
             let typed_ok = typed_parse["status"] == "ok";
@@ -4589,11 +4565,21 @@ fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlo
     }
 }
 
+/// How many inventory rows `inspect_save` returns for the player at most.
+///
+/// A late-game player carries well past 200 stacks, and addItem appends at the
+/// end of the MainContainer — so the old 200 cap hid exactly the item that had
+/// just been added, while the add dialog (which reads the uncapped
+/// `mainContainerPaths`) still refused to offer it a second time. The bound only
+/// exists so a pathological payload cannot produce unbounded JSON.
+const PLAYER_INVENTORY_ROW_LIMIT: usize = 4096;
+
 fn summarize_private_inventory_payload(
     payload: &[u8],
     refs: &[FStringRef],
     main_container: Option<&MainContainerSummary>,
     armor_slot: Option<&ArmorSlotSummary>,
+    misaligned: &[(Vec<String>, usize)],
 ) -> Value {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
@@ -4615,7 +4601,7 @@ fn summarize_private_inventory_payload(
         200,
     );
     let (mut items, item_stack_count, item_scope) =
-        summarize_private_inventory_items(payload, refs, 200);
+        summarize_private_inventory_items(payload, refs, PLAYER_INVENTORY_ROW_LIMIT);
     // Mark which rows can be deleted. removeItem addresses by path, so only a
     // path that occurs exactly once across the whole inventory is safe — a row
     // sharing its path with another container's stack must not offer delete, or
@@ -4668,12 +4654,23 @@ fn summarize_private_inventory_payload(
         .map(|a| a.equipped_paths.iter().collect())
         .unwrap_or_default();
     equipped_armor_paths.sort();
+    // Damage an older editor build left behind: slots whose m_Id no longer
+    // matches their position (see misaligned_slot_containers). Repairing is a
+    // write, so it is only ADVERTISED here — the user confirms it.
+    let misaligned_slots: usize = misaligned.iter().map(|(_, count)| count).sum();
+    if misaligned_slots > 0 {
+        writable.push("private.inventory.repairSlots");
+    }
     json!({
         "candidateCount": candidates.len(),
         "candidates": candidates,
         "itemStackCount": item_stack_count,
         "itemScope": item_scope,
         "items": items,
+        "slotIntegrity": {
+            "misalignedSlots": misaligned_slots,
+            "containers": misaligned.len(),
+        },
         "mainContainerPaths": main_paths,
         "equippedArmorPaths": equipped_armor_paths,
         "scriptPaths": script_paths,
@@ -8220,18 +8217,16 @@ fn replace_persistent_slot_player_save_name(
             "PersistentDataList.sav is not a GVAS file".to_string(),
         ));
     }
-    let refs = scan_fstrings(data, 0);
-    let Some((start_idx, end_idx)) = persistent_slot_ref_range(&refs, slot) else {
+    // Typed, size-chain-aware patch of this slot's cached public data. The old
+    // string-scan splice rewrote only the name's own size field and left the
+    // enclosing map/struct lengths stale, which the game's strict reader then
+    // rejected — dropping the slot from the load list (see
+    // replace_str_property_fstring).
+    if !patch_persistent_slot_string_if_present(data, slot, "m_PlayerSaveName", new_value)? {
         return Ok(false);
-    };
-    replace_str_property_fstring_in_range(
-        data,
-        &refs,
-        start_idx,
-        end_idx,
-        "m_PlayerSaveName",
-        new_value,
-    )?;
+    }
+    // The edited list must still parse end-to-end, the bar the game applies.
+    parse_profile_file(data)?;
     Ok(true)
 }
 
@@ -8319,6 +8314,7 @@ fn apply_private_edits(
             "private.inventory.reset" => {
                 parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
             }
+            "private.inventory.repairSlots" => Ok(PrivateEdit::InventoryRepairSlots),
             "private.story.apply" => {
                 parse_private_story_apply_edit(edit).map(PrivateEdit::StoryApply)
             }
@@ -8620,6 +8616,10 @@ enum PrivateEdit {
     InventoryAddItem(PrivateInventoryAddItemEdit),
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     InventoryReset(PrivateInventoryResetEdit),
+    /// Re-align every inventory container whose slot ids drifted away from their
+    /// positions (see [`misaligned_slot_containers`]). Carries no value: the
+    /// damaged containers are whatever the save turns out to hold.
+    InventoryRepairSlots,
     StoryApply(Vec<story::StoryChange>),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
@@ -9989,6 +9989,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::InventoryReset(edit) => {
             apply_private_inventory_reset_to_payload(payload, edit)
         }
+        PrivateEdit::InventoryRepairSlots => {
+            apply_private_inventory_repair_slots_to_payload(payload)
+        }
         PrivateEdit::StoryApply(changes) => story::apply_changes(payload, changes),
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
@@ -10731,6 +10734,17 @@ fn struct_element_property<'a>(
         .find(|p| p.name == name)
 }
 
+/// A free inventory slot: one whose `m_SlotData.m_ItemDefinition` is empty.
+///
+/// The game never shrinks `m_Slots`. Taking an item out of the inventory blanks
+/// its slot in place — empty definition, count 0 — and leaves the array length
+/// and every other slot's index untouched; the next item picked up reuses the
+/// first blank slot. Real saves carry dozens of these holes, which is why a
+/// picked-up item reappears in the middle of the list rather than at its end.
+fn slot_is_free(slot: &properties::PropertyValue) -> bool {
+    slot_item_definition(slot).unwrap_or_default().is_empty()
+}
+
 /// The `m_SlotData.m_ItemDefinition` asset path of an ItemVirtualData slot.
 fn slot_item_definition(slot: &properties::PropertyValue) -> Option<&str> {
     let slot_data = struct_element_property(slot, "m_SlotData")?;
@@ -10825,9 +10839,10 @@ struct MainContainerSummary {
     /// maps unambiguously to the row the user clicked. A path duplicated within
     /// the MainContainer or shared with another container is not removable.
     removable_paths: std::collections::HashSet<String>,
-    /// Whether any container holds a clean (state-free m_Payload) slot that
-    /// addItem can use as a template. Without one, addItem cannot succeed, so it
-    /// must not be advertised.
+    /// Whether addItem can succeed at all: either the MainContainer has a blank
+    /// slot to fill, or some container holds a clean (state-free `m_Payload`)
+    /// slot to clone when a new one has to be appended. With neither, addItem
+    /// cannot succeed and must not be advertised.
     has_clean_template: bool,
 }
 
@@ -10977,9 +10992,11 @@ fn inventory_main_container_view(
     else {
         return None;
     };
-    // Scan every container for a clean template slot (addItem clones it), and
-    // count how many times each item path occurs across the WHOLE inventory.
-    let mut has_clean_template = false;
+    // Scan every container for a clean template slot (addItem clones one when it
+    // has to append), and count how many times each item path occurs across the
+    // WHOLE inventory. A blank MainContainer slot alone already makes addItem
+    // possible — it fills that slot and needs no template at all.
+    let mut has_clean_template = main_slots.iter().any(slot_is_free);
     let mut global_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     if let Some(properties::PropertyValue::Array {
@@ -11184,12 +11201,143 @@ fn property_carries_state(prop: &properties::Property) -> bool {
     }
 }
 
-/// Append a new item slot to the player's MainContainer inventory by cloning
-/// the last existing slot (template) and retargeting its definition path,
-/// count, and id. Every length-changing step works through the existing
-/// size-chain-aware patch helpers and is proven by a strict re-parse; the
-/// caller's payload is only replaced once the final payload re-parses AND the
-/// new item surfaces in the inventory summary scan with the requested count.
+/// Every inventory slot array in the save whose `m_Id`s no longer match their
+/// positions, as `(path to the m_Slots array, misaligned slot count)`.
+///
+/// The game addresses a slot by its position and writes `m_Id == index` in every
+/// container (see [`normalize_slot_ids`]), so any mismatch is left over from an
+/// editor build that inserted or spliced slots mid-array — the damage that makes
+/// the game drop the wrong item. Covers the player and every NPC in one walk.
+fn misaligned_slot_containers(root: &properties::RootObject) -> Vec<(Vec<String>, usize)> {
+    fn misaligned(elements: &[properties::PropertyValue]) -> usize {
+        elements
+            .iter()
+            .enumerate()
+            .filter(|(index, slot)| slot_id(slot).is_some_and(|id| i32::try_from(*index) != Ok(id)))
+            .count()
+    }
+    fn walk_properties(
+        properties_: &[properties::Property],
+        path: &mut Vec<String>,
+        out: &mut Vec<(Vec<String>, usize)>,
+    ) {
+        for property in properties_ {
+            path.push(property.name.clone());
+            if property.name == "m_Slots" {
+                if let properties::PropertyValue::Array { elements } = &property.value {
+                    let count = misaligned(elements);
+                    if count > 0 {
+                        out.push((path.clone(), count));
+                    }
+                }
+            }
+            walk_value(&property.value, path, out);
+            path.pop();
+        }
+    }
+    fn walk_value(
+        value: &properties::PropertyValue,
+        path: &mut Vec<String>,
+        out: &mut Vec<(Vec<String>, usize)>,
+    ) {
+        match value {
+            properties::PropertyValue::Struct(properties::StructValue::Properties(inner)) => {
+                walk_properties(inner, path, out)
+            }
+            properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(
+                instanced,
+            ))) => walk_properties(&instanced.properties, path, out),
+            properties::PropertyValue::Array { elements }
+            | properties::PropertyValue::Set { elements, .. } => {
+                for (index, element) in elements.iter().enumerate() {
+                    path.push(format!("[{index}]"));
+                    walk_value(element, path, out);
+                    path.pop();
+                }
+            }
+            properties::PropertyValue::Map { entries, .. } => {
+                for (key, entry) in entries {
+                    let Some(segment) = properties::map_key_to_string(key) else {
+                        continue;
+                    };
+                    path.push(format!("{{{segment}}}"));
+                    walk_value(entry, path, out);
+                    path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk_properties(&root.properties, &mut Vec::new(), &mut out);
+    out
+}
+
+/// Rewrite every `m_Id` in one container's `m_Slots` so it equals the slot's
+/// own array index.
+///
+/// Every inventory container in every save the game writes satisfies
+/// `m_Id == index`, and the game resolves a slot through that id when an item
+/// leaves the bag: a slot whose id points at a different index makes it act on
+/// the wrong item — the dropped item stays in the inventory while an unrelated
+/// stack disappears. Structural edits move slots, so [`addItem`] and
+/// [`removeItem`] re-align the container they touched afterwards. This also
+/// repairs a container an earlier build already left misaligned.
+///
+/// `m_Id` is a fixed-size `IntProperty`, so no offset shifts between the writes
+/// and the single parse taken up front stays valid for all of them.
+///
+/// [`addItem`]: apply_private_inventory_add_item_to_payload
+/// [`removeItem`]: apply_private_inventory_remove_item_to_payload
+fn normalize_slot_ids(payload: &mut Vec<u8>, slots_path: &[String]) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload)
+        .map_err(|err| CoreError::Parse(format!("cannot re-align inventory slot ids: {err}")))?;
+    let slots_segs = properties::parse_path(slots_path)?;
+    let slots = properties::resolve(&root.properties, &slots_segs)?;
+    let properties::PropertyValue::Array { elements } = &slots.value else {
+        return Err(CoreError::Parse(
+            "inventory m_Slots is not a plain slot array; cannot re-align slot ids".to_string(),
+        ));
+    };
+    let misaligned: Vec<i32> = (0..elements.len())
+        .map(|index| {
+            i32::try_from(index).map_err(|_| {
+                CoreError::Parse("inventory holds more slots than m_Id can address".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|index| slot_id(&elements[*index as usize]) != Some(*index))
+        .collect();
+    for index in misaligned {
+        let mut path = slots_path.to_vec();
+        path.push(format!("[{index}]"));
+        path.push("m_Id".to_string());
+        let segs = properties::parse_path(&path)?;
+        let target = properties::resolve(&root.properties, &segs)?;
+        properties::patch_scalar(payload, target, properties::ScalarValue::Int(index))?;
+    }
+    Ok(())
+}
+
+/// Every slot's `m_Id` matches its index in `slots` — the invariant
+/// [`normalize_slot_ids`] restores, re-checked on the final payload.
+fn slot_ids_are_index_aligned(slots: &[properties::PropertyValue]) -> bool {
+    slots.iter().enumerate().all(|(index, slot)| {
+        i32::try_from(index).is_ok_and(|expected| slot_id(slot) == Some(expected))
+    })
+}
+
+/// Append a new item slot to the player's MainContainer inventory by cloning a
+/// clean existing slot (template) and retargeting its definition path, count,
+/// and id. The copy is always appended at the END of `m_Slots` and takes the
+/// next index as its `m_Id`, because the game requires `m_Id == index`
+/// (see [`normalize_slot_ids`]) — cloning in place behind a mid-array template
+/// would shift every later slot away from its id. Every length-changing step
+/// works through the existing size-chain-aware patch helpers and is proven by a
+/// strict re-parse; the caller's payload is only replaced once the final payload
+/// re-parses AND the new item surfaces in the inventory summary scan with the
+/// requested count.
 fn apply_private_inventory_add_item_to_payload(
     payload: &mut Vec<u8>,
     edit: &PrivateInventoryAddItemEdit,
@@ -11232,53 +11380,60 @@ fn apply_private_inventory_add_item_to_payload(
             edit.path
         )));
     }
-    // Choose the template. Prefer a clean (state-free m_Payload) MainContainer
-    // slot and duplicate it in place — its m_InventoryType is already
-    // MainContainer. If no MainContainer slot is clean (including an empty
-    // MainContainer), borrow a clean slot's bytes from another container and fix
-    // m_InventoryType to MainContainer below.
+    // Pick the slot to write into. The game never shrinks m_Slots: an item that
+    // leaves the inventory only blanks its slot, and the next item the player
+    // picks up REUSES the first blank one (see slot_is_free). Real saves are
+    // full of such holes, so filling one is both what the game does and the
+    // cheapest edit — the array keeps its length and every slot keeps its id.
+    //
+    // Only when there is no free slot does a new one get appended, cloned from a
+    // clean (state-free) template: preferably a MainContainer slot, whose
+    // m_InventoryType already fits, otherwise a slot borrowed from another
+    // container with m_InventoryType fixed up below. It is APPENDED rather than
+    // duplicated in place, so that its m_Id — the next free index — matches
+    // where it sits (see normalize_slot_ids).
     let is_clean = |slot: &properties::PropertyValue| {
         !struct_element_property(slot, "m_Payload").is_some_and(property_carries_state)
     };
-    let max_id = slots.iter().filter_map(slot_id).max().unwrap_or(-1);
-    let new_id = max_id.checked_add(1).ok_or_else(|| {
-        CoreError::Parse("inventory slot ids exhausted (m_Id overflow)".to_string())
+    let free_index = slots.iter().position(|slot| slot_is_free(slot));
+    let new_index = free_index.unwrap_or(slots.len());
+    let new_id = i32::try_from(new_index).map_err(|_| {
+        CoreError::Parse("inventory holds more slots than m_Id can address".to_string())
     })?;
-    let (container_edit, new_index, needs_type_patch) =
-        if let Some(source) = slots.iter().rposition(|slot| is_clean(slot)) {
-            // ArrayDuplicate inserts the copy right after the source slot.
-            (
-                properties::ContainerEdit::ArrayDuplicate(source),
-                source + 1,
-                false,
-            )
+    let mut patched = payload.clone();
+    let mut needs_type_patch = false;
+    if free_index.is_none() {
+        let template_bytes = if let Some(source) = slots.iter().rposition(|slot| is_clean(slot)) {
+            let layout = properties::container_layout(payload, chain.target)?;
+            let range = layout.element_ranges.get(source).cloned().ok_or_else(|| {
+                CoreError::Parse(
+                    "MainContainer m_Slots layout has no bytes for the chosen template slot"
+                        .to_string(),
+                )
+            })?;
+            payload[range].to_vec()
         } else {
-            let template_bytes =
-                donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?
-                    .ok_or_else(|| {
-                        CoreError::UnsupportedEdit(
-                            "no inventory container has a clean (state-free) slot to use as a \
+            needs_type_patch = true;
+            donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?.ok_or_else(
+                || {
+                    CoreError::UnsupportedEdit(
+                        "no inventory container has a clean (state-free) slot to use as a \
                          template; cannot synthesize a new item slot"
-                                .to_string(),
-                        )
-                    })?;
-            // ArrayInsertBytes appends to the end of the MainContainer.
-            (
-                properties::ContainerEdit::ArrayInsertBytes(template_bytes),
-                slots.len(),
-                true,
-            )
+                            .to_string(),
+                    )
+                },
+            )?
         };
 
-    // 3. Apply the structural edit on a scratch copy (size chains fixed up by
-    //    patch_container; failed patches leave the original untouched).
-    let mut patched = payload.clone();
-    properties::patch_container(
-        &mut patched,
-        chain.target,
-        &chain.enclosing_size_fields,
-        &container_edit,
-    )?;
+        // 3. Apply the structural edit on a scratch copy (size chains fixed up
+        //    by patch_container; failed patches leave the original untouched).
+        properties::patch_container(
+            &mut patched,
+            chain.target,
+            &chain.enclosing_size_fields,
+            &properties::ContainerEdit::ArrayInsertBytes(template_bytes),
+        )?;
+    }
 
     // 4. Retarget the duplicate: definition path first (length-changing, so
     //    re-resolve from a fresh parse), then the fixed-size count and id.
@@ -11373,7 +11528,17 @@ fn apply_private_inventory_add_item_to_payload(
         )?;
     }
 
-    // 5. Final proof: strict re-parse AND the new slot must exist in the
+    // 5. Re-align the edited container's slot ids with their indices. The append
+    //    above keeps the invariant on its own for a healthy save; this also
+    //    repairs a MainContainer an earlier build left misaligned.
+    let slots_path = {
+        let mut path = inventory_path.clone();
+        path.extend_from_slice(&slots_suffix);
+        path
+    };
+    normalize_slot_ids(&mut patched, &slots_path)?;
+
+    // 6. Final proof: strict re-parse AND the new slot must exist in the
     //    MainContainer itself with the requested path and count. A global
     //    region scan would be satisfied by the same item already living in a
     //    different container (e.g. Quickslots), so a no-op add could be wrongly
@@ -11403,6 +11568,13 @@ fn apply_private_inventory_add_item_to_payload(
              aborting the write",
             edit.path, edit.count
         )));
+    }
+    if !slot_ids_are_index_aligned(patched_slot_elems) {
+        return Err(CoreError::Validation(
+            "inventory addItem left slot ids out of step with their positions; \
+             aborting the write"
+                .to_string(),
+        ));
     }
     *payload = patched;
     Ok(())
@@ -11561,6 +11733,114 @@ fn donor_slot_template_bytes(
     Ok(None)
 }
 
+/// Re-align every inventory container whose slot ids drifted away from their
+/// positions, across the player and every NPC in one write.
+///
+/// This is the repair for a save an older build damaged (see
+/// [`misaligned_slot_containers`]): the ids are rewritten to match the slot each
+/// one sits in, which is what the game itself writes and what its drop path
+/// resolves against. Nothing else about the inventory changes — no slot moves,
+/// no item is added or removed.
+fn apply_private_inventory_repair_slots_to_payload(payload: &mut Vec<u8>) -> Result<(), CoreError> {
+    let root = properties::parse_private_root(payload).map_err(|err| {
+        CoreError::Parse(format!(
+            "private.inventory.repairSlots requires a typed-parsable private payload: {err}"
+        ))
+    })?;
+    let damaged: Vec<Vec<String>> = misaligned_slot_containers(&root)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    drop(root);
+    if damaged.is_empty() {
+        return Err(CoreError::Validation(
+            "this save has no misaligned inventory slots; nothing to repair".to_string(),
+        ));
+    }
+    let mut patched = payload.clone();
+    for slots_path in &damaged {
+        normalize_slot_ids(&mut patched, slots_path)?;
+    }
+
+    // Final proof: the payload still parses and no container is left misaligned.
+    let reparsed = properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "inventory slot repair produced an inconsistent payload: {err}"
+        ))
+    })?;
+    let remaining = misaligned_slot_containers(&reparsed);
+    if !remaining.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "inventory slot repair left {} container(s) misaligned; aborting the write",
+            remaining.len()
+        )));
+    }
+    *payload = patched;
+    Ok(())
+}
+
+/// Blank one inventory slot in place: drop the item-specific payload state,
+/// clear the item definition and zero the count — the exact shape the game
+/// leaves behind when an item leaves the inventory (see [`slot_is_free`]). The
+/// slot keeps its position, its `m_Id` and its `m_InventoryType`, and the array
+/// keeps its length, so no other slot moves.
+///
+/// Each step re-parses: clearing the payload and the definition both change
+/// lengths, which invalidates the offsets recorded before them.
+fn blank_inventory_slot(
+    payload: &mut Vec<u8>,
+    slots_path: &[String],
+    index: usize,
+) -> Result<(), CoreError> {
+    let slot_path = |leaf: &[&str]| -> Vec<String> {
+        let mut path = slots_path.to_vec();
+        path.push(format!("[{index}]"));
+        path.extend(leaf.iter().map(|segment| (*segment).to_string()));
+        path
+    };
+
+    // Item state (an armor's upgrades, say) must not survive in a slot the game
+    // will hand to the next item picked up. Entries go from the back so the
+    // ranges ahead of the splice stay valid, one re-parse per removal.
+    let generic_data_segs = properties::parse_path(&slot_path(&["m_Payload", "m_GenericData"]))?;
+    loop {
+        let root = properties::parse_private_root(payload)?;
+        let Ok(chain) = properties::resolve_chain(&root.properties, &generic_data_segs) else {
+            break;
+        };
+        let properties::PropertyValue::Map { entries, .. } = &chain.target.value else {
+            break;
+        };
+        let Some(last) = entries.len().checked_sub(1) else {
+            break;
+        };
+        let target = chain.target.clone();
+        let enclosing = chain.enclosing_size_fields.clone();
+        drop(root);
+        properties::patch_container(
+            payload,
+            &target,
+            &enclosing,
+            &properties::ContainerEdit::MapRemove { entry_index: last },
+        )?;
+    }
+
+    {
+        let root = properties::parse_private_root(payload)?;
+        let segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemDefinition"]))?;
+        let chain = properties::resolve_chain(&root.properties, &segs)?;
+        let target = chain.target.clone();
+        let enclosing = chain.enclosing_size_fields.clone();
+        drop(root);
+        properties::patch_string(payload, &target, &enclosing, "")?;
+    }
+
+    let root = properties::parse_private_root(payload)?;
+    let segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemCount"]))?;
+    let target = properties::resolve(&root.properties, &segs)?;
+    properties::patch_scalar(payload, target, properties::ScalarValue::Int(0))
+}
+
 fn apply_private_inventory_remove_item_to_payload(
     payload: &mut Vec<u8>,
     edit: &PrivateInventoryRemoveItemEdit,
@@ -11623,17 +11903,25 @@ fn apply_private_inventory_remove_item_to_payload(
             })?,
     };
 
-    // 3. Remove the slot on a scratch copy (size chains fixed up by
-    //    patch_container; a failed patch leaves the original untouched).
+    // 3. Blank the slot in place on a scratch copy — do NOT splice it out. The
+    //    game keeps m_Slots at a fixed length and empties the slot an item left
+    //    (see slot_is_free); splicing would shift every later slot down one
+    //    index, away from the id the game resolves it by, which is what made a
+    //    dropped item come back while an unrelated stack vanished.
+    let slots_path = {
+        let mut path = inventory_path.clone();
+        path.extend_from_slice(&slots_suffix);
+        path
+    };
     let mut patched = payload.clone();
-    properties::patch_container(
-        &mut patched,
-        chain.target,
-        &chain.enclosing_size_fields,
-        &properties::ContainerEdit::ArrayRemove(index),
-    )?;
+    blank_inventory_slot(&mut patched, &slots_path, index)?;
 
-    // 4. Final proof: strict re-parse, and the targeted slot must be gone from
+    // 4. Re-align the container's ids with their positions. Blanking keeps them
+    //    aligned on its own; this repairs a container an earlier build left
+    //    misaligned (see normalize_slot_ids).
+    normalize_slot_ids(&mut patched, &slots_path)?;
+
+    // 5. Final proof: strict re-parse, and the targeted slot must be blank in
     //    the MainContainer specifically. The same item path may legitimately
     //    still exist in another container (e.g. Quickslots), so a global
     //    player-inventory-region scan would wrongly abort the write — verify
@@ -11670,6 +11958,30 @@ fn apply_private_inventory_remove_item_to_payload(
              expected exactly one fewer — aborting the write",
             edit.path
         )));
+    }
+    // The slot itself must survive as a blank one: the game addresses slots by
+    // position, so the array length may never change.
+    if patched_slot_elems.len() != slots.len() {
+        return Err(CoreError::Validation(format!(
+            "removeItem for {} changed the {enum_label} slot count from {} to {}; \
+             the slot must be blanked, not removed — aborting the write",
+            edit.path,
+            slots.len(),
+            patched_slot_elems.len()
+        )));
+    }
+    if !patched_slot_elems.get(index).is_some_and(slot_is_free) {
+        return Err(CoreError::Validation(format!(
+            "removeItem for {} did not leave slot {index} blank; aborting the write",
+            edit.path
+        )));
+    }
+    if !slot_ids_are_index_aligned(patched_slot_elems) {
+        return Err(CoreError::Validation(
+            "inventory removeItem left slot ids out of step with their positions; \
+             aborting the write"
+                .to_string(),
+        ));
     }
     *payload = patched;
     Ok(())
@@ -12706,54 +13018,54 @@ where
     }))
 }
 
+/// Replace a `StrProperty`'s value inside a bare property list, keeping every
+/// enclosing container's declared size in step.
+///
+/// A save's public payload nests its metadata inside a struct that declares the
+/// length of its body. Rewriting only the string's own size field leaves that
+/// enclosing length too large (or too small): our own lenient string scan still
+/// reads such a payload, but the game parses it strictly — it drops a save whose
+/// public block it cannot read out of the load list entirely. So the write goes
+/// through the same size-chain machinery every private edit uses, and the result
+/// has to re-parse end-to-end before it is accepted.
 fn replace_str_property_fstring(
     payload: &mut Vec<u8>,
     property_name: &str,
     new_value: &str,
 ) -> Result<(), CoreError> {
-    let refs = scan_fstrings(payload, 0);
-    replace_str_property_fstring_in_range(payload, &refs, 0, refs.len(), property_name, new_value)
-}
-
-fn replace_str_property_fstring_in_range(
-    payload: &mut Vec<u8>,
-    refs: &[FStringRef],
-    start_idx: usize,
-    end_idx: usize,
-    property_name: &str,
-    new_value: &str,
-) -> Result<(), CoreError> {
-    let name_idx = refs
-        .iter()
-        .enumerate()
-        .take(end_idx)
-        .skip(start_idx)
-        .find(|(_, r)| r.value == property_name)
-        .map(|(idx, _)| idx)
+    let root = properties::parse_property_list_root_at(payload, 0).map_err(|err| {
+        CoreError::Parse(format!(
+            "cannot edit {property_name}: the payload is not a parsable property list: {err}"
+        ))
+    })?;
+    let (path, property) = properties::find_property_by_name(&root, property_name)
         .ok_or_else(|| CoreError::Parse(format!("property {property_name} was not found")))?;
-    if name_idx + 2 >= end_idx {
-        return Err(CoreError::Parse(format!(
-            "value for {property_name} was not found"
-        )));
-    }
-    let type_ref = refs
-        .get(name_idx + 1)
-        .ok_or_else(|| CoreError::Parse(format!("type for {property_name} was not found")))?;
-    if type_ref.value != "StrProperty" {
+    if property.type_name != "StrProperty" {
         return Err(CoreError::Parse(format!(
             "property {property_name} is not a StrProperty"
         )));
     }
-    let value_ref = refs
-        .get(name_idx + 2)
-        .ok_or_else(|| CoreError::Parse(format!("value for {property_name} was not found")))?;
-    if value_ref.utf16 {
-        return Err(CoreError::UnsupportedEdit(
-            "UTF-16 FString replacement is not implemented yet".to_string(),
-        ));
+    let segments = properties::parse_path(&path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_string(payload, &target, &enclosing, new_value)?;
+
+    // Strict gate: the edited list must still parse and consume every byte, the
+    // same bar the game's reader applies.
+    let reparsed = properties::parse_property_list_root_at(payload, 0).map_err(|err| {
+        CoreError::Parse(format!(
+            "editing {property_name} produced an unparsable payload: {err}"
+        ))
+    })?;
+    if reparsed.consumed != payload.len() {
+        return Err(CoreError::Validation(format!(
+            "editing {property_name} left {} trailing bytes the game's reader would not consume",
+            payload.len() - reparsed.consumed
+        )));
     }
-    let size_offset = type_ref.len_offset + type_ref.total_len + 4;
-    write_str_property_value(payload, size_offset, value_ref, new_value)
+    Ok(())
 }
 
 fn sha1_hex(data: &[u8]) -> String {
@@ -14608,22 +14920,17 @@ mod tests {
         quick_save: bool,
         auto_save: bool,
     ) -> Vec<u8> {
+        // One map entry: the slot name as the inline key, then the public-data
+        // struct as an inline property list. Every field is a real tagged
+        // property so the block survives a strict parse — the bar the game's
+        // reader applies to this file.
         [
             fstring(slot),
             str_property("m_SlotName", slot),
             str_property("m_PlayerSaveName", player_save_name),
             bool_property("m_IsPlayerSaveNameCustom", true),
-            fstring("m_CompressedBitmap"),
-            fstring("ArrayProperty"),
-            fstring("ByteProperty"),
             int_property("m_ChapterID", chapter_id),
-            fstring("m_difficultyPreset"),
-            fstring("ObjectProperty"),
             str_property("m_MapName", map_name),
-            fstring("m_Date"),
-            fstring("StructProperty"),
-            fstring("DateTime"),
-            fstring("/Script/CoreUObject"),
             double_property("m_TimePlayed", time_played_seconds),
             double_property("m_TimeLoaded", 0.0),
             bool_property("m_QuickSave", quick_save),
@@ -14634,17 +14941,19 @@ mod tests {
         .concat()
     }
 
+    /// A byte-accurate `PersistentDataList.sav`: `m_SavedGamesPublicData` as a
+    /// real `MapProperty<Str, SaveGamePublicData>` and `m_Profiles` as a real
+    /// struct array, in the bare GVAS save-game framing.
+    ///
+    /// The earlier version of this fixture was flat FString soup — readable by
+    /// the lenient string scan, but not parsable by any strict reader. That is
+    /// why a rename leaving an enclosing size stale went unnoticed here while
+    /// the game dropped the renamed save from its load list.
     fn persistent_data_list(slots: &[(&str, &str, i32, &str, f64, bool, bool)]) -> Vec<u8> {
-        let mut out = b"GVAS".to_vec();
-        out.extend_from_slice(&fstring("/Script/Angelscript.GothicFinalList"));
-        out.extend_from_slice(&fstring("m_SavedGamesPublicData"));
-        out.extend_from_slice(&fstring("MapProperty"));
-        out.extend_from_slice(&fstring("StrProperty"));
-        out.extend_from_slice(&fstring("StructProperty"));
-        out.extend_from_slice(&fstring("SaveGamePublicData"));
-        out.extend_from_slice(&fstring("/Script/G1R"));
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&(slots.len() as u32).to_le_bytes());
         for (slot, name, chapter, map, time_played, quick, auto) in slots {
-            out.extend_from_slice(&persistent_slot_public_data(
+            map_body.extend_from_slice(&persistent_slot_public_data(
                 slot,
                 name,
                 *chapter,
@@ -14654,46 +14963,82 @@ mod tests {
                 *auto,
             ));
         }
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("StrProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key flags
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor("SaveGamePublicData"));
+        let public_data = inv_tagged(
+            "m_SavedGamesPublicData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
+
         let saved_slots = slots
             .iter()
             .map(|(slot, _, _, _, _, _, _)| *slot)
             .collect::<Vec<_>>();
-        out.extend_from_slice(&fstring("m_Profiles"));
-        out.extend_from_slice(&fstring("ArrayProperty"));
-        out.extend_from_slice(&fstring("StructProperty"));
-        out.extend_from_slice(&fstring("ProfileData"));
-        out.extend_from_slice(&fstring("/Script/G1R"));
-        out.extend_from_slice(&str_property("m_ProfileName", "0"));
-        out.extend_from_slice(&int_property("m_ProfileId", 0));
-        out.extend_from_slice(&string_array_property(
+        let mut profile = str_property("m_ProfileName", "0");
+        profile.extend_from_slice(&int_property("m_ProfileId", 0));
+        profile.extend_from_slice(&strict_string_array_property(
             "m_QuickSaveName",
             &["G1R-001", "G1R-002", "G1R-003"],
         ));
-        out.extend_from_slice(&string_array_property(
+        profile.extend_from_slice(&strict_string_array_property(
             "m_AutoSaveName",
             &["G1R-001", "G1R-002"],
         ));
-        out.extend_from_slice(&string_array_property("m_SavedSlotsNames", &saved_slots));
-        out.extend_from_slice(&fstring("m_difficultyPreset"));
-        out.extend_from_slice(&fstring("ObjectProperty"));
-        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/Normal"));
-        out.extend_from_slice(&fstring("m_customCombatSettings"));
-        out.extend_from_slice(&fstring("ObjectProperty"));
-        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/CombatDefault"));
-        out.extend_from_slice(&fstring("m_customResourcesSettings"));
-        out.extend_from_slice(&fstring("ObjectProperty"));
-        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/ResourcesDefault"));
-        out.extend_from_slice(&fstring("m_customProgressionSettings"));
-        out.extend_from_slice(&fstring("ObjectProperty"));
-        out.extend_from_slice(&fstring("/Game/G1R/Gameplay/Difficulty/ProgressionDefault"));
-        out.extend_from_slice(&bool_property("m_Survival", false));
-        out.extend_from_slice(&bool_property("m_PermanentDeath", false));
-        out.extend_from_slice(&bool_property("m_PermanentDeathGameOver", false));
-        out.extend_from_slice(&bool_property("m_FakeSloppyCombos", false));
-        out.extend_from_slice(&int_property("m_MaxQuick", 3));
-        out.extend_from_slice(&int_property("m_MaxAuto", 3));
+        profile.extend_from_slice(&strict_string_array_property(
+            "m_SavedSlotsNames",
+            &saved_slots,
+        ));
+        profile.extend_from_slice(&inv_object_property(
+            "m_difficultyPreset",
+            "/Game/G1R/Gameplay/Difficulty/Normal",
+        ));
+        profile.extend_from_slice(&inv_object_property(
+            "m_customCombatSettings",
+            "/Game/G1R/Gameplay/Difficulty/CombatDefault",
+        ));
+        profile.extend_from_slice(&inv_object_property(
+            "m_customResourcesSettings",
+            "/Game/G1R/Gameplay/Difficulty/ResourcesDefault",
+        ));
+        profile.extend_from_slice(&inv_object_property(
+            "m_customProgressionSettings",
+            "/Game/G1R/Gameplay/Difficulty/ProgressionDefault",
+        ));
+        profile.extend_from_slice(&bool_property("m_Survival", false));
+        profile.extend_from_slice(&bool_property("m_PermanentDeath", false));
+        profile.extend_from_slice(&bool_property("m_PermanentDeathGameOver", false));
+        profile.extend_from_slice(&bool_property("m_FakeSloppyCombos", false));
+        profile.extend_from_slice(&int_property("m_MaxQuick", 3));
+        profile.extend_from_slice(&int_property("m_MaxAuto", 3));
+        profile.extend_from_slice(&fstring("None"));
+
+        let mut profiles_body = 1u32.to_le_bytes().to_vec(); // element count
+        profiles_body.extend_from_slice(&profile);
+        let mut profiles_descriptor = 1u32.to_le_bytes().to_vec();
+        profiles_descriptor.extend_from_slice(&fstring("StructProperty"));
+        profiles_descriptor.extend_from_slice(&inv_struct_descriptor("ProfileData"));
+        let profiles = inv_tagged(
+            "m_Profiles",
+            "ArrayProperty",
+            &profiles_descriptor,
+            0,
+            &profiles_body,
+        );
+
+        let mut out = b"GVAS".to_vec();
+        out.extend_from_slice(&[0u8; 24]); // opaque version/custom-version filler
+        // The header ends with the save-game class name, directly before the
+        // property list (the bare GVAS framing parse_profile_file probes for).
+        out.extend_from_slice(&fstring("/Script/Angelscript.GothicFinalList"));
+        out.extend_from_slice(&public_data);
+        out.extend_from_slice(&profiles);
         out.extend_from_slice(&fstring("None"));
-        out.extend_from_slice(&fstring("SavedDataVersion"));
         out
     }
 
@@ -15132,6 +15477,66 @@ mod tests {
         assert!(response["backupPath"].as_str().unwrap().contains(".bak."));
         let info = inspect_save(&path, false).unwrap();
         assert_eq!(info["public"]["playerSaveName"], "Slot B");
+    }
+
+    /// A save's public payload the way the game really writes it: the metadata
+    /// properties sit INSIDE an enclosing struct, whose declared size has to
+    /// track any length change below it. The older flat fixture had no
+    /// enclosing size at all, so it could not catch a stale one.
+    fn nested_public_payload(player_save_name: &str) -> Vec<u8> {
+        let mut inner = str_property("m_SlotName", "G1R-005");
+        inner.extend_from_slice(&str_property("m_PlayerSaveName", player_save_name));
+        let mut out = inv_struct_property("CustomPayload", "SaveDataPayload", &inner);
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    #[test]
+    fn public_name_edit_keeps_the_enclosing_struct_size_in_step() {
+        // Renaming used to rewrite only the StrProperty's own size field. The
+        // enclosing struct kept declaring the old, longer body, which our own
+        // lenient string scan never noticed — but the game parses this block
+        // strictly and drops a save it cannot read from the load list.
+        let mut payload = nested_public_payload("Artefakte von uralter Macht, Tag 22, 21:09");
+        let before = properties::parse_property_list_root_at(&payload, 0).unwrap();
+        assert_eq!(
+            before.consumed,
+            payload.len(),
+            "fixture must parse end-to-end before the edit"
+        );
+
+        replace_str_property_fstring(&mut payload, "m_PlayerSaveName", "ZZZ-Test").unwrap();
+
+        let after = properties::parse_property_list_root_at(&payload, 0)
+            .expect("the renamed public payload must still parse");
+        assert_eq!(
+            after.consumed,
+            payload.len(),
+            "enclosing struct size left stale by the rename"
+        );
+        let segs =
+            properties::parse_path(&["CustomPayload".to_string(), "m_PlayerSaveName".to_string()])
+                .unwrap();
+        let renamed = properties::resolve(&after.properties, &segs).unwrap();
+        assert_eq!(
+            renamed.value,
+            properties::PropertyValue::Str("ZZZ-Test".to_string())
+        );
+    }
+
+    #[test]
+    fn public_name_edit_keeps_the_enclosing_struct_size_in_step_when_growing() {
+        let mut payload = nested_public_payload("Short");
+        replace_str_property_fstring(
+            &mut payload,
+            "m_PlayerSaveName",
+            "A considerably longer save name than before",
+        )
+        .unwrap();
+
+        let after = properties::parse_property_list_root_at(&payload, 0)
+            .expect("the renamed public payload must still parse");
+        assert_eq!(after.consumed, payload.len());
     }
 
     #[test]
@@ -15918,15 +16323,11 @@ mod tests {
             "PersistentDataList.sav.bak.250"
         );
         assert_eq!(companion_backups[0]["createdEpoch"], 250);
-        // The slot metadata is surfaced for display from the string scan. The
-        // status reflects STRICT profile validation: this fixture is a flat
-        // string-scan soup (not a byte-accurate typed GVAS), so the strict parse
-        // flags it — a real, byte-accurate profile backup reports "ok" and is
-        // restorable (covered by restore_backup_restores_..._directly).
-        assert_eq!(
-            companion_backups[0]["status"],
-            "invalid PersistentDataList structure"
-        );
+        // The slot metadata is surfaced for display from the string scan, and
+        // the status reflects STRICT profile validation: this fixture is a
+        // byte-accurate typed GVAS, so the strict parse accepts it and the
+        // backup is restorable.
+        assert_eq!(companion_backups[0]["status"], "ok");
         assert_eq!(companion_backups[0]["slotName"], "G1R-001");
         assert_eq!(
             companion_backups[0]["playerSaveName"],
@@ -18277,6 +18678,7 @@ mod tests {
             &refs,
             main_container.as_ref(),
             armor_slot.as_ref(),
+            &misaligned_slot_containers(&root),
         );
         let items = inv["items"].as_array().unwrap();
         let equipped: Vec<&str> = items
@@ -18356,6 +18758,7 @@ mod tests {
             &refs,
             main_container.as_ref(),
             armor_slot.as_ref(),
+            &misaligned_slot_containers(&root),
         );
         let items = inv["items"].as_array().unwrap();
         let worn = items
@@ -22686,6 +23089,35 @@ mod tests {
         }
     }
 
+    /// Every slot's `m_Id` in one container, in array order. Real saves always
+    /// yield `[0, 1, 2, …]` here (see [`normalize_slot_ids`]).
+    fn inv_slot_ids(payload: &[u8], container_index: usize) -> Vec<i32> {
+        let root = properties::parse_private_root(payload).unwrap();
+        let segs = properties::parse_path(&inv_slots_prefix(container_index)).unwrap();
+        let prop = properties::resolve(&root.properties, &segs).unwrap();
+        let properties::PropertyValue::Array { elements } = &prop.value else {
+            panic!("m_Slots is not an array");
+        };
+        elements
+            .iter()
+            .map(|slot| slot_id(slot).expect("every slot has m_Id"))
+            .collect()
+    }
+
+    /// The item-definition path of every slot in one container, in array order.
+    fn inv_slot_paths(payload: &[u8], container_index: usize) -> Vec<String> {
+        let root = properties::parse_private_root(payload).unwrap();
+        let segs = properties::parse_path(&inv_slots_prefix(container_index)).unwrap();
+        let prop = properties::resolve(&root.properties, &segs).unwrap();
+        let properties::PropertyValue::Array { elements } = &prop.value else {
+            panic!("m_Slots is not an array");
+        };
+        elements
+            .iter()
+            .map(|slot| slot_item_definition(slot).unwrap_or_default().to_string())
+            .collect()
+    }
+
     #[test]
     fn typed_inventory_fixture_resolves_like_real_saves() {
         // The fixture must satisfy the same invariants the prior investigation
@@ -22899,6 +23331,114 @@ mod tests {
                 == "/Script/Angelscript.ItMi_Sulfur"
                 && item["count"] == 7),
             "summary missing new item: {items:?}"
+        );
+    }
+
+    #[test]
+    fn add_item_appends_past_a_stateful_last_slot_and_keeps_ids_index_aligned() {
+        // Every container the game writes keeps `m_Id == slot index`, and its
+        // in-game remove/drop path resolves a slot by that id. Here the only
+        // clean template is slot 0, so cloning it IN PLACE would insert the new
+        // item at index 1 and push the stateful armor to index 2 while it keeps
+        // id 1 — an id/index mismatch that makes the game drop the wrong slot.
+        // The new slot must be appended at the END instead.
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItAr_Armor",
+                1,
+                &inv_nonempty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main_slots);
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 7,
+            actor_id: None,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                "/Script/Angelscript.ItAr_Armor".to_string(),
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            ],
+            "the new item must be appended last, leaving the stateful slot in place"
+        );
+    }
+
+    #[test]
+    fn add_item_repairs_ids_left_misaligned_by_an_earlier_edit() {
+        // A save an older build already corrupted: slot 1 carries id 5. The next
+        // structural edit re-aligns the whole container, so a user does not have
+        // to start over to get a save the game handles correctly again.
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                5,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main_slots);
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 1,
+            actor_id: None,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn inventory_summary_lists_every_stack_of_a_large_player_inventory() {
+        // A late-game player carries well over 200 stacks. The rows must not be
+        // capped below that: addItem appends at the end, so a cap would hide
+        // exactly the item that was just added while the add dialog (which uses
+        // the uncapped path set) still refuses to offer it a second time.
+        let main_slots: Vec<Vec<u8>> = (0..220)
+            .map(|index| {
+                inv_item_slot(
+                    index,
+                    INV_MAIN_LABEL,
+                    &format!("/Script/Angelscript.ItMi_Stack{index:03}"),
+                    1,
+                    &inv_empty_payload_map(),
+                )
+            })
+            .collect();
+        let payload = typed_inventory_private_payload(&[], &main_slots);
+        let refs = scan_fstrings(&payload, 0);
+        let summary = summarize_private_inventory_payload(&payload, &refs, None, None, &[]);
+
+        assert_eq!(summary["itemStackCount"], 220);
+        let items = summary["items"].as_array().unwrap();
+        assert_eq!(items.len(), 220, "the row list must not be truncated");
+        assert!(
+            items
+                .iter()
+                .any(|item| item["path"] == "/Script/Angelscript.ItMi_Stack219"),
+            "the last stack must be listed"
         );
     }
 
@@ -24138,8 +24678,8 @@ mod tests {
 
     #[test]
     fn remove_item_deletes_matching_slot_from_main_container() {
-        // Two slots; removing Orenugget must leave Apple intact and shrink the
-        // MainContainer slot count by one.
+        // Two slots; removing Orenugget must leave Apple where it is and blank
+        // the Orenugget slot — the array keeps its length.
         let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
         assert_eq!(inv_slot_count(&payload, 1), 2);
         let edit = PrivateInventoryRemoveItemEdit {
@@ -24150,17 +24690,19 @@ mod tests {
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
 
-        // Strict re-parse and slot count decreased by one.
-        assert_eq!(inv_slot_count(&payload, 1), 1);
-        let root = properties::parse_private_root(&payload).unwrap();
-        // The surviving slot is the OTHER item (Apple).
-        let prefix = inv_slots_prefix(1);
-        let mut def_path: Vec<&str> = prefix.iter().map(String::as_str).collect();
-        def_path.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
-        let definition = inv_resolve(&root, &def_path);
+        assert_eq!(inv_slot_count(&payload, 1), 2);
         assert_eq!(
-            definition.value,
-            properties::PropertyValue::Object("/Script/Angelscript.ItFo_Apple".to_string())
+            inv_slot_paths(&payload, 1),
+            vec!["".to_string(), "/Script/Angelscript.ItFo_Apple".to_string()]
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        let prefix = inv_slots_prefix(1);
+        let mut count_path: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        count_path.extend_from_slice(&["[0]", "m_SlotData", "m_ItemCount"]);
+        assert_eq!(
+            inv_resolve(&root, &count_path).value,
+            properties::PropertyValue::Int(0),
+            "a blanked slot must carry count 0"
         );
 
         // The inventory summary scan no longer lists the removed item, but does
@@ -24180,6 +24722,283 @@ mod tests {
                 .any(|item| item["path"] == "/Script/Angelscript.ItFo_Apple"),
             "survivor missing from summary: {items:?}"
         );
+    }
+
+    #[test]
+    fn remove_item_blanks_the_slot_without_moving_the_others() {
+        // The game addresses a slot by its position and never shrinks m_Slots.
+        // Splicing the slot out would shift every later slot one index down,
+        // away from the id the game resolves it by — which made a dropped item
+        // come back while an unrelated stack disappeared. Blank in place instead.
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                2,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Sulfur",
+                2,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main_slots);
+        let edit = PrivateInventoryRemoveItemEdit {
+            path: "/Script/Angelscript.ItFo_Apple".to_string(),
+            actor_id: None,
+            container_type: None,
+            slot_id: None,
+        };
+        apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
+
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                String::new(),
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            ],
+            "Sulfur must keep index 2; only the Apple slot is blanked"
+        );
+    }
+
+    #[test]
+    fn add_item_fills_the_first_blank_slot_instead_of_growing_the_array() {
+        // The game reuses a blanked slot before it grows m_Slots — that is why a
+        // picked-up item reappears in the middle of the inventory, not at its
+        // end. Filling the hole also keeps every slot's id in place.
+        let main_slots = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(1, INV_MAIN_LABEL, "", 0, &inv_empty_payload_map()),
+            inv_item_slot(
+                2,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main_slots);
+        let edit = PrivateInventoryAddItemEdit {
+            path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            count: 7,
+            actor_id: None,
+        };
+        apply_private_inventory_add_item_to_payload(&mut payload, &edit).unwrap();
+
+        assert_eq!(inv_slot_count(&payload, 1), 3, "the array must not grow");
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                "/Script/Angelscript.ItFo_Apple".to_string(),
+            ]
+        );
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1, 2]);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let prefix = inv_slots_prefix(1);
+        let mut count_path: Vec<&str> = prefix.iter().map(String::as_str).collect();
+        count_path.extend_from_slice(&["[1]", "m_SlotData", "m_ItemCount"]);
+        assert_eq!(
+            inv_resolve(&root, &count_path).value,
+            properties::PropertyValue::Int(7)
+        );
+    }
+
+    #[test]
+    fn misaligned_slot_containers_reports_only_damaged_containers() {
+        // A healthy save has m_Id == index everywhere; the scan must stay quiet
+        // for it, or the editor would nag about every save.
+        let healthy = typed_inventory_private_payload(&[], &default_main_slots());
+        let root = properties::parse_private_root(&healthy).unwrap();
+        assert!(misaligned_slot_containers(&root).is_empty());
+
+        // The damage an older build left: a slot carrying someone else's id.
+        let damaged_main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                5,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let damaged = typed_inventory_private_payload(&[], &damaged_main);
+        let root = properties::parse_private_root(&damaged).unwrap();
+        let found = misaligned_slot_containers(&root);
+        assert_eq!(found.len(), 1, "one container is damaged: {found:?}");
+        assert_eq!(found[0].1, 1, "one slot in it is misaligned");
+        assert!(
+            found[0].0.ends_with(&["m_Slots".to_string()]),
+            "the reported path must address the slot array: {:?}",
+            found[0].0
+        );
+    }
+
+    #[test]
+    fn repair_slots_realigns_every_damaged_container() {
+        // Both containers damaged: the repair walks the whole save, not just the
+        // player's MainContainer.
+        let other = vec![inv_item_slot(
+            9,
+            INV_OTHER_LABEL,
+            "/Script/Angelscript.ItMi_Sulfur",
+            1,
+            &inv_empty_payload_map(),
+        )];
+        let main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                7,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&other, &main);
+        apply_private_inventory_repair_slots_to_payload(&mut payload).unwrap();
+
+        assert_eq!(inv_slot_ids(&payload, 0), vec![0]);
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1]);
+        // Items and counts are untouched — only the ids move.
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                "/Script/Angelscript.ItFo_Apple".to_string(),
+            ]
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert!(misaligned_slot_containers(&root).is_empty());
+    }
+
+    #[test]
+    fn repair_slots_refuses_a_healthy_save() {
+        let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
+        let before = payload.clone();
+        let err = apply_private_inventory_repair_slots_to_payload(&mut payload).unwrap_err();
+        assert!(
+            err.to_string().contains("nothing to repair"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(payload, before, "a refused repair must not touch the save");
+    }
+
+    #[test]
+    fn inventory_summary_reports_and_offers_the_slot_repair() {
+        let damaged_main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItMi_Orenugget",
+                3,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                4,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+        ];
+        let payload = typed_inventory_private_payload(&[], &damaged_main);
+        let refs = scan_fstrings(&payload, 0);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let misaligned = misaligned_slot_containers(&root);
+        let summary = summarize_private_inventory_payload(&payload, &refs, None, None, &misaligned);
+
+        assert_eq!(summary["slotIntegrity"]["misalignedSlots"], 1);
+        assert_eq!(summary["slotIntegrity"]["containers"], 1);
+        assert!(
+            summary["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.inventory.repairSlots")),
+            "writable: {:?}",
+            summary["writable"]
+        );
+
+        // A healthy save reports zero and does not offer the repair.
+        let healthy = typed_inventory_private_payload(&[], &default_main_slots());
+        let refs = scan_fstrings(&healthy, 0);
+        let summary = summarize_private_inventory_payload(&healthy, &refs, None, None, &[]);
+        assert_eq!(summary["slotIntegrity"]["misalignedSlots"], 0);
+        assert!(
+            !summary["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.inventory.repairSlots"))
+        );
+    }
+
+    #[test]
+    fn remove_then_add_reuses_the_freed_slot() {
+        // Round trip: what removeItem blanks, the next addItem picks up again —
+        // so repeated editing never grows the slot array.
+        let mut payload = typed_inventory_private_payload(&[], &default_main_slots());
+        apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                actor_id: None,
+                container_type: None,
+                slot_id: None,
+            },
+        )
+        .unwrap();
+        apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                count: 2,
+                actor_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(inv_slot_count(&payload, 1), 2);
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                "/Script/Angelscript.ItFo_Apple".to_string(),
+            ]
+        );
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1]);
     }
 
     #[test]
@@ -24205,18 +25024,16 @@ mod tests {
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
 
-        // MainContainer shrank; the other container's copy is untouched.
-        assert_eq!(inv_slot_count(&payload, 1), 1);
+        // The MainContainer slot is blanked, not dropped; the other container's
+        // copy is untouched.
+        assert_eq!(inv_slot_count(&payload, 1), 2);
         assert_eq!(inv_slot_count(&payload, 0), 1);
-        let root = properties::parse_private_root(&payload).unwrap();
-        let main_prefix = inv_slots_prefix(1);
-        let mut main_def: Vec<&str> = main_prefix.iter().map(String::as_str).collect();
-        main_def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
         assert_eq!(
-            inv_resolve(&root, &main_def).value,
-            properties::PropertyValue::Object("/Script/Angelscript.ItFo_Apple".to_string()),
-            "MainContainer should retain only Apple after removing Orenugget"
+            inv_slot_paths(&payload, 1),
+            vec!["".to_string(), "/Script/Angelscript.ItFo_Apple".to_string()],
+            "MainContainer should hold only Apple plus the blanked slot"
         );
+        let root = properties::parse_private_root(&payload).unwrap();
         let other_prefix = inv_slots_prefix(0);
         let mut other_def: Vec<&str> = other_prefix.iter().map(String::as_str).collect();
         other_def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
@@ -24274,16 +25091,15 @@ mod tests {
             slot_id: None,
         };
         apply_private_inventory_remove_item_to_payload(&mut payload, &edit).unwrap();
-        // One Orenugget slot remains.
-        assert_eq!(inv_slot_count(&payload, 1), 1);
-        let root = properties::parse_private_root(&payload).unwrap();
-        let prefix = inv_slots_prefix(1);
-        let mut def: Vec<&str> = prefix.iter().map(String::as_str).collect();
-        def.extend_from_slice(&["[0]", "m_SlotData", "m_ItemDefinition"]);
+        // The first slot is blanked; the second Orenugget stays where it was.
         assert_eq!(
-            inv_resolve(&root, &def).value,
-            properties::PropertyValue::Object("/Script/Angelscript.ItMi_Orenugget".to_string())
+            inv_slot_paths(&payload, 1),
+            vec![
+                "".to_string(),
+                "/Script/Angelscript.ItMi_Orenugget".to_string()
+            ]
         );
+        assert_eq!(inv_slot_ids(&payload, 1), vec![0, 1]);
     }
 
     #[test]

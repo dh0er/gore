@@ -2682,4 +2682,27 @@ class AppLocalizationsFr extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Emplacements d’inventaire endommagés';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position. Dans le jeu, jeter un tel objet en supprime un autre.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Réparation en attente — enregistrez pour l’appliquer.';
+
+  @override
+  String get slotRepairAction => 'Réparer';
+
+  @override
+  String get slotRepairDiscard => 'Annuler';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Réparer $count emplacements d’inventaire ? Seuls les identifiants sont réécrits pour correspondre à leur position — aucun objet n’est ajouté, supprimé ni modifié. Une sauvegarde de secours est créée.';
+  }
 }

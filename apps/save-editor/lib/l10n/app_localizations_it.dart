@@ -2673,4 +2673,26 @@ class AppLocalizationsIt extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Slot dell’inventario danneggiati';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione. Nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Riparazione in coda — salva per applicarla.';
+
+  @override
+  String get slotRepairAction => 'Ripara';
+
+  @override
+  String get slotRepairDiscard => 'Annulla';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Riparare $count slot dell’inventario? Vengono riscritti solo gli id degli slot per farli corrispondere alla posizione: nessun oggetto viene aggiunto, rimosso o modificato. Viene creato un backup.';
+  }
 }

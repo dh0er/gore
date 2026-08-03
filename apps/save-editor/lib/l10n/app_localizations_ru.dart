@@ -2677,4 +2677,27 @@ class AppLocalizationsRu extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Повреждённые слоты инвентаря';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции. В игре при выбрасывании такого предмета исчезает другой.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Восстановление добавлено — сохраните, чтобы применить.';
+
+  @override
+  String get slotRepairAction => 'Восстановить';
+
+  @override
+  String get slotRepairDiscard => 'Отменить';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Восстановить $count слотов инвентаря? Переписываются только идентификаторы слотов, чтобы соответствовать их позиции: ни один предмет не добавляется, не удаляется и не изменяется. Резервная копия создаётся как обычно.';
+  }
 }

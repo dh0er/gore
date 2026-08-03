@@ -2668,4 +2668,27 @@ class AppLocalizationsDe extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Beschädigte Inventar-Slots';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt. Im Spiel verschwindet dadurch beim Ablegen ein anderes Item.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Reparatur vorgemerkt — zum Anwenden speichern.';
+
+  @override
+  String get slotRepairAction => 'Reparieren';
+
+  @override
+  String get slotRepairDiscard => 'Verwerfen';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return '$count Inventar-Slots reparieren? Es werden nur die Slot-Ids an ihre Position angepasst — kein Item wird hinzugefügt, entfernt oder verändert. Ein Backup wird wie üblich angelegt.';
+  }
 }

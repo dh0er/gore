@@ -2684,4 +2684,27 @@ class AppLocalizationsPl extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Uszkodzone sloty ekwipunku';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji. W grze wyrzucenie takiego przedmiotu usuwa inny.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Naprawa w kolejce — zapisz, aby ją zastosować.';
+
+  @override
+  String get slotRepairAction => 'Napraw';
+
+  @override
+  String get slotRepairDiscard => 'Odrzuć';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Naprawić $count slotów ekwipunku? Zmieniane są wyłącznie identyfikatory slotów, aby pasowały do pozycji — żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Kopia zapasowa zostanie utworzona.';
+  }
 }

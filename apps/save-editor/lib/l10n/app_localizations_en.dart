@@ -2653,4 +2653,26 @@ class AppLocalizationsEn extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Damaged inventory slots';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'This savegame holds $count inventory slots whose id no longer matches their position. In the game, dropping such an item removes a different one instead.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Repair queued — save to apply it.';
+
+  @override
+  String get slotRepairAction => 'Repair';
+
+  @override
+  String get slotRepairDiscard => 'Discard';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return 'Repair $count inventory slots? Only the slot ids are rewritten to match their positions — no item is added, removed or changed. A backup is created as usual.';
+  }
 }

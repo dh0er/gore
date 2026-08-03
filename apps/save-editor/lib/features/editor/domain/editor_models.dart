@@ -790,6 +790,7 @@ class PrivateInventorySummary {
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
+    this.misalignedSlots = 0,
   });
 
   factory PrivateInventorySummary.fromJson(Map<String, Object?>? json) {
@@ -825,6 +826,10 @@ class PrivateInventorySummary {
       writable:
           (json?['writable'] as List?)?.whereType<String>().toList() ??
           const [],
+      misalignedSlots:
+          ((json?['slotIntegrity'] as Map?)?['misalignedSlots'] as num?)
+              ?.toInt() ??
+          0,
     );
   }
 
@@ -844,6 +849,16 @@ class PrivateInventorySummary {
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
+
+  /// Inventory slots anywhere in the save whose stored id no longer matches the
+  /// position they sit in — damage an older version of this editor left behind.
+  /// The game resolves a slot by that position, so it acts on the wrong item
+  /// until the save is repaired.
+  final int misalignedSlots;
+
+  /// Whether the core offers the whole-save slot repair for this save.
+  bool get canRepairSlots =>
+      misalignedSlots > 0 && writable.contains('private.inventory.repairSlots');
 
   bool get hasData =>
       candidateCount > 0 ||

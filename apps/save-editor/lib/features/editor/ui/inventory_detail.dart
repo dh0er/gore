@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
+import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 
@@ -146,27 +147,58 @@ class InventoryDetail extends ConsumerWidget {
       canCompress: canCompress,
     );
     final hasItems = inspection.privateInventory.hasData;
+    // Damage an older build of this editor left in the save. Surfaced above the
+    // inventory because that is where its effect shows up in the game, but the
+    // repair covers every actor's inventory in one write.
+    final repairBanner = inspection.privateInventory.canRepairSlots
+        ? SlotRepairBanner(
+            notifier: notifier,
+            misalignedSlots: inspection.privateInventory.misalignedSlots,
+          )
+        : null;
     if (!hasItems &&
         !gates.canAddItem &&
         !gates.canRemoveItem &&
         !gates.canReset) {
-      return _MessagePane(
+      final message = _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
         body: l10n.inventoryNoStacks,
+      );
+      if (repairBanner == null) return message;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+            child: repairBanner,
+          ),
+          Expanded(child: message),
+        ],
       );
     }
     // Shared sub-tab layout (see CharactersTab): outer 20/top 8 around the
     // detail's Card.
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: _PrivateInventorySummaryCard(
-        inventory: inspection.privateInventory,
-        notifier: notifier,
-        editable: gates.editable,
-        canAddItem: gates.canAddItem,
-        canRemoveItem: gates.canRemoveItem,
-        canReset: gates.canReset,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (repairBanner != null) ...[
+            repairBanner,
+            const SizedBox(height: 12),
+          ],
+          Expanded(
+            child: _PrivateInventorySummaryCard(
+              inventory: inspection.privateInventory,
+              notifier: notifier,
+              editable: gates.editable,
+              canAddItem: gates.canAddItem,
+              canRemoveItem: gates.canRemoveItem,
+              canReset: gates.canReset,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -611,6 +643,17 @@ class _PrivateInventorySummaryCardState
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
         );
+    // Same resolution for the pending structural cards below, which are
+    // addressed by asset path (adds) or by a slot whose id may be empty
+    // (removes): recover the class id from the path so a queued row reads like
+    // the browse rows and like the add dialog, instead of falling back to the
+    // derived id-only name for items the catalog can actually name.
+    String pendingNameOf(String path, {String id = ''}) {
+      final classId = id.isEmpty ? _itemDisplayFromPath(path) : id;
+      return localizedGameName(locCatalog, lang, classId) ??
+          itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
+    }
+
     final groups = groupInventoryItems(items, displayNameOf: nameOf);
 
     // Keep the current category selected if it still has items, else fall
@@ -875,10 +918,7 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
-                title: itemDisplayNameFromId(
-                  _itemDisplayFromPath(add.path),
-                  fallback: l10n.fallbackItem,
-                ),
+                title: pendingNameOf(add.path),
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -893,9 +933,9 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.remove,
                 icon: Icons.delete_outline,
-                title: itemDisplayNameFromId(
-                  _itemDisplayFromPath(_pendingRemovePath!),
-                  fallback: l10n.fallbackItem,
+                title: pendingNameOf(
+                  _pendingRemovePath!,
+                  id: _pendingRemove!.id,
                 ),
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds

@@ -1,0 +1,242 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
+import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
+
+/// A savegame an older build damaged — slots whose id no longer matches their
+/// position — must be called out, and the repair must reach the core as
+/// `private.inventory.repairSlots`. A healthy save must stay quiet.
+void main() {
+  Future<void> pumpApp(WidgetTester tester, GoresaveCoreService core) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> openPlayerInventory(WidgetTester tester) async {
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('a damaged save is flagged and the repair reaches the core', (
+    tester,
+  ) async {
+    final core = _InventoryCoreService(misalignedSlots: 3);
+    await pumpApp(tester, core);
+    await openPlayerInventory(tester);
+
+    expect(find.text('Damaged inventory slots'), findsOneWidget);
+    expect(
+      find.textContaining('3 inventory slots whose id no longer matches'),
+      findsOneWidget,
+    );
+
+    // Repair asks first — the user confirms before anything is queued.
+    await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Repair'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Repair queued'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
+    await tester.pumpAndSettle();
+    final write = core.requests.lastWhere((r) => r.command == 'write_save');
+    final edits = (write.payload['edits'] as List).cast<Map<String, Object?>>();
+    expect(edits, hasLength(1));
+    expect(edits.single['path'], 'private.inventory.repairSlots');
+  });
+
+  testWidgets('a healthy save shows no repair banner', (tester) async {
+    await pumpApp(tester, _InventoryCoreService(misalignedSlots: 0));
+    await openPlayerInventory(tester);
+
+    expect(find.text('Damaged inventory slots'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
+  });
+}
+
+class _RecordedRequest {
+  const _RecordedRequest(this.command, this.payload);
+  final String command;
+  final Map<String, Object?> payload;
+}
+
+/// Player inventory with one item; `misalignedSlots` drives the damage report.
+class _InventoryCoreService implements GoresaveCoreService {
+  _InventoryCoreService({required this.misalignedSlots});
+
+  final int misalignedSlots;
+  final requests = <_RecordedRequest>[];
+
+  static const _cheesePath = '/Script/Angelscript.ItFo_Cheese';
+
+  @override
+  String get description => 'slot-repair-fake-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    requests.add(_RecordedRequest(command, Map<String, Object?>.from(payload)));
+    switch (command) {
+      case 'scan_save_dir':
+        return {
+          'ok': true,
+          'data': {
+            'saveRoot': r'C:\tmp\saves',
+            'saves': [
+              {
+                'path': r'C:\tmp\saves\G1R-001.sav',
+                'slot': 'G1R-001',
+                'format': 'GSAV',
+                'fileSize': 914367,
+                'sha1': 'abc',
+                'status': 'ok',
+                'persistentProfileId': 0,
+                'playerSaveName': 'Save',
+                'chapterId': 1,
+                'autoSave': true,
+                'slotName': 'G1R-001',
+              },
+            ],
+            'profiles': [
+              {
+                'profileId': 0,
+                'profileName': '0',
+                'quickSaveSlots': <String>[],
+                'autoSaveSlots': <String>[],
+                'savedSlots': ['G1R-001'],
+              },
+            ],
+            'activeProfileId': 0,
+          },
+        };
+      case 'inspect_save':
+        return {
+          'ok': true,
+          'data': {
+            'format': 'GSAV',
+            'path': payload['path'],
+            'slot': 'G1R-001',
+            'size': 914367,
+            'sha1': 'abc',
+            'public': {'slotName': 'G1R-001', 'playerSaveName': 'Save'},
+            'private': {
+              'status': 'decoded',
+              'preview': false,
+              'decompressedSize': 9,
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
+              'player': {
+                'saveVersionNumber': 17,
+                'playerName': 'Hero',
+                'attributes': <Object?>[],
+                'writable': <String>[],
+              },
+              'inventory': {
+                'itemStackCount': 1,
+                'itemScope': 'player_inventory_region',
+                'items': [
+                  {
+                    'id': 'ItFo_Cheese',
+                    'path': _cheesePath,
+                    'count': 3,
+                    'removable': true,
+                    'slotId': 0,
+                    'containerType': 'MainContainer',
+                  },
+                ],
+                'mainContainerPaths': [_cheesePath],
+                'slotIntegrity': {
+                  'misalignedSlots': misalignedSlots,
+                  'containers': misalignedSlots > 0 ? 1 : 0,
+                },
+                'writable': [
+                  'private.inventory.setItemCount',
+                  if (misalignedSlots > 0) 'private.inventory.repairSlots',
+                ],
+              },
+            },
+          },
+        };
+      case 'list_backups':
+        return {
+          'ok': true,
+          'data': {
+            'path': payload['path'],
+            'backups': <Object?>[],
+            'companionBackups': <Object?>[],
+          },
+        };
+      case 'check_codec':
+        return {
+          'ok': true,
+          'data': {
+            'available': true,
+            'canDecompress': true,
+            'canCompress': true,
+            'status': 'ready',
+            'adapter': 'pure_rust_kraken',
+            'message': 'Codec host is ready.',
+          },
+        };
+      case 'private.characters.list':
+        return {
+          'ok': true,
+          'data': {'total': 0, 'characters': <Object?>[]},
+        };
+      case 'private.npc.list':
+        return {
+          'ok': true,
+          'data': {
+            'total': 0,
+            'offset': 0,
+            'limit': payload['limit'] ?? 100,
+            'count': 0,
+            'npcs': <Object?>[],
+          },
+        };
+      case 'write_save':
+        return {
+          'ok': true,
+          'data': {'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1'},
+        };
+      default:
+        return {
+          'ok': false,
+          'error': {'message': 'Unhandled fake command $command'},
+        };
+    }
+  }
+}

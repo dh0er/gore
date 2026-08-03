@@ -2667,4 +2667,26 @@ class AppLocalizationsEs extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Ranuras de inventario dañadas';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición. En el juego, soltar uno de esos objetos elimina otro distinto.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparación pendiente: guarda para aplicarla.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return '¿Reparar $count ranuras de inventario? Solo se reescriben los id de las ranuras para que coincidan con su posición: no se añade, elimina ni cambia ningún objeto. Se crea una copia de seguridad.';
+  }
 }

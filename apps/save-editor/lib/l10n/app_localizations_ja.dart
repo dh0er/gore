@@ -2606,4 +2606,26 @@ class AppLocalizationsJa extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'インベントリスロットの破損';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。';
+  }
+
+  @override
+  String get slotRepairQueued => '修復を予約しました。保存すると適用されます。';
+
+  @override
+  String get slotRepairAction => '修復';
+
+  @override
+  String get slotRepairDiscard => '取り消す';
+
+  @override
+  String slotRepairConfirm(int count) {
+    return '$count 個のインベントリスロットを修復しますか？ スロット ID を位置に合わせて書き直すだけで、アイテムの追加・削除・変更は行いません。バックアップは通常どおり作成されます。';
+  }
 }
