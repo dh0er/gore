@@ -44,28 +44,32 @@ To run it straight from a checkout, with no marketplace and no install:
 claude --plugin-dir path\to\gore\plugins\gore
 ```
 
-Codex and Cursor read their own manifests, which the plugin also carries
-(`.codex-plugin/`, `.cursor-plugin/`). Neither is as settled as Claude Code, so
-what follows is the half that is certain: both have a supported home for a
-server and a supported home for a skill, and neither needs this plugin to use
-them.
+### Codex and Cursor
 
-**Codex.** `codex plugin` and `codex mcp` are two different things there —
-servers live in `~/.codex/config.toml` under `[mcp_servers.*]`, and no installed
-Codex plugin carries an `.mcp.json` at all — so the server is its own command.
-Codex takes a local marketplace, which is the shortest route to the skill:
+All three clients bundle MCP servers into plugins, and all three want it spelled
+their own way — so this repository carries a marketplace manifest for each:
+
+| Client | Marketplace manifest | Plugin manifest | MCP config |
+|---|---|---|---|
+| Claude Code | `.claude-plugin/marketplace.json` | `.claude-plugin/plugin.json` | `.mcp.json` |
+| Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `.mcp.json` |
+| Cursor | `.cursor-plugin/marketplace.json` | `.cursor-plugin/plugin.json` | `mcp.json` |
+
+The two MCP files are the same configuration under the two names different
+clients look for, and `scripts/check_plugin.py` keeps every one of these in step.
+
+**Codex** takes a local marketplace directly, which makes it the easiest of the
+three to try from a checkout:
 
 ```powershell
-codex mcp add gore -- gore mcp serve
 codex plugin marketplace add C:\path\to\gore
 codex plugin add gore@gore
 ```
 
-**Cursor** has no command-line install for plugins; that lives in the app. Its
-plugin cache does hold Claude-format plugins complete with `.mcp.json` and
-`skills/`, at least one of them carrying no `.cursor-plugin/` manifest at all —
-evidence that it reads the whole Claude layout, but not a test result. The route
-that needs no plugin at all is two steps:
+**Cursor** has no command-line install for plugins, and a marketplace of your own
+is a Teams or Enterprise feature — Dashboard → Plugins → Add Marketplace, pointed
+at this repository. The public marketplace takes submissions, reviewed by hand.
+Without either, install nothing and wire the two halves up yourself:
 
 ```powershell
 cursor --add-mcp '{"name":"gore","command":"gore","args":["mcp","serve"]}'
@@ -249,12 +253,21 @@ approval layer — you can answer once at startup instead:
 gore mcp serve --allow-write
 ```
 
-**If you installed the plugin, the variables are the only route.** A plugin's
-`.mcp.json` carries a fixed `args` array and nothing between it and the server
-can add to it, so there is nowhere to type a flag. Set the variable in whatever
-your client launches from — the shell it inherits, or its own environment
-settings — and restart it, since a running process keeps the environment it
-started with:
+**Under the plugin, these are the route.** A plugin's MCP config carries a fixed
+`args` array and nothing between it and the server can add to it, so there is
+nowhere to type a flag — but `env` is part of that same config, and the plugin
+maps both permissions through it.
+
+In Claude Code you never touch a variable: the plugin declares them under
+`userConfig`, so enabling it asks you, in a dialog, whether GORE may change the
+game without confirming each time. Leave both off unless you have a reason.
+`${user_config.…}` is a Claude Code substitution; Codex and Cursor read the same
+file and pass the text through untouched, which the server reads as "not set"
+rather than as an error.
+
+Anywhere else, set the variable in whatever your client launches from — the shell
+it inherits, or its own environment settings — and restart it, since a running
+process keeps the environment it started with:
 
 ```powershell
 $env:GORE_MCP_ALLOW_WRITE = '1'

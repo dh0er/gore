@@ -98,6 +98,8 @@ gore/
 │  └─ mod-manager/         Flutter (Windows) multi-mod library/load-order/apply GUI
 ├─ plugins/
 │  └─ gore/                assistant plugin: the MCP server registration + the gore-modding skill
+├─ .claude-plugin/ · .cursor-plugin/ · .agents/plugins/
+│                          one marketplace manifest per client, all offering plugins/gore
 ├─ lua/                    gore-lua UE4SS helper library (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
 │  ├─ example/             sample mod using gore-lua
@@ -195,8 +197,10 @@ python scripts/check_docs_links.py
 ```
 
 The plugin is described three times over — once each for Claude Code, Codex and
-Cursor — and every copy hand-carries a name and a version. That they still agree,
-and that what they point at exists, is checked by:
+Cursor — and so is the marketplace that offers it, in three shapes at three paths
+(`.claude-plugin/`, `.agents/plugins/`, `.cursor-plugin/`). Every copy
+hand-carries a name. That they still agree, and that what they point at exists,
+is checked by:
 
 ```powershell
 python scripts/check_plugin.py

@@ -1,0 +1,19 @@
+{
+  "name": "gore",
+  "interface": {
+    "displayName": "GORE"
+  },
+  "plugins": [
+    {
+      "name": "gore",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gore"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

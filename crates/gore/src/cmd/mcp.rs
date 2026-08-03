@@ -78,7 +78,16 @@ fn with_environment(
 /// Refusing to start says which variable, and is the only answer that cannot mislead.
 fn switched_on(name: &str, raw: Option<String>) -> Result<bool> {
     let Some(raw) = raw else { return Ok(false) };
-    match raw.trim().to_ascii_lowercase().as_str() {
+    let raw = raw.trim();
+    // A placeholder that arrived verbatim. The plugin's `.mcp.json` maps these variables from
+    // `${user_config.…}`, which only Claude Code expands — Codex and Cursor read the same file and
+    // pass the text through untouched. Refusing there would mean the plugin installs cleanly on two
+    // clients and then starts no server at all, over a permission the user never asked for. An
+    // unexpanded placeholder says exactly as much as an unset variable, so it is read the same way.
+    if raw.starts_with("${") && raw.ends_with('}') {
+        return Ok(false);
+    }
+    match raw.to_ascii_lowercase().as_str() {
         "" | "0" | "false" | "no" | "off" => Ok(false),
         "1" | "true" | "yes" | "on" => Ok(true),
         other => bail!(
@@ -199,6 +208,23 @@ mod tests {
             assert!(!resolved.allow_write, "{off:?} must not pre-approve anything");
         }
         assert!(!with_env(flags(), &[]).expect("valid").allow_write);
+    }
+
+    #[test]
+    fn a_placeholder_no_client_expanded_is_read_as_unset() {
+        // The plugin's `.mcp.json` is read by all three clients, and only Claude Code expands
+        // `${user_config.…}`. If the other two turned that text into a refusal, installing the
+        // plugin there would leave the user with no server and an error about a permission they
+        // never touched.
+        for untouched in [
+            "${user_config.allow_write}",
+            "${user_config.allow_game_launch}",
+            "  ${anything at all}  ",
+        ] {
+            let resolved = with_env(flags(), &[(ALLOW_WRITE_ENV, untouched)])
+                .unwrap_or_else(|error| panic!("{untouched:?} must be tolerated: {error}"));
+            assert!(!resolved.allow_write, "{untouched:?} must not pre-approve anything");
+        }
     }
 
     #[test]

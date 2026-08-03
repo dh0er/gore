@@ -55,8 +55,15 @@ not the plugin. Fix that and restart the client.
 
 | | |
 |---|---|
-| `.mcp.json` | the server: every `gore` command, as twelve command-family tools plus `gore_guide` and `gore_help` |
+| `.mcp.json`, `mcp.json` | the server: every `gore` command, as twelve command-family tools plus `gore_guide` and `gore_help`. One configuration under the two names the three clients look for |
 | `skills/gore-modding/` | when to reach for which tool, the consent gate, and what a deploy does and does not prove |
+| `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` | the same plugin, described the way each client wants it |
+
+Enabling the plugin in Claude Code asks whether GORE may change your game
+installation without confirming each call, and whether it may start the game to
+compile AngelScript. Both are off unless you say otherwise; they map to
+`GORE_MCP_ALLOW_WRITE` and `GORE_MCP_ALLOW_GAME_LAUNCH`, which is also how to set
+them on a client that does not ask.
 
 The skill deliberately carries no asset paths, ids or sample names. Everything
 factual lives in the guide compiled into `gore.exe`, which is therefore always
