@@ -22,7 +22,7 @@ bool slotRepairAvailable(
     canCompress;
 
 /// Warns that this savegame carries inventory slots whose stored id no longer
-/// matches the position they sit in, and offers the one-click repair.
+/// matches the position they sit in, and offers the repair.
 ///
 /// The game addresses an inventory slot by its position; older versions of this
 /// editor inserted and deleted slots in a way that moved items away from the id
