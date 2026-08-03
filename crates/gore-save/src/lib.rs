@@ -1493,7 +1493,18 @@ fn backup_names_path(save_path: &Path) -> PathBuf {
 /// Read the label map for `save_path`'s folder. A missing or unreadable file
 /// yields an empty map: labels are decoration, never a reason to fail a listing.
 fn read_backup_names(save_path: &Path) -> HashMap<String, String> {
-    read_backup_names_strict(save_path).unwrap_or_default()
+    let Ok(text) = fs::read_to_string(backup_names_path(save_path)) else {
+        return HashMap::new();
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
+        return HashMap::new();
+    };
+    // Whatever can be read is shown; an entry that is not text is simply not a
+    // label. A mutation goes through the strict reader instead, which refuses
+    // the file rather than dropping such an entry on the next write.
+    map.into_iter()
+        .filter_map(|(key, value)| Some((key, value.as_str()?.to_string())))
+        .collect()
 }
 
 /// The label map, with an existing-but-unreadable file reported as an error.
@@ -1521,10 +1532,20 @@ fn read_backup_names_strict(save_path: &Path) -> Result<HashMap<String, String>,
             path.display()
         )));
     };
-    Ok(map
-        .into_iter()
-        .filter_map(|(key, value)| Some((key, value.as_str()?.to_string())))
-        .collect())
+    // Every entry has to be readable, not just most: dropping one here and
+    // saving the rest back would destroy it, which is exactly what the strict
+    // read exists to prevent.
+    let mut names = HashMap::new();
+    for (key, value) in map {
+        let Value::String(label) = value else {
+            return Err(CoreError::Parse(format!(
+                "{} holds a non-text label for {key}",
+                path.display()
+            )));
+        };
+        names.insert(key, label);
+    }
+    Ok(names)
 }
 
 /// Persist the label map, creating the backups folder if needed. An empty map
@@ -16394,39 +16415,59 @@ mod tests {
         // Once the file is gone the deletion cannot be taken back. Failing the
         // call over the label file would tell the user it did not happen, leave
         // the stale entry on screen, and leave nothing to retry.
+        //
+        // The failure is injected through the label file's CONTENT rather than
+        // its permissions: replacing a file's directory entry depends on the
+        // parent directory, so a read-only label file would not stop the write
+        // on Unix and the warning path would never run there.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
         let subfolder = dir.path().join("goresave_backups");
         fs::create_dir_all(&subfolder).unwrap();
-        let doomed = subfolder.join("G1R-001.sav.bak.100");
-        let kept = subfolder.join("G1R-001.sav.bak.200");
+        let backup = subfolder.join("G1R-001.sav.bak.100");
         fs::write(&path, minimal_gsav("Live")).unwrap();
-        fs::write(&doomed, minimal_gsav("Doomed")).unwrap();
-        fs::write(&kept, minimal_gsav("Kept")).unwrap();
-        rename_backup(&path, &doomed, "before the boss").unwrap();
-        // A second label keeps the map non-empty, so tidying up REWRITES the
-        // file rather than removing it.
-        rename_backup(&path, &kept, "after the boss").unwrap();
-
-        // Readable but not writable: the label lookup works, only the rewrite
-        // fails.
+        fs::write(&backup, minimal_gsav("Backup")).unwrap();
         let names_file = backup_names_path(&path);
-        let mut permissions = fs::metadata(&names_file).unwrap().permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&names_file, permissions).unwrap();
+        let damaged = "{\"G1R-001.sav.bak.100\": \"before the boss\"";
+        fs::write(&names_file, damaged).unwrap();
 
-        let response = delete_backup(&path, &doomed).unwrap();
+        let response = delete_backup(&path, &backup).unwrap();
         assert_eq!(response["deleted"], true);
-        assert!(!doomed.exists(), "the file is gone either way");
+        assert!(!backup.exists(), "the file is gone either way");
         assert!(
             response["labelWarning"].is_string(),
             "the caller is told the label could not be tidied: {response}"
         );
+        assert_eq!(
+            fs::read_to_string(&names_file).unwrap(),
+            damaged,
+            "the salvageable file is left exactly as it was"
+        );
+    }
 
-        // Let the temp dir clean itself up again.
-        let mut permissions = fs::metadata(&names_file).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&names_file, permissions).unwrap();
+    #[test]
+    fn a_label_that_is_not_text_blocks_a_rewrite_instead_of_vanishing() {
+        // Valid JSON, unreadable entry. Dropping it and saving the rest back
+        // would destroy it for good, so the mutation refuses instead.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.100");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&backup, minimal_gsav("Backup")).unwrap();
+        let names_file = backup_names_path(&path);
+        let odd = "{\"G1R-001.sav.bak.200\": 5}";
+        fs::write(&names_file, odd).unwrap();
+
+        let err = rename_backup(&path, &backup, "new name").unwrap_err();
+        assert!(
+            err.to_string().contains("non-text label"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read_to_string(&names_file).unwrap(), odd);
+        // Listing stays forgiving: the odd entry is not a label, the rest is.
+        assert!(list_save_backups(&path).unwrap()[0].name.is_none());
     }
 
     #[test]
