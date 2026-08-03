@@ -699,5 +699,6 @@
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "slotRepairUnavailable": "Naprawa nie jest teraz możliwa — tego zapisu gry nie da się zapisać.",
   "editorDeletedBackupWithLabelWarning": "Usunięto kopię zapasową: {path} — nie udało się usunąć jej nazwy: {details}",
-  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
+  "slotRepairNotOffered": "Naprawa nie jest dostępna dla tego zapisu gry."
 }

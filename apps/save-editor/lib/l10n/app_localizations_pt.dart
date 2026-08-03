@@ -2744,6 +2744,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5485,4 +5489,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }

@@ -1100,7 +1100,7 @@ class _OverviewPanel extends StatelessWidget {
           SlotRepairBanner(
             notifier: notifier,
             misalignedSlots: inspection.privateInventory.misalignedSlots,
-            canRepair: canQueueSlotRepair(
+            availability: slotRepairAvailability(
               inspection,
               canCompress: state.codecCompressReady,
             ),

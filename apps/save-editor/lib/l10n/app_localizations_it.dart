@@ -2749,4 +2749,8 @@ class AppLocalizationsIt extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Backup eliminato: $path — non è stato possibile rimuoverne il nome: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La riparazione non è disponibile per questo salvataggio.';
 }

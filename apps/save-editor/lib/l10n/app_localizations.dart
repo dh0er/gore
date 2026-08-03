@@ -4199,6 +4199,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Backup deleted: {path} — its name could not be removed: {details}'**
   String editorDeletedBackupWithLabelWarning(String path, String details);
+
+  /// No description provided for @slotRepairNotOffered.
+  ///
+  /// In en, this message translates to:
+  /// **'The repair is not available for this savegame.'**
+  String get slotRepairNotOffered;
 }
 
 class _AppLocalizationsDelegate

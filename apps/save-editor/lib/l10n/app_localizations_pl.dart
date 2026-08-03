@@ -2761,4 +2761,8 @@ class AppLocalizationsPl extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Usunięto kopię zapasową: $path — nie udało się usunąć jej nazwy: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Naprawa nie jest dostępna dla tego zapisu gry.';
 }

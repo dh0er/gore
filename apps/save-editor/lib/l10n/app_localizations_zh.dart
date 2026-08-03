@@ -2652,6 +2652,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return '已删除备份：$path — 但无法移除其名称：$details';
   }
+
+  @override
+  String get slotRepairNotOffered => '此存档不支持修复。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -5302,4 +5305,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return '已删除备份：$path — 但无法移除其名称：$details';
   }
+
+  @override
+  String get slotRepairNotOffered => '此存档不支持修复。';
 }

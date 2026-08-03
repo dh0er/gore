@@ -14,18 +14,40 @@ import 'package:goresave/providers/data_providers.dart';
 bool slotRepairWarranted(SaveInspection inspection) =>
     inspection.privateInventory.misalignedSlots > 0;
 
-/// Whether the repair can actually be queued: the core has to offer it, and it
-/// is a private write, so it takes the same capability every other inventory
-/// action is gated on — without either, the action could be queued but never
+/// Why the repair can or cannot be queued. The two obstacles read differently to
+/// a user — one is about this save's write capability, the other about the
+/// repair not being on offer at all — so they are kept apart rather than
+/// collapsed into one "unavailable".
+enum SlotRepairAvailability {
+  /// Offered and writable: the action can be queued.
+  available,
+
+  /// The core does not advertise the repair for this save, while other edits
+  /// may well be fine.
+  notOffered,
+
+  /// Offered, but this save cannot take a private write right now.
+  notWritable,
+}
+
+/// Which of the above applies. Repairing is a private write, so it takes the
+/// same capability every other inventory action is gated on; without it — or
+/// without the core offering the op — the action could be queued but never
 /// applied.
-bool canQueueSlotRepair(
+SlotRepairAvailability slotRepairAvailability(
   SaveInspection inspection, {
   required bool canCompress,
-}) =>
-    inspection.privateInventory.canRepairSlots &&
-    inspection.privateEditable &&
-    inspection.privateTypedVerified &&
-    canCompress;
+}) {
+  if (!inspection.privateInventory.canRepairSlots) {
+    return SlotRepairAvailability.notOffered;
+  }
+  if (!inspection.privateEditable ||
+      !inspection.privateTypedVerified ||
+      !canCompress) {
+    return SlotRepairAvailability.notWritable;
+  }
+  return SlotRepairAvailability.available;
+}
 
 /// Warns that this savegame carries inventory slots whose stored id no longer
 /// matches the position they sit in, and offers the repair.
@@ -43,7 +65,7 @@ class SlotRepairBanner extends ConsumerWidget {
     super.key,
     required this.notifier,
     required this.misalignedSlots,
-    required this.canRepair,
+    required this.availability,
   });
 
   final EditorNotifier notifier;
@@ -51,10 +73,10 @@ class SlotRepairBanner extends ConsumerWidget {
   /// How many slots across the whole save are affected.
   final int misalignedSlots;
 
-  /// Whether this session can write the repair. When false the warning still
-  /// shows — the save is damaged either way — but the action is replaced by the
-  /// reason it is unavailable.
-  final bool canRepair;
+  /// Whether the repair can be queued, and if not, why. The warning shows
+  /// either way — the save is damaged regardless — but anything other than
+  /// [SlotRepairAvailability.available] replaces the action with its reason.
+  final SlotRepairAvailability availability;
 
   /// Pending-edit registry key. One per save; the repair is whole-save.
   static const String pendingKey = 'inventoryRepair';
@@ -100,10 +122,12 @@ class SlotRepairBanner extends ConsumerWidget {
                       color: scheme.onErrorContainer,
                     ),
                   ),
-                  if (!canRepair) ...[
+                  if (availability != SlotRepairAvailability.available) ...[
                     const SizedBox(height: 4),
                     Text(
-                      l10n.slotRepairUnavailable,
+                      availability == SlotRepairAvailability.notOffered
+                          ? l10n.slotRepairNotOffered
+                          : l10n.slotRepairUnavailable,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: scheme.onErrorContainer,
                         fontStyle: FontStyle.italic,
@@ -113,7 +137,7 @@ class SlotRepairBanner extends ConsumerWidget {
                 ],
               ),
             ),
-            if (canRepair) ...[
+            if (availability == SlotRepairAvailability.available) ...[
               const SizedBox(width: 12),
               if (queued)
                 TextButton(

@@ -2681,4 +2681,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'バックアップを削除しました: $path — その名前は削除できませんでした: $details';
   }
+
+  @override
+  String get slotRepairNotOffered => 'このセーブデータでは修復を利用できません。';
 }

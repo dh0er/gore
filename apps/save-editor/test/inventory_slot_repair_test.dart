@@ -177,6 +177,24 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
   });
 
+  testWidgets('a repair that is not offered says so, not "cannot be written"', (
+    tester,
+  ) async {
+    // Two different obstacles: this save could take a write, the repair is just
+    // not on offer for it. Saying it cannot be written would be untrue.
+    await pumpApp(
+      tester,
+      _InventoryCoreService(misalignedSlots: 3, offersRepair: false),
+    );
+    await openPlayerInventory(tester);
+
+    expect(
+      find.textContaining('not available for this savegame'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('cannot be written'), findsNothing);
+  });
+
   testWidgets('damage without an offered repair still warns', (tester) async {
     // The count and the op are separate signals. A save reported as damaged by
     // a core that offers no repair must still say so — silence would leave the

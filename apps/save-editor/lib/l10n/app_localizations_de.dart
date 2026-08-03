@@ -2745,4 +2745,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Backup gelöscht: $path — sein Name konnte nicht entfernt werden: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Für dieses Savegame steht die Reparatur nicht zur Verfügung.';
 }

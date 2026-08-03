@@ -2743,4 +2743,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Copia de seguridad eliminada: $path: no se pudo quitar su nombre: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La reparación no está disponible para esta partida guardada.';
 }

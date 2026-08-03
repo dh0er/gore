@@ -699,5 +699,6 @@
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "slotRepairUnavailable": "La riparazione non è possibile al momento: questo salvataggio non può essere scritto.",
   "editorDeletedBackupWithLabelWarning": "Backup eliminato: {path} — non è stato possibile rimuoverne il nome: {details}",
-  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
+  "slotRepairNotOffered": "La riparazione non è disponibile per questo salvataggio."
 }

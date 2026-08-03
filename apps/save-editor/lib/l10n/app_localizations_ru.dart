@@ -2754,4 +2754,8 @@ class AppLocalizationsRu extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Копия удалена: $path — её название убрать не удалось: $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Для этого сохранения восстановление недоступно.';
 }

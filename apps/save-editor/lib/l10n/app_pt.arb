@@ -699,5 +699,6 @@
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "slotRepairUnavailable": "No momento não é possível reparar — este jogo salvo não pode ser gravado.",
   "editorDeletedBackupWithLabelWarning": "Backup excluído: {path} — não foi possível remover o nome dele: {details}",
-  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
+  "slotRepairNotOffered": "O reparo não está disponível para este jogo salvo."
 }

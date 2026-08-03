@@ -131,7 +131,7 @@ class InventoryDetail extends ConsumerWidget {
                 child: SlotRepairBanner(
                   notifier: notifier,
                   misalignedSlots: inspection.privateInventory.misalignedSlots,
-                  canRepair: canQueueSlotRepair(
+                  availability: slotRepairAvailability(
                     inspection,
                     canCompress: canCompress,
                   ),

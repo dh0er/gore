@@ -710,5 +710,6 @@
   "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "slotRepairUnavailable": "La réparation n’est pas possible pour l’instant — cette sauvegarde ne peut pas être écrite.",
   "editorDeletedBackupWithLabelWarning": "Sauvegarde supprimée : {path} — son nom n’a pas pu être supprimé : {details}",
-  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}}
+  "@editorDeletedBackupWithLabelWarning": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
+  "slotRepairNotOffered": "La réparation n’est pas disponible pour cette sauvegarde."
 }

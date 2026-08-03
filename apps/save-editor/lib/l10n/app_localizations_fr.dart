@@ -2759,4 +2759,8 @@ class AppLocalizationsFr extends AppLocalizations {
   String editorDeletedBackupWithLabelWarning(String path, String details) {
     return 'Sauvegarde supprimée : $path — son nom n’a pas pu être supprimé : $details';
   }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La réparation n’est pas disponible pour cette sauvegarde.';
 }
