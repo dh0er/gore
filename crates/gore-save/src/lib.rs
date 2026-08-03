@@ -1583,6 +1583,48 @@ where
     }))
 }
 
+/// Delete the label map, but only while it still holds `expected`.
+///
+/// Checking and then deleting leaves a window in which another editor publishes
+/// a fresh map that this delete then throws away. So the file is first moved
+/// aside — one atomic step that also takes it out of everyone else's way — and
+/// only dropped for good once the claimed bytes turn out to be the expected
+/// ones. Anything else goes back where it came from.
+fn remove_backup_names(path: &Path, expected: &FileSnapshot) -> Result<(), CoreError> {
+    let claim = ScratchFile::create(path, "claim-labels", &[])?;
+    // The scratch file only reserved a free name; the claim is the move itself.
+    fs::remove_file(claim.path())?;
+    match fs::rename(path, claim.path()) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Already gone. Only correct if that is what we expected to find.
+            return match expected {
+                FileSnapshot::Missing => Ok(()),
+                FileSnapshot::Present(_) => Err(CoreError::Update(format!(
+                    "{} vanished while its labels were being tidied",
+                    path.display()
+                ))),
+            };
+        }
+        Err(err) => return Err(err.into()),
+    }
+    let claimed = fs::read(claim.path())?;
+    if matches!(expected, FileSnapshot::Present(bytes) if *bytes == claimed) {
+        // The claim file is removed by its own Drop.
+        return Ok(());
+    }
+    // Someone else's map: put it back untouched, unless they have published yet
+    // another one in the meantime — then theirs is the truth and the claimed
+    // copy is stale.
+    if rename_noreplace(claim.path(), path).is_ok() {
+        std::mem::forget(claim);
+    }
+    Err(CoreError::Update(format!(
+        "{} changed while its labels were being tidied",
+        path.display()
+    )))
+}
+
 /// Write `names` to `path`, but only while the file still holds `expected`.
 /// An empty map removes the file so an untouched save folder keeps no leftovers.
 fn publish_backup_names(
@@ -1591,17 +1633,7 @@ fn publish_backup_names(
     names: &HashMap<String, String>,
 ) -> Result<(), CoreError> {
     if names.is_empty() {
-        if !matches!(snapshot_file(path)?, ref current if current == expected) {
-            return Err(CoreError::Update(format!(
-                "{} changed while its labels were being tidied",
-                path.display()
-            )));
-        }
-        match fs::remove_file(path) {
-            Ok(()) => return Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err.into()),
-        }
+        return remove_backup_names(path, expected);
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -16552,6 +16584,44 @@ mod tests {
             Some("mine, renamed")
         );
         assert_eq!(after.get("b.bak.2").map(String::as_str), Some("theirs"));
+    }
+
+    #[test]
+    fn clearing_the_last_label_leaves_another_editors_map_alone() {
+        // Clearing the final label deletes the map. If another editor published
+        // a fresh one in between, that file — not a stale one — is what a plain
+        // delete would destroy.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let names_file = backup_names_path(&path);
+        fs::write(&names_file, "{\n  \"a.bak.1\": \"mine\"\n}").unwrap();
+        let stale = snapshot_file(&names_file).unwrap();
+
+        // The other editor publishes while this one still holds the old view.
+        let theirs = "{\n  \"b.bak.2\": \"theirs\"\n}";
+        fs::write(&names_file, theirs).unwrap();
+
+        let err = publish_backup_names(&names_file, &stale, &HashMap::new()).unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert_eq!(
+            fs::read_to_string(&names_file).unwrap(),
+            theirs,
+            "the other editor's map must be back exactly as it was"
+        );
+        assert!(
+            !fs::read_dir(subfolder.as_path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().contains("claim-labels")),
+            "the claim must not be left behind"
+        );
+
+        // Against the current file it goes through, and the map is gone.
+        let current = snapshot_file(&names_file).unwrap();
+        publish_backup_names(&names_file, &current, &HashMap::new()).unwrap();
+        assert!(!names_file.exists());
     }
 
     #[test]
