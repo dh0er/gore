@@ -1555,14 +1555,23 @@ fn read_backup_names_strict(save_path: &Path) -> Result<HashMap<String, String>,
 /// later write drops the other's. So the publish only goes through while the
 /// file is still exactly what was read, and a change underneath simply starts
 /// the whole sequence over on the newer map.
-fn mutate_backup_names<F>(save_path: &Path, mutate: F) -> Result<(), CoreError>
+fn mutate_backup_names<P, F>(
+    save_path: &Path,
+    precondition: P,
+    mutate: F,
+) -> Result<(), CoreError>
 where
+    P: Fn() -> Result<(), CoreError>,
     F: Fn(&mut HashMap<String, String>),
 {
     let path = backup_names_path(save_path);
     let mut last_conflict = None;
     for _ in 0..8 {
         let before = snapshot_file(&path)?;
+        // Re-checked on every attempt, right before publishing: another editor
+        // may have deleted the backup since the caller looked, and a label for a
+        // file that is gone would be inherited by the next one under that name.
+        precondition()?;
         let mut names = read_backup_names_strict(save_path)?;
         let unchanged = names.clone();
         mutate(&mut names);
@@ -1709,9 +1718,14 @@ fn prune_backup_label(save_path: &Path, file_name: &str) -> Result<(), CoreError
         return Ok(());
     }
     let file_name = file_name.to_string();
-    mutate_backup_names(save_path, |names| {
-        names.remove(&file_name);
-    })
+    // No precondition: the backup is gone by design here.
+    mutate_backup_names(
+        save_path,
+        || Ok(()),
+        |names| {
+            names.remove(&file_name);
+        },
+    )
 }
 
 /// Label one backup of `save_path`, or clear its label with an empty name. The
@@ -1720,13 +1734,17 @@ fn rename_backup(save_path: &Path, backup_path: &Path, name: &str) -> Result<Val
     let file_name = resolve_owned_backup(save_path, backup_path)?;
     let trimmed = name.trim().to_string();
     let key = file_name.clone();
-    mutate_backup_names(save_path, |names| {
-        if trimmed.is_empty() {
-            names.remove(&key);
-        } else {
-            names.insert(key.clone(), trimmed.clone());
-        }
-    })?;
+    mutate_backup_names(
+        save_path,
+        || resolve_owned_backup(save_path, backup_path).map(|_| ()),
+        |names| {
+            if trimmed.is_empty() {
+                names.remove(&key);
+            } else {
+                names.insert(key.clone(), trimmed.clone());
+            }
+        },
+    )?;
     Ok(json!({
         "path": backup_path.display().to_string(),
         "fileName": file_name,
@@ -16652,6 +16670,45 @@ mod tests {
         );
         // Listing stays forgiving: a broken file costs the labels, not the list.
         assert_eq!(list_save_backups(&path).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn naming_a_backup_that_is_gone_leaves_no_label_behind() {
+        // Another editor can delete the backup between the moment this one looks
+        // and the moment it writes the label. A label left for a file that no
+        // longer exists would be inherited by the next backup taking that name.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.100");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+
+        let err = rename_backup(&path, &backup, "before the boss").unwrap_err();
+        assert!(
+            err.to_string().contains("refusing to touch it"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !backup_names_path(&path).exists(),
+            "no label may be published for a backup that is not there"
+        );
+
+        // The check is coupled to the write, not done once up front: a
+        // precondition that fails leaves the map untouched.
+        fs::write(&backup, minimal_gsav("Backup")).unwrap();
+        rename_backup(&path, &backup, "before the boss").unwrap();
+        let before = fs::read_to_string(backup_names_path(&path)).unwrap();
+        let err = mutate_backup_names(
+            &path,
+            || Err(CoreError::InvalidRequest("vanished".into())),
+            |names| {
+                names.insert("G1R-001.sav.bak.101".into(), "later".into());
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vanished"), "unexpected: {err}");
+        assert_eq!(fs::read_to_string(backup_names_path(&path)).unwrap(), before);
     }
 
     #[test]
