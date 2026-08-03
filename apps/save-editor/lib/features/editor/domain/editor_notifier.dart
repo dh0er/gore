@@ -3580,14 +3580,16 @@ const _typedEditPaths = {
   'private.typed.arrayDuplicate',
 };
 
-/// A raw typed edit that writes INTO one inventory slot — its id, its count, a
-/// set or array inside its payload, anything below `m_Slots/[i]`.
+/// A raw typed edit that reaches a slot — INTO one (its id, its count, a set or
+/// array inside its payload, anything below `m_Slots/[i]`) or AT the slot array
+/// itself, which an array operation addresses by ending at `m_Slots` and naming
+/// its element in `value.index`.
 ///
-/// Every structural inventory write claims whole slots: the repair renumbers
-/// them, an add fills a blank one and resets its payload, a removal blanks one.
-/// Any of those would overwrite such an edit after it was reported committed.
+/// An add or a removal claims whole slots, so either shape collides with it: the
+/// add fills a blank slot the splice may then delete, and a splice of the array
+/// shifts every later slot away from its id again.
 ///
-/// Matched on an `m_Slots/[i]` step rather than on an ancestor name: only the
+/// Matched on the `m_Slots` step rather than on an ancestor name: only the
 /// PLAYER inventory sits under an `m_Inventory` segment, while an NPC's lives
 /// under `InventoryByGlobalId{id}/InventoryItems/…` (see
 /// `npc::npc_inventory_path`), and both are rewritten alike.
@@ -3597,6 +3599,7 @@ bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
   final path = (edit['value'] as Map?)?['path'];
   if (path is! List) return false;
   final segments = path.whereType<String>().toList();
+  if (segments.isNotEmpty && segments.last == 'm_Slots') return true;
   for (var index = 0; index + 1 < segments.length; index++) {
     if (segments[index] != 'm_Slots') continue;
     final slot = segments[index + 1];

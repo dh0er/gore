@@ -131,14 +131,40 @@ void main() {
     });
   });
 
-  test('ignores anything that is not inside a slot', () {
-    // m_Slots itself, with no slot picked out.
+  test('matches an array operation on the slot array itself', () {
+    // arrayRemove/arrayDuplicate address the array and name their element in
+    // value.index, so the path just ends at m_Slots. Such a splice deletes or
+    // duplicates a whole slot — including one an add just filled.
+    for (final op in [
+      'private.typed.arrayRemove',
+      'private.typed.arrayDuplicate',
+    ]) {
+      expect(
+        isInventorySlotTypedEdit({
+          'path': op,
+          'value': {
+            'path': ['m_SavedPlayers', '[0]', 'm_Inventory', 'm_Slots'],
+            'index': 3,
+          },
+        }),
+        isTrue,
+        reason: op,
+      );
+    }
+    // The repair renumbers last, so it survives such a splice and stays allowed.
     expect(
-      isInventorySlotTypedEdit(
-        typedEdit(['m_SavedPlayers', '[0]', 'm_Inventory', 'm_Slots']),
-      ),
+      isInventorySlotIdTypedEdit({
+        'path': 'private.typed.arrayRemove',
+        'value': {
+          'path': ['m_SavedPlayers', '[0]', 'm_Inventory', 'm_Slots'],
+          'index': 3,
+        },
+      }),
       isFalse,
     );
+  });
+
+  test('ignores anything that is not inside a slot', () {
     expect(
       isInventorySlotTypedEdit(typedEdit(['m_Something', 'm_Id'])),
       isFalse,
