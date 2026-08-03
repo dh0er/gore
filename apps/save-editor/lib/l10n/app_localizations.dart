@@ -4187,6 +4187,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Could not name the backup: {details}'**
   String editorRenameBackupFailed(String details);
+
+  /// No description provided for @slotRepairUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Repairing is not possible right now — this savegame cannot be written.'**
+  String get slotRepairUnavailable;
 }
 
 class _AppLocalizationsDelegate

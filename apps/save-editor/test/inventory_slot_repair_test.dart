@@ -160,18 +160,20 @@ void main() {
     expect(writes.last, ['private.inventory.repairSlots']);
   });
 
-  testWidgets('no repair action while the save cannot be written', (
+  testWidgets('without write capability the warning stays, the action goes', (
     tester,
   ) async {
-    // Every other inventory action is gated on write capability; an action that
-    // could be queued but never applied must not be offered either.
+    // The damage is there either way and the game will act on the wrong item,
+    // so the reader must still be told. Only the action — which could be queued
+    // but never applied — is withheld, with the reason in its place.
     await pumpApp(
       tester,
       _InventoryCoreService(misalignedSlots: 3, canCompress: false),
     );
     await openPlayerInventory(tester);
 
-    expect(find.text('Damaged inventory slots'), findsNothing);
+    expect(find.text('Damaged inventory slots'), findsOneWidget);
+    expect(find.textContaining('cannot be written'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
   });
 

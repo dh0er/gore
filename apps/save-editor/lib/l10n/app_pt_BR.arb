@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "Não foi possível excluir o backup: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Não foi possível nomear o backup: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "No momento não é possível reparar — este jogo salvo não pode ser gravado."
 }

@@ -2673,4 +2673,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'バックアップに名前を付けられませんでした: $details';
   }
+
+  @override
+  String get slotRepairUnavailable => '現在は修復できません。このセーブデータには書き込めません。';
 }

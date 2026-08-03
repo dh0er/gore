@@ -1096,13 +1096,14 @@ class _OverviewPanel extends StatelessWidget {
         // Damage an older build left in the save is save-wide, so it is called
         // out here first — someone who only edits attributes or story state
         // would otherwise never see the inventory's copy of this warning.
-        if (slotRepairAvailable(
-          inspection,
-          canCompress: state.codecCompressReady,
-        )) ...[
+        if (slotRepairWarranted(inspection)) ...[
           SlotRepairBanner(
             notifier: notifier,
             misalignedSlots: inspection.privateInventory.misalignedSlots,
+            canRepair: canQueueSlotRepair(
+              inspection,
+              canCompress: state.codecCompressReady,
+            ),
           ),
           const SizedBox(height: 16),
         ],

@@ -2745,4 +2745,8 @@ class AppLocalizationsRu extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Не удалось задать название копии: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Восстановление сейчас невозможно — в это сохранение нельзя записать.';
 }

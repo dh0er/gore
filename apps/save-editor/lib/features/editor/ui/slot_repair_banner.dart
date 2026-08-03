@@ -6,17 +6,22 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/providers/data_providers.dart';
 
-/// Whether this save both needs the slot repair and can actually receive it.
+/// Whether this save carries the damage the repair addresses.
 ///
-/// Repairing is a private write, so it takes the same capability every other
-/// inventory action is gated on — otherwise the action could be queued but never
-/// applied. Shared by the places that surface the warning (the overview and the
-/// inventory) so they can never disagree about it.
-bool slotRepairAvailable(
+/// Deliberately independent of whether the editor can currently write: the
+/// warning says the game will act on the wrong item, which a reader needs to
+/// know even in a session that cannot repair it.
+bool slotRepairWarranted(SaveInspection inspection) =>
+    inspection.privateInventory.canRepairSlots;
+
+/// Whether the repair can actually be queued. It is a private write, so it takes
+/// the same capability every other inventory action is gated on — without it the
+/// action could be queued but never applied.
+bool canQueueSlotRepair(
   SaveInspection inspection, {
   required bool canCompress,
 }) =>
-    inspection.privateInventory.canRepairSlots &&
+    slotRepairWarranted(inspection) &&
     inspection.privateEditable &&
     inspection.privateTypedVerified &&
     canCompress;
@@ -37,12 +42,18 @@ class SlotRepairBanner extends ConsumerWidget {
     super.key,
     required this.notifier,
     required this.misalignedSlots,
+    required this.canRepair,
   });
 
   final EditorNotifier notifier;
 
   /// How many slots across the whole save are affected.
   final int misalignedSlots;
+
+  /// Whether this session can write the repair. When false the warning still
+  /// shows — the save is damaged either way — but the action is replaced by the
+  /// reason it is unavailable.
+  final bool canRepair;
 
   /// Pending-edit registry key. One per save; the repair is whole-save.
   static const String pendingKey = 'inventoryRepair';
@@ -88,34 +99,46 @@ class SlotRepairBanner extends ConsumerWidget {
                       color: scheme.onErrorContainer,
                     ),
                   ),
+                  if (!canRepair) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      l10n.slotRepairUnavailable,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: scheme.onErrorContainer,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            const SizedBox(width: 12),
-            if (queued)
-              TextButton(
-                onPressed: () => notifier.clearPendingEdit(pendingKey),
-                child: Text(l10n.slotRepairDiscard),
-              )
-            else
-              FilledButton.icon(
-                icon: const Icon(Icons.healing_outlined, size: 18),
-                label: Text(l10n.slotRepairAction),
-                // No confirmation step: the button only QUEUES the repair, the
-                // banner already states what it does, and Discard takes it back
-                // before anything reaches the save.
-                onPressed: () => notifier.setPendingEdit(
-                  pendingKey,
-                  const PendingSaveEdit(
-                    edits: [
-                      {
-                        'path': 'private.inventory.repairSlots',
-                        'value': <String, Object?>{},
-                      },
-                    ],
+            if (canRepair) ...[
+              const SizedBox(width: 12),
+              if (queued)
+                TextButton(
+                  onPressed: () => notifier.clearPendingEdit(pendingKey),
+                  child: Text(l10n.slotRepairDiscard),
+                )
+              else
+                FilledButton.icon(
+                  icon: const Icon(Icons.healing_outlined, size: 18),
+                  label: Text(l10n.slotRepairAction),
+                  // No confirmation step: the button only QUEUES the repair, the
+                  // banner already states what it does, and Discard takes it
+                  // back before anything reaches the save.
+                  onPressed: () => notifier.setPendingEdit(
+                    pendingKey,
+                    const PendingSaveEdit(
+                      edits: [
+                        {
+                          'path': 'private.inventory.repairSlots',
+                          'value': <String, Object?>{},
+                        },
+                      ],
+                    ),
                   ),
                 ),
-              ),
+            ],
           ],
         ),
       ),

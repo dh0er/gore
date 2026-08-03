@@ -703,5 +703,6 @@
   "editorDeleteBackupFailed": "无法删除备份：{details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "无法为备份命名：{details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "目前无法修复 — 无法写入此存档。"
 }

@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "No se pudo eliminar la copia de seguridad: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "No se pudo nombrar la copia de seguridad: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "Ahora mismo no se puede reparar: esta partida guardada no se puede escribir."
 }

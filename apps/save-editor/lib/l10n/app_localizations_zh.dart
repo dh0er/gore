@@ -2644,6 +2644,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return '无法为备份命名：$details';
   }
+
+  @override
+  String get slotRepairUnavailable => '目前无法修复 — 无法写入此存档。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -5286,4 +5289,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String editorRenameBackupFailed(String details) {
     return '无法为备份命名：$details';
   }
+
+  @override
+  String get slotRepairUnavailable => '目前无法修复 — 无法写入此存档。';
 }

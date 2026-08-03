@@ -2720,4 +2720,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Could not name the backup: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Repairing is not possible right now — this savegame cannot be written.';
 }

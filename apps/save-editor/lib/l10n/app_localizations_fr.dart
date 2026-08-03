@@ -2750,4 +2750,8 @@ class AppLocalizationsFr extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Impossible de nommer la sauvegarde : $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'La réparation n’est pas possible pour l’instant — cette sauvegarde ne peut pas être écrite.';
 }

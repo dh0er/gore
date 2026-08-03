@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "Nie udało się usunąć kopii zapasowej: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Nie udało się nazwać kopii zapasowej: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "Naprawa nie jest teraz możliwa — tego zapisu gry nie da się zapisać."
 }

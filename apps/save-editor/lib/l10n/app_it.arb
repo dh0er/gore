@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "Impossibile eliminare il backup: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Impossibile assegnare un nome al backup: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "La riparazione non è possibile al momento: questo salvataggio non può essere scritto."
 }

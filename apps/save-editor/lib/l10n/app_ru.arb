@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "Не удалось удалить копию: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Не удалось задать название копии: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "Восстановление сейчас невозможно — в это сохранение нельзя записать."
 }

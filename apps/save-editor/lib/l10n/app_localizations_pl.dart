@@ -2752,4 +2752,8 @@ class AppLocalizationsPl extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Nie udało się nazwać kopii zapasowej: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Naprawa nie jest teraz możliwa — tego zapisu gry nie da się zapisać.';
 }

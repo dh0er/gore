@@ -122,7 +122,7 @@ class InventoryDetail extends ConsumerWidget {
     // inventory — not just the player's. The overview carries the same warning
     // for users who never open this tab; both share one pending edit, so
     // queueing on either shows as queued on the other.
-    final content = slotRepairAvailable(inspection, canCompress: canCompress)
+    final content = slotRepairWarranted(inspection)
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -131,6 +131,10 @@ class InventoryDetail extends ConsumerWidget {
                 child: SlotRepairBanner(
                   notifier: notifier,
                   misalignedSlots: inspection.privateInventory.misalignedSlots,
+                  canRepair: canQueueSlotRepair(
+                    inspection,
+                    canCompress: canCompress,
+                  ),
                 ),
               ),
               Expanded(child: body),

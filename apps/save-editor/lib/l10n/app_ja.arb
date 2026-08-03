@@ -703,5 +703,6 @@
   "editorDeleteBackupFailed": "バックアップを削除できませんでした: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "バックアップに名前を付けられませんでした: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "現在は修復できません。このセーブデータには書き込めません。"
 }

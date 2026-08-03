@@ -2734,4 +2734,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'No se pudo nombrar la copia de seguridad: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Ahora mismo no se puede reparar: esta partida guardada no se puede escribir.';
 }

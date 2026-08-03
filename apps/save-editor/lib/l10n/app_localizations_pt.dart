@@ -2735,6 +2735,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Não foi possível nomear o backup: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5467,4 +5471,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String editorRenameBackupFailed(String details) {
     return 'Não foi possível nomear o backup: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
 }

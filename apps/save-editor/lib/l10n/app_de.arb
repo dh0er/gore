@@ -696,5 +696,6 @@
   "editorDeleteBackupFailed": "Backup konnte nicht gelöscht werden: {details}",
   "@editorDeleteBackupFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorRenameBackupFailed": "Backup konnte nicht benannt werden: {details}",
-  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}}
+  "@editorRenameBackupFailed": {"placeholders": {"details": {"type": "String"}}},
+  "slotRepairUnavailable": "Reparieren ist gerade nicht möglich — dieser Spielstand lässt sich nicht schreiben."
 }

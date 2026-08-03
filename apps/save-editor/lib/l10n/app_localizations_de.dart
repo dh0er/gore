@@ -2736,4 +2736,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String editorRenameBackupFailed(String details) {
     return 'Backup konnte nicht benannt werden: $details';
   }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Reparieren ist gerade nicht möglich — dieser Spielstand lässt sich nicht schreiben.';
 }
