@@ -2631,5 +2631,5 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'スロットの修復とスロット ID の直接編集が同時に予約されています。修復はすべてのスロット ID を書き直すため、直接編集は失われます。どちらかを取り消してから保存し直してください。';
+      'スロットを振り直すインベントリ編集と、スロット ID の直接編集が同時に予約されています。振り直しによって直接編集は失われます。どちらかを取り消してから保存し直してください。';
 }

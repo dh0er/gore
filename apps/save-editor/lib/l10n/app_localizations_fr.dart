@@ -2708,5 +2708,5 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Une réparation des emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La réparation réécrit tous les identifiants et supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.';
+      'Une modification d’inventaire qui renumérote les emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La renumérotation supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.';
 }

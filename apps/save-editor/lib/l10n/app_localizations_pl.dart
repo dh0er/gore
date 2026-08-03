@@ -2710,5 +2710,5 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'W kolejce są zarówno naprawa slotów, jak i bezpośrednia zmiana identyfikatora slotu. Naprawa nadpisuje wszystkie identyfikatory i odrzuciłaby tę zmianę — cofnij jedną z nich i zapisz ponownie.';
+      'W kolejce są zarówno zmiana ekwipunku, która przenumerowuje sloty, jak i bezpośrednia zmiana identyfikatora slotu. Przenumerowanie odrzuciłoby tę zmianę — cofnij jedną z nich i zapisz ponownie.';
 }

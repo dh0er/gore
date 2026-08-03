@@ -2678,5 +2678,5 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'A slot repair and a direct edit of a slot id are both queued. The repair rewrites every slot id and would discard the direct edit — revert one of them, then save again.';
+      'An inventory edit that renumbers slots and a direct edit of a slot id are both queued. The renumbering would discard the direct edit — revert one of them, then save again.';
 }

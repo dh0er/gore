@@ -26,6 +26,31 @@ void main() {
     );
   });
 
+  test(
+    'matches an NPC slot id edit, which sits under no m_Inventory segment',
+    () {
+      expect(
+        isSlotIdTypedEdit(
+          typedEdit([
+            'm_GenericData',
+            '{CharacterStates}',
+            'NPCCharacters',
+            'InventoryByGlobalId',
+            '{Lizard-A}',
+            'InventoryItems',
+            'm_Values',
+            'Items',
+            '[6]',
+            'm_Slots',
+            '[3]',
+            'm_Id',
+          ]),
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('ignores other inventory fields and non-inventory paths', () {
     expect(
       isSlotIdTypedEdit(
@@ -41,6 +66,11 @@ void main() {
       isFalse,
     );
     expect(isSlotIdTypedEdit(typedEdit(['m_Something', 'm_Id'])), isFalse);
+    // An m_Id that is not a slot's (no m_Slots/[i] ahead of it) stays untouched.
+    expect(
+      isSlotIdTypedEdit(typedEdit(['m_Inventory', 'm_Values', 'm_Id'])),
+      isFalse,
+    );
     expect(
       isSlotIdTypedEdit({'path': 'private.inventory.addItem', 'value': {}}),
       isFalse,

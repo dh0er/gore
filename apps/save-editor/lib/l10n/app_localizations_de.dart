@@ -2694,5 +2694,5 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Eine Slot-Reparatur und eine direkte Änderung einer Slot-Id sind beide vorgemerkt. Die Reparatur überschreibt alle Slot-Ids und würde die direkte Änderung verwerfen — eine von beiden zurücknehmen, dann erneut speichern.';
+      'Eine Inventar-Änderung, die Slots neu nummeriert, und eine direkte Änderung einer Slot-Id sind beide vorgemerkt. Die Neunummerierung würde die direkte Änderung verwerfen — eine von beiden zurücknehmen, dann erneut speichern.';
 }

@@ -2693,7 +2693,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Um reparo de espaços e uma edição direta de um id de espaço estão ambos na fila. O reparo reescreve todos os ids e descartaria a edição direta — reverta um dos dois e salve novamente.';
+      'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5384,5 +5384,5 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Um reparo de espaços e uma edição direta de um id de espaço estão ambos na fila. O reparo reescreve todos os ids e descartaria a edição direta — reverta um dos dois e salve novamente.';
+      'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
 }

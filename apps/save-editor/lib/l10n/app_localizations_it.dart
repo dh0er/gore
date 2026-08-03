@@ -2698,5 +2698,5 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Sono in coda sia una riparazione degli slot sia una modifica diretta di un id di slot. La riparazione riscrive tutti gli id e scarterebbe la modifica diretta: annullane una, poi salva di nuovo.';
+      'Sono in coda sia una modifica dell’inventario che rinumera gli slot sia una modifica diretta di un id di slot. La rinumerazione scarterebbe la modifica diretta: annullane una, poi salva di nuovo.';
 }

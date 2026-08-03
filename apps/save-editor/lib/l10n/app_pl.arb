@@ -681,5 +681,5 @@
   "slotRepairDiscard": "Odrzuć",
   "slotRepairConfirm": "Naprawić {count} slotów ekwipunku? Zmieniane są wyłącznie identyfikatory slotów, aby pasowały do pozycji — żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Kopia zapasowa zostanie utworzona.",
   "@slotRepairConfirm": {"placeholders": {"count": {"type": "int"}}},
-  "editorInventorySlotRepairConflict": "W kolejce są zarówno naprawa slotów, jak i bezpośrednia zmiana identyfikatora slotu. Naprawa nadpisuje wszystkie identyfikatory i odrzuciłaby tę zmianę — cofnij jedną z nich i zapisz ponownie."
+  "editorInventorySlotRepairConflict": "W kolejce są zarówno zmiana ekwipunku, która przenumerowuje sloty, jak i bezpośrednia zmiana identyfikatora slotu. Przenumerowanie odrzuciłoby tę zmianę — cofnij jedną z nich i zapisz ponownie."
 }

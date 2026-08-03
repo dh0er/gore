@@ -2692,5 +2692,5 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      'Hay en cola una reparación de ranuras y una edición directa de un id de ranura. La reparación reescribe todos los id y descartaría la edición directa: revierte una de las dos y vuelve a guardar.';
+      'Hay en cola una edición del inventario que renumera las ranuras y una edición directa de un id de ranura. La renumeración descartaría la edición directa: revierte una de las dos y vuelve a guardar.';
 }

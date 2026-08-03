@@ -2602,7 +2602,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      '槽位修复与直接编辑槽位 ID 同时在待保存列表中。修复会重写所有槽位 ID，从而丢弃直接编辑 — 请撤销其中一项后再保存。';
+      '会重新编号槽位的物品栏改动与直接编辑槽位 ID 同时在待保存列表中。重新编号会丢弃直接编辑 — 请撤销其中一项后再保存。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -5203,5 +5203,5 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get editorInventorySlotRepairConflict =>
-      '槽位修复与直接编辑槽位 ID 同时在待保存列表中。修复会重写所有槽位 ID，从而丢弃直接编辑 — 请撤销其中一项后再保存。';
+      '会重新编号槽位的物品栏改动与直接编辑槽位 ID 同时在待保存列表中。重新编号会丢弃直接编辑 — 请撤销其中一项后再保存。';
 }
