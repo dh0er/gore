@@ -4,10 +4,11 @@
 //!
 //! Render the embedded guide into one self-contained HTML file.
 //!
-//! The release zip ships the guide as Markdown beside `gore.exe`, which is fine for `grep` and for
-//! the MCP server but poor for actually reading: Windows has no default handler for `.md`, so a
-//! double-click lands in Notepad, and the guide is table-heavy enough that raw pipe tables are close
-//! to unreadable there.
+//! The release zip ships the guide as Markdown beside `gore.exe`, which is fine for `grep` but poor
+//! for actually reading: Windows has no default handler for `.md`, so a double-click lands in
+//! Notepad, and the guide is table-heavy enough that raw pipe tables are close to unreadable there.
+//! (The MCP server does not read those files either — it serves the copy `include_str!`d into this
+//! binary, which is why an edit to the staged Markdown reaches a human and no agent.)
 //!
 //! What this produces is deliberately *one file*, with every page, its stylesheet and its script
 //! inlined. A thinner wrapper that fetched the `.md` files at runtime would be less code, but it

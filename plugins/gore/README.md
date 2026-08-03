@@ -28,8 +28,16 @@ plugin is shared across machines and an absolute path would be wrong on most of
 them.
 
 GORE is a Rust binary, not something a package manager fetches on demand, so
-install it first: download a `gore-cli-v*` release, unpack it, and put that
-directory on `PATH`.
+install it first. Either unpack a `gore-cli-v*`
+[release](https://github.com/dh0er/gore/releases) and put that directory on
+`PATH`, or build it from a checkout:
+
+```powershell
+cargo build --release -p gore     # → target\release\gore.exe
+```
+
+and put `target\release` on `PATH`. A `PATH` change only reaches processes
+started afterwards, so restart the client — not just the plugin — once it is set.
 
 **If it is missing**, the `gore_*` tools simply will not appear. The client
 reports a server that failed to start; what it says depends on the client, and

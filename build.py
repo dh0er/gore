@@ -155,9 +155,10 @@ PROJECTS: dict[str, dict] = {
         # tree are rewritten to absolute GitHub URLs (see stage_docs).
         "doc_dirs": [("docs/guide", "docs")],
         # The same guide, rendered by the freshly built binary into one browsable,
-        # self-contained HTML file. The Markdown copies are what `grep` and the MCP
-        # server want; this is what a human double-clicks, because Windows has no
-        # handler for .md and the guide is far too table-heavy for Notepad.
+        # self-contained HTML file. The Markdown copies are what `grep` wants (the
+        # MCP server has its own, compiled into the exe); this is what a human
+        # double-clicks, because Windows has no handler for .md and the guide is
+        # far too table-heavy for Notepad.
         "guide_html": "docs/guide.html",
     },
 }

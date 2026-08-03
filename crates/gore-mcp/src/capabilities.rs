@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use crate::consent::{Needs, Policy};
 use crate::server::Options;
+use crate::spec::{Class, GroupShape};
 
 /// The newest revision we implement. Also what we answer with when a client asks for something we
 /// do not recognise.
@@ -93,14 +94,17 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
     let mut text = String::from(PRIMER);
 
     text.push_str("\nWHAT THIS SERVER MAY DO\n");
-    text.push_str(
+    text.push_str(&format!(
         "Reading anything is unremarkable, and so is writing to a path that is free and outside \
          the game installation. What needs agreement is changing something that already exists: an \
-         occupied output path, an output aimed inside the installation, an in-place rewrite. A few \
-         commands compute their targets from a file this server does not read (gen, mod build, \
-         texture replace) or write a whole tree of them (stubs, audio extract, as emit-all); those \
-         are gated whatever is on disk. The decision is per subcommand, not per tool:\n",
-    );
+         occupied output path, a directory that already holds files, an output aimed inside the \
+         installation, an in-place rewrite. Aim those somewhere new and they cost nothing. A second \
+         group asks whatever is on disk, because what it changes is not a path you chose — the \
+         installation itself, the shared catalogs and library the tools keep, or a target worked \
+         out from a file this server does not read: {always}. The decision is per subcommand, not \
+         per tool:\n",
+        always = always_gated().join(", "),
+    ));
     // Both lines ask `Options::pre_approves` — the same function the gate itself uses — rather than
     // reading the flags directly. The primer promising something the gate then refuses is the
     // failure mode this whole section keeps re-learning, and sharing one predicate ends it.
@@ -130,6 +134,33 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
 
     text.push_str(HOW_IT_BEHAVES);
     text
+}
+
+/// The commands no argument can make harmless, named the way a caller would write them.
+///
+/// Read out of the spec table rather than typed here, for the reason [`will_be`] shares a predicate
+/// with the gate: a primer that names commands the gate no longer treats that way is a lie told to
+/// every client on connect, and it is the kind that survives a green test run. This sentence has
+/// already been wrong once — it still listed `mod build`, `stubs`, `audio extract` and `as emit-all`
+/// after those four learned to check their destination and ask only when something is in the way.
+///
+/// The bar is deliberately narrow: `Class::Mutate` and worse, which is the tier that asks no matter
+/// what it is handed. Commands that ask only about an occupied destination are covered by the
+/// sentence above this list, and naming them here would tell a model to avoid calls that are free.
+///
+/// `GameLaunch` is excluded because the line below this one is about exactly those, by name.
+fn always_gated() -> Vec<String> {
+    crate::spec::GROUPS
+        .iter()
+        .flat_map(|group| group.commands.iter().map(move |command| (group, command)))
+        .filter(|(_, command)| {
+            matches!(command.safety.base, Class::Mutate | Class::Destructive)
+        })
+        .map(|(group, command)| match group.shape {
+            GroupShape::Nested => format!("{} {}", group.cli, command.sub),
+            GroupShape::Flat => command.sub.to_string(),
+        })
+        .collect()
 }
 
 /// The two tiers the primer reports on, as the gate itself would describe them.
@@ -243,6 +274,8 @@ HOW IT BEHAVES
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::GROUPS;
+    use serde_json::Map;
     use std::path::PathBuf;
 
     fn options(allow_write: bool, allow_game_launch: bool) -> Options {
@@ -293,9 +326,67 @@ mod tests {
         assert!(!text.contains("writing new files, always works"), "{text}");
         assert!(text.contains("Reading anything is unremarkable"), "{text}");
         assert!(
-            text.contains("gated whatever is on disk"),
-            "the primer must say that some writes are gated regardless"
+            text.contains("asks whatever is on disk"),
+            "the primer must say that some writes are gated regardless: {text}"
         );
+        // And the other half of the same truth, added when four commands stopped being in that
+        // group: aiming a write somewhere new is the way past the question, and a primer that only
+        // ever warns teaches a model to ask permission it does not need.
+        assert!(text.contains("somewhere new and they cost nothing"), "{text}");
+    }
+
+    #[test]
+    fn the_commands_the_primer_names_are_the_ones_the_gate_gates_unconditionally() {
+        // The failure this exists for happened. The sentence was prose, and it went on naming
+        // `mod build`, `stubs`, `audio extract` and `as emit-all` as gated "whatever is on disk"
+        // after all four learned to check their destination first — so the one text every client
+        // reads on connect was telling every model to avoid four calls that had become free.
+        //
+        // Nothing caught it. `every_surface_that_names_a_permission_agrees_with_the_gate` compares
+        // `Class::label()` against the gate and never looks at a command name, and the whole test
+        // suite stayed green through the change that falsified this line. Deriving the list is what
+        // fixes that; this test only holds the derivation to the gate's own definition.
+        let named = always_gated();
+        let text = asking(false, false);
+
+        let expected: Vec<String> = GROUPS
+            .iter()
+            .flat_map(|group| group.commands.iter().map(move |command| (group, command)))
+            .filter(|(_, command)| {
+                // "No argument can make this harmless." A command that merely asks about an
+                // occupied destination must not be here: the primer would be telling a model to
+                // avoid a call that costs nothing on a fresh path.
+                let empty = Map::new();
+                command.safety.requirements(&empty).write
+                    && command.safety.in_place_without.is_none()
+                    && command.safety.truncates.is_empty()
+                    && command.safety.clobbers_dir.is_empty()
+                    && command.safety.derives.is_empty()
+            })
+            .filter(|(_, command)| !matches!(command.safety.base, Class::GameLaunch))
+            .map(|(group, command)| match group.shape {
+                GroupShape::Nested => format!("{} {}", group.cli, command.sub),
+                GroupShape::Flat => command.sub.to_string(),
+            })
+            .collect();
+
+        assert_eq!(named, expected, "the primer's list drifted from the gate");
+        assert!(!named.is_empty(), "an empty list would make the sentence nonsense");
+
+        for command in &named {
+            assert!(text.contains(command.as_str()), "{command} is missing from: {text}");
+        }
+
+        // And the four that moved must not have come back. Named individually because they are the
+        // exact regression, and because a reader of this file should be able to see which claim was
+        // wrong without going through the history.
+        for freed in ["mod build", "stubs", "audio extract", "as emit-all"] {
+            assert!(
+                !named.iter().any(|command| command == freed),
+                "`{freed}` asks only about an occupied destination and must not be listed as \
+                 unconditional"
+            );
+        }
     }
 
     #[test]

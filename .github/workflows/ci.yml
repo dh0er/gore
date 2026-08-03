@@ -57,3 +57,13 @@ jobs:
           flutter pub get
           flutter analyze
           flutter test
+
+      # Docs and the plugin manifests. Neither is reached by test.py, and both
+      # now ship to users — the guide inside the CLI zip, the plugin through a
+      # marketplace — so a dead link or a manifest that disagrees with its two
+      # siblings is something a reader finds rather than a test.
+      - name: Docs links + plugin manifests
+        working-directory: .
+        run: |
+          python scripts/check_docs_links.py
+          python scripts/check_plugin.py

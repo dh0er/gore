@@ -35,9 +35,10 @@ gore audio list --bank "$SFX" --filter Orcdog --max 0 --json   # counts only
 ```
 
 Do not answer a truncation notice by asking for everything at once. All 7,218
-samples of `SFX.bank` are a 458,589-byte table, far past the 256 KiB an MCP
-client accepts in one result, and the cut lands in the middle of a line — so
-filtering what arrived answers "no such sample" for the 3,095 that never did.
+samples of `SFX.bank` are a 458,589-byte table, far past the 256 KiB the MCP
+server passes on by default (`--max-output-kib` raises it), and the cut lands in
+the middle of a line — so filtering what arrived answers "no such sample" for the
+3,095 that never did.
 Narrow with `--filter` instead, and raise `--max` only as far as you need.
 `--max 0` lists nothing and reports only the counts, which is the cheap way to
 ask "how many match?".

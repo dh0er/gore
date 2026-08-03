@@ -12,36 +12,25 @@ ships inside the binary so the agent can read it before acting.
 
 ## Setup
 
-The server is part of `gore.exe`; there is nothing extra to install.
+The server is part of `gore.exe`, so there is no second binary to fetch. What you
+install is the **plugin**: it registers the server *and* adds the `gore-modding`
+skill, so a client gets the tools and the workflow around them in one step
+instead of two. The tools alone are the sharper edge — they will faithfully
+replace an asset the engine never reads, and the skill is what stops that.
 
-Claude Code:
-
-```powershell
-claude mcp add gore -- C:\path\to\gore.exe mcp serve
-```
-
-Claude Desktop, or any client with a JSON config:
-
-```json
-{
-  "mcpServers": {
-    "gore": {
-      "command": "C:\\path\\to\\gore.exe",
-      "args": ["mcp", "serve"]
-    }
-  }
-}
-```
-
-### As a plugin
-
-`plugins/gore/` in this repository is a plugin that registers the server *and*
-installs the `gore-modding` skill, so a client gets the tools and the workflow
-around them in one step instead of two. The repository is its own marketplace:
+`plugins/gore/` is that plugin, and this repository is its own marketplace:
 
 ```powershell
 claude plugin marketplace add dh0er/gore
 claude plugin install gore@gore
+```
+
+This is a monorepo with a vendored toolchain in it, so a full clone costs more
+than the plugin needs. `--sparse` limits the checkout to the two directories that
+matter:
+
+```powershell
+claude plugin marketplace add dh0er/gore --sparse .claude-plugin plugins
 ```
 
 In the Claude desktop app, the same thing without a terminal: the **+** button
@@ -56,12 +45,54 @@ claude --plugin-dir path\to\gore\plugins\gore
 ```
 
 Codex and Cursor read their own manifests, which the plugin also carries
-(`.codex-plugin/`, `.cursor-plugin/`). Those cover the skill; each client
-registers MCP servers its own way.
+(`.codex-plugin/`, `.cursor-plugin/`). Those declare the skill; whether either
+client also picks up the `.mcp.json` beside them has not been tested here, so
+treat the JSON block below as the reliable way to get the server on those two.
 
-Its `.mcp.json` invokes `gore` by name, so `gore.exe` has to be on `PATH` — that
-is the one thing the plugin cannot do for you, since the binary is a Rust build
-rather than something a package manager fetches on demand.
+### `gore.exe` has to be on `PATH`
+
+The plugin's `.mcp.json` invokes `gore` by name rather than by absolute path,
+because a plugin is shared across machines and an absolute path would be wrong on
+most of them. That leaves one prerequisite it cannot satisfy for you, since the
+binary is a Rust build rather than something a package manager fetches on demand.
+
+If it is missing, no `gore_*` tool appears at all: the client reports a server
+that failed to start, and it cannot say why, because nothing on that side knows
+what `gore` was supposed to be. `gore --version` in a terminal is the check. A
+`PATH` change only reaches processes started afterwards, so restart the client.
+
+### Wiring a client up by hand
+
+Any client with a JSON config can register the server directly, without the
+plugin. Two reasons to do it this way: the client has no plugin support, or you
+want to pass [flags](#answering-in-advance), which the plugin's `.mcp.json` does
+not carry.
+
+```json
+{
+  "mcpServers": {
+    "gore": {
+      "command": "gore",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Claude Code has a one-liner for the same thing:
+
+```powershell
+claude mcp add gore -- gore mcp serve
+```
+
+Both spell the command as `gore`, so they need `PATH` set exactly as above.
+Replace it with the absolute path to `gore.exe` if you would rather not.
+
+What this route does not bring is the skill. The server's own primer reaches
+every client on connect and carries the orientation an agent needs to start
+safely — read the guide first, how the consent gate behaves, how to relay an
+answer — but the judgement that grows with use lives in the skill, and only the
+plugin installs it.
 
 The skill deliberately carries no asset paths, ids or sample names. Everything
 factual lives in this guide, which ships inside the binary and is therefore always
@@ -100,7 +131,8 @@ The decision is made **per subcommand**, not per tool.
 | | What it covers | Examples |
 |---|---|---|
 | Runs straight away | Reading, and commands writing to a free path outside the game installation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract` |
-| Asks you first | Changing the game installation, rewriting a file in place, deleting user content, replacing a shared catalog, or overwriting an output file that already exists | `mod deploy`, `mod build`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture replace`, `texture index` without an output path, `gen`, `stubs`, `audio extract`, `as emit-all`, `deploy-shared`, `loc import` without an output path, `loc extract`, `catalog dump` onto an existing file |
+| Asks you first, whatever is on disk | Changing the game installation, deleting user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `gen`, `deploy-shared`, `loc extract`, `audio restore` |
+| Asks you only when something is in the way | Overwriting an output file that already exists, writing into a directory that already holds files, rebuilding a bundle folder that is there, or rewriting a file in place | `catalog dump` onto an existing file, `texture index` without an output path, `loc import` without an output path, `mod build` over an existing bundle, `stubs`, `audio extract` and `as emit-all` into a non-empty directory |
 | Asks you first | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 Many commands sidestep the question entirely: passing an output argument turns an

@@ -96,13 +96,15 @@ gore/
 │  ├─ save-editor/         Flutter (Windows) savegame editor — WinSparkle auto-update
 │  ├─ mod-studio/          Flutter (Windows) no-code mod authoring GUI
 │  └─ mod-manager/         Flutter (Windows) multi-mod library/load-order/apply GUI
+├─ plugins/
+│  └─ gore/                assistant plugin: the MCP server registration + the gore-modding skill
 ├─ lua/                    gore-lua UE4SS helper library (deployed into the game's Mods/shared)
 ├─ mods/                   first-party UE4SS mod folders
 │  ├─ example/             sample mod using gore-lua
 │  └─ gore-dump/           generated dump mod (regen: `gore dump-mod`)
 ├─ vendor/
 │  └─ retoc/               vendored IoStore reader fork (Oodle decode routed to gore-oodle)
-├─ scripts/                release helpers (appcast.py — WinSparkle appcast generator)
+├─ scripts/                release helpers + the docs/plugin checks CI runs
 └─ docs/                   this documentation
 ```
 
@@ -151,6 +153,14 @@ Both artifact names are derived from the project in `build.py`
 (`zip_basename` / `installer_basename`), and the installer stem is handed to
 Inno Setup as `/DOutputBaseName`, so the three cannot drift apart.
 
+The assistant plugin under `plugins/gore/` is deliberately **not** a project
+here. There is nothing to compile and nothing to zip: a marketplace serves it
+straight out of the repository, so what a user installs is whatever the default
+branch holds. Its version lives in the three manifests, is independent of the
+CLI's, and should be bumped when the skill or a manifest changes — not when
+`gore.exe` is released. `scripts/check_plugin.py` is what keeps the three copies
+from drifting apart; nothing bumps them for you.
+
 ### Updater feeds
 
 Each GUI app checks for updates through a WinSparkle appcast. All three read a
@@ -177,12 +187,23 @@ Internal libraries share one workspace version.
 
 ## Documentation checks
 
-Relative links across the README, `docs/`, and the component READMEs are
-verified by:
+Relative links across the README, `docs/`, the component READMEs and the plugin
+are verified by:
 
 ```powershell
 python scripts/check_docs_links.py
 ```
 
-It is a standalone check and is deliberately not wired into
-`python build.py all test`.
+The plugin is described three times over — once each for Claude Code, Codex and
+Cursor — and every copy hand-carries a name and a version. That they still agree,
+and that what they point at exists, is checked by:
+
+```powershell
+python scripts/check_plugin.py
+```
+
+Both are standalone and deliberately outside `python build.py all test`, which is
+about shippable products. CI runs them in their own step. Neither replaces
+`claude plugin validate --strict plugins/gore`, which is the authority on whether
+a manifest is well formed and wants Claude Code installed — run it before
+publishing a change to the manifests.

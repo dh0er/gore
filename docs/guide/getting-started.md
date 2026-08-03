@@ -19,7 +19,9 @@ documentation is available offline, right next to the binary.
 
 To read it offline, open `docs\guide.html`: one browsable file with every page,
 a collapsible sidebar and a filter box. The `docs\*.md` files next to it are the
-same content in Markdown, for `grep` and for the [MCP server](mcp.md). You can
+same content in Markdown, for `grep`. The [MCP server](mcp.md) serves that guide
+too, but from a copy compiled into `gore.exe` rather than from these files —
+editing them changes what you read, not what an assistant is told. You can
 regenerate the HTML at any time with `gore guide html`.
 
 **Build it yourself.** Requires a stable Rust toolchain:

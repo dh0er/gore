@@ -30,6 +30,11 @@ GLOBS = (
     "lua/README.md",
     "mods/*/README.md",
     "crates/*/*.md",
+    # The plugin ships to users through a marketplace, so its prose is as public as the guide's —
+    # and its skill is read by a model rather than a person, which makes a dead link cheaper to
+    # introduce and dearer to notice.
+    "plugins/*/README.md",
+    "plugins/*/skills/*/SKILL.md",
 )
 
 # Skipped entirely: local-only areas, not part of the published docs.
