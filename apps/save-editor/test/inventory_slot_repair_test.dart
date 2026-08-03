@@ -74,6 +74,20 @@ void main() {
     expect(edits.single['path'], 'private.inventory.repairSlots');
   });
 
+  testWidgets('the warning also shows while an NPC inventory is selected', (
+    tester,
+  ) async {
+    // The damage is reported and repaired save-wide, so it must not disappear
+    // just because the Characters tab is showing an NPC.
+    await pumpApp(tester, _InventoryCoreService(misalignedSlots: 3));
+    await openPlayerInventory(tester);
+    await tester.tap(find.text('Lizard-A'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Damaged inventory slots'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Repair'), findsOneWidget);
+  });
+
   testWidgets('a healthy save shows no repair banner', (tester) async {
     await pumpApp(tester, _InventoryCoreService(misalignedSlots: 0));
     await openPlayerInventory(tester);
@@ -214,18 +228,57 @@ class _InventoryCoreService implements GoresaveCoreService {
       case 'private.characters.list':
         return {
           'ok': true,
-          'data': {'total': 0, 'characters': <Object?>[]},
+          'data': {
+            'total': 1,
+            'characters': [
+              {
+                'globalId': 'Lizard-A',
+                'uniqueName': 'Lizard',
+                'isDead': false,
+                'hasInventory': true,
+                'hasKnowledge': false,
+                'hasEvents': false,
+              },
+            ],
+          },
         };
       case 'private.npc.list':
         return {
           'ok': true,
           'data': {
-            'total': 0,
+            'total': 1,
             'offset': 0,
             'limit': payload['limit'] ?? 100,
-            'count': 0,
-            'npcs': <Object?>[],
+            'count': 1,
+            'npcs': [
+              {'id': 'Lizard-A', 'name': 'Lizard A'},
+            ],
           },
+        };
+      case 'private.npc.inventory':
+        return {
+          'ok': true,
+          'data': {
+            'id': payload['id'],
+            'itemStackCount': 1,
+            'items': [
+              {
+                'id': 'ItFo_Cheese',
+                'path': _cheesePath,
+                'count': 1,
+                'removable': true,
+                'slotId': 0,
+                'containerType': 'MainContainer',
+              },
+            ],
+            'mainContainerPaths': [_cheesePath],
+            'writable': ['private.inventory.setItemCount'],
+          },
+        };
+      case 'private.npc.attributes':
+        return {
+          'ok': true,
+          'data': {'attributes': <Object?>[]},
         };
       case 'write_save':
         return {

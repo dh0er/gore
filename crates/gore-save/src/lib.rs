@@ -5913,7 +5913,9 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
         .iter()
         .map(|(path, count, slot_id, container_label)| {
             let removable = if is_npc {
-                slot_id.is_some()
+                // Freeing a slot resets its payload from a state-free donor in
+                // the same inventory; without one the write would fail.
+                slot_id.is_some() && view.summary.has_clean_payload_donor
             } else {
                 view.summary.removable_paths.contains(path)
             };
@@ -5947,7 +5949,8 @@ fn actor_inventory_summary(root: &properties::RootObject, actor_id: Option<&str>
     // removeItem is offered when at least one emitted row is removable (NPC: any
     // row with a slot id; player: any globally-unique MainContainer path).
     let any_removable = if is_npc {
-        view.rows.iter().any(|(_, _, slot_id, _)| slot_id.is_some())
+        view.summary.has_clean_payload_donor
+            && view.rows.iter().any(|(_, _, slot_id, _)| slot_id.is_some())
     } else {
         !view.summary.removable_paths.is_empty()
     };
@@ -10844,6 +10847,10 @@ struct MainContainerSummary {
     /// slot to clone when a new one has to be appended. With neither, addItem
     /// cannot succeed and must not be advertised.
     has_clean_template: bool,
+    /// Whether some slot in this inventory has a state-free `m_Payload`. Freeing
+    /// a slot that carries item state resets it from such a donor, so without
+    /// one removal would fail at write time and is not offered.
+    has_clean_payload_donor: bool,
 }
 
 /// The item-definition paths currently in the player's `ArmorSlot` container —
@@ -10997,6 +11004,12 @@ fn inventory_main_container_view(
     // WHOLE inventory. A blank MainContainer slot alone already makes addItem
     // possible — it fills that slot and needs no template at all.
     let mut has_clean_template = main_slots.iter().any(slot_is_free);
+    // Freeing a slot that carries item state needs a state-free payload from
+    // somewhere in the SAME inventory to reset it with (see
+    // clean_payload_value_bytes). Without one, removal would fail at write time,
+    // so it must not be offered — and "no donor" means every slot in this
+    // inventory carries state, so it disqualifies all of them at once.
+    let mut has_clean_payload_donor = false;
     let mut global_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     if let Some(properties::PropertyValue::Array {
@@ -11013,6 +11026,7 @@ fn inventory_main_container_view(
                         .is_some_and(property_carries_state)
                     {
                         has_clean_template = true;
+                        has_clean_payload_donor = true;
                     }
                     if let Some(path) = slot_item_definition(slot) {
                         if !path.is_empty() {
@@ -11040,7 +11054,7 @@ fn inventory_main_container_view(
                 continue;
             }
             all_paths.insert(path.to_string());
-            if global_counts.get(path) == Some(&1) {
+            if global_counts.get(path) == Some(&1) && has_clean_payload_donor {
                 removable_paths.insert(path.to_string());
             }
         }
@@ -11111,6 +11125,7 @@ fn inventory_main_container_view(
             all_paths,
             removable_paths,
             has_clean_template,
+            has_clean_payload_donor,
         },
         rows,
     })
@@ -25123,6 +25138,59 @@ mod tests {
             !inv_slot_carries_state(&payload, 1, 1),
             "an item added into a freed slot must not inherit its old state"
         );
+    }
+
+    #[test]
+    fn removal_is_not_offered_without_a_clean_payload_donor() {
+        // Every slot carries item state, so freeing one has nothing to reset its
+        // payload from. Offering removal would queue an edit that fails at save
+        // time, so neither the rows nor `writable` may advertise it.
+        let stateful_only = vec![inv_item_slot(
+            0,
+            INV_MAIN_LABEL,
+            "/Script/Angelscript.ItAr_Armor",
+            1,
+            &inv_stateful_payload(),
+        )];
+        let mut payload = typed_inventory_private_payload(&[], &stateful_only);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = main_container_summary(&root).unwrap();
+        assert!(!summary.has_clean_payload_donor);
+        assert!(
+            summary.removable_paths.is_empty(),
+            "no row may be offered for removal without a donor"
+        );
+
+        let refs = scan_fstrings(&payload, 0);
+        let inventory =
+            summarize_private_inventory_payload(&payload, &refs, Some(&summary), None, &[]);
+        assert!(
+            !inventory["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.inventory.removeItem")),
+            "writable: {:?}",
+            inventory["writable"]
+        );
+
+        // And the apply path refuses rather than writing a slot that keeps its
+        // old state.
+        let before = payload.clone();
+        let err = apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: "/Script/Angelscript.ItAr_Armor".to_string(),
+                actor_id: None,
+                container_type: None,
+                slot_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("state-free payload"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(payload, before, "a refused removal must not touch the save");
     }
 
     #[test]

@@ -117,7 +117,26 @@ class InventoryDetail extends ConsumerWidget {
       );
     }
 
-    if (!showActorHeader) return body;
+    // Damage an older build of this editor left in the save. It is reported
+    // save-wide and repaired save-wide, so it belongs above EITHER actor's
+    // inventory — not just the player's.
+    final content = inspection.privateInventory.canRepairSlots
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                child: SlotRepairBanner(
+                  notifier: notifier,
+                  misalignedSlots: inspection.privateInventory.misalignedSlots,
+                ),
+              ),
+              Expanded(child: body),
+            ],
+          )
+        : body;
+
+    if (!showActorHeader) return content;
 
     // Standalone fallback: CharactersTab renders this header once above its
     // sub-tab bar and passes showActorHeader:false.
@@ -130,7 +149,7 @@ class InventoryDetail extends ConsumerWidget {
           lang: lang,
           showObjectIds: showObjectIds,
         ),
-        Expanded(child: body),
+        Expanded(child: content),
       ],
     );
   }
@@ -147,58 +166,27 @@ class InventoryDetail extends ConsumerWidget {
       canCompress: canCompress,
     );
     final hasItems = inspection.privateInventory.hasData;
-    // Damage an older build of this editor left in the save. Surfaced above the
-    // inventory because that is where its effect shows up in the game, but the
-    // repair covers every actor's inventory in one write.
-    final repairBanner = inspection.privateInventory.canRepairSlots
-        ? SlotRepairBanner(
-            notifier: notifier,
-            misalignedSlots: inspection.privateInventory.misalignedSlots,
-          )
-        : null;
     if (!hasItems &&
         !gates.canAddItem &&
         !gates.canRemoveItem &&
         !gates.canReset) {
-      final message = _MessagePane(
+      return _MessagePane(
         icon: Icons.inventory_2_outlined,
         title: l10n.inventoryTitle,
         body: l10n.inventoryNoStacks,
-      );
-      if (repairBanner == null) return message;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-            child: repairBanner,
-          ),
-          Expanded(child: message),
-        ],
       );
     }
     // Shared sub-tab layout (see CharactersTab): outer 20/top 8 around the
     // detail's Card.
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (repairBanner != null) ...[
-            repairBanner,
-            const SizedBox(height: 12),
-          ],
-          Expanded(
-            child: _PrivateInventorySummaryCard(
-              inventory: inspection.privateInventory,
-              notifier: notifier,
-              editable: gates.editable,
-              canAddItem: gates.canAddItem,
-              canRemoveItem: gates.canRemoveItem,
-              canReset: gates.canReset,
-            ),
-          ),
-        ],
+      child: _PrivateInventorySummaryCard(
+        inventory: inspection.privateInventory,
+        notifier: notifier,
+        editable: gates.editable,
+        canAddItem: gates.canAddItem,
+        canRemoveItem: gates.canRemoveItem,
+        canReset: gates.canReset,
       ),
     );
   }
