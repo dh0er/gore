@@ -1359,18 +1359,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final repairEdits = allEdits
         .where((k) => k.edit['path'] == repairSlotsPath)
         .toList();
-    // Every write that re-numbers slots — the whole-save repair, and the add and
-    // removal that re-align the container they touch — would silently overwrite
-    // a raw All-Data edit of a slot's m_Id while Save still reported success.
-    // Refuse the combination the way a queued inventory reset does.
-    const idNormalizingPaths = {
+    // Every structural inventory write claims whole slots — the repair renumbers
+    // them, an add fills a blank one and resets its payload, a removal blanks
+    // one — so it would silently overwrite a raw All-Data edit into a slot while
+    // Save still reported success. Refuse the combination the way a queued
+    // inventory reset does.
+    const slotClaimingPaths = {
       repairSlotsPath,
       'private.inventory.addItem',
       'private.inventory.removeItem',
     };
-    if (allEdits.any((k) => idNormalizingPaths.contains(k.edit['path'])) &&
-        allEdits.any((k) => isSlotIdTypedEdit(k.edit))) {
-      state = state.copyWith(error: _l10n.editorInventorySlotRepairConflict);
+    if (allEdits.any((k) => slotClaimingPaths.contains(k.edit['path'])) &&
+        allEdits.any((k) => isInventorySlotTypedEdit(k.edit))) {
+      state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
       return false;
     }
     final fixedBatch = allEdits
@@ -3556,24 +3557,29 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 /// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
 /// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
 /// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
-/// A raw typed edit that writes an inventory slot's `m_Id` — the very field
-/// every slot-renumbering write rewrites.
+/// A raw typed edit that writes INTO one inventory slot — its id, its count, its
+/// payload, anything below `m_Slots/[i]`.
 ///
-/// Matched on the `m_Slots/[i]/m_Id` tail rather than on an ancestor name: only
-/// the PLAYER inventory sits under an `m_Inventory` segment, while an NPC's
-/// lives under `InventoryByGlobalId{id}/InventoryItems/…` (see
-/// `npc::npc_inventory_path`), and both are renumbered alike.
+/// Every structural inventory write claims whole slots: the repair renumbers
+/// them, an add fills a blank one and resets its payload, a removal blanks one.
+/// Any of those would overwrite such an edit after it was reported committed.
+///
+/// Matched on an `m_Slots/[i]` step rather than on an ancestor name: only the
+/// PLAYER inventory sits under an `m_Inventory` segment, while an NPC's lives
+/// under `InventoryByGlobalId{id}/InventoryItems/…` (see
+/// `npc::npc_inventory_path`), and both are rewritten alike.
 @visibleForTesting
-bool isSlotIdTypedEdit(Map<String, Object?> edit) {
+bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
   if (edit['path'] != 'private.typed.setValue') return false;
   final path = (edit['value'] as Map?)?['path'];
   if (path is! List) return false;
   final segments = path.whereType<String>().toList();
-  if (segments.length < 3 || segments.last != 'm_Id') return false;
-  final slotIndex = segments[segments.length - 2];
-  return segments[segments.length - 3] == 'm_Slots' &&
-      slotIndex.startsWith('[') &&
-      slotIndex.endsWith(']');
+  for (var index = 0; index + 1 < segments.length; index++) {
+    if (segments[index] != 'm_Slots') continue;
+    final slot = segments[index + 1];
+    if (slot.startsWith('[') && slot.endsWith(']')) return true;
+  }
+  return false;
 }
 
 bool _isInventoryTypedEdit(Map<String, Object?> edit) {

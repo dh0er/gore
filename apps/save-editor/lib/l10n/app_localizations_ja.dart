@@ -2625,8 +2625,8 @@ class AppLocalizationsJa extends AppLocalizations {
   String get slotRepairDiscard => '取り消す';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'スロットを振り直すインベントリ編集と、スロット ID の直接編集が同時に予約されています。振り直しによって直接編集は失われます。どちらかを取り消してから保存し直してください。';
+  String get editorInventorySlotEditConflict =>
+      'インベントリスロットへの直接編集と、スロットごと扱う操作（修復・追加・削除）が同時に予約されています。後者が前者を上書きします。どちらかを取り消してから保存し直してください。';
 
   @override
   String get backupFactFile => 'ファイル';

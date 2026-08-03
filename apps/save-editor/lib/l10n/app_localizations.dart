@@ -4110,11 +4110,11 @@ abstract class AppLocalizations {
   /// **'Discard'**
   String get slotRepairDiscard;
 
-  /// No description provided for @editorInventorySlotRepairConflict.
+  /// No description provided for @editorInventorySlotEditConflict.
   ///
   /// In en, this message translates to:
-  /// **'An inventory edit that renumbers slots and a direct edit of a slot id are both queued. The renumbering would discard the direct edit — revert one of them, then save again.'**
-  String get editorInventorySlotRepairConflict;
+  /// **'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.'**
+  String get editorInventorySlotEditConflict;
 
   /// No description provided for @backupFactFile.
   ///

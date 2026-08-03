@@ -679,7 +679,7 @@
   "slotRepairQueued": "Naprawa w kolejce — zapisz, aby ją zastosować.",
   "slotRepairAction": "Napraw",
   "slotRepairDiscard": "Odrzuć",
-  "editorInventorySlotRepairConflict": "W kolejce są zarówno zmiana ekwipunku, która przenumerowuje sloty, jak i bezpośrednia zmiana identyfikatora slotu. Przenumerowanie odrzuciłoby tę zmianę — cofnij jedną z nich i zapisz ponownie.",
+  "editorInventorySlotEditConflict": "W kolejce jest bezpośrednia zmiana slotu ekwipunku razem z operacją zajmującą całe sloty (naprawa, dodanie lub usunięcie). Druga nadpisałaby pierwszą — cofnij jedną z nich i zapisz ponownie.",
   "backupFactFile": "Plik",
   "renameBackupTooltip": "Nazwij tę kopię",
   "renameBackupTitle": "Nazwa kopii zapasowej",

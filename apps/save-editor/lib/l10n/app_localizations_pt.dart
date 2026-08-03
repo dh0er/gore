@@ -2687,8 +2687,8 @@ class AppLocalizationsPt extends AppLocalizations {
   String get slotRepairDiscard => 'Descartar';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
 
   @override
   String get backupFactFile => 'Arquivo';
@@ -5423,8 +5423,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get slotRepairDiscard => 'Descartar';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
 
   @override
   String get backupFactFile => 'Arquivo';

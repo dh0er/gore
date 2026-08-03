@@ -2702,8 +2702,8 @@ class AppLocalizationsFr extends AppLocalizations {
   String get slotRepairDiscard => 'Annuler';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Une modification d’inventaire qui renumérote les emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La renumérotation supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.';
+  String get editorInventorySlotEditConflict =>
+      'Une modification directe d’un emplacement d’inventaire est en attente en même temps qu’une opération qui s’approprie des emplacements entiers (réparation, ajout ou suppression). La seconde écraserait la première — annulez l’une des deux, puis enregistrez de nouveau.';
 
   @override
   String get backupFactFile => 'Fichier';

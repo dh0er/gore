@@ -679,7 +679,7 @@
   "slotRepairQueued": "Riparazione in coda — salva per applicarla.",
   "slotRepairAction": "Ripara",
   "slotRepairDiscard": "Annulla",
-  "editorInventorySlotRepairConflict": "Sono in coda sia una modifica dell’inventario che rinumera gli slot sia una modifica diretta di un id di slot. La rinumerazione scarterebbe la modifica diretta: annullane una, poi salva di nuovo.",
+  "editorInventorySlotEditConflict": "Una modifica diretta a uno slot dell’inventario è in coda insieme a un’operazione che occupa slot interi (riparazione, aggiunta o rimozione). La seconda sovrascriverebbe la prima: annullane una, poi salva di nuovo.",
   "backupFactFile": "File",
   "renameBackupTooltip": "Assegna un nome a questo backup",
   "renameBackupTitle": "Assegna un nome al backup",

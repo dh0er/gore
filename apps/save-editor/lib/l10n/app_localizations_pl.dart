@@ -2704,8 +2704,8 @@ class AppLocalizationsPl extends AppLocalizations {
   String get slotRepairDiscard => 'Odrzuć';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'W kolejce są zarówno zmiana ekwipunku, która przenumerowuje sloty, jak i bezpośrednia zmiana identyfikatora slotu. Przenumerowanie odrzuciłoby tę zmianę — cofnij jedną z nich i zapisz ponownie.';
+  String get editorInventorySlotEditConflict =>
+      'W kolejce jest bezpośrednia zmiana slotu ekwipunku razem z operacją zajmującą całe sloty (naprawa, dodanie lub usunięcie). Druga nadpisałaby pierwszą — cofnij jedną z nich i zapisz ponownie.';
 
   @override
   String get backupFactFile => 'Plik';

@@ -2686,8 +2686,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String get slotRepairDiscard => 'Descartar';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Hay en cola una edición del inventario que renumera las ranuras y una edición directa de un id de ranura. La renumeración descartaría la edición directa: revierte una de las dos y vuelve a guardar.';
+  String get editorInventorySlotEditConflict =>
+      'Hay en cola una edición directa de una ranura de inventario junto con una operación que ocupa ranuras enteras (reparar, añadir o eliminar). La segunda sobrescribiría la primera: revierte una de las dos y vuelve a guardar.';
 
   @override
   String get backupFactFile => 'Archivo';

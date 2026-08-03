@@ -2672,8 +2672,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get slotRepairDiscard => 'Discard';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'An inventory edit that renumbers slots and a direct edit of a slot id are both queued. The renumbering would discard the direct edit — revert one of them, then save again.';
+  String get editorInventorySlotEditConflict =>
+      'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.';
 
   @override
   String get backupFactFile => 'File';

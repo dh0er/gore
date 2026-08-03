@@ -2697,8 +2697,8 @@ class AppLocalizationsRu extends AppLocalizations {
   String get slotRepairDiscard => 'Отменить';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'В очереди одновременно изменение инвентаря, перенумеровывающее слоты, и прямое изменение идентификатора слота. Перенумерация отменит прямое изменение — отмените одно из них и сохраните снова.';
+  String get editorInventorySlotEditConflict =>
+      'В очереди одновременно прямое изменение слота инвентаря и операция, занимающая слоты целиком (восстановление, добавление или удаление). Вторая перезапишет первую — отмените одно из них и сохраните снова.';
 
   @override
   String get backupFactFile => 'Файл';

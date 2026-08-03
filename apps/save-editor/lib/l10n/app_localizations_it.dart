@@ -2692,8 +2692,8 @@ class AppLocalizationsIt extends AppLocalizations {
   String get slotRepairDiscard => 'Annulla';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Sono in coda sia una modifica dell’inventario che rinumera gli slot sia una modifica diretta di un id di slot. La rinumerazione scarterebbe la modifica diretta: annullane una, poi salva di nuovo.';
+  String get editorInventorySlotEditConflict =>
+      'Una modifica diretta a uno slot dell’inventario è in coda insieme a un’operazione che occupa slot interi (riparazione, aggiunta o rimozione). La seconda sovrascriverebbe la prima: annullane una, poi salva di nuovo.';
 
   @override
   String get backupFactFile => 'File';

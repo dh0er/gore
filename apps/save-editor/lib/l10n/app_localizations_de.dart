@@ -2688,8 +2688,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String get slotRepairDiscard => 'Verwerfen';
 
   @override
-  String get editorInventorySlotRepairConflict =>
-      'Eine Inventar-Änderung, die Slots neu nummeriert, und eine direkte Änderung einer Slot-Id sind beide vorgemerkt. Die Neunummerierung würde die direkte Änderung verwerfen — eine von beiden zurücknehmen, dann erneut speichern.';
+  String get editorInventorySlotEditConflict =>
+      'Eine direkte Änderung an einem Inventar-Slot ist zusammen mit einer Änderung vorgemerkt, die ganze Slots beansprucht (Reparatur, Hinzufügen oder Entfernen). Die zweite würde die erste überschreiben — eine von beiden zurücknehmen, dann erneut speichern.';
 
   @override
   String get backupFactFile => 'Datei';

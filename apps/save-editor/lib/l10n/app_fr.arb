@@ -690,7 +690,7 @@
   "slotRepairQueued": "Réparation en attente — enregistrez pour l’appliquer.",
   "slotRepairAction": "Réparer",
   "slotRepairDiscard": "Annuler",
-  "editorInventorySlotRepairConflict": "Une modification d’inventaire qui renumérote les emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La renumérotation supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.",
+  "editorInventorySlotEditConflict": "Une modification directe d’un emplacement d’inventaire est en attente en même temps qu’une opération qui s’approprie des emplacements entiers (réparation, ajout ou suppression). La seconde écraserait la première — annulez l’une des deux, puis enregistrez de nouveau.",
   "backupFactFile": "Fichier",
   "renameBackupTooltip": "Nommer cette sauvegarde",
   "renameBackupTitle": "Nommer la sauvegarde",
