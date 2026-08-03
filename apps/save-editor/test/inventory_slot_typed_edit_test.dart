@@ -89,6 +89,48 @@ void main() {
     );
   });
 
+  group('the narrower id predicate the repair uses', () {
+    // The repair only rewrites ids, and only after everything else has run, so
+    // it collides with an edit of a slot's m_Id and with nothing else.
+    List<String> slotPath(List<String> leaf) => [
+      'm_SavedPlayers',
+      '[0]',
+      'm_Inventory',
+      'm_Slots',
+      '[3]',
+      ...leaf,
+    ];
+
+    test('matches a slot id edit', () {
+      expect(isInventorySlotIdTypedEdit(typedEdit(slotPath(['m_Id']))), isTrue);
+    });
+
+    test('leaves the other slot fields alone', () {
+      for (final leaf in [
+        ['m_SlotData', 'm_ItemCount'],
+        ['m_Payload', 'm_StageLevel'],
+        <String>[],
+      ]) {
+        expect(
+          isInventorySlotIdTypedEdit(typedEdit(slotPath(leaf))),
+          isFalse,
+          reason: 'leaf: $leaf',
+        );
+        // The wider predicate, which add and remove use, still claims them.
+        expect(isInventorySlotTypedEdit(typedEdit(slotPath(leaf))), isTrue);
+      }
+    });
+
+    test('ignores an m_Id that is not a slot id', () {
+      expect(
+        isInventorySlotIdTypedEdit(
+          typedEdit(['m_Inventory', 'm_Values', 'm_Id']),
+        ),
+        isFalse,
+      );
+    });
+  });
+
   test('ignores anything that is not inside a slot', () {
     // m_Slots itself, with no slot picked out.
     expect(

@@ -1359,18 +1359,24 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final repairEdits = allEdits
         .where((k) => k.edit['path'] == repairSlotsPath)
         .toList();
-    // Every structural inventory write claims whole slots — the repair renumbers
-    // them, an add fills a blank one and resets its payload, a removal blanks
-    // one — so it would silently overwrite a raw All-Data edit into a slot while
-    // Save still reported success. Refuse the combination the way a queued
-    // inventory reset does.
+    // An add or a removal claims a whole slot — the add fills a blank one and
+    // resets its payload, the removal blanks one — so ANY raw All-Data edit into
+    // a slot would be silently overwritten while Save still reported success.
+    // The repair is narrower: it only rewrites ids, and only after everything
+    // else has run, so it collides with an edit of a slot's m_Id and with
+    // nothing else. Refuse those combinations the way a queued reset does.
     const slotClaimingPaths = {
-      repairSlotsPath,
       'private.inventory.addItem',
       'private.inventory.removeItem',
     };
-    if (allEdits.any((k) => slotClaimingPaths.contains(k.edit['path'])) &&
-        allEdits.any((k) => isInventorySlotTypedEdit(k.edit))) {
+    final claimsSlots = allEdits.any(
+      (k) => slotClaimingPaths.contains(k.edit['path']),
+    );
+    final conflicts = claimsSlots
+        ? allEdits.any((k) => isInventorySlotTypedEdit(k.edit))
+        : repairEdits.isNotEmpty &&
+              allEdits.any((k) => isInventorySlotIdTypedEdit(k.edit));
+    if (conflicts) {
       state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
       return false;
     }
@@ -3590,6 +3596,22 @@ bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
     if (slot.startsWith('[') && slot.endsWith(']')) return true;
   }
   return false;
+}
+
+/// A raw typed edit that writes a slot's `m_Id` — the one field the whole-save
+/// repair rewrites, and therefore the only one it can collide with. Anything
+/// else inside a slot survives the repair untouched.
+@visibleForTesting
+bool isInventorySlotIdTypedEdit(Map<String, Object?> edit) {
+  if (!_typedEditPaths.contains(edit['path'])) return false;
+  final path = (edit['value'] as Map?)?['path'];
+  if (path is! List) return false;
+  final segments = path.whereType<String>().toList();
+  if (segments.length < 3 || segments.last != 'm_Id') return false;
+  final slot = segments[segments.length - 2];
+  return segments[segments.length - 3] == 'm_Slots' &&
+      slot.startsWith('[') &&
+      slot.endsWith(']');
 }
 
 bool _isInventoryTypedEdit(Map<String, Object?> edit) {
