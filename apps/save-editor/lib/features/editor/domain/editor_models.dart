@@ -856,7 +856,9 @@ class PrivateInventorySummary {
   /// until the save is repaired.
   final int misalignedSlots;
 
-  /// Whether the core offers the whole-save slot repair for this save.
+  /// Whether the core offers the whole-save slot repair for this save. The
+  /// WARNING keys off [misalignedSlots] alone — a save can be damaged without
+  /// the repair being on offer, and the reader still needs to know.
   bool get canRepairSlots =>
       misalignedSlots > 0 && writable.contains('private.inventory.repairSlots');
 

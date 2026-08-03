@@ -8,20 +8,21 @@ import 'package:goresave/providers/data_providers.dart';
 
 /// Whether this save carries the damage the repair addresses.
 ///
-/// Deliberately independent of whether the editor can currently write: the
-/// warning says the game will act on the wrong item, which a reader needs to
-/// know even in a session that cannot repair it.
+/// Nothing but the count: the warning says the game will act on the wrong item,
+/// which a reader needs to know even where nothing can be repaired — including
+/// a save whose core offers no repair at all.
 bool slotRepairWarranted(SaveInspection inspection) =>
-    inspection.privateInventory.canRepairSlots;
+    inspection.privateInventory.misalignedSlots > 0;
 
-/// Whether the repair can actually be queued. It is a private write, so it takes
-/// the same capability every other inventory action is gated on — without it the
-/// action could be queued but never applied.
+/// Whether the repair can actually be queued: the core has to offer it, and it
+/// is a private write, so it takes the same capability every other inventory
+/// action is gated on — without either, the action could be queued but never
+/// applied.
 bool canQueueSlotRepair(
   SaveInspection inspection, {
   required bool canCompress,
 }) =>
-    slotRepairWarranted(inspection) &&
+    inspection.privateInventory.canRepairSlots &&
     inspection.privateEditable &&
     inspection.privateTypedVerified &&
     canCompress;

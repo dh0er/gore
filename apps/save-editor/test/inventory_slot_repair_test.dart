@@ -177,6 +177,20 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
   });
 
+  testWidgets('damage without an offered repair still warns', (tester) async {
+    // The count and the op are separate signals. A save reported as damaged by
+    // a core that offers no repair must still say so — silence would leave the
+    // reader believing the save is fine.
+    await pumpApp(
+      tester,
+      _InventoryCoreService(misalignedSlots: 3, offersRepair: false),
+    );
+    await openPlayerInventory(tester);
+
+    expect(find.text('Damaged inventory slots'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
+  });
+
   testWidgets('a healthy save shows no repair banner', (tester) async {
     await pumpApp(tester, _InventoryCoreService(misalignedSlots: 0));
     await openPlayerInventory(tester);
@@ -198,6 +212,7 @@ class _InventoryCoreService implements GoresaveCoreService {
     required this.misalignedSlots,
     this.canCompress = true,
     this.npcRemovable = false,
+    this.offersRepair = true,
   });
 
   final int misalignedSlots;
@@ -207,6 +222,9 @@ class _InventoryCoreService implements GoresaveCoreService {
 
   /// Whether the NPC inventory offers removal (an id-addressed edit).
   final bool npcRemovable;
+
+  /// Whether the core advertises the repair op alongside the damage count.
+  final bool offersRepair;
   final requests = <_RecordedRequest>[];
 
   static const _cheesePath = '/Script/Angelscript.ItFo_Cheese';
@@ -297,7 +315,8 @@ class _InventoryCoreService implements GoresaveCoreService {
                 },
                 'writable': [
                   'private.inventory.setItemCount',
-                  if (misalignedSlots > 0) 'private.inventory.repairSlots',
+                  if (misalignedSlots > 0 && offersRepair)
+                    'private.inventory.repairSlots',
                 ],
               },
             },
