@@ -3287,15 +3287,20 @@ class _RenameBackupDialogState extends State<_RenameBackupDialog> {
     final l10n = AppLocalizations.of(context);
     return AlertDialog(
       title: Text(l10n.renameBackupTitle),
-      content: TextField(
-        controller: _controller,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: l10n.renameBackupLabel,
-          helperText: l10n.renameBackupHelp(widget.fileName),
-          helperMaxLines: 3,
+      // The helper names the backup file, which is long, and a dialog sized to
+      // its title alone clipped it. Give it room to wrap and to be read.
+      content: SizedBox(
+        width: 460,
+        child: TextField(
+          controller: _controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.renameBackupLabel,
+            helperText: l10n.renameBackupHelp(widget.fileName),
+            helperMaxLines: 6,
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
         ),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
       ),
       actions: [
         TextButton(

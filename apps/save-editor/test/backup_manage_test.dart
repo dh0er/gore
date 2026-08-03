@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
@@ -14,7 +15,10 @@ import 'support/ui_settings_test_store.dart';
 /// visible as a fact, and an unnamed backup keeps heading itself with its file
 /// name.
 void main() {
-  Future<void> openBackups(WidgetTester tester, GoresaveCoreService core) async {
+  Future<void> openBackups(
+    WidgetTester tester,
+    GoresaveCoreService core,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1400, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -68,9 +72,33 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final request = core.requests.lastWhere((r) => r.command == 'rename_backup');
+    final request = core.requests.lastWhere(
+      (r) => r.command == 'rename_backup',
+    );
     expect(request.payload['backupPath'], r'C:\tmp\saves\G1R-001.sav.bak.100');
     expect(request.payload['name'], 'before the boss');
+  });
+
+  testWidgets('the rename helper is readable with a long file name', (
+    tester,
+  ) async {
+    // Real backup file names carry a timestamp; the helper naming one wrapped
+    // past the room the dialog gave it and was cut off mid-sentence.
+    await openBackups(
+      tester,
+      _BackupCoreService(fileName: 'G1R-005.sav.bak.1785764967'),
+    );
+
+    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.pumpAndSettle();
+
+    final helper = find.textContaining('Shown instead of the file name');
+    expect(helper, findsOneWidget);
+    expect(
+      tester.renderObject<RenderParagraph>(helper).didExceedMaxLines,
+      isFalse,
+      reason: 'the helper must not be clipped',
+    );
   });
 
   testWidgets('deleting asks first and only then reaches the core', (
@@ -103,7 +131,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final request = core.requests.lastWhere((r) => r.command == 'delete_backup');
+    final request = core.requests.lastWhere(
+      (r) => r.command == 'delete_backup',
+    );
     expect(request.payload['backupPath'], r'C:\tmp\saves\G1R-001.sav.bak.100');
   });
 }
@@ -116,9 +146,12 @@ class _RecordedRequest {
 
 /// One save with exactly one backup, optionally carrying a label.
 class _BackupCoreService implements GoresaveCoreService {
-  _BackupCoreService({this.name});
+  _BackupCoreService({this.name, this.fileName = 'G1R-001.sav.bak.100'});
 
   final String? name;
+
+  /// Real backup names carry a unix timestamp and get long.
+  final String fileName;
   final requests = <_RecordedRequest>[];
 
   static const _backupPath = r'C:\tmp\saves\G1R-001.sav.bak.100';
@@ -205,7 +238,7 @@ class _BackupCoreService implements GoresaveCoreService {
             'backups': [
               {
                 'path': _backupPath,
-                'fileName': 'G1R-001.sav.bak.100',
+                'fileName': fileName,
                 if (name != null) 'name': name,
                 'fileSize': 1024,
                 'sha1': 'deadbeefdeadbeef',
