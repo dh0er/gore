@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
@@ -1358,6 +1359,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final repairEdits = allEdits
         .where((k) => k.edit['path'] == repairSlotsPath)
         .toList();
+    // A raw All-Data edit of a slot's m_Id states the opposite intention: the
+    // repair would silently overwrite it and Save would still report success.
+    // Refuse the combination the way a queued inventory reset does.
+    if (repairEdits.isNotEmpty && allEdits.any((k) => isSlotIdTypedEdit(k.edit))) {
+      state = state.copyWith(error: _l10n.editorInventorySlotRepairConflict);
+      return false;
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
@@ -3492,6 +3500,17 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 /// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
 /// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
 /// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
+/// A raw typed edit that writes an inventory slot's `m_Id` — the very field the
+/// whole-save slot repair rewrites.
+@visibleForTesting
+bool isSlotIdTypedEdit(Map<String, Object?> edit) {
+  if (!_isInventoryTypedEdit(edit)) return false;
+  final path = (edit['value'] as Map?)?['path'];
+  if (path is! List) return false;
+  final segments = path.whereType<String>().toList();
+  return segments.isNotEmpty && segments.last == 'm_Id';
+}
+
 bool _isInventoryTypedEdit(Map<String, Object?> edit) {
   if (edit['path'] != 'private.typed.setValue') return false;
   final value = edit['value'];

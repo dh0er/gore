@@ -2691,4 +2691,8 @@ class AppLocalizationsDe extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return '$count Inventar-Slots reparieren? Es werden nur die Slot-Ids an ihre Position angepasst — kein Item wird hinzugefügt, entfernt oder verändert. Ein Backup wird wie üblich angelegt.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Eine Slot-Reparatur und eine direkte Änderung einer Slot-Id sind beide vorgemerkt. Die Reparatur überschreibt alle Slot-Ids und würde die direkte Änderung verwerfen — eine von beiden zurücknehmen, dann erneut speichern.';
 }

@@ -11003,7 +11003,6 @@ fn inventory_main_container_view(
     // has to append), and count how many times each item path occurs across the
     // WHOLE inventory. A blank MainContainer slot alone already makes addItem
     // possible — it fills that slot and needs no template at all.
-    let mut has_clean_template = main_slots.iter().any(slot_is_free);
     // Freeing a slot that carries item state needs a state-free payload from
     // somewhere in the SAME inventory to reset it with (see
     // clean_payload_value_bytes). Without one, removal would fail at write time,
@@ -11025,7 +11024,6 @@ fn inventory_main_container_view(
                     if !struct_element_property(slot, "m_Payload")
                         .is_some_and(property_carries_state)
                     {
-                        has_clean_template = true;
                         has_clean_payload_donor = true;
                     }
                     if let Some(path) = slot_item_definition(slot) {
@@ -11124,7 +11122,10 @@ fn inventory_main_container_view(
         summary: MainContainerSummary {
             all_paths,
             removable_paths,
-            has_clean_template,
+            // addItem either fills a free slot — resetting its payload from a
+            // state-free one when needed — or appends a clone of a state-free
+            // slot. Both come down to the same prerequisite.
+            has_clean_template: has_clean_payload_donor,
             has_clean_payload_donor,
         },
         rows,
@@ -11417,7 +11418,18 @@ fn apply_private_inventory_add_item_to_payload(
     })?;
     let mut patched = payload.clone();
     let mut needs_type_patch = false;
-    if free_index.is_none() {
+    if let Some(free_index) = free_index {
+        // A slot is picked as free on its empty definition alone, and an older
+        // build could leave one blank while its payload still held the removed
+        // item's state. Reset it so the new item cannot inherit upgrades,
+        // ownership or a stage level (see reset_slot_payload_if_stateful).
+        let slots_path = {
+            let mut path = inventory_path.clone();
+            path.extend_from_slice(&slots_suffix);
+            path
+        };
+        reset_slot_payload_if_stateful(&mut patched, &slots_path, free_index)?;
+    } else {
         let template_bytes = if let Some(source) = slots.iter().rposition(|slot| is_clean(slot)) {
             let layout = properties::container_layout(payload, chain.target)?;
             let range = layout.element_ranges.get(source).cloned().ok_or_else(|| {
@@ -11860,6 +11872,40 @@ fn clean_payload_value_bytes(
     None
 }
 
+/// Reset one slot's `m_Payload` to a state-free one when it carries item state.
+///
+/// Item state (an armor's upgrades, its stage level, ownership tags, nested
+/// items) must never travel with a slot: not into a slot being freed, and not
+/// into an item reusing a slot some older build blanked without clearing it.
+/// The payload shape varies by item, so rather than reset field by field, swap
+/// in the whole serialized payload of a state-free slot — the same struct type,
+/// and exactly the clean shape the game leaves behind.
+fn reset_slot_payload_if_stateful(
+    payload: &mut Vec<u8>,
+    slots_path: &[String],
+    index: usize,
+) -> Result<(), CoreError> {
+    let mut path = slots_path.to_vec();
+    path.push(format!("[{index}]"));
+    path.push("m_Payload".to_string());
+    let payload_segs = properties::parse_path(&path)?;
+    let root = properties::parse_private_root(payload)?;
+    if !properties::resolve(&root.properties, &payload_segs).is_ok_and(property_carries_state) {
+        return Ok(());
+    }
+    let clean = clean_payload_value_bytes(payload, &root, slots_path).ok_or_else(|| {
+        CoreError::UnsupportedEdit(
+            "no inventory slot has a state-free payload to reset this slot with;              the edit would leave the old item's state behind"
+                .to_string(),
+        )
+    })?;
+    let chain = properties::resolve_chain(&root.properties, &payload_segs)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_value_bytes(payload, &target, &enclosing, &clean)
+}
+
 /// Blank one inventory slot in place: drop the item-specific payload state,
 /// clear the item definition and zero the count — the exact shape the game
 /// leaves behind when an item leaves the inventory (see [`slot_is_free`]). The
@@ -11880,29 +11926,7 @@ fn blank_inventory_slot(
         path
     };
 
-    // Item state (an armor's upgrades, its stage level, ownership tags, nested
-    // items) must not survive in a slot the game will hand to the next item
-    // picked up. The payload's shape varies by item, so rather than reset field
-    // by field, swap in the whole serialized payload of a state-free slot — the
-    // same struct type, and exactly the clean shape the game leaves behind.
-    {
-        let payload_segs = properties::parse_path(&slot_path(&["m_Payload"]))?;
-        let root = properties::parse_private_root(payload)?;
-        if properties::resolve(&root.properties, &payload_segs).is_ok_and(property_carries_state) {
-            let clean = clean_payload_value_bytes(payload, &root, slots_path).ok_or_else(|| {
-                CoreError::UnsupportedEdit(
-                    "no inventory slot has a state-free payload to reset the freed slot with; \
-                     removing this item would leave its state behind"
-                        .to_string(),
-                )
-            })?;
-            let chain = properties::resolve_chain(&root.properties, &payload_segs)?;
-            let target = chain.target.clone();
-            let enclosing = chain.enclosing_size_fields.clone();
-            drop(root);
-            properties::patch_value_bytes(payload, &target, &enclosing, &clean)?;
-        }
-    }
+    reset_slot_payload_if_stateful(payload, slots_path, index)?;
 
     {
         let root = properties::parse_private_root(payload)?;
@@ -25231,6 +25255,87 @@ mod tests {
             "unexpected error: {err}"
         );
         assert_eq!(payload, before, "a refused removal must not touch the save");
+    }
+
+    #[test]
+    fn add_item_cleans_a_blank_slot_that_still_carries_state() {
+        // A slot counts as free on its empty definition alone, and an older
+        // build could leave one blank with the removed item's payload intact.
+        // Reusing it must not hand the new item those upgrades.
+        let main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(1, INV_MAIN_LABEL, "", 0, &inv_stateful_payload()),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main);
+        assert!(
+            inv_slot_carries_state(&payload, 1, 1),
+            "fixture precondition"
+        );
+
+        apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                count: 1,
+                actor_id: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItFo_Apple".to_string(),
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            ]
+        );
+        assert!(
+            !inv_slot_carries_state(&payload, 1, 1),
+            "the added item must not inherit the blanked slot's state"
+        );
+        assert!(slot_upgrade_pairs(&inv_slot_elements(&payload, 1)[1]).is_empty());
+    }
+
+    #[test]
+    fn adding_is_not_offered_without_a_clean_payload_donor() {
+        // Every slot carries state — including the blank one — so neither the
+        // free-slot reuse nor the append path can produce a clean item.
+        let main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItAr_Armor",
+                1,
+                &inv_stateful_payload(),
+            ),
+            inv_item_slot(1, INV_MAIN_LABEL, "", 0, &inv_stateful_payload()),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main);
+        let root = properties::parse_private_root(&payload).unwrap();
+        let summary = main_container_summary(&root).unwrap();
+        assert!(!summary.has_clean_template);
+
+        let before = payload.clone();
+        let err = apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                count: 1,
+                actor_id: None,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("state-free payload"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(payload, before, "a refused add must not touch the save");
     }
 
     #[test]

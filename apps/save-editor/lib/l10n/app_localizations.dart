@@ -4115,6 +4115,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Repair {count} inventory slots? Only the slot ids are rewritten to match their positions — no item is added, removed or changed. A backup is created as usual.'**
   String slotRepairConfirm(int count);
+
+  /// No description provided for @editorInventorySlotRepairConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A slot repair and a direct edit of a slot id are both queued. The repair rewrites every slot id and would discard the direct edit — revert one of them, then save again.'**
+  String get editorInventorySlotRepairConflict;
 }
 
 class _AppLocalizationsDelegate

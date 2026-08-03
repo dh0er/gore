@@ -2705,4 +2705,8 @@ class AppLocalizationsFr extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return 'Réparer $count emplacements d’inventaire ? Seuls les identifiants sont réécrits pour correspondre à leur position — aucun objet n’est ajouté, supprimé ni modifié. Une sauvegarde de secours est créée.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Une réparation des emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La réparation réécrit tous les identifiants et supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.';
 }

@@ -2628,4 +2628,8 @@ class AppLocalizationsJa extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return '$count 個のインベントリスロットを修復しますか？ スロット ID を位置に合わせて書き直すだけで、アイテムの追加・削除・変更は行いません。バックアップは通常どおり作成されます。';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'スロットの修復とスロット ID の直接編集が同時に予約されています。修復はすべてのスロット ID を書き直すため、直接編集は失われます。どちらかを取り消してから保存し直してください。';
 }

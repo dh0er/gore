@@ -680,5 +680,6 @@
   "slotRepairAction": "Reparar",
   "slotRepairDiscard": "Descartar",
   "slotRepairConfirm": "Reparar {count} espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.",
-  "@slotRepairConfirm": {"placeholders": {"count": {"type": "int"}}}
+  "@slotRepairConfirm": {"placeholders": {"count": {"type": "int"}}},
+  "editorInventorySlotRepairConflict": "Um reparo de espaços e uma edição direta de um id de espaço estão ambos na fila. O reparo reescreve todos os ids e descartaria a edição direta — reverta um dos dois e salve novamente."
 }

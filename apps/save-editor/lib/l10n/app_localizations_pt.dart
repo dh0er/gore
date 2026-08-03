@@ -2690,6 +2690,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Um reparo de espaços e uma edição direta de um id de espaço estão ambos na fila. O reparo reescreve todos os ids e descartaria a edição direta — reverta um dos dois e salve novamente.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5377,4 +5381,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String slotRepairConfirm(int count) {
     return 'Reparar $count espaços de inventário? Apenas os ids dos espaços são reescritos para corresponder à posição — nenhum item é adicionado, removido ou alterado. Um backup é criado normalmente.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Um reparo de espaços e uma edição direta de um id de espaço estão ambos na fila. O reparo reescreve todos os ids e descartaria a edição direta — reverta um dos dois e salve novamente.';
 }

@@ -2707,4 +2707,8 @@ class AppLocalizationsPl extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return 'Naprawić $count slotów ekwipunku? Zmieniane są wyłącznie identyfikatory slotów, aby pasowały do pozycji — żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Kopia zapasowa zostanie utworzona.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'W kolejce są zarówno naprawa slotów, jak i bezpośrednia zmiana identyfikatora slotu. Naprawa nadpisuje wszystkie identyfikatory i odrzuciłaby tę zmianę — cofnij jedną z nich i zapisz ponownie.';
 }

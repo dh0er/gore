@@ -2695,4 +2695,8 @@ class AppLocalizationsIt extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return 'Riparare $count slot dell’inventario? Vengono riscritti solo gli id degli slot per farli corrispondere alla posizione: nessun oggetto viene aggiunto, rimosso o modificato. Viene creato un backup.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Sono in coda sia una riparazione degli slot sia una modifica diretta di un id di slot. La riparazione riscrive tutti gli id e scarterebbe la modifica diretta: annullane una, poi salva di nuovo.';
 }

@@ -2675,4 +2675,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return 'Repair $count inventory slots? Only the slot ids are rewritten to match their positions — no item is added, removed or changed. A backup is created as usual.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'A slot repair and a direct edit of a slot id are both queued. The repair rewrites every slot id and would discard the direct edit — revert one of them, then save again.';
 }

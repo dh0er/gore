@@ -2689,4 +2689,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String slotRepairConfirm(int count) {
     return '¿Reparar $count ranuras de inventario? Solo se reescriben los id de las ranuras para que coincidan con su posición: no se añade, elimina ni cambia ningún objeto. Se crea una copia de seguridad.';
   }
+
+  @override
+  String get editorInventorySlotRepairConflict =>
+      'Hay en cola una reparación de ranuras y una edición directa de un id de ranura. La reparación reescribe todos los id y descartaría la edición directa: revierte una de las dos y vuelve a guardar.';
 }
