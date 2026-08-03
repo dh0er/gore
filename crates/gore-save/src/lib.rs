@@ -1549,7 +1549,13 @@ fn write_backup_names(save_path: &Path, names: &HashMap<String, String>) -> Resu
         .collect();
     let text = serde_json::to_string_pretty(&Value::Object(object))
         .map_err(|err| CoreError::Parse(format!("cannot encode backup labels: {err}")))?;
-    fs::write(&path, text)?;
+    // Stage beside the file and rename over it, never write in place: a write
+    // interrupted halfway would leave a map that listings silently read as "no
+    // labels" and that mutations refuse to touch, stranding names the user
+    // cannot restore. The rename replaces the destination in one step; the
+    // staging file only survives a failure, where its own Drop removes it.
+    let staged = ScratchFile::create(&path, "tmp-labels", text.as_bytes())?;
+    fs::rename(staged.path(), &path)?;
     Ok(())
 }
 
@@ -16360,6 +16366,15 @@ mod tests {
         let listed = list_save_backups(&path).unwrap();
         assert_eq!(listed[0].name.as_deref(), Some("before the boss"));
         assert_eq!(listed[0].file_name, "G1R-001.sav.bak.100");
+
+        // The map is renamed into place, so no staging file may survive it.
+        assert!(
+            !fs::read_dir(subfolder.as_path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().contains("tmp-labels")),
+            "a staged label file was left behind"
+        );
 
         // An empty name clears it again, leaving no leftover file behind.
         rename_backup(&path, &backup, "   ").unwrap();
