@@ -1554,23 +1554,39 @@ fn resolve_owned_backup(save_path: &Path, backup_path: &Path) -> Result<String, 
 fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     let file_name = resolve_owned_backup(save_path, backup_path)?;
     fs::remove_file(backup_path)?;
-    // Labels are keyed by file name, and the same name can exist twice — once
-    // beside the save, once in the backups folder, both of which are listed. Let
-    // the label go only once no backup carries that name any more, or deleting
-    // one copy would silently strip the other's name.
-    let still_listed = list_save_backups(save_path)?
-        .into_iter()
-        .chain(list_persistent_data_list_backups_for_save(save_path)?)
-        .any(|item| item.file_name == file_name);
-    let mut names = read_backup_names(save_path);
-    if !still_listed && names.remove(&file_name).is_some() {
-        write_backup_names(save_path, &names)?;
-    }
+    // The file is gone for good from here on, so nothing below may turn the call
+    // into a failure: the caller would report a deletion that did happen as
+    // failed, leave the stale entry on screen, and have nothing left to retry.
+    // A label that could not be tidied up rides along as a warning instead.
+    let label_warning = prune_backup_label(save_path, &file_name)
+        .err()
+        .map(|err| err.to_string());
     Ok(json!({
         "path": backup_path.display().to_string(),
         "fileName": file_name,
         "deleted": true,
+        "labelWarning": label_warning,
     }))
+}
+
+/// Drop the label for `file_name` once no backup carries that name any more.
+///
+/// Labels are keyed by file name, and the same name can exist twice — once
+/// beside the save, once in the backups folder, both of which are listed — so a
+/// surviving copy keeps the name the user gave it.
+fn prune_backup_label(save_path: &Path, file_name: &str) -> Result<(), CoreError> {
+    let still_listed = list_save_backups(save_path)?
+        .into_iter()
+        .chain(list_persistent_data_list_backups_for_save(save_path)?)
+        .any(|item| item.file_name == file_name);
+    if still_listed {
+        return Ok(());
+    }
+    let mut names = read_backup_names(save_path);
+    if names.remove(file_name).is_some() {
+        write_backup_names(save_path, &names)?;
+    }
+    Ok(())
 }
 
 /// Label one backup of `save_path`, or clear its label with an empty name. The
@@ -16333,6 +16349,46 @@ mod tests {
         assert!(!backup.exists());
         assert!(list_save_backups(&path).unwrap().is_empty());
         assert!(read_backup_names(&path).is_empty());
+    }
+
+    #[test]
+    fn a_deleted_backup_reports_success_even_if_its_label_cannot_be_tidied() {
+        // Once the file is gone the deletion cannot be taken back. Failing the
+        // call over the label file would tell the user it did not happen, leave
+        // the stale entry on screen, and leave nothing to retry.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let doomed = subfolder.join("G1R-001.sav.bak.100");
+        let kept = subfolder.join("G1R-001.sav.bak.200");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&doomed, minimal_gsav("Doomed")).unwrap();
+        fs::write(&kept, minimal_gsav("Kept")).unwrap();
+        rename_backup(&path, &doomed, "before the boss").unwrap();
+        // A second label keeps the map non-empty, so tidying up REWRITES the
+        // file rather than removing it.
+        rename_backup(&path, &kept, "after the boss").unwrap();
+
+        // Readable but not writable: the label lookup works, only the rewrite
+        // fails.
+        let names_file = backup_names_path(&path);
+        let mut permissions = fs::metadata(&names_file).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&names_file, permissions).unwrap();
+
+        let response = delete_backup(&path, &doomed).unwrap();
+        assert_eq!(response["deleted"], true);
+        assert!(!doomed.exists(), "the file is gone either way");
+        assert!(
+            response["labelWarning"].is_string(),
+            "the caller is told the label could not be tidied: {response}"
+        );
+
+        // Let the temp dir clean itself up again.
+        let mut permissions = fs::metadata(&names_file).unwrap().permissions();
+        permissions.set_readonly(false);
+        fs::set_permissions(&names_file, permissions).unwrap();
     }
 
     #[test]
