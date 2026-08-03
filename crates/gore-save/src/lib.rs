@@ -1493,15 +1493,38 @@ fn backup_names_path(save_path: &Path) -> PathBuf {
 /// Read the label map for `save_path`'s folder. A missing or unreadable file
 /// yields an empty map: labels are decoration, never a reason to fail a listing.
 fn read_backup_names(save_path: &Path) -> HashMap<String, String> {
-    let Ok(text) = fs::read_to_string(backup_names_path(save_path)) else {
-        return HashMap::new();
+    read_backup_names_strict(save_path).unwrap_or_default()
+}
+
+/// The label map, with an existing-but-unreadable file reported as an error.
+///
+/// Anything that REWRITES the map has to go through this: the forgiving reader
+/// would hand a mutation an empty map for a file it could not parse, and saving
+/// that back would discard every label the file still held — a file an
+/// interrupted write may well have left recoverable.
+fn read_backup_names_strict(save_path: &Path) -> Result<HashMap<String, String>, CoreError> {
+    let path = backup_names_path(save_path);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) => return Err(err.into()),
     };
-    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
-        return HashMap::new();
+    let parsed = serde_json::from_str::<Value>(&text).map_err(|err| {
+        CoreError::Parse(format!(
+            "{} is not readable backup-label JSON: {err}",
+            path.display()
+        ))
+    })?;
+    let Value::Object(map) = parsed else {
+        return Err(CoreError::Parse(format!(
+            "{} does not hold a backup-label object",
+            path.display()
+        )));
     };
-    map.into_iter()
+    Ok(map
+        .into_iter()
         .filter_map(|(key, value)| Some((key, value.as_str()?.to_string())))
-        .collect()
+        .collect())
 }
 
 /// Persist the label map, creating the backups folder if needed. An empty map
@@ -1582,7 +1605,7 @@ fn prune_backup_label(save_path: &Path, file_name: &str) -> Result<(), CoreError
     if still_listed {
         return Ok(());
     }
-    let mut names = read_backup_names(save_path);
+    let mut names = read_backup_names_strict(save_path)?;
     if names.remove(file_name).is_some() {
         write_backup_names(save_path, &names)?;
     }
@@ -1594,7 +1617,7 @@ fn prune_backup_label(save_path: &Path, file_name: &str) -> Result<(), CoreError
 fn rename_backup(save_path: &Path, backup_path: &Path, name: &str) -> Result<Value, CoreError> {
     let file_name = resolve_owned_backup(save_path, backup_path)?;
     let trimmed = name.trim();
-    let mut names = read_backup_names(save_path);
+    let mut names = read_backup_names_strict(save_path)?;
     if trimmed.is_empty() {
         names.remove(&file_name);
     } else {
@@ -16389,6 +16412,36 @@ mod tests {
         let mut permissions = fs::metadata(&names_file).unwrap().permissions();
         permissions.set_readonly(false);
         fs::set_permissions(&names_file, permissions).unwrap();
+    }
+
+    #[test]
+    fn a_damaged_label_map_is_not_overwritten_by_a_rename() {
+        // An interrupted write can leave the file recoverable by hand. Naming
+        // one backup must not answer that by saving an empty map over it.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.100");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&backup, minimal_gsav("Backup")).unwrap();
+
+        let names_file = backup_names_path(&path);
+        let damaged = "{\"G1R-001.sav.bak.100\": \"before the boss\"";
+        fs::write(&names_file, damaged).unwrap();
+
+        let err = rename_backup(&path, &backup, "new name").unwrap_err();
+        assert!(
+            err.to_string().contains("backup-label JSON"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            fs::read_to_string(&names_file).unwrap(),
+            damaged,
+            "the salvageable file must be left exactly as it was"
+        );
+        // Listing stays forgiving: a broken file costs the labels, not the list.
+        assert_eq!(list_save_backups(&path).unwrap().len(), 1);
     }
 
     #[test]
