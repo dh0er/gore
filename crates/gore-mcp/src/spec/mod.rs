@@ -169,9 +169,9 @@ impl Class {
 
 /// How a command builds a second output path out of one it was given.
 ///
-/// Only shapes the gate can compute from the arguments alone belong here. `gore gen` derives its
-/// target from the mod name inside `overrides.toml`, which this layer cannot see without parsing
-/// the file, so that command is classified as a mutation instead of being described here.
+/// Only shapes the gate can work out for itself belong here. `gore gen` derives its target from
+/// the mod name inside `overrides.toml`, and TOML is not something this layer parses, so that
+/// command is classified as a mutation instead of being described here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Derived {
     /// `Path::with_extension(_)` — `texture extract` writes `out` and `out` + `.png.json`.
@@ -184,6 +184,29 @@ pub enum Derived {
     /// here would be wrong, because the caller chooses it. This is what keeps `scaffold` ungated
     /// for a fresh mod name while still catching a collision with an existing mod folder.
     ChildOfArg(&'static str),
+    /// `Path::join(<a string read out of a JSON file another argument names>)` — `mod build`
+    /// deletes and rebuilds `<out>/<meta.name from the spec>` (`cmd/modcmd.rs`).
+    ///
+    /// The name is one `serde_json` pointer away, and reading it is what turns "this command
+    /// deletes a folder somewhere" into "this command deletes *that* folder, and it is not there".
+    /// The whole point is that a first build asks nobody: the question belongs to the rebuild.
+    ///
+    /// Unreadable file, missing pointer, non-string value, or a name carrying a path separator all
+    /// mean the folder cannot be identified, and the gate treats that as occupied. Failing closed
+    /// is the only safe direction: the alternative reads "could not check" as "nothing there".
+    ChildNamedInJson {
+        /// The argument holding the path of the JSON file to read.
+        arg: &'static str,
+        /// A `serde_json` pointer to the string, e.g. `/meta/name`.
+        pointer: &'static str,
+    },
+}
+
+impl Derived {
+    /// Whether this shape depends on a file, and therefore has an unreadable case to fail closed on.
+    pub const fn reads_a_file(&self) -> bool {
+        matches!(self, Derived::ChildNamedInJson { .. })
+    }
 }
 
 /// A command's safety class, including the conditional case.
@@ -239,23 +262,51 @@ pub struct Safety {
     /// unless `out` is the game's `~mods` folder, in which case those three files are the live
     /// override the game mounts, and the call has quietly done what `texture deploy` is gated for.
     pub installs_via: &'static [&'static str],
+    /// Arguments naming a directory whose *contents* this command overwrites under names it takes
+    /// from the data it reads rather than from its arguments.
+    ///
+    /// `audio extract` writes one WAV per sample, `stubs` one `.lua` per class, `as emit-all` one
+    /// `.as` per module. None of those names is preflightable, which is why all three used to be
+    /// gated outright — and that is what made a scratch extraction into a fresh temp directory cost
+    /// the same confirmation as writing into the game.
+    ///
+    /// The narrower question is the one worth asking. An *empty or absent* directory has nothing to
+    /// lose, whatever the command decides to call the files it puts there, so the gate looks and
+    /// asks only when something is already in the way. Same permission boundary as
+    /// [`Safety::truncates`] and the same window: a file appearing between the check and the child's
+    /// write is still overwritten. What this answers is whether an agent may aim a name-choosing
+    /// writer at a directory it can see is occupied.
+    pub clobbers_dir: &'static [&'static str],
 }
 
 impl Safety {
+    /// A class with every conditional facet switched off. The one place a new facet has to be
+    /// defaulted, so adding one cannot silently skip a constructor.
+    const fn of(base: Class) -> Self {
+        Self {
+            base,
+            in_place_without: None,
+            truncates: &[],
+            derives: &[],
+            installs_via: &[],
+            clobbers_dir: &[],
+        }
+    }
+
     pub const fn read() -> Self {
-        Self { base: Class::Read, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
+        Self::of(Class::Read)
     }
     pub const fn write() -> Self {
-        Self { base: Class::Write, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
+        Self::of(Class::Write)
     }
     pub const fn mutate() -> Self {
-        Self { base: Class::Mutate, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
+        Self::of(Class::Mutate)
     }
     pub const fn destructive() -> Self {
-        Self { base: Class::Destructive, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
+        Self::of(Class::Destructive)
     }
     pub const fn game_launch() -> Self {
-        Self { base: Class::GameLaunch, in_place_without: None, truncates: &[], derives: &[], installs_via: &[] }
+        Self::of(Class::GameLaunch)
     }
 
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
@@ -265,25 +316,13 @@ impl Safety {
     /// path as the output turns "write a new file" back into "replace that file", and the atomic
     /// writer underneath does exactly that.
     pub const fn write_or_in_place(out_arg: &'static [&'static str; 1]) -> Self {
-        Self {
-            base: Class::Write,
-            in_place_without: Some(out_arg[0]),
-            truncates: out_arg,
-            derives: &[],
-            installs_via: &[],
-        }
+        Self { in_place_without: Some(out_arg[0]), truncates: out_arg, ..Self::of(Class::Write) }
     }
 
     /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
     /// they already exist. See [`Safety::truncates`].
     pub const fn write_truncating(outputs: &'static [&'static str]) -> Self {
-        Self {
-            base: Class::Write,
-            in_place_without: None,
-            truncates: outputs,
-            derives: &[],
-            installs_via: &[],
-        }
+        Self { truncates: outputs, ..Self::of(Class::Write) }
     }
 
     /// Register arguments that make this an installation change when they point into the game
@@ -296,6 +335,13 @@ impl Safety {
     /// Register paths the command derives from an argument and overwrites. See [`Safety::derives`].
     pub const fn also_writes(mut self, derived: &'static [(&'static str, Derived)]) -> Self {
         self.derives = derived;
+        self
+    }
+
+    /// Register directories the command fills with names of its own choosing. See
+    /// [`Safety::clobbers_dir`].
+    pub const fn clobbers_dir(mut self, args: &'static [&'static str]) -> Self {
+        self.clobbers_dir = args;
         self
     }
 
@@ -920,6 +966,7 @@ mod tests {
                 let covered = |name: &str| {
                     command.safety.truncates.contains(&name)
                         || command.safety.installs_via.contains(&name)
+                        || command.safety.clobbers_dir.contains(&name)
                         || command.safety.derives.iter().any(|(arg, _)| *arg == name)
                         // A command gated outright needs no per-argument check. Asked of the
                         // gate rather than of `Class`, because a GameLaunch command requires write
@@ -981,6 +1028,9 @@ mod tests {
             ("gore_voice", "replace", &["out"]),
             ("gore_voice", "apply-manifest", &["out"]),
             ("gore_texture", "pack", &["out"]),
+            // A bundle directory is a build artifact anywhere but the installation, where the same
+            // files would be sitting in the tree the game reads without ever having been deployed.
+            ("gore_mod", "build", &["out"]),
         ];
         expected.sort_unstable();
 
@@ -1010,6 +1060,11 @@ mod tests {
 
         let expected: Vec<(&str, &str, &[(&'static str, Derived)])> = vec![
             ("gore_catalog", "dump-mod", &[("out", Derived::Child("gore-dump"))]),
+            (
+                "gore_mod",
+                "build",
+                &[("out", Derived::ChildNamedInJson { arg: "spec", pointer: "/meta/name" })],
+            ),
             ("gore_project", "scaffold", &[("out", Derived::ChildOfArg("mod_name"))]),
             ("gore_texture", "extract", &[("out", Derived::Extension("png.json"))]),
         ];
@@ -1017,9 +1072,62 @@ mod tests {
 
         for (tool, sub, entries) in &derived {
             let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
-            for (arg, _) in *entries {
+            for (arg, how) in *entries {
+                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+                // A shape that reads a file needs the argument naming that file to exist too,
+                // and to be required — an optional one would leave the gate deriving nothing on
+                // exactly the calls that omit it.
+                if let Derived::ChildNamedInJson { arg: source, .. } = how {
+                    let named = command
+                        .arg(source)
+                        .unwrap_or_else(|| panic!("{tool} {sub} has no argument `{source}`"));
+                    assert!(named.required, "{tool} {sub}: `{source}` must be required");
+                }
+            }
+        }
+    }
+
+    /// Directories a command fills under names of its own choosing.
+    ///
+    /// The third of the same family, and the newest: these commands were gated outright until the
+    /// gate learned to look inside the directory. Extracting one WAV into a scratch folder that did
+    /// not exist yet used to raise the same question as writing into the game, which is how a test
+    /// session spent three confirmations to build one mod.
+    #[test]
+    fn exactly_the_known_name_choosing_writers_are_gated_on_an_occupied_directory() {
+        let mut choosing: Vec<(&str, &str, &[&'static str])> = Vec::new();
+        for group in GROUPS {
+            for command in group.commands {
+                if !command.safety.clobbers_dir.is_empty() {
+                    choosing.push((group.tool, command.sub, command.safety.clobbers_dir));
+                }
+            }
+        }
+        choosing.sort_unstable();
+
+        let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
+            // One WAV per sample, named from the bank.
+            ("gore_audio", "extract", &["out"]),
+            // One `.lua` per class, named from the model file.
+            ("gore_catalog", "stubs", &["out"]),
+            // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.
+            ("gore_as", "emit-all", &["outdir"]),
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(choosing, expected);
+
+        for (tool, sub, args) in &choosing {
+            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            for arg in *args {
                 assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
             }
+            // The whole narrowing rests on the directory being the only thing at risk. A command
+            // that also rewrites its own input has a second target this check never looks at.
+            assert!(
+                command.safety.in_place_without.is_none(),
+                "{tool} {sub} rewrites in place as well; a directory check cannot cover that"
+            );
         }
     }
 

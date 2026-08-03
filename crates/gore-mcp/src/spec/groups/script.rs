@@ -572,13 +572,9 @@ const AS_COMMANDS: &[CommandSpec] = &[
         EMIT_ALL_ARGS,
         // Writes every decompiled module under `outdir` with `fs::write`. The module paths come from
         // the cache being read, so hand edits in that tree are truncated and nothing here can check
-        // for them first.
-        Safety::mutate(),
+        // for them first -- but an empty or absent `outdir` has no hand edits to lose.
+        Safety::write().clobbers_dir(&["outdir"]),
         T_LONG,
-    )
-    .gated_because(
-        "writes every decompiled module into the output tree and overwrites hand edits there; the \
-         paths come from the cache being read, so nothing here can check for them first",
     )
     .guide("scripts"),
     CommandSpec::new(

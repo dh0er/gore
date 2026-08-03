@@ -219,14 +219,11 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
         "stubs",
         "Generate LuaLS/EmmyLua type stubs from model.json",
         STUBS_ARGS,
-        // Writes one `.lua` per class into `out`, overwriting whatever is there. The class names come
-        // from the model file this layer does not read.
-        Safety::mutate(),
+        // Writes one `.lua` per class into `out`, overwriting whatever is there. The class names
+        // come from the model file this layer does not read -- so the files cannot be named ahead
+        // of time, but an empty or absent `out` still has nothing in them to lose.
+        Safety::write().clobbers_dir(&["out"]),
         T_NORMAL,
-    )
-    .gated_because(
-        "overwrites one `.lua` file per class in the output directory, and cannot name them \
-         beforehand because they come from the model file",
     )
     .guide("catalogs-and-models"),
     CommandSpec::new(
@@ -518,15 +515,22 @@ mod tests {
     #[test]
     fn exactly_the_commands_whose_targets_cannot_be_checked_are_gated() {
         // `deploy-shared` copies the SDK into the game's `ue4ss/Mods`; `gen` rewrites
-        // `<out>/<name from overrides.toml>`; `stubs` overwrites one `.lua` per class in its
-        // output directory. None of those paths can be computed from the arguments, so all three
-        // are gated outright rather than described as derived outputs.
+        // `<out>/<name from overrides.toml>`, and TOML is not something this layer parses. Neither
+        // path can be computed from the arguments, so both are gated outright.
+        //
+        // `stubs` is deliberately not here any more. It writes one `.lua` per class under names it
+        // takes from the model file, which is just as unpreflightable — but the directory those
+        // files land in is not, so it is gated on an occupied `out` instead of on every call.
         let mutating: Vec<&str> = [CONFIG, CATALOG, LOCATION, PROJECT]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(mutating, vec!["stubs", "gen", "deploy-shared"]);
+        assert_eq!(mutating, vec!["gen", "deploy-shared"]);
+
+        let stubs = CATALOG.command("stubs").expect("exists");
+        assert!(!stubs.safety.worst_case().needs_write_permission());
+        assert_eq!(stubs.safety.clobbers_dir, &["out"]);
     }
 }

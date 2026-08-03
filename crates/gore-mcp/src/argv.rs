@@ -396,15 +396,47 @@ fn consent_for(
     // A `Write` command needs no question because it creates new files. When its output is already
     // there, it does not create anything — it truncates — so the promise that made it harmless no
     // longer holds and the call has to be treated as a mutation.
-    if let Some((name, target)) = existing_target(command, args) {
-        return question(
-            format!(
-                "`{name}` already exists at `{target}`, and this command overwrites its output \
-                 rather than refusing"
+    if let Some((name, occupancy)) = occupied_target(command, args) {
+        let needs = Needs { write: true, game_launch: false };
+        return match occupancy {
+            Occupancy::Existing(target) => question(
+                format!(
+                    "`{name}` already exists at `{target}`, and this command overwrites its output \
+                     rather than refusing"
+                ),
+                Some("Choose a path that does not exist yet".into()),
+                needs,
             ),
-            Some("Choose a path that does not exist yet".into()),
-            Needs { write: true, game_launch: false },
-        );
+            // Kept apart from the arm above, which reads "`out` already exists at …" and would then
+            // print a path that is not `out`'s value — `mod build` names the bundle directory and
+            // writes the folder underneath it.
+            Occupancy::ExistingDerived(target) => question(
+                format!(
+                    "writes `{target}`, a path it derives from `{name}` rather than being given, \
+                     and that path already exists — so this command replaces it rather than \
+                     refusing"
+                ),
+                Some(format!("Point `{name}` somewhere that does not hold it yet")),
+                needs,
+            ),
+            Occupancy::NonEmptyDir(target) => question(
+                format!(
+                    "would write into `{target}`, which is not empty, under names it takes from \
+                     the data it reads rather than from its arguments — so anything already there \
+                     that it collides with is overwritten"
+                ),
+                Some(format!("Point `{name}` at a new or empty directory")),
+                needs,
+            ),
+            Occupancy::Unreadable { source, target } => question(
+                format!(
+                    "writes into `{target}` under a name it reads out of `{source}`, and that name \
+                     could not be read from here — so what it would replace cannot be checked first"
+                ),
+                Some(format!("Make `{source}` readable, or check `{target}` yourself")),
+                needs,
+            ),
+        };
     }
 
     None
@@ -454,7 +486,15 @@ fn output_paths(
     command: &CommandSpec,
     args: &Map<String, Value>,
 ) -> Vec<(&'static str, std::path::PathBuf)> {
-    let named = command.safety.installs_via.iter().copied().chain(command.safety.truncates.iter().copied());
+    let named = command
+        .safety
+        .installs_via
+        .iter()
+        .copied()
+        .chain(command.safety.truncates.iter().copied())
+        // A directory filled with names of the command's own choosing is still a directory being
+        // written into, and aiming one at the installation installs whatever lands there.
+        .chain(command.safety.clobbers_dir.iter().copied());
 
     let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
         .filter_map(|name| {
@@ -465,25 +505,16 @@ fn output_paths(
 
     paths.extend(command.safety.derives.iter().filter_map(|(name, how)| {
         let given = args.get(*name)?.as_str()?;
-        let base = std::path::Path::new(given);
-        let derived = match *how {
-            Derived::ChildOfArg(other) => base.join(args.get(other)?.as_str()?),
-            other => derived_path(base, other),
+        // An underivable last component leaves the directory it would have gone in, which is the
+        // part that decides whether this lands in the game tree.
+        let derived = match derived_target(args, std::path::Path::new(given), *how) {
+            DerivedTarget::At(path) => path,
+            DerivedTarget::Unknown { .. } => std::path::PathBuf::from(given),
         };
         Some((*name, derived))
     }));
 
     paths
-}
-
-/// The two shapes that need nothing but the base path. `ChildOfArg` needs another argument's value
-/// and is resolved by the callers, which have the argument map.
-fn derived_path(base: &std::path::Path, how: Derived) -> std::path::PathBuf {
-    match how {
-        Derived::Extension(extension) => base.with_extension(extension),
-        Derived::Child(child) => base.join(child),
-        Derived::ChildOfArg(_) => base.to_path_buf(),
-    }
 }
 
 /// Make a path absolute, and resolve symlinks as far down as it already exists.
@@ -548,14 +579,32 @@ fn resolve_following_links(path: &std::path::Path, hops: u8) -> Option<std::path
     }
 }
 
-/// The first output path that is already occupied — named by an argument, or derived from one.
-fn existing_target(
+/// What a `Write` command would destroy after all, and how the gate found out.
+enum Occupancy {
+    /// A path an argument names is already a file or a directory.
+    Existing(String),
+    /// The same, for a path the command works out for itself. Separate because the sentence has to
+    /// be: naming the argument as the thing that exists is false as soon as the two differ.
+    ExistingDerived(String),
+    /// A directory this call fills with names of its own choosing already holds something.
+    NonEmptyDir(String),
+    /// A path could not be worked out, because the file its last component is named in did not
+    /// yield one. Not knowing is not the same as nothing being there, and only one of the two is
+    /// safe to assume.
+    Unreadable { source: String, target: String },
+}
+
+/// The first output this call would destroy something at — named by an argument, derived from one,
+/// or sitting inside a directory it fills under names of its own.
+fn occupied_target(
     command: &CommandSpec,
     args: &Map<String, Value>,
-) -> Option<(&'static str, String)> {
+) -> Option<(&'static str, Occupancy)> {
     let named = command.safety.truncates.iter().copied().find_map(|name| {
         let given = args.get(name)?.as_str()?;
-        std::path::Path::new(given).exists().then(|| (name, given.to_string()))
+        std::path::Path::new(given)
+            .exists()
+            .then(|| (name, Occupancy::Existing(given.to_string())))
     });
     if named.is_some() {
         return named;
@@ -563,15 +612,82 @@ fn existing_target(
 
     // A derived path is written just as unconditionally as the one the caller named, and the
     // caller cannot avoid it by choosing a different argument value for something else.
-    command.safety.derives.iter().copied().find_map(|(name, how)| {
+    let derived = command.safety.derives.iter().copied().find_map(|(name, how)| {
         let given = args.get(name)?.as_str()?;
-        let base = std::path::Path::new(given);
-        let derived = match how {
-            Derived::ChildOfArg(other) => base.join(args.get(other)?.as_str()?),
-            other => derived_path(base, other),
-        };
-        derived.exists().then(|| (name, derived.to_string_lossy().into_owned()))
+        match derived_target(args, std::path::Path::new(given), how) {
+            DerivedTarget::At(path) => path
+                .exists()
+                .then(|| (name, Occupancy::ExistingDerived(path.to_string_lossy().into_owned()))),
+            DerivedTarget::Unknown { source } => Some((
+                name,
+                Occupancy::Unreadable { source, target: given.to_string() },
+            )),
+        }
+    });
+    if derived.is_some() {
+        return derived;
+    }
+
+    // Last, because it is the weakest claim of the three: something is in the way, but which file
+    // the command will collide with is exactly what cannot be known before it runs.
+    command.safety.clobbers_dir.iter().copied().find_map(|name| {
+        let given = args.get(name)?.as_str()?;
+        let entries = std::fs::read_dir(given).ok()?;
+        // `read_dir` failing is not occupancy: a directory that is not there yet is the ordinary
+        // case this whole check exists to let through ungated.
+        entries
+            .flatten()
+            .next()
+            .map(|_| (name, Occupancy::NonEmptyDir(given.to_string())))
     })
+}
+
+/// Where a derived output lands, or why the gate could not work it out.
+enum DerivedTarget {
+    At(std::path::PathBuf),
+    /// Names the file that was supposed to supply the missing component.
+    Unknown { source: String },
+}
+
+/// Resolve one [`Derived`] shape against the arguments it may need.
+fn derived_target(
+    args: &Map<String, Value>,
+    base: &std::path::Path,
+    how: Derived,
+) -> DerivedTarget {
+    match how {
+        Derived::ChildOfArg(other) => match args.get(other).and_then(Value::as_str) {
+            Some(child) => DerivedTarget::At(base.join(child)),
+            // A missing argument is a call clap will reject anyway; nothing is derived from it.
+            None => DerivedTarget::At(base.to_path_buf()),
+        },
+        Derived::ChildNamedInJson { arg, pointer } => {
+            let source = args.get(arg).and_then(Value::as_str).unwrap_or(arg).to_string();
+            match name_in_json(&source, pointer) {
+                Some(name) => DerivedTarget::At(base.join(name)),
+                None => DerivedTarget::Unknown { source },
+            }
+        }
+        Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
+        Derived::Child(child) => DerivedTarget::At(base.join(child)),
+    }
+}
+
+/// Read one string out of a JSON file, and refuse anything that would not be a single path
+/// component.
+///
+/// A name carrying a separator, a drive letter or `..` would make the derived path point somewhere
+/// other than inside the directory the caller named — so the honest answer there is "unknown",
+/// which fails closed, rather than a path the check would then look for in the wrong place.
+fn name_in_json(path: &str, pointer: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let document: Value = serde_json::from_str(&text).ok()?;
+    let name = document.pointer(pointer)?.as_str()?;
+    let mut components = std::path::Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(only)), None) if only == name => Some(name.to_string()),
+        _ => None,
+    }
 }
 
 fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String, BuildError> {
@@ -966,26 +1082,156 @@ mod tests {
         // neither, and the assistant — which had read the arguments — had to contradict its own
         // server to the user it was working for. The truth was in the table all along, as a comment
         // above the entry.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let occupied = dir.path().join("sfx");
+        std::fs::create_dir_all(&occupied).expect("mkdir");
+        std::fs::write(occupied.join("0_Kept.wav"), b"edited").expect("write");
+
         let raised = question(
             "gore_audio",
             "extract",
-            json!({ "bank": "SFX.bank", "out": "T:/scratch/mudmod" }),
+            json!({ "bank": "SFX.bank", "out": occupied.to_string_lossy() }),
             &options(),
         )
-        .expect("extracting into a directory it cannot preflight is asked about");
+        .expect("extracting over files already in the directory is asked about");
 
         assert!(
             !raised.reason.contains("changes the game installation or the shared catalogs"),
             "the one-size-fits-all reason is back: {}",
             raised.reason
         );
-        assert!(raised.reason.contains("output directory"), "{}", raised.reason);
+        assert!(raised.reason.contains("is not empty"), "{}", raised.reason);
+        assert!(raised.reason.contains(&*occupied.to_string_lossy()), "{}", raised.reason);
 
         // And a command that really does touch the installation still says so, in its own terms.
         let deploy = question("gore_mod", "deploy", json!({ "bundle": "b" }), &options())
             .expect("deploying is asked about");
         assert!(deploy.reason.contains("installs the bundle into the game"), "{}", deploy.reason);
         assert_ne!(deploy.reason, raised.reason, "two commands, two reasons");
+    }
+
+    #[test]
+    fn a_name_choosing_writer_aimed_at_an_empty_directory_asks_nobody() {
+        // The reason this whole facet exists. Three confirmations were spent building one test mod,
+        // and two of them were for commands that could not have destroyed anything: the scratch
+        // directories they wrote into did not exist yet. Every one of those questions was answered
+        // by the client itself, in milliseconds, without reaching a person — so the cost was not a
+        // dialog, it was a refusal the assistant then had to work around.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist-yet");
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir");
+
+        for out in [&missing, &empty] {
+            assert!(
+                question(
+                    "gore_audio",
+                    "extract",
+                    json!({ "bank": "SFX.bank", "out": out.to_string_lossy() }),
+                    &options(),
+                )
+                .is_none(),
+                "{} holds nothing to overwrite",
+                out.display()
+            );
+        }
+
+        // The directory being outside the installation is not what makes it safe — an empty one
+        // inside the game tree is still a directory the game reads.
+        let inside = dir.path().join("G1R").join("Content");
+        std::fs::create_dir_all(&inside).expect("mkdir");
+        assert!(
+            question(
+                "gore_audio",
+                "extract",
+                json!({ "bank": "SFX.bank", "out": inside.to_string_lossy() }),
+                &options(),
+            )
+            .is_some(),
+            "an empty destination inside the installation is still an installation change"
+        );
+    }
+
+    #[test]
+    fn building_a_bundle_asks_about_the_rebuild_rather_than_the_build() {
+        // `mod build` deletes `<out>/<meta.name>` before writing it. The name is in the spec, which
+        // is JSON, so the gate reads it: a first build destroys nothing and says nothing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec = dir.path().join("spec.json");
+        std::fs::write(&spec, br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#).expect("write");
+        let out = dir.path().join("build");
+        let call = || {
+            json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() })
+        };
+
+        assert!(
+            question("gore_mod", "build", call(), &options()).is_none(),
+            "a bundle folder that is not there yet is not something to confirm deleting"
+        );
+
+        std::fs::create_dir_all(out.join("DaniTestMod")).expect("mkdir");
+        let raised = question("gore_mod", "build", call(), &options())
+            .expect("rebuilding over an existing bundle folder is asked about");
+        assert!(raised.reason.contains("DaniTestMod"), "{}", raised.reason);
+        // The sentence for a *named* output would read "`out` already exists at …" and then print
+        // a path that is not what `out` was set to. A person reading that would go looking for the
+        // wrong folder.
+        assert!(
+            !raised.reason.starts_with("`out` already exists"),
+            "the derived path is being described as the argument's own: {}",
+            raised.reason
+        );
+        assert!(raised.reason.contains("derives from `out`"), "{}", raised.reason);
+
+        // A different mod name in the same output directory is a different folder, and untouched.
+        std::fs::write(&spec, br#"{"meta":{"name":"Other","version":"1.0.0"}}"#).expect("write");
+        assert!(
+            question("gore_mod", "build", call(), &options()).is_none(),
+            "the collision is with one folder, not with the output directory"
+        );
+    }
+
+    #[test]
+    fn a_bundle_name_that_cannot_be_read_is_treated_as_occupied() {
+        // Fail closed, in every direction the file can disappoint. "Could not check" must never
+        // read as "nothing there" — that is the one mistake this facet could introduce, and it
+        // would land on exactly the calls whose spec is malformed.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+        let spec = dir.path().join("spec.json");
+
+        let unreadable: [&[u8]; 5] = [
+            b"{ not json",
+            br#"{"meta":{}}"#,
+            br#"{"meta":{"name":42}}"#,
+            // A name that is not one path component would put the deletion somewhere else entirely.
+            br#"{"meta":{"name":"../escape"}}"#,
+            br#"{"meta":{"name":"nested/mod"}}"#,
+        ];
+        for body in unreadable {
+            std::fs::write(&spec, body).expect("write");
+            let raised = question(
+                "gore_mod",
+                "build",
+                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+                &options(),
+            )
+            .unwrap_or_else(|| panic!("{:?} must not pass as an empty destination", body));
+            assert!(raised.reason.contains("could not be read"), "{}", raised.reason);
+        }
+
+        // Including the file simply not being there.
+        std::fs::remove_file(&spec).expect("remove");
+        assert!(
+            question(
+                "gore_mod",
+                "build",
+                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+                &options(),
+            )
+            .is_some(),
+            "a spec that cannot be opened tells the gate nothing about what it would delete"
+        );
     }
 
     #[test]

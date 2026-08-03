@@ -241,14 +241,12 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         AUDIO_EXTRACT_ARGS,
         // Writes `<out>/<index>_<sample>.wav` per sample with `fs::write`, so a rerun or an edited
         // WAV in that directory is truncated. The names come from the bank's own sample list, which
-        // this layer cannot read -- not preflightable, therefore gated.
-        Safety::mutate(),
+        // this layer cannot read. That used to gate the command outright, and the cost showed up in
+        // a real session: extracting one sample into a scratch directory that did not exist yet
+        // raised the same confirmation as writing into the game. An empty or absent `out` holds
+        // nothing to overwrite, whatever the bank calls its samples, so only an occupied one asks.
+        Safety::write().clobbers_dir(&["out"]),
         T_NORMAL,
-    )
-    .gated_because(
-        "writes one WAV per sample into the output directory and overwrites any file already \
-         there, including an edited one; the filenames come from the bank, so they cannot be \
-         checked first. It changes nothing in the game installation",
     )
     .guide("audio"),
     CommandSpec::new(

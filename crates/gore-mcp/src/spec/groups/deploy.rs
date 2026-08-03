@@ -468,19 +468,19 @@ const MOD_DEPLOY_ARGS: &[ArgSpec] =
 const MOD_UNDEPLOY_ARGS: &[ArgSpec] = &[GAME];
 
 const MOD_COMMANDS: &[CommandSpec] = &[
-    // `gore_mod::write_bundle` calls `remove_dir_all` on `<out>/<name from the spec JSON>` before
-    // rebuilding it, so a colliding mod name erases whatever was there. The name lives inside the
-    // spec file, which this layer does not read.
+    // `gore_mod::write_bundle` calls `remove_dir_all` on `<out>/<meta.name from the spec JSON>`
+    // before rebuilding it (`cmd/modcmd.rs` joins exactly that, unsanitized), so a colliding mod
+    // name erases whatever was there. The name lives inside the spec file -- one pointer away, so
+    // the gate reads it and asks about the *rebuild* rather than about every build. A first build
+    // into a directory that does not hold that bundle yet destroys nothing and now says so.
     CommandSpec::new(
         "build",
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
-        Safety::mutate(),
+        Safety::write()
+            .also_writes(&[("out", Derived::ChildNamedInJson { arg: "spec", pointer: "/meta/name" })])
+            .installs_via(&["out"]),
         T_LONG,
-    )
-    .gated_because(
-        "deletes and rebuilds the bundle folder named inside the spec file, so a name that \
-         collides erases what was there. It writes nowhere near the game installation",
     )
     .guide("bundles"),
     CommandSpec::new(
@@ -751,10 +751,14 @@ mod tests {
         // The two `deploy`/`undeploy` pairs are texture and mod; `apply` and `reset` are the
         // manager's install-wide operations. The rest are here because they overwrite or delete
         // paths this layer cannot check: `remove` destroys library content, `import` replaces it
-        // when the same mod is imported twice, `texture replace` rewrites cooked files under a
-        // mount-mapped path, and `mod build` clears its bundle directory before rebuilding it.
-        // `texture index` is here only in its `out`-less form, where it publishes into the shared
-        // data directory and prunes the other cached generations; `worst_case` reports that shape.
+        // when the same mod is imported twice, and `texture replace` rewrites cooked files under a
+        // mount-mapped path. `texture index` is here only in its `out`-less form, where it
+        // publishes into the shared data directory and prunes the other cached generations;
+        // `worst_case` reports that shape.
+        //
+        // `mod build` is deliberately absent. It also clears a directory before rebuilding it, but
+        // the directory is `<out>/<meta.name from the spec>` and the spec is JSON, so the gate can
+        // read the name and ask about the rebuild rather than about the first build.
         let gated: Vec<&str> = [TEXTURE, ASSET, MOD, MGR]
             .iter()
             .flat_map(|group| group.commands.iter())
@@ -764,10 +768,14 @@ mod tests {
         assert_eq!(
             gated,
             vec![
-                "replace", "deploy", "index", "undeploy", "build", "deploy", "undeploy",
+                "replace", "deploy", "index", "undeploy", "deploy", "undeploy",
                 "import", "remove", "apply", "reset"
             ]
         );
+
+        let build = MOD.command("build").expect("exists");
+        assert!(!build.safety.worst_case().needs_write_permission());
+        assert!(build.safety.derives.iter().any(|(_, how)| how.reads_a_file()));
     }
 
     #[test]

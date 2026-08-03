@@ -187,7 +187,7 @@ approval layer — you can answer once at startup instead:
 gore mcp serve --allow-write
 ```
 
-Five rules are worth knowing because they have no equivalent on the command
+Six rules are worth knowing because they have no equivalent on the command
 line:
 
 - **An existing output file is an overwrite, not a creation.** Every command
@@ -202,27 +202,34 @@ line:
   no confirmation at all — their CLI refuses an existing output on its own. `scaffold`
   refuses too, but only when `Scripts/main.lua` is already there, which is why
   its mod folder is checked here as well.
-  Three commands write a path no argument spells out, and are checked all the
+  Four commands write a path no argument spells out, and are checked all the
   same: `texture extract` also writes `<out>.png.json`, `dump-mod` writes a
-  `gore-dump/` folder inside the directory it is given, and `scaffold` writes
-  `<out>/<mod_name>/` — so a fresh mod name runs straight away and only a
-  collision with an existing mod folder asks. Commands whose targets cannot be
-  checked ask outright, and writing into a directory is no exception —
-  the folder may exist harmlessly while the files inside it are replaced one by
-  one. That covers `gen` and `mod build` (target folder named inside the spec
-  file they read; `mod build` clears it first), `texture replace` (cooked files
-  under a path derived from the asset name, deleting a stale `.ubulk`),
-  `stubs`, `audio extract` and `as emit-all` (one file per class, sample or
-  module), and `mgr import` (re-importing the same mod deletes the payload of
-  the entry it replaces).
-  The check happens before the command starts, so it is a decision point and not
-  a lock: a file created *while* a command runs is still overwritten.
+  `gore-dump/` folder inside the directory it is given, `scaffold` writes
+  `<out>/<mod_name>/`, and `mod build` clears and rebuilds
+  `<out>/<meta.name from the spec>` — so a fresh mod name runs straight away and
+  only a collision with a folder already there asks. A spec that cannot be read,
+  or whose name is not a single folder name, counts as a collision: not knowing
+  what would be deleted is not the same as knowing nothing would be.
+- **A directory only matters when something is in it.** `audio extract`,
+  `stubs` and `as emit-all` each write one file per sample, class or module,
+  under names that come from the bank, the model or the cache — so which files
+  they land on cannot be known beforehand. An empty or absent output directory
+  has nothing to lose either way, and those calls run without asking; one that
+  already holds files asks first, and names the directory. Where the names
+  cannot be checked *and* the folder cannot either, the command asks outright:
+  `gen` (target folder named inside the `overrides.toml` it reads),
+  `texture replace` (cooked files under a path derived from the asset name,
+  deleting a stale `.ubulk`), and `mgr import` (re-importing the same mod
+  deletes the payload of the entry it replaces).
+  Every check here happens before the command starts, so it is a decision point
+  and not a lock: a file created *while* a command runs is still overwritten.
   Closing that window would mean making these commands refuse to re-run at all,
   which is the one thing they exist to do.
-- **Where a file lands can matter more than what writes it.** `texture pack`
-  and `asset pack` normally produce an artifact you deploy later, and `dump-mod`
-  and `scaffold` normally produce a mod folder you install afterwards — so none
-  of them asks. Point an output inside the game tree and the same call
+- **Where a file lands can matter more than what writes it.** `texture pack`,
+  `asset pack` and `mod build` normally produce an artifact you deploy later,
+  and `dump-mod` and `scaffold` normally produce a mod folder you install
+  afterwards — so none of them asks. Point an output inside the game tree and
+  the same call
   writes straight into the live installation — the `~mods` override, `ue4ss\Mods`,
   or the game's own `.lcache` or `.bank` — which is a deployment however new the
   path is. That case asks, recognised either from an explicit `--game` or from a

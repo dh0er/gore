@@ -54,11 +54,27 @@ Then read your own work back. Every write path in this toolkit can be re-read:
 a replaced sample lists as replaced, a bundle records a hash per file. Do that
 before reporting success, and say which items you could not check.
 
+## Never put a name in a spec that you have not seen in a listing
+
+Every id in a bundle spec — a sample name, an archive path, a texture asset, a
+localization id — has to come from a listing you actually ran, not from the
+pattern the neighbouring names suggested. The naming looks regular enough to
+extrapolate from and is not: one session's spec named a Diego line that appeared
+in no listing, and it happened to exist. The failure mode when it does not is
+`mod build` accepting the spec and `mod deploy` refusing it afterwards, which
+costs you the whole build.
+
 ## The consent gate
 
-Any call that changes the installation asks first, over MCP elicitation. Many
-clients answer that question themselves in milliseconds without showing anybody
-anything, so the call comes back refused even though nobody declined.
+A call asks first when it would change the game installation, or destroy
+something outside it that this server can see is there — an output file that
+already exists, an output directory that already holds files, a bundle folder
+about to be cleared and rebuilt. Writing into a fresh or empty scratch directory
+asks nobody. If a question does arrive, it is about something real; read what it
+names rather than approving it reflexively.
+
+Many clients answer that question themselves in milliseconds without showing
+anybody anything, so the call comes back refused even though nobody declined.
 
 When that happens: do not resend the call unchanged, and do not tell the user they
 said no — the server cannot see who answered. Show them the command line the
