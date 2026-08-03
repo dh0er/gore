@@ -1,9 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+/// Whether this save both needs the slot repair and can actually receive it.
+///
+/// Repairing is a private write, so it takes the same capability every other
+/// inventory action is gated on — otherwise the action could be queued but never
+/// applied. Shared by the places that surface the warning (the overview and the
+/// inventory) so they can never disagree about it.
+bool slotRepairAvailable(
+  SaveInspection inspection, {
+  required bool canCompress,
+}) =>
+    inspection.privateInventory.canRepairSlots &&
+    inspection.privateEditable &&
+    inspection.privateTypedVerified &&
+    canCompress;
 
 /// Warns that this savegame carries inventory slots whose stored id no longer
 /// matches the position they sit in, and offers the one-click repair.
@@ -119,7 +135,10 @@ class SlotRepairBanner extends ConsumerWidget {
       pendingKey,
       const PendingSaveEdit(
         edits: [
-          {'path': 'private.inventory.repairSlots', 'value': <String, Object?>{}},
+          {
+            'path': 'private.inventory.repairSlots',
+            'value': <String, Object?>{},
+          },
         ],
       ),
     );

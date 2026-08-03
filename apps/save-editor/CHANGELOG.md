@@ -17,8 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - An NPC's position and spawn position are shown but cannot be changed: the
   game restores an NPC's placement from the level, not from the savegame.
 - A savegame damaged by an earlier version is now recognised on load: the
-  inventory shows a warning with the number of affected slots and a one-click
-  repair, applied with the next save.
+  overview and the inventory show a warning with the number of affected slots
+  and a one-click repair, applied with the next save.
 
 ### Fixed
 

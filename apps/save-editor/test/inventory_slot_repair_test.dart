@@ -5,6 +5,7 @@ import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
@@ -72,6 +73,58 @@ void main() {
     final edits = (write.payload['edits'] as List).cast<Map<String, Object?>>();
     expect(edits, hasLength(1));
     expect(edits.single['path'], 'private.inventory.repairSlots');
+  });
+
+  testWidgets('the overview warns first, and shares one queued repair', (
+    tester,
+  ) async {
+    // The damage is save-wide, so someone who never opens the Inventory tab has
+    // to meet it on the overview — and queueing there must show up in the
+    // inventory's copy of the banner as the same pending edit, not a second one.
+    await pumpApp(tester, _InventoryCoreService(misalignedSlots: 3));
+
+    expect(find.byType(SlotRepairBanner), findsOneWidget);
+    // Topmost: nothing else on the overview may sit above the warning.
+    final overview = find
+        .ancestor(
+          of: find.byType(SlotRepairBanner),
+          matching: find.byType(ListView),
+        )
+        .last;
+    final bannerTop = tester.getRect(find.byType(SlotRepairBanner)).top;
+    final ownCards = tester
+        .widgetList<Card>(
+          find.descendant(
+            of: find.byType(SlotRepairBanner),
+            matching: find.byType(Card),
+          ),
+        )
+        .toSet();
+    for (final card in tester.widgetList<Card>(
+      find.descendant(of: overview, matching: find.byType(Card)),
+    )) {
+      if (ownCards.contains(card)) continue;
+      expect(
+        bannerTop,
+        lessThan(tester.getRect(find.byWidget(card)).top),
+        reason: 'the warning belongs above everything else on the overview',
+      );
+    }
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Repair'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+    await openPlayerInventory(tester);
+    expect(find.textContaining('Repair queued'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
   });
 
   testWidgets('the warning also shows while an NPC inventory is selected', (

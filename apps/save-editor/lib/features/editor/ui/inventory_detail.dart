@@ -119,15 +119,10 @@ class InventoryDetail extends ConsumerWidget {
 
     // Damage an older build of this editor left in the save. It is reported
     // save-wide and repaired save-wide, so it belongs above EITHER actor's
-    // inventory — not just the player's. Repairing is a private write, so it
-    // needs the same write capability every other inventory action is gated on:
-    // without it the action could be queued but never applied.
-    final canRepair =
-        inspection.privateInventory.canRepairSlots &&
-        inspection.privateEditable &&
-        inspection.privateTypedVerified &&
-        canCompress;
-    final content = canRepair
+    // inventory — not just the player's. The overview carries the same warning
+    // for users who never open this tab; both share one pending edit, so
+    // queueing on either shows as queued on the other.
+    final content = slotRepairAvailable(inspection, canCompress: canCompress)
         ? Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

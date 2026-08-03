@@ -15,6 +15,7 @@ import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
+import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
@@ -1092,6 +1093,19 @@ class _OverviewPanel extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+        // Damage an older build left in the save is save-wide, so it is called
+        // out here first — someone who only edits attributes or story state
+        // would otherwise never see the inventory's copy of this warning.
+        if (slotRepairAvailable(
+          inspection,
+          canCompress: state.codecCompressReady,
+        )) ...[
+          SlotRepairBanner(
+            notifier: notifier,
+            misalignedSlots: inspection.privateInventory.misalignedSlots,
+          ),
+          const SizedBox(height: 16),
+        ],
         _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
         _MetadataEditor(
