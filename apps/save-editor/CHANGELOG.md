@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Backups can be given a name and deleted. The name heads the entry; the file
+  name stays visible below it and is never changed.
 - Added a "Position" tab to Characters. The hero's position moved there from the
   Attributes tab and can be picked from a list of 10,075 named locations from
   the game, grouped by region, instead of typing coordinates. Applying a

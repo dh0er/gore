@@ -2583,7 +2583,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。';
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。保存时会照常创建备份。';
   }
 
   @override
@@ -2598,6 +2598,52 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       '会重新编号槽位的物品栏改动与直接编辑槽位 ID 同时在待保存列表中。重新编号会丢弃直接编辑 — 请撤销其中一项后再保存。';
+
+  @override
+  String get backupFactFile => '文件';
+
+  @override
+  String get renameBackupTooltip => '为此备份命名';
+
+  @override
+  String get renameBackupTitle => '备份名称';
+
+  @override
+  String get renameBackupLabel => '名称';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return '显示在文件名 $fileName 之外。留空则移除名称；文件本身不会被重命名。';
+  }
+
+  @override
+  String get deleteBackupTooltip => '删除此备份';
+
+  @override
+  String get deleteBackupTitle => '删除备份';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '删除“$name”（$fileName）？文件将从磁盘移除且无法恢复。';
+  }
+
+  @override
+  String get deleteBackupConfirm => '删除';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return '已删除备份：$path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return '无法删除备份：$details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return '无法为备份命名：$details';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -5179,7 +5225,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String slotRepairBody(int count) {
-    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。';
+    return '此存档中有 $count 个物品栏槽位的 ID 与其位置不再匹配 — 在游戏中丢弃这类物品时，会误删另一件物品。修复仅重写槽位 ID，不会添加、删除或更改任何物品。保存时会照常创建备份。';
   }
 
   @override
@@ -5194,4 +5240,50 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get editorInventorySlotRepairConflict =>
       '会重新编号槽位的物品栏改动与直接编辑槽位 ID 同时在待保存列表中。重新编号会丢弃直接编辑 — 请撤销其中一项后再保存。';
+
+  @override
+  String get backupFactFile => '文件';
+
+  @override
+  String get renameBackupTooltip => '为此备份命名';
+
+  @override
+  String get renameBackupTitle => '备份名称';
+
+  @override
+  String get renameBackupLabel => '名称';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return '显示在文件名 $fileName 之外。留空则移除名称；文件本身不会被重命名。';
+  }
+
+  @override
+  String get deleteBackupTooltip => '删除此备份';
+
+  @override
+  String get deleteBackupTitle => '删除备份';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '删除“$name”（$fileName）？文件将从磁盘移除且无法恢复。';
+  }
+
+  @override
+  String get deleteBackupConfirm => '删除';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return '已删除备份：$path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return '无法删除备份：$details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return '无法为备份命名：$details';
+  }
 }

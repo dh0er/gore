@@ -2612,7 +2612,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。修復はスロット ID を書き直すだけで、アイテムの追加・削除・変更は行いません。';
+    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。修復はスロット ID を書き直すだけで、アイテムの追加・削除・変更は行いません。 保存時には通常どおりバックアップが作成されます。';
   }
 
   @override
@@ -2627,4 +2627,50 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'スロットを振り直すインベントリ編集と、スロット ID の直接編集が同時に予約されています。振り直しによって直接編集は失われます。どちらかを取り消してから保存し直してください。';
+
+  @override
+  String get backupFactFile => 'ファイル';
+
+  @override
+  String get renameBackupTooltip => 'このバックアップに名前を付ける';
+
+  @override
+  String get renameBackupTitle => 'バックアップ名';
+
+  @override
+  String get renameBackupLabel => '名前';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'ファイル名 $fileName の代わりに表示されます。空にすると名前を削除します。ファイル自体の名前は変わりません。';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'このバックアップを削除';
+
+  @override
+  String get deleteBackupTitle => 'バックアップの削除';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '「$name」（$fileName）を削除しますか？ ファイルはディスクから削除され、元に戻せません。';
+  }
+
+  @override
+  String get deleteBackupConfirm => '削除';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'バックアップを削除しました: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'バックアップを削除できませんでした: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'バックアップに名前を付けられませんでした: $details';
+  }
 }

@@ -1095,6 +1095,7 @@ class BackupEntry {
     this.createdEpoch,
     this.playerSaveName,
     this.slotName,
+    this.name,
   });
 
   factory BackupEntry.fromJson(Map<Object?, Object?> json) {
@@ -1108,6 +1109,7 @@ class BackupEntry {
       scope: json['scope'] as String? ?? 'save',
       playerSaveName: json['playerSaveName'] as String?,
       slotName: json['slotName'] as String?,
+      name: json['name'] as String?,
     );
   }
 
@@ -1120,6 +1122,14 @@ class BackupEntry {
   final String scope;
   final String? playerSaveName;
   final String? slotName;
+
+  /// User-given label, kept beside the backup files. `null` when the user never
+  /// named this backup — the file name is the title then.
+  final String? name;
+
+  /// What to head the entry with: the label when there is one, else the file
+  /// name (which stays visible either way).
+  String get title => name?.isNotEmpty == true ? name! : fileName;
 
   bool get canRestore =>
       (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';

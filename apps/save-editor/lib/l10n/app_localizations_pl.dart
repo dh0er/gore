@@ -2690,7 +2690,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji — w grze wyrzucenie takiego przedmiotu usuwa inny. Naprawa zmienia wyłącznie identyfikatory: żaden przedmiot nie zostanie dodany, usunięty ani zmieniony.';
+    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji — w grze wyrzucenie takiego przedmiotu usuwa inny. Naprawa zmienia wyłącznie identyfikatory: żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Przy zapisie tworzona jest kopia zapasowa, jak zawsze.';
   }
 
   @override
@@ -2706,4 +2706,50 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'W kolejce są zarówno zmiana ekwipunku, która przenumerowuje sloty, jak i bezpośrednia zmiana identyfikatora slotu. Przenumerowanie odrzuciłoby tę zmianę — cofnij jedną z nich i zapisz ponownie.';
+
+  @override
+  String get backupFactFile => 'Plik';
+
+  @override
+  String get renameBackupTooltip => 'Nazwij tę kopię';
+
+  @override
+  String get renameBackupTitle => 'Nazwa kopii zapasowej';
+
+  @override
+  String get renameBackupLabel => 'Nazwa';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Wyświetlana zamiast nazwy pliku $fileName. Puste pole usuwa nazwę; sam plik nie jest zmieniany.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Usuń tę kopię zapasową';
+
+  @override
+  String get deleteBackupTitle => 'Usuń kopię zapasową';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Usunąć „$name” ($fileName)? Plik zostanie skasowany z dysku i nie da się go przywrócić.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Usuń';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Usunięto kopię zapasową: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Nie udało się usunąć kopii zapasowej: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Nie udało się nazwać kopii zapasowej: $details';
+  }
 }

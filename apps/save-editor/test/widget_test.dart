@@ -339,7 +339,8 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Backups'), warnIfMissed: false);
     await tester.pumpAndSettle();
 
-    expect(find.text('G1R-001.sav.bak.200'), findsOneWidget);
+    // Twice: as the unnamed backup's title, and as its "File" fact below.
+    expect(find.text('G1R-001.sav.bak.200'), findsNWidgets(2));
     expect(find.text('Before edit'), findsOneWidget);
 
     await tester.tap(
@@ -364,7 +365,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Profile backups'), findsOneWidget);
-    expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
+    // Title plus "File" fact, same as the slot backup above.
+    expect(find.text('PersistentDataList.sav.bak.250'), findsNWidgets(2));
     expect(find.text('Before companion edit'), findsOneWidget);
     // Companion (PersistentDataList.sav) backups are restorable: restoring one
     // targets PersistentDataList.sav in the save folder, not the selected slot.

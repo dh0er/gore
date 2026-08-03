@@ -2679,7 +2679,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione: nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro. La riparazione riscrive solo gli id: nessun oggetto viene aggiunto, rimosso o modificato.';
+    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione: nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro. La riparazione riscrive solo gli id: nessun oggetto viene aggiunto, rimosso o modificato. Al salvataggio viene creato un backup, come sempre.';
   }
 
   @override
@@ -2694,4 +2694,50 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'Sono in coda sia una modifica dell’inventario che rinumera gli slot sia una modifica diretta di un id di slot. La rinumerazione scarterebbe la modifica diretta: annullane una, poi salva di nuovo.';
+
+  @override
+  String get backupFactFile => 'File';
+
+  @override
+  String get renameBackupTooltip => 'Assegna un nome a questo backup';
+
+  @override
+  String get renameBackupTitle => 'Assegna un nome al backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Mostrato al posto del nome file $fileName. Lascia vuoto per rimuovere il nome; il file non viene rinominato.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Elimina questo backup';
+
+  @override
+  String get deleteBackupTitle => 'Elimina backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Eliminare «$name» ($fileName)? Il file viene rimosso dal disco e non può essere recuperato.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Elimina';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup eliminato: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Impossibile eliminare il backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Impossibile assegnare un nome al backup: $details';
+  }
 }

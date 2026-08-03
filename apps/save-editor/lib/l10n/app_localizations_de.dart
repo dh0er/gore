@@ -2674,7 +2674,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt — im Spiel verschwindet dadurch beim Ablegen ein anderes Item. Die Reparatur passt nur die Ids an: kein Item wird hinzugefügt, entfernt oder verändert.';
+    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt — im Spiel verschwindet dadurch beim Ablegen ein anderes Item. Die Reparatur passt nur die Ids an: kein Item wird hinzugefügt, entfernt oder verändert. Beim Speichern wird wie immer ein Backup angelegt.';
   }
 
   @override
@@ -2690,4 +2690,50 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'Eine Inventar-Änderung, die Slots neu nummeriert, und eine direkte Änderung einer Slot-Id sind beide vorgemerkt. Die Neunummerierung würde die direkte Änderung verwerfen — eine von beiden zurücknehmen, dann erneut speichern.';
+
+  @override
+  String get backupFactFile => 'Datei';
+
+  @override
+  String get renameBackupTooltip => 'Backup benennen';
+
+  @override
+  String get renameBackupTitle => 'Backup benennen';
+
+  @override
+  String get renameBackupLabel => 'Name';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Wird statt des Dateinamens $fileName angezeigt. Leer lassen entfernt den Namen; die Datei selbst wird nicht umbenannt.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Backup löschen';
+
+  @override
+  String get deleteBackupTitle => 'Backup löschen';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '„$name“ ($fileName) löschen? Die Datei wird von der Festplatte entfernt und lässt sich nicht zurückholen.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Löschen';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup gelöscht: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Backup konnte nicht gelöscht werden: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Backup konnte nicht benannt werden: $details';
+  }
 }

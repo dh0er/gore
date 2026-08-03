@@ -2683,7 +2683,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции: в игре при выбрасывании такого предмета исчезает другой. Восстановление переписывает только идентификаторы: ни один предмет не добавляется, не удаляется и не изменяется.';
+    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции: в игре при выбрасывании такого предмета исчезает другой. Восстановление переписывает только идентификаторы: ни один предмет не добавляется, не удаляется и не изменяется. При сохранении, как обычно, создаётся резервная копия.';
   }
 
   @override
@@ -2699,4 +2699,50 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'В очереди одновременно изменение инвентаря, перенумеровывающее слоты, и прямое изменение идентификатора слота. Перенумерация отменит прямое изменение — отмените одно из них и сохраните снова.';
+
+  @override
+  String get backupFactFile => 'Файл';
+
+  @override
+  String get renameBackupTooltip => 'Назвать эту копию';
+
+  @override
+  String get renameBackupTitle => 'Название копии';
+
+  @override
+  String get renameBackupLabel => 'Название';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Показывается вместо имени файла $fileName. Пустое поле убирает название; сам файл не переименовывается.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Удалить эту копию';
+
+  @override
+  String get deleteBackupTitle => 'Удалить копию';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Удалить «$name» ($fileName)? Файл будет стёрт с диска, вернуть его не получится.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Удалить';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Копия удалена: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Не удалось удалить копию: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Не удалось задать название копии: $details';
+  }
 }

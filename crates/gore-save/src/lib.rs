@@ -218,6 +218,10 @@ struct PersistentDataListSummary {
 pub struct BackupListItem {
     pub path: String,
     pub file_name: String,
+    /// User-given label for this backup, kept beside the files (see
+    /// [`backup_names_path`]). `None` when the user never named it — callers
+    /// then show the file name.
+    pub name: Option<String>,
     pub file_size: u64,
     pub sha1: String,
     pub created_epoch: Option<u64>,
@@ -487,6 +491,18 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 })?;
             Ok(restore_backup(&path, &backup_path)?)
         }
+        "delete_backup" => {
+            let path = required_path(&payload)?;
+            let backup_path = required_backup_path(&payload)?;
+            Ok(delete_backup(&path, &backup_path)?)
+        }
+        "rename_backup" => {
+            let path = required_path(&payload)?;
+            let backup_path = required_backup_path(&payload)?;
+            // An absent or empty name clears the label.
+            let name = payload.get("name").and_then(Value::as_str).unwrap_or("");
+            Ok(rename_backup(&path, &backup_path, name)?)
+        }
         "validate_codec_roundtrip" => {
             let path = required_path(&payload)?;
             let backend = codec_backend::KrakenBackend::default();
@@ -672,6 +688,16 @@ fn required_path(payload: &Value) -> Result<PathBuf, CoreError> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .ok_or_else(|| CoreError::InvalidRequest("missing payload.path".to_string()))
+}
+
+/// The `backupPath` a backup operation acts on. Kept separate from
+/// [`required_path`] (the live save) so the two can never be confused.
+fn required_backup_path(payload: &Value) -> Result<PathBuf, CoreError> {
+    payload
+        .get("backupPath")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| CoreError::InvalidRequest("missing payload.backupPath".to_string()))
 }
 
 pub fn scan_save_dir(path: &Path) -> Result<Vec<SaveListItem>, CoreError> {
@@ -1448,12 +1474,123 @@ fn looks_slot_name(value: &str) -> bool {
     number.len() == 3 && number.chars().all(|ch| ch.is_ascii_digit())
 }
 
+/// Where user-given backup labels live: one JSON object mapping a backup's file
+/// name to its label, inside the save folder's `goresave_backups` directory.
+///
+/// Kept beside the backups rather than in app settings so a label travels with
+/// the files it describes, and keyed by file name so it survives a backup being
+/// moved between the legacy location (next to the save) and the subfolder. The
+/// backup file itself is never renamed — its name encodes the save and the
+/// moment it was taken.
+fn backup_names_path(save_path: &Path) -> PathBuf {
+    save_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("goresave_backups")
+        .join("backup_names.json")
+}
+
+/// Read the label map for `save_path`'s folder. A missing or unreadable file
+/// yields an empty map: labels are decoration, never a reason to fail a listing.
+fn read_backup_names(save_path: &Path) -> HashMap<String, String> {
+    let Ok(text) = fs::read_to_string(backup_names_path(save_path)) else {
+        return HashMap::new();
+    };
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(&text) else {
+        return HashMap::new();
+    };
+    map.into_iter()
+        .filter_map(|(key, value)| Some((key, value.as_str()?.to_string())))
+        .collect()
+}
+
+/// Persist the label map, creating the backups folder if needed. An empty map
+/// removes the file so an untouched save folder keeps no leftovers.
+fn write_backup_names(save_path: &Path, names: &HashMap<String, String>) -> Result<(), CoreError> {
+    let path = backup_names_path(save_path);
+    if names.is_empty() {
+        match fs::remove_file(&path) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut sorted: Vec<(&String, &String)> = names.iter().collect();
+    sorted.sort();
+    let object: serde_json::Map<String, Value> = sorted
+        .into_iter()
+        .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+        .collect();
+    let text = serde_json::to_string_pretty(&Value::Object(object))
+        .map_err(|err| CoreError::Parse(format!("cannot encode backup labels: {err}")))?;
+    fs::write(&path, text)?;
+    Ok(())
+}
+
+/// Resolve `backup_path` against the backups this save actually has, returning
+/// its file name.
+///
+/// Rename and delete take a path from the caller, so it is matched against the
+/// listing rather than against a name pattern: only a file this save's own
+/// listing produced can be touched, which rules out deleting the live save, a
+/// sibling slot's backup, or anything outside the folder.
+fn resolve_owned_backup(save_path: &Path, backup_path: &Path) -> Result<String, CoreError> {
+    let target = backup_path.display().to_string();
+    let owned = list_save_backups(save_path)?
+        .into_iter()
+        .chain(list_persistent_data_list_backups_for_save(save_path)?)
+        .find(|item| item.path == target);
+    owned.map(|item| item.file_name).ok_or_else(|| {
+        CoreError::InvalidRequest(format!(
+            "{target} is not a backup of this savegame; refusing to touch it"
+        ))
+    })
+}
+
+/// Delete one backup of `save_path` and drop its label.
+fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
+    let file_name = resolve_owned_backup(save_path, backup_path)?;
+    fs::remove_file(backup_path)?;
+    let mut names = read_backup_names(save_path);
+    if names.remove(&file_name).is_some() {
+        write_backup_names(save_path, &names)?;
+    }
+    Ok(json!({
+        "path": backup_path.display().to_string(),
+        "fileName": file_name,
+        "deleted": true,
+    }))
+}
+
+/// Label one backup of `save_path`, or clear its label with an empty name. The
+/// backup file keeps its own name either way.
+fn rename_backup(save_path: &Path, backup_path: &Path, name: &str) -> Result<Value, CoreError> {
+    let file_name = resolve_owned_backup(save_path, backup_path)?;
+    let trimmed = name.trim();
+    let mut names = read_backup_names(save_path);
+    if trimmed.is_empty() {
+        names.remove(&file_name);
+    } else {
+        names.insert(file_name.clone(), trimmed.to_string());
+    }
+    write_backup_names(save_path, &names)?;
+    Ok(json!({
+        "path": backup_path.display().to_string(),
+        "fileName": file_name,
+        "name": (!trimmed.is_empty()).then(|| trimmed.to_string()),
+    }))
+}
+
 pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.exists() {
         return Ok(Vec::new());
     }
     let prefix = backup_file_prefix(path)?;
+    let names = read_backup_names(path);
     let mut backups = Vec::new();
 
     // Collect candidate (backup_path, file_name) pairs from both locations:
@@ -1514,6 +1651,7 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
+            name: names.get(&file_name).cloned(),
             file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
@@ -1544,6 +1682,7 @@ fn list_persistent_data_list_backups_for_save(
     };
     let persistent_path = parent.join("PersistentDataList.sav");
     let prefix = backup_file_prefix(&persistent_path)?;
+    let names = read_backup_names(path);
     let mut backups = Vec::new();
 
     // Collect candidate (backup_path, file_name) pairs from both locations:
@@ -1612,6 +1751,7 @@ fn list_persistent_data_list_backups_for_save(
             };
         backups.push(BackupListItem {
             path: backup_path.display().to_string(),
+            name: names.get(&file_name).cloned(),
             file_name,
             file_size: metadata.len(),
             sha1: sha1_hex(&data),
@@ -16151,6 +16291,66 @@ mod tests {
             inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
             "Public name"
         );
+    }
+
+    #[test]
+    fn backups_can_be_labelled_and_deleted() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let backup = subfolder.join("G1R-001.sav.bak.100");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&backup, minimal_gsav("Backup")).unwrap();
+
+        // Unlabelled to begin with.
+        assert!(list_save_backups(&path).unwrap()[0].name.is_none());
+
+        // A label rides beside the files and never touches the backup itself.
+        let renamed = rename_backup(&path, &backup, "  before the boss  ").unwrap();
+        assert_eq!(renamed["name"], "before the boss");
+        assert!(backup.exists(), "labelling must not rename the file");
+        let listed = list_save_backups(&path).unwrap();
+        assert_eq!(listed[0].name.as_deref(), Some("before the boss"));
+        assert_eq!(listed[0].file_name, "G1R-001.sav.bak.100");
+
+        // An empty name clears it again, leaving no leftover file behind.
+        rename_backup(&path, &backup, "   ").unwrap();
+        assert!(list_save_backups(&path).unwrap()[0].name.is_none());
+        assert!(!backup_names_path(&path).exists());
+
+        // Deleting drops the file and its label.
+        rename_backup(&path, &backup, "keep me").unwrap();
+        delete_backup(&path, &backup).unwrap();
+        assert!(!backup.exists());
+        assert!(list_save_backups(&path).unwrap().is_empty());
+        assert!(read_backup_names(&path).is_empty());
+    }
+
+    #[test]
+    fn backup_operations_refuse_anything_that_is_not_this_saves_backup() {
+        // The path comes from the caller, so it is matched against this save's
+        // own listing — never a name pattern. The live save, another slot's
+        // backup and an unrelated file must all be rejected untouched.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let other = subfolder.join("G1R-002.sav.bak.100");
+        let stranger = dir.path().join("notes.txt");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&other, minimal_gsav("Other slot")).unwrap();
+        fs::write(&stranger, b"hands off").unwrap();
+
+        for target in [&path, &other, &stranger] {
+            let err = delete_backup(&path, target).unwrap_err();
+            assert!(
+                err.to_string().contains("not a backup of this savegame"),
+                "unexpected error: {err}"
+            );
+            assert!(target.exists(), "a refused delete must not remove anything");
+            assert!(rename_backup(&path, target, "x").is_err());
+        }
     }
 
     #[test]

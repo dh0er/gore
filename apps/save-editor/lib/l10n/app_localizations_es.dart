@@ -2673,7 +2673,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición: en el juego, soltar uno de esos objetos elimina otro distinto. La reparación solo reescribe los id: no se añade, elimina ni cambia ningún objeto.';
+    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición: en el juego, soltar uno de esos objetos elimina otro distinto. La reparación solo reescribe los id: no se añade, elimina ni cambia ningún objeto. Al guardar se crea una copia de seguridad, como siempre.';
   }
 
   @override
@@ -2688,4 +2688,50 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'Hay en cola una edición del inventario que renumera las ranuras y una edición directa de un id de ranura. La renumeración descartaría la edición directa: revierte una de las dos y vuelve a guardar.';
+
+  @override
+  String get backupFactFile => 'Archivo';
+
+  @override
+  String get renameBackupTooltip => 'Poner nombre a esta copia';
+
+  @override
+  String get renameBackupTitle => 'Nombrar copia de seguridad';
+
+  @override
+  String get renameBackupLabel => 'Nombre';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Se muestra en lugar del nombre de archivo $fileName. Déjalo vacío para quitar el nombre; el archivo no se renombra.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Eliminar esta copia de seguridad';
+
+  @override
+  String get deleteBackupTitle => 'Eliminar copia de seguridad';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '¿Eliminar «$name» ($fileName)? El archivo se borra del disco y no se puede recuperar.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Eliminar';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Copia de seguridad eliminada: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'No se pudo eliminar la copia de seguridad: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'No se pudo nombrar la copia de seguridad: $details';
+  }
 }

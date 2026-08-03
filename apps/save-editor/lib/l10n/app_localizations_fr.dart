@@ -2688,7 +2688,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position — dans le jeu, jeter un tel objet en supprime un autre. La réparation ne réécrit que les identifiants : aucun objet n’est ajouté, supprimé ni modifié.';
+    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position — dans le jeu, jeter un tel objet en supprime un autre. La réparation ne réécrit que les identifiants : aucun objet n’est ajouté, supprimé ni modifié. Une sauvegarde de secours est créée à l’enregistrement, comme toujours.';
   }
 
   @override
@@ -2704,4 +2704,50 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'Une modification d’inventaire qui renumérote les emplacements et une modification directe d’un identifiant d’emplacement sont toutes deux en attente. La renumérotation supprimerait la modification directe — annulez l’une des deux, puis enregistrez de nouveau.';
+
+  @override
+  String get backupFactFile => 'Fichier';
+
+  @override
+  String get renameBackupTooltip => 'Nommer cette sauvegarde';
+
+  @override
+  String get renameBackupTitle => 'Nommer la sauvegarde';
+
+  @override
+  String get renameBackupLabel => 'Nom';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Affiché à la place du nom de fichier $fileName. Laissez vide pour supprimer le nom ; le fichier lui-même n’est pas renommé.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Supprimer cette sauvegarde';
+
+  @override
+  String get deleteBackupTitle => 'Supprimer la sauvegarde';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Supprimer « $name » ($fileName) ? Le fichier est effacé du disque et ne peut pas être récupéré.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Supprimer';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Sauvegarde supprimée : $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Impossible de supprimer la sauvegarde : $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Impossible de nommer la sauvegarde : $details';
+  }
 }

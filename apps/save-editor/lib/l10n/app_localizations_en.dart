@@ -2659,7 +2659,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'This savegame holds $count inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed.';
+    return 'This savegame holds $count inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed. A backup is created when you save, as always.';
   }
 
   @override
@@ -2674,4 +2674,50 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'An inventory edit that renumbers slots and a direct edit of a slot id are both queued. The renumbering would discard the direct edit — revert one of them, then save again.';
+
+  @override
+  String get backupFactFile => 'File';
+
+  @override
+  String get renameBackupTooltip => 'Name this backup';
+
+  @override
+  String get renameBackupTitle => 'Name backup';
+
+  @override
+  String get renameBackupLabel => 'Name';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Shown instead of the file name $fileName. Leave empty to remove the name; the file itself is not renamed.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Delete this backup';
+
+  @override
+  String get deleteBackupTitle => 'Delete backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Delete “$name” ($fileName)? The file is removed from disk and cannot be brought back.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Delete';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup deleted: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Could not delete the backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Could not name the backup: $details';
+  }
 }

@@ -4089,7 +4089,7 @@ abstract class AppLocalizations {
   /// No description provided for @slotRepairBody.
   ///
   /// In en, this message translates to:
-  /// **'This savegame holds {count} inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed.'**
+  /// **'This savegame holds {count} inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed. A backup is created when you save, as always.'**
   String slotRepairBody(int count);
 
   /// No description provided for @slotRepairQueued.
@@ -4115,6 +4115,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'An inventory edit that renumbers slots and a direct edit of a slot id are both queued. The renumbering would discard the direct edit — revert one of them, then save again.'**
   String get editorInventorySlotRepairConflict;
+
+  /// No description provided for @backupFactFile.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get backupFactFile;
+
+  /// No description provided for @renameBackupTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Name this backup'**
+  String get renameBackupTooltip;
+
+  /// No description provided for @renameBackupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Name backup'**
+  String get renameBackupTitle;
+
+  /// No description provided for @renameBackupLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Name'**
+  String get renameBackupLabel;
+
+  /// No description provided for @renameBackupHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Shown instead of the file name {fileName}. Leave empty to remove the name; the file itself is not renamed.'**
+  String renameBackupHelp(String fileName);
+
+  /// No description provided for @deleteBackupTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete this backup'**
+  String get deleteBackupTooltip;
+
+  /// No description provided for @deleteBackupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete backup'**
+  String get deleteBackupTitle;
+
+  /// No description provided for @deleteBackupBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete “{name}” ({fileName})? The file is removed from disk and cannot be brought back.'**
+  String deleteBackupBody(String name, String fileName);
+
+  /// No description provided for @deleteBackupConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get deleteBackupConfirm;
+
+  /// No description provided for @editorDeletedBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup deleted: {path}'**
+  String editorDeletedBackup(String path);
+
+  /// No description provided for @editorDeleteBackupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not delete the backup: {details}'**
+  String editorDeleteBackupFailed(String details);
+
+  /// No description provided for @editorRenameBackupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not name the backup: {details}'**
+  String editorRenameBackupFailed(String details);
 }
 
 class _AppLocalizationsDelegate

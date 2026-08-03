@@ -2355,6 +2355,55 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }, failureMessage: (details) => _l10n.editorRestoreFailed(details));
   }
 
+  /// Delete one backup of the selected save (or of `targetPath`). The core only
+  /// accepts a file its own backup listing produced, so this can never remove
+  /// the live save or another slot's snapshot.
+  Future<void> deleteBackup(String backupPath, {String? targetPath}) async {
+    final path = targetPath ?? state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'delete_backup',
+        payload: {'path': path, 'backupPath': backupPath},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _l10n.editorDeleteBackupFailed(_errorDetails(response)),
+        );
+        return;
+      }
+      state = state.copyWith(
+        lastWriteMessage: _l10n.editorDeletedBackup(backupPath),
+      );
+      await refreshBackups();
+    }, failureMessage: (details) => _l10n.editorDeleteBackupFailed(details));
+  }
+
+  /// Label one backup of the selected save (or of `targetPath`). An empty name
+  /// clears the label. The backup FILE keeps its own name either way — it
+  /// encodes which save it belongs to and when it was taken.
+  Future<void> renameBackup(
+    String backupPath,
+    String name, {
+    String? targetPath,
+  }) async {
+    final path = targetPath ?? state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'rename_backup',
+        payload: {'path': path, 'backupPath': backupPath, 'name': name},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _l10n.editorRenameBackupFailed(_errorDetails(response)),
+        );
+        return;
+      }
+      await refreshBackups();
+    }, failureMessage: (details) => _l10n.editorRenameBackupFailed(details));
+  }
+
   Future<void> checkCodec() async {
     try {
       final response = await _execute('check_codec');

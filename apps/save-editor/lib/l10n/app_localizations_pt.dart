@@ -2674,7 +2674,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String slotRepairBody(int count) {
-    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado.';
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
   }
 
   @override
@@ -2689,6 +2689,52 @@ class AppLocalizationsPt extends AppLocalizations {
   @override
   String get editorInventorySlotRepairConflict =>
       'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5360,7 +5406,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String slotRepairBody(int count) {
-    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado.';
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
   }
 
   @override
@@ -5375,4 +5421,50 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get editorInventorySlotRepairConflict =>
       'Uma edição de inventário que renumera espaços e uma edição direta de um id de espaço estão ambas na fila. A renumeração descartaria a edição direta — reverta uma das duas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
 }
