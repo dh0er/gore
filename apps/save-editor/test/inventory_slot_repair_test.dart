@@ -88,6 +88,61 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Repair'), findsOneWidget);
   });
 
+  testWidgets('the repair is written last, after id-addressed edits', (
+    tester,
+  ) async {
+    // The repair rewrites every misaligned m_Id, so an NPC removal pinned to the
+    // id the UI showed has to reach the core FIRST or it would no longer match.
+    final core = _InventoryCoreService(misalignedSlots: 3, npcRemovable: true);
+    await pumpApp(tester, core);
+    await openPlayerInventory(tester);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Repair'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Lizard-A'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.delete_outline).first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (2)'));
+    await tester.pumpAndSettle();
+
+    final writes = core.requests.where((r) => r.command == 'write_save').map((
+      r,
+    ) {
+      return (r.payload['edits'] as List)
+          .cast<Map<String, Object?>>()
+          .map((e) => e['path'])
+          .toList();
+    }).toList();
+    expect(writes.length, greaterThanOrEqualTo(2));
+    expect(writes.first, contains('private.inventory.removeItem'));
+    expect(writes.last, ['private.inventory.repairSlots']);
+  });
+
+  testWidgets('no repair action while the save cannot be written', (
+    tester,
+  ) async {
+    // Every other inventory action is gated on write capability; an action that
+    // could be queued but never applied must not be offered either.
+    await pumpApp(
+      tester,
+      _InventoryCoreService(misalignedSlots: 3, canCompress: false),
+    );
+    await openPlayerInventory(tester);
+
+    expect(find.text('Damaged inventory slots'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Repair'), findsNothing);
+  });
+
   testWidgets('a healthy save shows no repair banner', (tester) async {
     await pumpApp(tester, _InventoryCoreService(misalignedSlots: 0));
     await openPlayerInventory(tester);
@@ -105,9 +160,19 @@ class _RecordedRequest {
 
 /// Player inventory with one item; `misalignedSlots` drives the damage report.
 class _InventoryCoreService implements GoresaveCoreService {
-  _InventoryCoreService({required this.misalignedSlots});
+  _InventoryCoreService({
+    required this.misalignedSlots,
+    this.canCompress = true,
+    this.npcRemovable = false,
+  });
 
   final int misalignedSlots;
+
+  /// Whether the codec can compress; without it no private edit can be written.
+  final bool canCompress;
+
+  /// Whether the NPC inventory offers removal (an id-addressed edit).
+  final bool npcRemovable;
   final requests = <_RecordedRequest>[];
 
   static const _cheesePath = '/Script/Angelscript.ItFo_Cheese';
@@ -219,7 +284,7 @@ class _InventoryCoreService implements GoresaveCoreService {
           'data': {
             'available': true,
             'canDecompress': true,
-            'canCompress': true,
+            'canCompress': canCompress,
             'status': 'ready',
             'adapter': 'pure_rust_kraken',
             'message': 'Codec host is ready.',
@@ -272,7 +337,10 @@ class _InventoryCoreService implements GoresaveCoreService {
               },
             ],
             'mainContainerPaths': [_cheesePath],
-            'writable': ['private.inventory.setItemCount'],
+            'writable': [
+              'private.inventory.setItemCount',
+              if (npcRemovable) 'private.inventory.removeItem',
+            ],
           },
         };
       case 'private.npc.attributes':

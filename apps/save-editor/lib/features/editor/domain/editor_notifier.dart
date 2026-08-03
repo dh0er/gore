@@ -1350,11 +1350,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorInventoryResetConflict);
       return false;
     }
+    // The whole-save slot repair rewrites every misaligned m_Id. Any edit that
+    // addresses a slot by the id the UI showed — an NPC removal or count edit —
+    // must therefore run BEFORE it, so the repair gets its own trailing write
+    // instead of leading the fixed batch.
+    const repairSlotsPath = 'private.inventory.repairSlots';
+    final repairEdits = allEdits
+        .where((k) => k.edit['path'] == repairSlotsPath)
+        .toList();
     final fixedBatch = allEdits
         .where(
           (k) =>
               !splicingPaths.contains(k.edit['path']) &&
-              k.edit['path'] != skillPath,
+              k.edit['path'] != skillPath &&
+              k.edit['path'] != repairSlotsPath,
         )
         .toList();
 
@@ -1385,6 +1394,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // (see skillPath above).
       if (skillEdits.isNotEmpty)
         _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
+      // Last: the slot repair, so every id-addressed edit above resolved against
+      // the ids the user saw (see repairSlotsPath).
+      if (repairEdits.isNotEmpty)
+        _SubWrite(edits: [for (final keyed in repairEdits) keyed.edit]),
     ];
 
     final n = displayEditCount;
