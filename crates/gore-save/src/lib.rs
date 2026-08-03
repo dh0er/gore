@@ -1554,8 +1554,16 @@ fn resolve_owned_backup(save_path: &Path, backup_path: &Path) -> Result<String, 
 fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     let file_name = resolve_owned_backup(save_path, backup_path)?;
     fs::remove_file(backup_path)?;
+    // Labels are keyed by file name, and the same name can exist twice — once
+    // beside the save, once in the backups folder, both of which are listed. Let
+    // the label go only once no backup carries that name any more, or deleting
+    // one copy would silently strip the other's name.
+    let still_listed = list_save_backups(save_path)?
+        .into_iter()
+        .chain(list_persistent_data_list_backups_for_save(save_path)?)
+        .any(|item| item.file_name == file_name);
     let mut names = read_backup_names(save_path);
-    if names.remove(&file_name).is_some() {
+    if !still_listed && names.remove(&file_name).is_some() {
         write_backup_names(save_path, &names)?;
     }
     Ok(json!({
@@ -16324,6 +16332,40 @@ mod tests {
         delete_backup(&path, &backup).unwrap();
         assert!(!backup.exists());
         assert!(list_save_backups(&path).unwrap().is_empty());
+        assert!(read_backup_names(&path).is_empty());
+    }
+
+    #[test]
+    fn deleting_one_of_two_same_named_backups_keeps_the_others_label() {
+        // The listing covers both the legacy spot beside the save and the
+        // backups folder, so one file name can name two files. Labels are keyed
+        // by that name, so deleting one copy must leave the survivor named.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let legacy = dir.path().join("G1R-001.sav.bak.100");
+        let filed = subfolder.join("G1R-001.sav.bak.100");
+        fs::write(&path, minimal_gsav("Live")).unwrap();
+        fs::write(&legacy, minimal_gsav("Legacy")).unwrap();
+        fs::write(&filed, minimal_gsav("Filed")).unwrap();
+
+        rename_backup(&path, &legacy, "before the boss").unwrap();
+        assert!(
+            list_save_backups(&path)
+                .unwrap()
+                .iter()
+                .all(|item| item.name.as_deref() == Some("before the boss")),
+            "both copies share the name because the label is keyed by file name"
+        );
+
+        delete_backup(&path, &legacy).unwrap();
+        let remaining = list_save_backups(&path).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].name.as_deref(), Some("before the boss"));
+
+        // Only the last copy going takes the label with it.
+        delete_backup(&path, &filed).unwrap();
         assert!(read_backup_names(&path).is_empty());
     }
 
