@@ -35,6 +35,37 @@ void main() {
     }
   });
 
+  test('matches a container operation inside a slot, not just setValue', () {
+    // setAdd/setRemove and the array ops address their target the same way, and
+    // a structural inventory write would overwrite them just the same.
+    for (final op in [
+      'private.typed.setAdd',
+      'private.typed.setRemove',
+      'private.typed.arrayRemove',
+      'private.typed.arrayDuplicate',
+    ]) {
+      expect(
+        isInventorySlotTypedEdit({
+          'path': op,
+          'value': {
+            'path': [
+              'm_SavedPlayers',
+              '[0]',
+              'm_Inventory',
+              'm_Slots',
+              '[3]',
+              'm_Payload',
+              'm_GenericData',
+            ],
+            'index': 0,
+          },
+        }),
+        isTrue,
+        reason: op,
+      );
+    }
+  });
+
   test('matches an NPC slot edit, which sits under no m_Inventory segment', () {
     expect(
       isInventorySlotTypedEdit(

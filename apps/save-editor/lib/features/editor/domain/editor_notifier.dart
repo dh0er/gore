@@ -3557,8 +3557,18 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 /// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
 /// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
 /// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
-/// A raw typed edit that writes INTO one inventory slot — its id, its count, its
-/// payload, anything below `m_Slots/[i]`.
+/// Every raw typed operation, whether it writes a value or mutates a container.
+/// All of them address their target the same way, through `value.path`.
+const _typedEditPaths = {
+  'private.typed.setValue',
+  'private.typed.setAdd',
+  'private.typed.setRemove',
+  'private.typed.arrayRemove',
+  'private.typed.arrayDuplicate',
+};
+
+/// A raw typed edit that writes INTO one inventory slot — its id, its count, a
+/// set or array inside its payload, anything below `m_Slots/[i]`.
 ///
 /// Every structural inventory write claims whole slots: the repair renumbers
 /// them, an add fills a blank one and resets its payload, a removal blanks one.
@@ -3570,7 +3580,7 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 /// `npc::npc_inventory_path`), and both are rewritten alike.
 @visibleForTesting
 bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
-  if (edit['path'] != 'private.typed.setValue') return false;
+  if (!_typedEditPaths.contains(edit['path'])) return false;
   final path = (edit['value'] as Map?)?['path'];
   if (path is! List) return false;
   final segments = path.whereType<String>().toList();
