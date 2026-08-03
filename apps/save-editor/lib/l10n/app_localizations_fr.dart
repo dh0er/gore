@@ -2682,4 +2682,85 @@ class AppLocalizationsFr extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Emplacements d’inventaire endommagés';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Cette sauvegarde contient $count emplacements d’inventaire dont l’identifiant ne correspond plus à leur position — dans le jeu, jeter un tel objet en supprime un autre. La réparation ne réécrit que les identifiants : aucun objet n’est ajouté, supprimé ni modifié. Une sauvegarde de secours est créée à l’enregistrement, comme toujours.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Réparation en attente — enregistrez pour l’appliquer.';
+
+  @override
+  String get slotRepairAction => 'Réparer';
+
+  @override
+  String get slotRepairDiscard => 'Annuler';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Une modification directe d’un emplacement d’inventaire est en attente en même temps qu’une opération qui s’approprie des emplacements entiers (réparation, ajout ou suppression). La seconde écraserait la première — annulez l’une des deux, puis enregistrez de nouveau.';
+
+  @override
+  String get backupFactFile => 'Fichier';
+
+  @override
+  String get renameBackupTooltip => 'Nommer cette sauvegarde';
+
+  @override
+  String get renameBackupTitle => 'Nommer la sauvegarde';
+
+  @override
+  String get renameBackupLabel => 'Nom';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Affiché à la place du nom de fichier $fileName. Laissez vide pour supprimer le nom ; le fichier lui-même n’est pas renommé.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Supprimer cette sauvegarde';
+
+  @override
+  String get deleteBackupTitle => 'Supprimer la sauvegarde';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Supprimer « $name » ($fileName) ? Le fichier est effacé du disque et ne peut pas être récupéré.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Supprimer';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Sauvegarde supprimée : $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Impossible de supprimer la sauvegarde : $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Impossible de nommer la sauvegarde : $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'La réparation n’est pas possible pour l’instant — cette sauvegarde ne peut pas être écrite.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Sauvegarde supprimée : $path — son nom n’a pas pu être supprimé : $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La réparation n’est pas disponible pour cette sauvegarde.';
 }

@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
+import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 
@@ -116,7 +117,32 @@ class InventoryDetail extends ConsumerWidget {
       );
     }
 
-    if (!showActorHeader) return body;
+    // Damage an older build of this editor left in the save. It is reported
+    // save-wide and repaired save-wide, so it belongs above EITHER actor's
+    // inventory — not just the player's. The overview carries the same warning
+    // for users who never open this tab; both share one pending edit, so
+    // queueing on either shows as queued on the other.
+    final content = slotRepairWarranted(inspection)
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                child: SlotRepairBanner(
+                  notifier: notifier,
+                  misalignedSlots: inspection.privateInventory.misalignedSlots,
+                  availability: slotRepairAvailability(
+                    inspection,
+                    canCompress: canCompress,
+                  ),
+                ),
+              ),
+              Expanded(child: body),
+            ],
+          )
+        : body;
+
+    if (!showActorHeader) return content;
 
     // Standalone fallback: CharactersTab renders this header once above its
     // sub-tab bar and passes showActorHeader:false.
@@ -129,7 +155,7 @@ class InventoryDetail extends ConsumerWidget {
           lang: lang,
           showObjectIds: showObjectIds,
         ),
-        Expanded(child: body),
+        Expanded(child: content),
       ],
     );
   }
@@ -611,6 +637,17 @@ class _PrivateInventorySummaryCardState
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
           fallback: l10n.fallbackItem,
         );
+    // Same resolution for the pending structural cards below, which are
+    // addressed by asset path (adds) or by a slot whose id may be empty
+    // (removes): recover the class id from the path so a queued row reads like
+    // the browse rows and like the add dialog, instead of falling back to the
+    // derived id-only name for items the catalog can actually name.
+    String pendingNameOf(String path, {String id = ''}) {
+      final classId = id.isEmpty ? _itemDisplayFromPath(path) : id;
+      return localizedGameName(locCatalog, lang, classId) ??
+          itemDisplayNameFromId(classId, fallback: l10n.fallbackItem);
+    }
+
     final groups = groupInventoryItems(items, displayNameOf: nameOf);
 
     // Keep the current category selected if it still has items, else fall
@@ -875,10 +912,7 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
-                title: itemDisplayNameFromId(
-                  _itemDisplayFromPath(add.path),
-                  fallback: l10n.fallbackItem,
-                ),
+                title: pendingNameOf(add.path),
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -893,9 +927,9 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.remove,
                 icon: Icons.delete_outline,
-                title: itemDisplayNameFromId(
-                  _itemDisplayFromPath(_pendingRemovePath!),
-                  fallback: l10n.fallbackItem,
+                title: pendingNameOf(
+                  _pendingRemovePath!,
+                  id: _pendingRemove!.id,
                 ),
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds

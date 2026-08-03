@@ -2653,4 +2653,84 @@ class AppLocalizationsEn extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Damaged inventory slots';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'This savegame holds $count inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed. A backup is created when you save, as always.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Repair queued — save to apply it.';
+
+  @override
+  String get slotRepairAction => 'Repair';
+
+  @override
+  String get slotRepairDiscard => 'Discard';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.';
+
+  @override
+  String get backupFactFile => 'File';
+
+  @override
+  String get renameBackupTooltip => 'Name this backup';
+
+  @override
+  String get renameBackupTitle => 'Name backup';
+
+  @override
+  String get renameBackupLabel => 'Name';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Shown instead of the file name $fileName. Leave empty to remove the name; the file itself is not renamed.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Delete this backup';
+
+  @override
+  String get deleteBackupTitle => 'Delete backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Delete “$name” ($fileName)? The file is removed from disk and cannot be brought back.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Delete';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup deleted: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Could not delete the backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Could not name the backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Repairing is not possible right now — this savegame cannot be written.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup deleted: $path — its name could not be removed: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'The repair is not available for this savegame.';
 }

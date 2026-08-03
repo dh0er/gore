@@ -2667,4 +2667,84 @@ class AppLocalizationsEs extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Ranuras de inventario dañadas';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Esta partida guardada tiene $count ranuras de inventario cuyo id ya no coincide con su posición: en el juego, soltar uno de esos objetos elimina otro distinto. La reparación solo reescribe los id: no se añade, elimina ni cambia ningún objeto. Al guardar se crea una copia de seguridad, como siempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparación pendiente: guarda para aplicarla.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Hay en cola una edición directa de una ranura de inventario junto con una operación que ocupa ranuras enteras (reparar, añadir o eliminar). La segunda sobrescribiría la primera: revierte una de las dos y vuelve a guardar.';
+
+  @override
+  String get backupFactFile => 'Archivo';
+
+  @override
+  String get renameBackupTooltip => 'Poner nombre a esta copia';
+
+  @override
+  String get renameBackupTitle => 'Nombrar copia de seguridad';
+
+  @override
+  String get renameBackupLabel => 'Nombre';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Se muestra en lugar del nombre de archivo $fileName. Déjalo vacío para quitar el nombre; el archivo no se renombra.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Eliminar esta copia de seguridad';
+
+  @override
+  String get deleteBackupTitle => 'Eliminar copia de seguridad';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '¿Eliminar «$name» ($fileName)? El archivo se borra del disco y no se puede recuperar.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Eliminar';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Copia de seguridad eliminada: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'No se pudo eliminar la copia de seguridad: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'No se pudo nombrar la copia de seguridad: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Ahora mismo no se puede reparar: esta partida guardada no se puede escribir.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Copia de seguridad eliminada: $path: no se pudo quitar su nombre: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La reparación no está disponible para esta partida guardada.';
 }

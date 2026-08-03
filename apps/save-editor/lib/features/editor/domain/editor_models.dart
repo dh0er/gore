@@ -790,6 +790,7 @@ class PrivateInventorySummary {
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
+    this.misalignedSlots = 0,
   });
 
   factory PrivateInventorySummary.fromJson(Map<String, Object?>? json) {
@@ -825,6 +826,10 @@ class PrivateInventorySummary {
       writable:
           (json?['writable'] as List?)?.whereType<String>().toList() ??
           const [],
+      misalignedSlots:
+          ((json?['slotIntegrity'] as Map?)?['misalignedSlots'] as num?)
+              ?.toInt() ??
+          0,
     );
   }
 
@@ -844,6 +849,18 @@ class PrivateInventorySummary {
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
+
+  /// Inventory slots anywhere in the save whose stored id no longer matches the
+  /// position they sit in — damage an older version of this editor left behind.
+  /// The game resolves a slot by that position, so it acts on the wrong item
+  /// until the save is repaired.
+  final int misalignedSlots;
+
+  /// Whether the core offers the whole-save slot repair for this save. The
+  /// WARNING keys off [misalignedSlots] alone — a save can be damaged without
+  /// the repair being on offer, and the reader still needs to know.
+  bool get canRepairSlots =>
+      misalignedSlots > 0 && writable.contains('private.inventory.repairSlots');
 
   bool get hasData =>
       candidateCount > 0 ||
@@ -1080,6 +1097,7 @@ class BackupEntry {
     this.createdEpoch,
     this.playerSaveName,
     this.slotName,
+    this.name,
   });
 
   factory BackupEntry.fromJson(Map<Object?, Object?> json) {
@@ -1093,6 +1111,7 @@ class BackupEntry {
       scope: json['scope'] as String? ?? 'save',
       playerSaveName: json['playerSaveName'] as String?,
       slotName: json['slotName'] as String?,
+      name: json['name'] as String?,
     );
   }
 
@@ -1105,6 +1124,14 @@ class BackupEntry {
   final String scope;
   final String? playerSaveName;
   final String? slotName;
+
+  /// User-given label, kept beside the backup files. `null` when the user never
+  /// named this backup — the file name is the title then.
+  final String? name;
+
+  /// What to head the entry with: the label when there is one, else the file
+  /// name (which stays visible either way).
+  String get title => name?.isNotEmpty == true ? name! : fileName;
 
   bool get canRestore =>
       (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';

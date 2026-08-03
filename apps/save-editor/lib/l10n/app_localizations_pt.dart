@@ -2668,6 +2668,86 @@ class AppLocalizationsPt extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -5333,4 +5413,84 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }

@@ -2606,4 +2606,82 @@ class AppLocalizationsJa extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'インベントリスロットの破損';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'このセーブデータには、ID が位置と一致しないインベントリスロットが $count 個あります。ゲーム内でそのアイテムを捨てると、別のアイテムが消えます。修復はスロット ID を書き直すだけで、アイテムの追加・削除・変更は行いません。 保存時には通常どおりバックアップが作成されます。';
+  }
+
+  @override
+  String get slotRepairQueued => '修復を予約しました。保存すると適用されます。';
+
+  @override
+  String get slotRepairAction => '修復';
+
+  @override
+  String get slotRepairDiscard => '取り消す';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'インベントリスロットへの直接編集と、スロットごと扱う操作（修復・追加・削除）が同時に予約されています。後者が前者を上書きします。どちらかを取り消してから保存し直してください。';
+
+  @override
+  String get backupFactFile => 'ファイル';
+
+  @override
+  String get renameBackupTooltip => 'このバックアップに名前を付ける';
+
+  @override
+  String get renameBackupTitle => 'バックアップ名';
+
+  @override
+  String get renameBackupLabel => '名前';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'ファイル名 $fileName の代わりに表示されます。空にすると名前を削除します。ファイル自体の名前は変わりません。';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'このバックアップを削除';
+
+  @override
+  String get deleteBackupTitle => 'バックアップの削除';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '「$name」（$fileName）を削除しますか？ ファイルはディスクから削除され、元に戻せません。';
+  }
+
+  @override
+  String get deleteBackupConfirm => '削除';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'バックアップを削除しました: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'バックアップを削除できませんでした: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'バックアップに名前を付けられませんでした: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable => '現在は修復できません。このセーブデータには書き込めません。';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'バックアップを削除しました: $path — その名前は削除できませんでした: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered => 'このセーブデータでは修復を利用できません。';
 }
