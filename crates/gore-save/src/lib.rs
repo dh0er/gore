@@ -11779,6 +11779,70 @@ fn apply_private_inventory_repair_slots_to_payload(payload: &mut Vec<u8>) -> Res
     Ok(())
 }
 
+/// The serialized value bytes of a state-free `m_Payload`, taken from a slot of
+/// the same inventory — the clean shape the game leaves in a freed slot.
+///
+/// Searched in the edited container first, then in its siblings, so an inventory
+/// where every remaining item in one container carries state still finds a
+/// template. Every slot uses the same `ItemPayload` struct type, so the bytes
+/// drop into any of them; the caller proves it with a re-parse.
+fn clean_payload_value_bytes(
+    payload: &[u8],
+    root: &properties::RootObject,
+    slots_path: &[String],
+) -> Option<Vec<u8>> {
+    // slots_path is [.., "Items", "[k]", "m_Slots"]; drop the last two segments
+    // to reach the container array and scan its siblings after this container.
+    let items_path = slots_path.get(..slots_path.len().checked_sub(2)?)?;
+    let mut candidates = vec![slots_path.to_vec()];
+    if let Ok(segments) = properties::parse_path(items_path) {
+        if let Ok(properties::Property {
+            value: properties::PropertyValue::Array { elements },
+            ..
+        }) = properties::resolve(&root.properties, &segments).cloned()
+        {
+            for index in 0..elements.len() {
+                let mut path = items_path.to_vec();
+                path.push(format!("[{index}]"));
+                path.push("m_Slots".to_string());
+                if path != slots_path {
+                    candidates.push(path);
+                }
+            }
+        }
+    }
+    for slots in candidates {
+        let Ok(segments) = properties::parse_path(&slots) else {
+            continue;
+        };
+        let Ok(prop) = properties::resolve(&root.properties, &segments) else {
+            continue;
+        };
+        let properties::PropertyValue::Array { elements } = &prop.value else {
+            continue;
+        };
+        let Some(index) = elements.iter().position(|slot| {
+            !struct_element_property(slot, "m_Payload").is_some_and(property_carries_state)
+        }) else {
+            continue;
+        };
+        let mut path = slots.clone();
+        path.push(format!("[{index}]"));
+        path.push("m_Payload".to_string());
+        let Ok(segments) = properties::parse_path(&path) else {
+            continue;
+        };
+        let Ok(clean) = properties::resolve(&root.properties, &segments) else {
+            continue;
+        };
+        let end = clean.value_offset.checked_add(clean.value_size)?;
+        if let Some(bytes) = payload.get(clean.value_offset..end) {
+            return Some(bytes.to_vec());
+        }
+    }
+    None
+}
+
 /// Blank one inventory slot in place: drop the item-specific payload state,
 /// clear the item definition and zero the count — the exact shape the game
 /// leaves behind when an item leaves the inventory (see [`slot_is_free`]). The
@@ -11799,30 +11863,28 @@ fn blank_inventory_slot(
         path
     };
 
-    // Item state (an armor's upgrades, say) must not survive in a slot the game
-    // will hand to the next item picked up. Entries go from the back so the
-    // ranges ahead of the splice stay valid, one re-parse per removal.
-    let generic_data_segs = properties::parse_path(&slot_path(&["m_Payload", "m_GenericData"]))?;
-    loop {
+    // Item state (an armor's upgrades, its stage level, ownership tags, nested
+    // items) must not survive in a slot the game will hand to the next item
+    // picked up. The payload's shape varies by item, so rather than reset field
+    // by field, swap in the whole serialized payload of a state-free slot — the
+    // same struct type, and exactly the clean shape the game leaves behind.
+    {
+        let payload_segs = properties::parse_path(&slot_path(&["m_Payload"]))?;
         let root = properties::parse_private_root(payload)?;
-        let Ok(chain) = properties::resolve_chain(&root.properties, &generic_data_segs) else {
-            break;
-        };
-        let properties::PropertyValue::Map { entries, .. } = &chain.target.value else {
-            break;
-        };
-        let Some(last) = entries.len().checked_sub(1) else {
-            break;
-        };
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
-        drop(root);
-        properties::patch_container(
-            payload,
-            &target,
-            &enclosing,
-            &properties::ContainerEdit::MapRemove { entry_index: last },
-        )?;
+        if properties::resolve(&root.properties, &payload_segs).is_ok_and(property_carries_state) {
+            let clean = clean_payload_value_bytes(payload, &root, slots_path).ok_or_else(|| {
+                CoreError::UnsupportedEdit(
+                    "no inventory slot has a state-free payload to reset the freed slot with; \
+                     removing this item would leave its state behind"
+                        .to_string(),
+                )
+            })?;
+            let chain = properties::resolve_chain(&root.properties, &payload_segs)?;
+            let target = chain.target.clone();
+            let enclosing = chain.enclosing_size_fields.clone();
+            drop(root);
+            properties::patch_value_bytes(payload, &target, &enclosing, &clean)?;
+        }
     }
 
     {
@@ -14679,17 +14741,6 @@ mod tests {
         out.extend_from_slice(&((value.len() + 1 + 4) as u32).to_le_bytes());
         out.push(0);
         out.extend_from_slice(&fstring(value));
-        out
-    }
-
-    fn string_array_property(name: &str, values: &[&str]) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(&fstring(name));
-        out.extend_from_slice(&fstring("ArrayProperty"));
-        out.extend_from_slice(&fstring("StrProperty"));
-        for value in values {
-            out.extend_from_slice(&fstring(value));
-        }
         out
     }
 
@@ -24962,6 +25013,115 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&json!("private.inventory.repairSlots"))
+        );
+    }
+
+    /// ArrayProperty<NameProperty>, the key half of the real generic-data shape.
+    fn inv_name_array_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut descriptor = 1u32.to_le_bytes().to_vec();
+        descriptor.extend_from_slice(&fstring("NameProperty"));
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for value in values {
+            body.extend_from_slice(&fstring(value));
+        }
+        inv_tagged(name, "ArrayProperty", &descriptor, 0, &body)
+    }
+
+    /// An item payload carrying state the way real saves do: `m_GenericData` as
+    /// a STRUCT with parallel `m_Keys`/`m_Values` arrays (what
+    /// [`slot_upgrade_pairs`] reads), plus a non-default scalar beside it.
+    fn inv_stateful_payload() -> Vec<u8> {
+        let mut generic = inv_name_array_property("m_Keys", &["UpgradeUpper"]);
+        generic.extend_from_slice(&strict_string_array_property("m_Values", &["1"]));
+        let mut out = inv_struct_property("m_GenericData", "ReplicatedStringMap", &generic);
+        out.extend_from_slice(&int_property("m_StageLevel", 3));
+        out
+    }
+
+    fn inv_slot_elements(payload: &[u8], container_index: usize) -> Vec<properties::PropertyValue> {
+        let root = properties::parse_private_root(payload).unwrap();
+        let segs = properties::parse_path(&inv_slots_prefix(container_index)).unwrap();
+        let prop = properties::resolve(&root.properties, &segs).unwrap();
+        match &prop.value {
+            properties::PropertyValue::Array { elements } => elements.clone(),
+            other => panic!("m_Slots is not an array: {other:?}"),
+        }
+    }
+
+    fn inv_slot_carries_state(payload: &[u8], container_index: usize, slot: usize) -> bool {
+        let elements = inv_slot_elements(payload, container_index);
+        struct_element_property(&elements[slot], "m_Payload").is_some_and(property_carries_state)
+    }
+
+    #[test]
+    fn remove_item_resets_the_payload_the_freed_slot_hands_on() {
+        // Real saves keep item state in a STRUCT with parallel m_Keys/m_Values
+        // arrays (see slot_upgrade_pairs), plus scalars like m_StageLevel — not
+        // in a MapProperty. A freed slot must carry none of it, or the next item
+        // that lands there inherits the removed item's upgrades.
+        let main = vec![
+            inv_item_slot(
+                0,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItFo_Apple",
+                1,
+                &inv_empty_payload_map(),
+            ),
+            inv_item_slot(
+                1,
+                INV_MAIN_LABEL,
+                "/Script/Angelscript.ItAr_Armor",
+                1,
+                &inv_stateful_payload(),
+            ),
+        ];
+        let mut payload = typed_inventory_private_payload(&[], &main);
+        assert!(
+            inv_slot_carries_state(&payload, 1, 1),
+            "fixture must start out stateful"
+        );
+        assert_eq!(
+            slot_upgrade_pairs(&inv_slot_elements(&payload, 1)[1]),
+            vec![("UpgradeUpper".to_string(), "1".to_string())],
+        );
+
+        apply_private_inventory_remove_item_to_payload(
+            &mut payload,
+            &PrivateInventoryRemoveItemEdit {
+                path: "/Script/Angelscript.ItAr_Armor".to_string(),
+                actor_id: None,
+                container_type: None,
+                slot_id: None,
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !inv_slot_carries_state(&payload, 1, 1),
+            "the freed slot must not keep the removed item's state"
+        );
+        assert!(slot_upgrade_pairs(&inv_slot_elements(&payload, 1)[1]).is_empty());
+
+        // The next item to reuse that slot starts clean.
+        apply_private_inventory_add_item_to_payload(
+            &mut payload,
+            &PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Sulfur".to_string(),
+                count: 1,
+                actor_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            inv_slot_paths(&payload, 1),
+            vec![
+                "/Script/Angelscript.ItFo_Apple".to_string(),
+                "/Script/Angelscript.ItMi_Sulfur".to_string(),
+            ]
+        );
+        assert!(
+            !inv_slot_carries_state(&payload, 1, 1),
+            "an item added into a freed slot must not inherit its old state"
         );
     }
 
