@@ -1548,12 +1548,56 @@ fn read_backup_names_strict(save_path: &Path) -> Result<HashMap<String, String>,
     Ok(names)
 }
 
-/// Persist the label map, creating the backups folder if needed. An empty map
-/// removes the file so an untouched save folder keeps no leftovers.
-fn write_backup_names(save_path: &Path, names: &HashMap<String, String>) -> Result<(), CoreError> {
+/// Apply `mutate` to the label map and publish the result.
+///
+/// Read, change, write — with a second editor open on the same save folder that
+/// is a lost update: both read the same map, each changes its own entry, and the
+/// later write drops the other's. So the publish only goes through while the
+/// file is still exactly what was read, and a change underneath simply starts
+/// the whole sequence over on the newer map.
+fn mutate_backup_names<F>(save_path: &Path, mutate: F) -> Result<(), CoreError>
+where
+    F: Fn(&mut HashMap<String, String>),
+{
     let path = backup_names_path(save_path);
+    let mut last_conflict = None;
+    for _ in 0..8 {
+        let before = snapshot_file(&path)?;
+        let mut names = read_backup_names_strict(save_path)?;
+        let unchanged = names.clone();
+        mutate(&mut names);
+        if names == unchanged {
+            return Ok(());
+        }
+        match publish_backup_names(&path, &before, &names) {
+            Ok(()) => return Ok(()),
+            // Someone else published in the meantime; re-read and try again.
+            Err(err) => last_conflict = Some(err),
+        }
+    }
+    Err(last_conflict.unwrap_or_else(|| {
+        CoreError::Update(format!(
+            "backup labels at {} kept changing underneath",
+            path.display()
+        ))
+    }))
+}
+
+/// Write `names` to `path`, but only while the file still holds `expected`.
+/// An empty map removes the file so an untouched save folder keeps no leftovers.
+fn publish_backup_names(
+    path: &Path,
+    expected: &FileSnapshot,
+    names: &HashMap<String, String>,
+) -> Result<(), CoreError> {
     if names.is_empty() {
-        match fs::remove_file(&path) {
+        if !matches!(snapshot_file(path)?, ref current if current == expected) {
+            return Err(CoreError::Update(format!(
+                "{} changed while its labels were being tidied",
+                path.display()
+            )));
+        }
+        match fs::remove_file(path) {
             Ok(()) => return Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(err.into()),
@@ -1570,13 +1614,13 @@ fn write_backup_names(save_path: &Path, names: &HashMap<String, String>) -> Resu
         .collect();
     let text = serde_json::to_string_pretty(&Value::Object(object))
         .map_err(|err| CoreError::Parse(format!("cannot encode backup labels: {err}")))?;
-    // Stage beside the file and rename over it, never write in place: a write
+    // Stage beside the file and swap it in, never write in place: a write
     // interrupted halfway would leave a map that listings silently read as "no
     // labels" and that mutations refuse to touch, stranding names the user
-    // cannot restore. The rename replaces the destination in one step; the
-    // staging file only survives a failure, where its own Drop removes it.
-    let staged = ScratchFile::create(&path, "tmp-labels", text.as_bytes())?;
-    fs::rename(staged.path(), &path)?;
+    // cannot restore. The swap also refuses if the file moved on since it was
+    // read, which is what keeps two editors from overwriting each other.
+    let staged = ScratchFile::create(path, "tmp-labels", text.as_bytes())?;
+    begin_replace_if_unchanged(path, staged.path(), expected)?.commit();
     Ok(())
 }
 
@@ -1632,25 +1676,25 @@ fn prune_backup_label(save_path: &Path, file_name: &str) -> Result<(), CoreError
     if still_listed {
         return Ok(());
     }
-    let mut names = read_backup_names_strict(save_path)?;
-    if names.remove(file_name).is_some() {
-        write_backup_names(save_path, &names)?;
-    }
-    Ok(())
+    let file_name = file_name.to_string();
+    mutate_backup_names(save_path, |names| {
+        names.remove(&file_name);
+    })
 }
 
 /// Label one backup of `save_path`, or clear its label with an empty name. The
 /// backup file keeps its own name either way.
 fn rename_backup(save_path: &Path, backup_path: &Path, name: &str) -> Result<Value, CoreError> {
     let file_name = resolve_owned_backup(save_path, backup_path)?;
-    let trimmed = name.trim();
-    let mut names = read_backup_names_strict(save_path)?;
-    if trimmed.is_empty() {
-        names.remove(&file_name);
-    } else {
-        names.insert(file_name.clone(), trimmed.to_string());
-    }
-    write_backup_names(save_path, &names)?;
+    let trimmed = name.trim().to_string();
+    let key = file_name.clone();
+    mutate_backup_names(save_path, |names| {
+        if trimmed.is_empty() {
+            names.remove(&key);
+        } else {
+            names.insert(key.clone(), trimmed.clone());
+        }
+    })?;
     Ok(json!({
         "path": backup_path.display().to_string(),
         "fileName": file_name,
@@ -16468,6 +16512,46 @@ mod tests {
         assert_eq!(fs::read_to_string(&names_file).unwrap(), odd);
         // Listing stays forgiving: the odd entry is not a label, the rest is.
         assert!(list_save_backups(&path).unwrap()[0].name.is_none());
+    }
+
+    #[test]
+    fn a_label_write_refuses_to_clobber_another_editors_update() {
+        // Two editors on one save folder: both read the same map, each changes
+        // its own entry. The later write must not simply win — it would drop the
+        // other's label without a trace.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let subfolder = dir.path().join("goresave_backups");
+        fs::create_dir_all(&subfolder).unwrap();
+        let names_file = backup_names_path(&path);
+        fs::write(&names_file, "{\n  \"a.bak.1\": \"mine\"\n}").unwrap();
+
+        // What this editor read before making its change.
+        let stale = snapshot_file(&names_file).unwrap();
+
+        // The other editor publishes first.
+        fs::write(&names_file, "{\n  \"b.bak.2\": \"theirs\"\n}").unwrap();
+
+        let mut names = HashMap::new();
+        names.insert("a.bak.1".to_string(), "mine, renamed".to_string());
+        let err = publish_backup_names(&names_file, &stale, &names).unwrap_err();
+        assert!(!err.to_string().is_empty());
+        assert!(
+            fs::read_to_string(&names_file).unwrap().contains("theirs"),
+            "the other editor's label must survive"
+        );
+
+        // Reading afresh and publishing against THAT succeeds.
+        let current = snapshot_file(&names_file).unwrap();
+        let mut merged = read_backup_names_strict(&path).unwrap();
+        merged.insert("a.bak.1".to_string(), "mine, renamed".to_string());
+        publish_backup_names(&names_file, &current, &merged).unwrap();
+        let after = read_backup_names_strict(&path).unwrap();
+        assert_eq!(
+            after.get("a.bak.1").map(String::as_str),
+            Some("mine, renamed")
+        );
+        assert_eq!(after.get("b.bak.2").map(String::as_str), Some("theirs"));
     }
 
     #[test]
