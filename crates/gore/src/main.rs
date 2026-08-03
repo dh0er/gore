@@ -234,14 +234,17 @@ enum McpAction {
     Serve {
         /// Pre-approve commands that change the game installation or overwrite an existing file,
         /// so they run without confirming with you. Without this they are still allowed — the
-        /// agent's client asks you first. Use it where nobody is watching (CI, batch runs)
+        /// agent's client asks you first. Use it where nobody is watching (CI, batch runs).
+        /// Also settable as GORE_MCP_ALLOW_WRITE=1, which is the only route a plugin has
         #[arg(long)]
         allow_write: bool,
-        /// Pre-approve commands that launch the game executable (`as compile`, `as compile-module`)
+        /// Pre-approve commands that launch the game executable (`as compile`, `as compile-module`).
+        /// Also settable as GORE_MCP_ALLOW_GAME_LAUNCH=1
         #[arg(long)]
         allow_game_launch: bool,
         /// Never ask, and refuse anything that would need confirming. The strict posture, for a
-        /// server exposed to an agent whose calls nobody reviews
+        /// server exposed to an agent whose calls nobody reviews.
+        /// Also settable as GORE_MCP_NO_CONSENT_PROMPTS=1
         #[arg(long)]
         no_consent_prompts: bool,
         /// Override every per-command wall-clock cap, in seconds (0 keeps the defaults)

@@ -45,9 +45,22 @@ claude --plugin-dir path\to\gore\plugins\gore
 ```
 
 Codex and Cursor read their own manifests, which the plugin also carries
-(`.codex-plugin/`, `.cursor-plugin/`). Those declare the skill; whether either
-client also picks up the `.mcp.json` beside them has not been tested here, so
-treat the JSON block below as the reliable way to get the server on those two.
+(`.codex-plugin/`, `.cursor-plugin/`).
+
+**Codex needs the server added separately.** `codex plugin` and `codex mcp` are
+two different things there: servers live in `~/.codex/config.toml` under
+`[mcp_servers.*]`, and no Codex plugin carries an `.mcp.json` at all. So the
+manifest here gives Codex the skill, and the server is one more command:
+
+```powershell
+codex mcp add gore -- gore mcp serve
+```
+
+Cursor looks like it does read the `.mcp.json` — plugins in its own cache ship
+one, including at least one that carries no `.cursor-plugin/` manifest and
+nothing but the Claude-format files beside it. That is evidence rather than a
+test result, so if the `gore_*` tools do not appear there, add the server by hand
+with the JSON below.
 
 ### `gore.exe` has to be on `PATH`
 
@@ -209,15 +222,33 @@ agent nobody is reviewing cannot talk its own way past the gate.
 Where nobody is watching — CI, a scripted batch, an agent that already has its own
 approval layer — you can answer once at startup instead:
 
-| Flag | Effect |
-|---|---|
-| `--allow-write` | Installation changes and in-place rewrites run without asking |
-| `--allow-game-launch` | The same for starting the game. Compiling needs **both**, because it also stages files in the installation |
-| `--no-consent-prompts` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
+| Flag | Environment variable | Effect |
+|---|---|---|
+| `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes and in-place rewrites run without asking |
+| `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for starting the game. Compiling needs **both**, because it also stages files in the installation |
+| `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
 
 ```powershell
 gore mcp serve --allow-write
 ```
+
+**If you installed the plugin, the variables are the only route.** A plugin's
+`.mcp.json` carries a fixed `args` array and nothing between it and the server
+can add to it, so there is nowhere to type a flag. Set the variable in whatever
+your client launches from — the shell it inherits, or its own environment
+settings — and restart it, since a running process keeps the environment it
+started with:
+
+```powershell
+$env:GORE_MCP_ALLOW_WRITE = '1'
+```
+
+Either source turning a permission on is enough, and setting both is not an
+error: a flag and its variable are the same person saying the same thing twice.
+Off is `0`, `false`, `no`, `off`, empty, or simply unset. Anything else refuses
+to start and says which variable — a permission setting that cannot be read is
+the one case where either default misleads, one by granting what nobody wrote
+and the other by leaving someone to wonder why every call still stops to ask.
 
 Six rules are worth knowing because they have no equivalent on the command
 line:

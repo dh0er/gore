@@ -73,6 +73,9 @@ One prerequisite the plugin cannot satisfy: it starts the server as `gore mcp
 serve`, by name, so **`gore.exe` has to be on `PATH`**. If it is not, no `gore_*`
 tool appears at all — `gore --version` in a terminal is the check.
 
+Codex needs one more command, because a Codex plugin carries skills and not
+servers: `codex mcp add gore -- gore mcp serve`.
+
 To wire a client up by hand instead — a client with no plugin support, or one you
 want to pass [flags](docs/guide/mcp.md#answering-in-advance) to:
 
@@ -111,9 +114,9 @@ server saw no confirmation of its own, so the transcript is what you check. See
 [MCP server](docs/guide/mcp.md).
 
 For unattended use, `--allow-write` and `--allow-game-launch` answer in advance,
-and `--no-consent-prompts` refuses instead of asking. Those go in the `args`
-above, which is why the hand-wired route is worth keeping: the plugin's own
-`.mcp.json` starts the server without them. Details:
+and `--no-consent-prompts` refuses instead of asking. Each also reads an
+environment variable — `GORE_MCP_ALLOW_WRITE=1` and so on — which is the only
+route under the plugin, whose `.mcp.json` has nowhere to put a flag. Details:
 [MCP server](docs/guide/mcp.md).
 
 ## Documentation
