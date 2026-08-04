@@ -99,13 +99,31 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
     Map<String, Object?> payload = const {},
   }) async {
     final request = jsonEncode({'command': command, 'payload': payload});
-    final response = await Isolate.run(
-      () => _executeNativeRequest(description, request),
+    return Isolate.run(
+      () => decodeCanonicalGoreCoreResponse(
+        _executeNativeRequest(description, request),
+      ),
     );
-    final decoded = jsonDecode(response);
-    if (decoded is Map) return decoded.cast<String, Object?>();
-    throw const FormatException('gore_ffi returned a non-object response');
   }
+}
+
+/// Decode only the compact canonical JSON emitted by gore-ffi.
+///
+/// Dart's normal decoder silently keeps the last duplicate key. Re-encoding
+/// the insertion-ordered result and requiring byte equality also rejects
+/// whitespace and alternate string spellings before manager DTOs can accept a
+/// normalized hostile response.
+Map<String, Object?> decodeCanonicalGoreCoreResponse(String response) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(response);
+  } on FormatException {
+    throw const FormatException('gore_ffi returned invalid JSON');
+  }
+  if (decoded is! Map || jsonEncode(decoded) != response) {
+    throw const FormatException('gore_ffi returned non-canonical JSON');
+  }
+  return decoded.cast<String, Object?>();
 }
 
 String _executeNativeRequest(String libPath, String request) {
@@ -200,15 +218,13 @@ String _executeV2(
 }
 
 bool _isCurrentCoreInfo(String response) {
-  final Object? decoded;
+  final Map<String, Object?> decoded;
   try {
-    decoded = jsonDecode(response);
+    decoded = decodeCanonicalGoreCoreResponse(response);
   } on FormatException {
     return false;
   }
-  if (decoded is! Map ||
-      decoded['ok'] != true ||
-      decoded['abi'] != _protocolAbi) {
+  if (decoded['ok'] != true || decoded['abi'] != _protocolAbi) {
     return false;
   }
   final commands = decoded['commands'];
