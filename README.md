@@ -54,40 +54,23 @@ Full walkthrough: [Getting started](docs/guide/getting-started.md).
 
 ## Modding from an AI assistant
 
-`gore mcp serve` exposes the whole CLI over the
-[Model Context Protocol](https://modelcontextprotocol.io), so an assistant can
-drive GORE for you. The server is part of `gore.exe`; what you install is the
-**[plugin](plugins/gore/README.md)**, which registers it *and* adds the
-`gore-modding` skill — the workflow around the tools, which the tools themselves
-cannot carry. This repository is its own marketplace:
+### Claude plugin
 
 ```powershell
 claude plugin marketplace add dh0er/gore
 claude plugin install gore@gore
 ```
 
-In the Claude desktop app, the same without a terminal: the **+** beside the
-prompt box, then **Plugins → Add plugin**.
-
-One prerequisite the plugin cannot satisfy: it starts the server as `gore mcp
-serve`, by name, so **`gore.exe` has to be on `PATH`**. If it is not, no `gore_*`
-tool appears at all — `gore --version` in a terminal is the check.
-
-Codex and Cursor each want the marketplace spelled their own way, and the
-repository carries a manifest for all three. Codex takes a local checkout
-directly:
+### Codex plugin
 
 ```powershell
 codex plugin marketplace add C:\path\to\gore
 codex plugin add gore@gore
 ```
 
-Cursor has no command-line install, and adding a marketplace of your own is a
-Teams or Enterprise feature there — see [AI assistants](docs/guide/mcp.md) for
-the two-step route that needs no plugin at all.
+### Manual installation (all agents)
 
-To wire a client up by hand instead — a client with no plugin support, or one you
-want to pass [flags](docs/guide/mcp.md#answering-in-advance) to:
+Add the MCP server to the client configuration:
 
 ```json
 {
@@ -100,34 +83,19 @@ want to pass [flags](docs/guide/mcp.md#answering-in-advance) to:
 }
 ```
 
-Spell `command` as an absolute path to `gore.exe` if you would rather not touch
-`PATH`.
+Link the `gore-modding` skill from a checkout into the agent's personal skills
+directory:
 
-Reading works out of the box, and so does writing to a free path outside the game
-installation. What is **confirmed with you first** is changing something that is
-already there: the installation itself, an output file that exists, a directory
-that already holds files, an in-place rewrite. Aim a command somewhere new and it
-runs without asking. A handful ask whatever is on disk, because what they change
-is not a path you chose — the installation, the shared catalogs and library the
-tools keep, or a target read out of a file the server does not open (`gen`,
-`texture replace`, `loc extract`, `mgr import`, and the deploy/undeploy pairs).
+```powershell
+New-Item -ItemType Junction `
+  -Path <agent-skills-directory>\gore-modding `
+  -Target C:\path\to\gore\plugins\gore\skills\gore-modding
+```
 
-Your client shows a dialog naming the command and the file, and nothing runs
-unless you agree. Claude Code, Cursor and Codex can all show that dialog — but
-only while they are interactive. Claude Code driven non-interactively answers for
-you, and every such call is refused without you seeing anything.
+`gore.exe` must be on `PATH`; check with `gore --version`.
 
-Where no dialog reaches you, the assistant asks you in the chat instead: the
-refusal shows it the command line to put in front of you, and your answer comes
-back as `user_approved`. The result then says the command ran on that claim — the
-server saw no confirmation of its own, so the transcript is what you check. See
-[MCP server](docs/guide/mcp.md).
-
-For unattended use, `--allow-write` and `--allow-game-launch` answer in advance,
-and `--no-consent-prompts` refuses instead of asking. Each also reads an
-environment variable, which is how the plugin reaches them: enabling it in Claude
-Code asks you about both permissions in a dialog. Details:
-[MCP server](docs/guide/mcp.md).
+For unattended use, add `--allow-write` and/or `--allow-game-launch` to
+`gore mcp serve` to pre-approve writes or game launches. Compiling requires both.
 
 ## Documentation
 
