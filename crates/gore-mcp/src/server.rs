@@ -140,6 +140,18 @@ impl Session {
         let params = request.params_object();
 
         match request.method.as_str() {
+            // The handshake happens once, and only as a request. Without an id the reply is thrown
+            // away, so negotiating from it would leave the two sides disagreeing about what was
+            // agreed — including whether this client can be asked anything. A second one after
+            // `notifications/initialized` could replace that agreement mid-session.
+            "initialize" if request.is_notification() => None,
+            // Still allowed before the handshake completes: that is how a client renegotiates a
+            // protocol revision this server answered with something it cannot speak.
+            "initialize" if self.initialized => Some(Response::error(
+                id,
+                errors::INVALID_REQUEST,
+                "`initialize` may only be sent once, before `notifications/initialized`",
+            )),
             "initialize" => Some(Response::ok(id, self.initialize(&params))),
 
             "notifications/initialized" => {
@@ -158,6 +170,11 @@ impl Session {
             "ping" => Some(Response::ok(id, json!({}))),
 
             "tools/list" => Some(Response::ok(id, json!({ "tools": self.tool_definitions() }))),
+            // A tool call with no id is a malformed request, not a fire-and-forget notification.
+            // JSON-RPC forbids answering it, so running it would spawn a child, change whatever it
+            // changes, and throw the outcome away. There is nothing for a `notifications/cancelled`
+            // to name either, so a call that stops to ask could not be withdrawn.
+            "tools/call" if request.is_notification() => None,
             "tools/call" => Some(self.call_tool(id, &params, peer)),
 
             "resources/list" => Some(Response::ok(id, json!({ "resources": self.resources() }))),
@@ -179,10 +196,13 @@ impl Session {
         self.protocol_version = capabilities::negotiate_protocol_version(requested);
         // Presence is the whole signal. The capability's value is an options object reserved for
         // future use, and an empty one — which is what every client sends today — means supported.
+        // `null` and `false` are the two ways a client spells the opposite, and reading either as a
+        // declaration is not a harmless mistake: a question put to a client that cannot answer it
+        // does not come back refused, it waits for the round trip to fail.
         self.client_can_elicit = params
             .get("capabilities")
             .and_then(|caps| caps.get("elicitation"))
-            .is_some_and(|value| !value.is_null());
+            .is_some_and(|value| !matches!(value, Value::Null | Value::Bool(false)));
         json!({
             "protocolVersion": self.protocol_version,
             "capabilities": capabilities::capabilities(),
@@ -478,6 +498,12 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
             }
 
             if cancels(&frame, &self.call_id) {
+                // A batch is put back rather than dropped. The cancellation itself earns no reply,
+                // but its fellow members may be requests, and an unanswered request leaves the
+                // client waiting on something that is never coming.
+                if matches!(&frame, Frame::Batch(_)) {
+                    self.deferred.push_back(frame);
+                }
                 return Err("the client cancelled the call with the question open".into());
             }
 
@@ -493,11 +519,22 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
 
 /// Whether a frame is the client withdrawing the request we are asking about.
 fn cancels(frame: &Frame, call_id: &Value) -> bool {
-    let Frame::Message(request) = frame else { return false };
-    if request.method != "notifications/cancelled" || call_id.is_null() {
-        return false;
+    match frame {
+        Frame::Message(request) => {
+            request.method == "notifications/cancelled"
+                && !call_id.is_null()
+                && request
+                    .params_object()
+                    .get("requestId")
+                    .is_some_and(|requested| requested == call_id)
+        }
+        // Searched member by member, because a client entitled to send batches at all may put the
+        // cancellation inside one — and missing it there is the wedge this check exists to prevent:
+        // the batch is set aside unread while the question goes on waiting for an answer that has
+        // already been withdrawn. The transport never nests batches, so this recurses one level.
+        Frame::Batch(members) => members.iter().any(|member| cancels(member, call_id)),
+        _ => false,
     }
-    request.params_object().get("requestId").is_some_and(|requested| requested == call_id)
 }
 
 /// A JSON-RPC error object, as one sentence.
@@ -1182,6 +1219,70 @@ mod tests {
         let mut session = Session::new(options());
         initialize_with(&mut session, json!({ "elicitation": null }));
         assert_eq!(session.consent_policy(), Policy::CannotAsk, "an explicit null is not a declaration");
+
+        // The other way a client says no. Reading it as yes is the expensive direction: the
+        // question goes out, nothing over there answers it, and the call waits on a round trip
+        // that fails instead of being refused outright.
+        let mut session = Session::new(options());
+        initialize_with(&mut session, json!({ "elicitation": false }));
+        assert_eq!(session.consent_policy(), Policy::CannotAsk, "`false` is a refusal, not a declaration");
+    }
+
+    #[test]
+    fn the_handshake_happens_once_and_only_as_a_request() {
+        // A second `initialize` could replace what was agreed — including whether this client can
+        // be asked anything — halfway through a session that has already acted on the first answer.
+        let mut session = Session::new(options());
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        assert_eq!(session.consent_policy(), Policy::Ask);
+
+        assert!(
+            session.handle_unasked(&notification("notifications/initialized", json!({}))).is_none(),
+            "a notification must not be answered"
+        );
+
+        let second = session
+            .handle_unasked(&request(
+                "initialize",
+                json!({ "protocolVersion": "2025-11-25", "capabilities": {} }),
+            ))
+            .expect("a repeated initialize is answered, with an error");
+        assert!(second.error.is_some(), "{second:?}");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::Ask,
+            "the refused handshake must not have taken the empty capabilities with it"
+        );
+    }
+
+    #[test]
+    fn a_handshake_or_a_tool_call_with_no_id_is_not_acted_on() {
+        // JSON-RPC forbids answering either, so acting on one means doing the work and throwing the
+        // outcome away. For a tool call that is a child process that changed something nobody will
+        // ever be told about, and with no id there is nothing a cancellation could name.
+        let mut session = Session::new(options());
+
+        let handshake = notification(
+            "initialize",
+            json!({ "protocolVersion": "2025-11-25", "capabilities": { "elicitation": {} } }),
+        );
+        assert!(session.handle_unasked(&handshake).is_none(), "no reply to a notification");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "nothing may be negotiated from a frame the other side cannot be told the answer to"
+        );
+
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session =
+            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({ "elicitation": {} }));
+        let call = notification(
+            "tools/call",
+            json!({ "name": "gore_guide", "arguments": { "action": "list" } }),
+        );
+        assert!(session.handle_unasked(&call).is_none(), "no reply to a notification");
+        assert!(spawn.calls().is_empty(), "and nothing ran");
     }
 
     #[test]

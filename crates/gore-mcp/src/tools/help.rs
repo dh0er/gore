@@ -147,8 +147,13 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
 /// typo in something it read correctly.
 /// `help` is clap's own, and takes any command as its argument — `gore help mgr` is how the CLI
 /// itself suggests exploring. Its second token is validated as a first token would be, below.
+///
+/// Nothing derives this list, because these commands are absent from `spec::GROUPS` by design — so
+/// it goes stale the moment the CLI grows a subcommand here, silently, and the symptom is this tool
+/// telling a model that a command it read in the guide does not exist. `guide search` was missing
+/// for exactly as long as it took someone to notice. Keep it against `crates/gore/src/main.rs`.
 const META_COMMANDS: &[(&str, &[&str])] =
-    &[("mcp", &["serve", "tools"]), ("guide", &["html"]), ("help", &[])];
+    &[("mcp", &["serve", "tools"]), ("guide", &["search", "html"]), ("help", &[])];
 
 fn meta_command(name: &str) -> Option<&'static [&'static str]> {
     META_COMMANDS.iter().find(|(command, _)| *command == name).map(|(_, subs)| *subs)
