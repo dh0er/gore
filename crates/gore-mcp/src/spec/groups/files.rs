@@ -429,6 +429,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .json(JsonSupport::Stdout)
+    .aliases(&["index"])
     .guide("voice"),
     CommandSpec::new(
         "match-line",
@@ -478,6 +479,7 @@ const VOICE_COMMANDS: &[CommandSpec] = &[
         Safety::write().installs_via(&["out"]),
         T_LONG,
     )
+    .aliases(&["apply"])
     .guide("voice"),
 ];
 

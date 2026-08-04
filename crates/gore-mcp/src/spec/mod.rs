@@ -458,6 +458,14 @@ pub struct CommandSpec {
     /// path, a destination inside the game tree — and say something this field cannot, because they
     /// can name the file. They are left alone.
     pub gated_because: Option<&'static str>,
+    /// Extra spellings the CLI itself advertises for this subcommand.
+    ///
+    /// clap's `visible_alias` puts them in `--help`, so a model that read `gore voice --help` sees
+    /// `list [aliases: index]` and will reasonably ask this server about `voice index`. The tool
+    /// enum still offers only the canonical name — one spelling to choose from is the point — but
+    /// refusing to *explain* a name the CLI just showed someone sends them hunting for a typo in
+    /// something they read correctly.
+    pub aliases: &'static [&'static str],
     /// Sets from which exactly one argument must be supplied.
     ///
     /// Mirrors clap's `required_unless_present` + `conflicts_with` pairs — `voice extract` takes
@@ -488,6 +496,7 @@ impl CommandSpec {
             timeout_secs,
             guide: None,
             gated_because: None,
+            aliases: &[],
             exactly_one_of: &[],
             at_most_one_of: &[],
         }
@@ -524,6 +533,17 @@ impl CommandSpec {
         self
     }
 
+    /// Register the CLI's own visible aliases for this subcommand. See [`Self::aliases`].
+    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
+    /// Whether `name` is this command, under its canonical spelling or one the CLI advertises.
+    pub fn answers_to(&self, name: &str) -> bool {
+        self.sub == name || self.aliases.contains(&name)
+    }
+
     pub fn arg(&self, name: &str) -> Option<&'static ArgSpec> {
         self.args.iter().find(|arg| arg.name == name)
     }
@@ -554,6 +574,16 @@ pub struct GroupSpec {
 impl GroupSpec {
     pub fn command(&self, sub: &str) -> Option<&'static CommandSpec> {
         self.commands.iter().find(|command| command.sub == sub)
+    }
+
+    /// The command `name` refers to, accepting the CLI's own visible aliases.
+    ///
+    /// Kept apart from [`Self::command`] on purpose: a tool call resolves through that one, so the
+    /// argv builder only ever sees canonical names and the schema stays a closed set. This is for
+    /// the surfaces that answer questions *about* the CLI, where a spelling the CLI itself printed
+    /// has to be understood.
+    pub fn command_or_alias(&self, name: &str) -> Option<&'static CommandSpec> {
+        self.commands.iter().find(|command| command.answers_to(name))
     }
 
     pub fn subcommands(&self) -> Vec<&'static str> {

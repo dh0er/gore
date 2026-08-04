@@ -215,7 +215,12 @@ fn validate(path: &[&str]) -> Result<(), String> {
                     format!("`gore {first}` is not a command. {}", available())
                 });
             };
-            if group.command(second).is_some() {
+            // Aliases count here, and only here. `gore voice --help` prints
+            // `list [aliases: index]`, so a model that read it will ask this tool about
+            // `voice index` — and refusing to explain a name the CLI just showed it sends it
+            // hunting for a typo in something it read correctly. A tool *call* still resolves
+            // through the canonical name alone, which keeps the subcommand enum a closed set.
+            if group.command_or_alias(second).is_some() {
                 Ok(())
             } else {
                 Err(format!(

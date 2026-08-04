@@ -543,8 +543,13 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
 fn cancels(frame: &Frame, call_id: &Value) -> bool {
     match frame {
         Frame::Message(request) => {
+            // A null id is matched like any other. `"id": null` is a request rather than a
+            // notification — presence is what decides that — so a gated `tools/call` carrying one
+            // does open a consent question, and refusing to match its cancellation left the only
+            // way out of that wait an answer or EOF. There is no ambiguity to protect against:
+            // this loop serves one request at a time, so the call being asked about is the only
+            // call a cancellation could be naming.
             request.method == "notifications/cancelled"
-                && !call_id.is_null()
                 && request
                     .params_object()
                     .get("requestId")

@@ -727,7 +727,21 @@ pub fn extract_wav(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, St
     if fsb.codec == Codec::Pcm16 {
         let s = fsb.samples.get(index).ok_or("sample index out of range")?;
         let start = (fsb.data_section + s.data_offset) as usize;
-        let end = (start + s.size as usize).min(block.len());
+        // `size` spans to the next sample's offset, and FSB5 offsets are 32-byte aligned — so for
+        // any sample whose PCM does not land on that boundary it runs past the audio into as much
+        // as 30 bytes of padding. Emitting those appends silence the replacement never had, which
+        // means `extract` does not reproduce what `replace` wrote. The frame count is what says
+        // where the audio actually ends; `size` only says where the next one begins.
+        let declared = (s.num_samples as usize)
+            .saturating_mul(s.channels as usize)
+            .saturating_mul(2);
+        let mut len = s.size as usize;
+        // Only ever narrows. A bank whose header understates its own frame count would otherwise
+        // lose real audio here, and `size` remains the outer bound in either direction.
+        if declared > 0 {
+            len = len.min(declared);
+        }
+        let end = (start + len).min(block.len());
         let audio = block.get(start..end).ok_or("sample data out of range")?;
         // Truncated rather than refused: an odd length means one dangling byte, and dropping it
         // costs half a sample of the tail where erroring would cost the whole recording.
@@ -1259,6 +1273,33 @@ mod tests {
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), rate);
         assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn a_padded_sample_extracts_its_audio_and_not_the_padding_after_it() {
+        // FSB5 offsets are 32-byte aligned, so the builder pads between samples and a sample's
+        // `size` — the gap to the next offset — overshoots its audio by up to 30 bytes. Reading to
+        // `size` appended that padding as silence, which meant `extract` did not reproduce what
+        // `replace` had written. 100 frames is 200 bytes, which is 8 short of the boundary.
+        let first: Vec<i16> = (0..100).map(|n| (n as i16).wrapping_mul(37).wrapping_add(1)).collect();
+        let second: Vec<i16> = (0..64).map(|n| (n as i16).wrapping_mul(-11)).collect();
+        assert_ne!(first.len() * 2 % 32, 0, "the fixture has to be the unaligned case");
+
+        let bytes = build_fsb5_pcm16_multi(&[
+            Pcm16Sample { name: "first".into(), freq: 44_100, channels: 1, pcm: first.clone() },
+            Pcm16Sample { name: "second".into(), freq: 44_100, channels: 1, pcm: second.clone() },
+        ])
+        .unwrap();
+        let fsb = parse_fsb5(&bytes).unwrap();
+
+        assert_eq!(
+            extract_wav(&bytes, &fsb, 0).unwrap(),
+            wav_pcm16(44_100, 1, &first),
+            "the padding between this sample and the next is not audio"
+        );
+        // The last sample has nothing after it to pad against, which is why the bug only ever
+        // showed on the earlier ones — and why a single-sample fixture would have missed it.
+        assert_eq!(extract_wav(&bytes, &fsb, 1).unwrap(), wav_pcm16(44_100, 1, &second));
     }
 
     #[test]
