@@ -1,5 +1,8 @@
 {
   "@@locale": "zh_Hans",
+  "recoveryAction": "恢复",
+  "recoveryRequiredConfirm": "恢复中断的部署并移除已部分部署的文件吗？",
+  "statusRecoveryRequired": "需要恢复",
   "appTitle": "GORE Mod Manager",
   "tabMods": "模组",
   "tabSettings": "设置",

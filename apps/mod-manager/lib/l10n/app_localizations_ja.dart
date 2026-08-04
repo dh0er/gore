@@ -9,6 +9,15 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
+  String get recoveryAction => '復旧';
+
+  @override
+  String get recoveryRequiredConfirm => '中断されたデプロイを復旧し、部分的にデプロイされたファイルを削除しますか？';
+
+  @override
+  String get statusRecoveryRequired => '復旧が必要';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

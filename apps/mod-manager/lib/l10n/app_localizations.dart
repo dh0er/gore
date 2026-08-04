@@ -116,6 +116,24 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
   ];
 
+  /// No description provided for @recoveryAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover'**
+  String get recoveryAction;
+
+  /// No description provided for @recoveryRequiredConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover the interrupted deployment and remove any partially deployed files?'**
+  String get recoveryRequiredConfirm;
+
+  /// No description provided for @statusRecoveryRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery required'**
+  String get statusRecoveryRequired;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:

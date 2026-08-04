@@ -9,6 +9,16 @@ class AppLocalizationsPt extends AppLocalizations {
   AppLocalizationsPt([String locale = 'pt']) : super(locale);
 
   @override
+  String get recoveryAction => 'Recuperar';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Recuperar a implantação interrompida e remover os arquivos parcialmente implantados?';
+
+  @override
+  String get statusRecoveryRequired => 'Recuperação necessária';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override
@@ -215,6 +225,16 @@ class AppLocalizationsPt extends AppLocalizations {
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
 class AppLocalizationsPtBr extends AppLocalizationsPt {
   AppLocalizationsPtBr() : super('pt_BR');
+
+  @override
+  String get recoveryAction => 'Recuperar';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Recuperar a implantação interrompida e remover os arquivos parcialmente implantados?';
+
+  @override
+  String get statusRecoveryRequired => 'Recuperação necessária';
 
   @override
   String get appTitle => 'GORE Mod Manager';

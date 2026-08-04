@@ -1,5 +1,8 @@
 {
   "@@locale": "pt_BR",
+  "recoveryAction": "Recuperar",
+  "recoveryRequiredConfirm": "Recuperar a implantação interrompida e remover os arquivos parcialmente implantados?",
+  "statusRecoveryRequired": "Recuperação necessária",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Configurações",

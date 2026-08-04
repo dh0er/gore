@@ -9,6 +9,16 @@ class AppLocalizationsIt extends AppLocalizations {
   AppLocalizationsIt([String locale = 'it']) : super(locale);
 
   @override
+  String get recoveryAction => 'Ripristina';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Ripristinare la distribuzione interrotta e rimuovere i file distribuiti parzialmente?';
+
+  @override
+  String get statusRecoveryRequired => 'Ripristino necessario';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

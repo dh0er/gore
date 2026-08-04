@@ -1,5 +1,8 @@
 {
   "@@locale": "pl",
+  "recoveryAction": "Odzyskaj",
+  "recoveryRequiredConfirm": "Odzyskać przerwane wdrożenie i usunąć częściowo wdrożone pliki?",
+  "statusRecoveryRequired": "Wymagane odzyskiwanie",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mody",
   "tabSettings": "Ustawienia",

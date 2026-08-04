@@ -9,6 +9,16 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
+  String get recoveryAction => 'Восстановить';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Восстановить прерванное развёртывание и удалить частично развёрнутые файлы?';
+
+  @override
+  String get statusRecoveryRequired => 'Требуется восстановление';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

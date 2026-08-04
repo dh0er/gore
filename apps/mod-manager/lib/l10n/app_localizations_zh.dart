@@ -9,6 +9,15 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get recoveryAction => '恢复';
+
+  @override
+  String get recoveryRequiredConfirm => '恢复中断的部署并移除已部分部署的文件吗？';
+
+  @override
+  String get statusRecoveryRequired => '需要恢复';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override
@@ -211,6 +220,15 @@ class AppLocalizationsZh extends AppLocalizations {
 /// The translations for Chinese, using the Han script (`zh_Hans`).
 class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
+
+  @override
+  String get recoveryAction => '恢复';
+
+  @override
+  String get recoveryRequiredConfirm => '恢复中断的部署并移除已部分部署的文件吗？';
+
+  @override
+  String get statusRecoveryRequired => '需要恢复';
 
   @override
   String get appTitle => 'GORE Mod Manager';

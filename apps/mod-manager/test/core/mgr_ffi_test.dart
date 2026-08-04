@@ -230,6 +230,12 @@ void main() {
       expect((s as ManagerStatusStudioDeployActive).modName, 'MyStudioMod');
     });
 
+    test('parses recovery_required as a known recovery state', () async {
+      final s = await parse({'state': 'recovery_required'});
+      expect(s, isA<ManagerStatusRecoveryRequired>());
+      expect(s.state, 'recovery_required');
+    });
+
     test('parses in_sync with loadout (wire shape: entry ARRAY)', () async {
       final s = await parse({
         'state': 'in_sync',

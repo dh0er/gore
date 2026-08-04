@@ -220,6 +220,31 @@ class _ModsTab extends ConsumerWidget {
     await ref.read(statusProvider.notifier).undeployAll(root);
   }
 
+  Future<void> _recoverDeployment(BuildContext context, WidgetRef ref) async {
+    final l10n = AppLocalizations.of(context);
+    final root = _gameRoot(ref);
+    if (root == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l10n.statusRecoveryRequired),
+        content: Text(l10n.recoveryRequiredConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.recoveryAction),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ref.read(statusProvider.notifier).undeployAll(root);
+  }
+
   Future<void> _promptTakeOver(BuildContext context, WidgetRef ref) async {
     final l10n = AppLocalizations.of(context);
     final root = _gameRoot(ref);
@@ -309,6 +334,7 @@ class _ModsTab extends ConsumerWidget {
               _StatusChip(
                 state: status,
                 onStudioTap: () => _promptTakeOver(context, ref),
+                onRecoveryTap: () => _recoverDeployment(context, ref),
               ),
               if (status.busy || conflicts.isLoading) ...[
                 const SizedBox(width: 12),
@@ -392,6 +418,8 @@ class _ModsTab extends ConsumerWidget {
 ///  * disabled while [studioActive] — a prior apply was blocked by an active
 ///    studio deployment; every apply fails until it's taken over, and the
 ///    status may not have caught up yet (that path shows take-over, not Apply);
+///  * disabled for [ManagerStatusRecoveryRequired] until the recovery chip's
+///    undeploy action completes;
 ///  * disabled otherwise: [ManagerStatusInSync] (nothing changed),
 ///    [ManagerStatusStudioDeployActive] (that path shows take-over, not Apply),
 ///    an unknown/null status, or NothingDeployed with zero enabled mods.
@@ -408,6 +436,7 @@ bool canApply(
     ManagerStatusGameUpdated() => true,
     ManagerStatusNothingDeployed() =>
       library.loadout.entries.any((e) => e.enabled),
+    ManagerStatusRecoveryRequired() => false,
     _ => false,
   };
 }
@@ -431,10 +460,15 @@ enum _OverflowAction { refresh, undeployAll }
 /// The deployment-status chip. Maps each [ManagerStatusView] variant to a
 /// localized label + tone; tapping the studio-deploy variant runs [onStudioTap].
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.state, required this.onStudioTap});
+  const _StatusChip({
+    required this.state,
+    required this.onStudioTap,
+    required this.onRecoveryTap,
+  });
 
   final StatusState state;
   final VoidCallback onStudioTap;
+  final VoidCallback onRecoveryTap;
 
   @override
   Widget build(BuildContext context) {
@@ -465,6 +499,12 @@ class _StatusChip extends StatelessWidget {
           scheme.errorContainer,
           scheme.onErrorContainer,
           Icons.system_update_alt,
+        ),
+      ManagerStatusRecoveryRequired() => (
+          l10n.statusRecoveryRequired,
+          scheme.errorContainer,
+          scheme.onErrorContainer,
+          Icons.warning_amber_rounded,
         ),
       ManagerStatusStudioDeployActive() => (
           l10n.statusStudioDeploy,
@@ -513,6 +553,16 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         onTap: onStudioTap,
         child: chip,
+      );
+    }
+    if (status is ManagerStatusRecoveryRequired) {
+      return Tooltip(
+        message: l10n.recoveryAction,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onRecoveryTap,
+          child: chip,
+        ),
       );
     }
     return chip;

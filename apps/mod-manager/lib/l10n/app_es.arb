@@ -1,5 +1,8 @@
 {
   "@@locale": "es",
+  "recoveryAction": "Recuperar",
+  "recoveryRequiredConfirm": "¿Recuperar el despliegue interrumpido y eliminar los archivos desplegados parcialmente?",
+  "statusRecoveryRequired": "Recuperación necesaria",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Ajustes",
