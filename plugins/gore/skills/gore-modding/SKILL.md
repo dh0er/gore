@@ -93,16 +93,38 @@ page and say how much they left out. Narrow with `--filter`; raise `--max` only 
 far as you need. Asking for everything at once rebuilds the oversized result the
 bound exists to prevent — and a cut-off JSON array does not parse.
 
+## Hand the build over before you ask to install it
+
+The moment `mod build` succeeds, and **before** the deploy question is put to the
+user in any form, tell them four things:
+
+1. **What the mod changes**, domain by domain — for each one, what they will see
+   or hear, and where. Not the spec; what it does.
+2. **Where the bundle is**, as a full path.
+3. **The deploy command**, spelled out, so they can run it themselves.
+4. **The undeploy command** that removes all of it.
+
+Then ask.
+
+This is the order that keeps the decision with them. Deploying writes into a game
+installation they may have hours in, and "may I deploy?" is not a question anyone
+can answer without already knowing what is in the bundle and how to get rid of
+it. Sessions keep getting this backwards — asking first and explaining afterwards
+— which turns the summary into a report on something already done.
+
+It also stops the build from being trapped behind you. A person who has the path
+and the two commands can install it next week, from a shell, without this
+conversation.
+
 ## After deploying, be honest about what is proven
 
 `gore mod deploy` verifies that the bytes it wrote are the bytes it meant to
 write, by hash. Nothing observes the screen. A successful deploy is not evidence
 that the change is visible.
 
-So end with a checklist the user can actually run: what to look at, in what order,
-and what each item would look like if it worked. Mark the items you could not
-verify offline as uncertain, and say why. Then tell them the one command that
-undoes everything — `gore mod undeploy` — and offer to run it.
+So follow it with a checklist the user can actually run: what to look at, in what
+order, and what each item would look like if it worked. Mark the items you could
+not verify offline as uncertain, and say why.
 
 If something did not show up, the first question is not "did the tool fail" but
 "does the engine read that asset". Check that before changing the pipeline.

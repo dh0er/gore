@@ -1,7 +1,7 @@
 {
   "name": "gore",
   "description": "Mod Gothic 1 Remake with the GORE toolkit: the MCP server that exposes every gore CLI command, plus the workflow knowledge that keeps an assistant from modding something the engine never reads.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Daniel Hoer"
   },

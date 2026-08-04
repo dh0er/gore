@@ -1,6 +1,6 @@
 {
   "name": "gore",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mod Gothic 1 Remake with the GORE toolkit: textures, localized text, dialog, audio, voice-over, item values and AngelScript, built into one bundle and deployed as a unit.",
   "author": {
     "name": "Daniel Hoer",

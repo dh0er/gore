@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "GORE, the modding toolkit for Gothic 1 Remake: the MCP server that exposes every gore CLI command, and the workflow knowledge that goes with it.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
