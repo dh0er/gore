@@ -579,7 +579,7 @@ pub(super) fn compile_report_v1_raw(input: &str) -> Value {
     let game_dir = PathBuf::from(&payload.game_dir);
     // This guard remains held across authoritative pristine selection and the complete compiler
     // transaction, so deploy/undeploy cannot change the selected bytes before live compiler use.
-    let guard = match acquire_compile_install_mutation(&game_dir) {
+    let guard = match acquire_guard(&game_dir) {
         Ok(guard) => guard,
         Err(message) => return install_guard_failure(&game_dir, message),
     };
@@ -674,7 +674,7 @@ pub(super) fn install_state_v1_raw(input: &str) -> Value {
         Err(message) => return err("SCRIPT_COMPILE_INSTALL_STATE_BAD_REQUEST", message),
     };
     let game_dir = Path::new(&payload.game_dir);
-    let probe = probe_install_compile_state(game_dir);
+    let probe = probe_install_state(game_dir);
     let deploy_recovery = match gore_mod::deploy_recovery_required(game_dir) {
         Ok(true) => DeployRecoveryProbe::Required,
         Ok(false) => DeployRecoveryProbe::NotRequired,
@@ -794,6 +794,37 @@ fn parse_request(input: &str) -> Result<CompileWirePayload, &'static str> {
         return Err("op must be exactly 'add' or 'edit'");
     }
     Ok(request.payload)
+}
+
+/// The compile guard, and the "is the game running?" probe behind it.
+///
+/// Under `cfg(test)` both answer from a stated value rather than from the real process list. These
+/// tests build a throwaway install in a temp directory and assert on structured failure codes —
+/// `COMPILE_BASE_UNAVAILABLE`, `COMPILE_BASE_RECOVERY_REQUIRED` — that they can only reach if the
+/// guard lets them past. The production probe made every one of them return
+/// `COMPILE_GAME_PROCESS_RUNNING` instead whenever Gothic happened to be open on the developer's
+/// machine, which is exactly when someone is working on modding tools. Production is untouched: the
+/// real probe is what ships.
+#[cfg(not(test))]
+fn acquire_guard(game_dir: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    acquire_compile_install_mutation(game_dir)
+}
+
+#[cfg(test)]
+fn acquire_guard(game_dir: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    gore_as::compile::acquire_compile_install_mutation_with_stated_game_process(game_dir, || {
+        Ok(false)
+    })
+}
+
+#[cfg(not(test))]
+fn probe_install_state(game_dir: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    probe_install_compile_state(game_dir)
+}
+
+#[cfg(test)]
+fn probe_install_state(game_dir: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    gore_as::compile::probe_install_compile_state_with_stated_game_process(game_dir, || Ok(false))
 }
 
 fn parse_install_state_request(input: &str) -> Result<InstallStateWirePayload, &'static str> {

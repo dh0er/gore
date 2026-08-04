@@ -1608,10 +1608,28 @@ fn sync_default_output_parent(_parent: &Path) -> Result<()> {
 /// Acquire cross-tool ownership before selecting the deployment-aware pristine cache. The same
 /// guard is then transferred into gore-as, so deploy/undeploy cannot change the authoritative base
 /// between this read and compiler use.
+/// Acquire the compile guard.
+///
+/// Split out for one reason: under `cfg(test)` it answers "is the game running?" from a thread-local
+/// instead of from the real process list. These tests build a throwaway install in a temp directory
+/// and assert on guard bookkeeping, which has nothing to do with what is running on the developer's
+/// machine — but the production probe made the whole suite go red whenever Gothic happened to be
+/// open, which is precisely when someone is likely to be testing modding tools. Production
+/// behaviour is untouched.
+#[cfg(not(test))]
+fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    gore_as::compile::acquire_compile_install_mutation(game)
+}
+
+#[cfg(test)]
+fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    gore_as::compile::acquire_compile_install_mutation_with_stated_game_process(game, || Ok(false))
+}
+
 fn guarded_pristine_script_cache(
     game: &Path,
 ) -> Result<(Vec<u8>, gore_as::compile::InstallMutationGuard)> {
-    let mut guard = gore_as::compile::acquire_compile_install_mutation(game)
+    let mut guard = acquire_compile_guard(game)
         .map_err(anyhow::Error::msg)
         .context("acquiring the AngelScript install-mutation guard")?;
     match gore_mod::pristine_script_cache(game) {

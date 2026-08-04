@@ -416,11 +416,17 @@ fn a_replaced_sample_is_listed_as_the_replacement_and_not_as_the_audio_it_replac
 }
 
 #[test]
-fn one_reason_for_skipping_a_sample_is_reported_once_and_not_once_per_sample() {
-    // `extract` decodes Vorbis, so a bank in any other codec rejects every sample for the same
-    // cause. Printed per sample that was 7,218 identical stderr lines for `SFX.bank` — one root
-    // cause, ~400 KB of restatement, and the actual reason pushed out of whatever window a reader
-    // has. The first sample is still named, which is what a single-sample run needs.
+fn every_sample_of_a_pcm16_bank_extracts_rather_than_being_skipped() {
+    // PCM16 is what `audio replace` appends, so this is the codec of every replacement — and
+    // `extract` used to reject it, skipping precisely the sample a user had just written and
+    // reporting success with no file. This bank is built the same way a replaced one ends up.
+    //
+    // It replaces a test that asserted the opposite: that a whole PCM16 bank was skipped for one
+    // shared reason, reported once rather than once per sample. That de-duplication is still in
+    // `cmd/audio.rs` and still worth having — 7,218 identical stderr lines was the bug that put it
+    // there — but it has no end-to-end fixture any more, because the only bank these tests can
+    // build is now one that extracts. Reinstating it needs a builder for a codec `extract_wav`
+    // genuinely cannot read.
     let temp = TempDir::new().unwrap();
     let bank = temp.path().join("SFX.bank");
     let extracted = temp.path().join("wavs");
@@ -440,15 +446,13 @@ fn one_reason_for_skipping_a_sample_is_reported_once_and_not_once_per_sample() {
         .unwrap();
     assert!(output.status.success(), "{:?}", output);
 
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    let lines = stderr.lines().filter(|line| !line.is_empty()).count();
-    assert_eq!(lines, 1, "one cause must be reported once, got {stderr:?}");
-    assert!(
-        stderr.contains("skipped 12 sample(s), first #0 SFX_UI_Click_00")
-            && stderr.contains("only supports Vorbis"),
-        "the one line must carry the count, a sample and the reason, got {stderr:?}"
-    );
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("extracted 0 wav file(s)"));
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    assert!(stderr.trim().is_empty(), "nothing was skipped, so nothing is reported: {stderr:?}");
+
+    let stdout = String::from_utf8(output.stdout.clone()).unwrap();
+    assert!(stdout.contains("extracted 12 wav file(s)"), "{stdout:?}");
+    assert!(stdout.contains("(0 skipped)"), "{stdout:?}");
+
+    let written = std::fs::read_dir(&extracted).unwrap().count();
+    assert_eq!(written, 12, "a count in the summary is not a file on disk");
 }
