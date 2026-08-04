@@ -9,6 +9,16 @@ class AppLocalizationsEs extends AppLocalizations {
   AppLocalizationsEs([String locale = 'es']) : super(locale);
 
   @override
+  String get recoveryAction => 'Recuperar';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      '¿Recuperar el despliegue interrumpido y eliminar los archivos desplegados parcialmente?';
+
+  @override
+  String get statusRecoveryRequired => 'Recuperación necesaria';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

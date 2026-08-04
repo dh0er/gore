@@ -98,7 +98,9 @@ fn walk(b: &[u8], start: usize, end: usize, depth: usize, st: &mut Stats) {
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_DIR.to_string());
+    let dir = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_DIR.to_string());
     for name in ["SFX.bank", "Music.bank", "VO.bank", "CINEMATICS.bank"] {
         let path = format!("{dir}\\{name}");
         let bytes = match std::fs::read(&path) {
@@ -117,17 +119,29 @@ fn main() {
         println!("  --- summary ---");
         println!("  WAVS list present : {}", st.has_wavs);
         println!("  WAV  nodes        : {}", st.wav_count);
-        println!("  STBL SoundTable   : {}{}", st.has_stbl,
-            st.stbl_bank_index.map(|i| format!(" (SoundbankIndex={i})")).unwrap_or_default());
+        println!(
+            "  STBL SoundTable   : {}{}",
+            st.has_stbl,
+            st.stbl_bank_index
+                .map(|i| format!(" (SoundbankIndex={i})"))
+                .unwrap_or_default()
+        );
         if !st.wav_samples.is_empty() {
-            println!("  first WAV refs (SoundBankIndex, SubsoundIndex): {:?}", st.wav_samples);
+            println!(
+                "  first WAV refs (SoundBankIndex, SubsoundIndex): {:?}",
+                st.wav_samples
+            );
         }
         if let Some(d) = &st.sndh_dump {
             println!("  SNDH body[0..16]  : {d}");
         }
         println!(
             "  => REPOINTABLE via WAV : {}",
-            if st.wav_count > 0 { "YES" } else { "NO (STBL-only or other)" }
+            if st.wav_count > 0 {
+                "YES"
+            } else {
+                "NO (STBL-only or other)"
+            }
         );
     }
 }

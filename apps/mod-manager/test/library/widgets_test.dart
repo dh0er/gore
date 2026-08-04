@@ -303,4 +303,48 @@ void main() {
     expect(find.text(l10n.takeOverTitle), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('recovery chip opens the undeploy recovery path', (tester) async {
+    final exe = _makeGameExe();
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(),
+        'mgr_analyze': {'ok': true, 'conflicts': []},
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'recovery_required'},
+        },
+        'mgr_undeploy_all': {'ok': true, 'removed': 1},
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, exePath: exe));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(find.text(l10n.statusRecoveryRequired), findsOneWidget);
+    expect(find.text(l10n.statusNothingDeployed), findsNothing);
+    final apply = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, l10n.actionApply),
+    );
+    expect(apply.onPressed, isNull);
+
+    await tester.tap(
+      find.ancestor(
+        of: find.text(l10n.statusRecoveryRequired),
+        matching: find.byType(InkWell),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text(l10n.recoveryRequiredConfirm), findsOneWidget);
+
+    await tester.tap(
+      find.widgetWithText(FilledButton, l10n.recoveryAction),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      fake.calls.any((call) => call.command == 'mgr_undeploy_all'),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

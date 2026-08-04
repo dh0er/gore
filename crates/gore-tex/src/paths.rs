@@ -1,8 +1,8 @@
 //! Auto-resolve the game container + .usmap from an install dir.
 
+use crate::error::{Result, TexError};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::error::{Result, TexError};
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -49,7 +49,11 @@ pub fn read_optional(path: &Path) -> std::io::Result<Vec<u8>> {
 /// Given a game install dir, return the main IoStore container `.utoc`.
 pub fn main_container(game_dir: &Path) -> Result<PathBuf> {
     let p = game_dir.join("G1R/Content/Paks/G1R-Windows.utoc");
-    if p.exists() { Ok(p) } else { Err(TexError::ContainerNotFound(p)) }
+    if p.exists() {
+        Ok(p)
+    } else {
+        Err(TexError::ContainerNotFound(p))
+    }
 }
 
 /// Given a game install dir, return the `.usmap` mappings file. When several exist, the
@@ -63,7 +67,10 @@ pub fn usmap(game_dir: &Path) -> Result<PathBuf> {
         .filter(|p| p.extension().is_some_and(|x| x == "usmap"))
         .collect();
     found.sort();
-    found.into_iter().next().ok_or_else(|| TexError::UsmapNotFound(dir))
+    found
+        .into_iter()
+        .next()
+        .ok_or_else(|| TexError::UsmapNotFound(dir))
 }
 
 /// Map a UE virtual asset path to its physical content-relative path inside a
@@ -85,6 +92,14 @@ pub fn content_mount_rel(asset: &str) -> Option<String> {
 /// The shared gore cache path for the texture index (next to loc_catalog.json).
 pub fn texture_index_path() -> PathBuf {
     gore_loc::paths::shared_data_dir().join("texture_index.json")
+}
+
+/// Immutable per-source cache path used by the Managed texture catalog. The source fingerprint
+/// is hashed again solely to produce one bounded, filename-safe key; it is never parsed from a
+/// path or shared with a different installed generation.
+pub fn texture_index_path_for_build(build_id: &str) -> PathBuf {
+    let key = blake3::hash(build_id.as_bytes()).to_hex();
+    gore_loc::paths::shared_data_dir().join(format!("texture-index-v2-{key}.json"))
 }
 
 #[cfg(test)]
@@ -123,6 +138,19 @@ mod tests {
         // Plugin / unknown roots are not placeable -> None (caller rejects).
         assert_eq!(content_mount_rel("/MyPlugin/Foo/T_Y"), None);
         assert_eq!(content_mount_rel("NoLeadingSlash"), None);
+    }
+
+    #[test]
+    fn managed_texture_index_cache_is_bounded_and_generation_scoped() {
+        let first = texture_index_path_for_build("source-a");
+        let same = texture_index_path_for_build("source-a");
+        let second = texture_index_path_for_build("source-b");
+        assert_eq!(first, same);
+        assert_ne!(first, second);
+        let name = first.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("texture-index-v2-"));
+        assert!(name.ends_with(".json"));
+        assert_eq!(name.len(), "texture-index-v2-".len() + 64 + ".json".len());
     }
 
     #[test]

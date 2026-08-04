@@ -123,7 +123,14 @@ fn extract_packets(audio: &[u8]) -> Vec<&[u8]> {
 }
 
 // ---------- Ogg page muxing ----------
-fn write_page(out: &mut Vec<u8>, header_type: u8, granule: u64, serial: u32, seq: u32, packets: &[&[u8]]) {
+fn write_page(
+    out: &mut Vec<u8>,
+    header_type: u8,
+    granule: u64,
+    serial: u32,
+    seq: u32,
+    packets: &[&[u8]],
+) {
     // lacing segment table
     let mut segtab = Vec::new();
     for pkt in packets {

@@ -1,0 +1,536 @@
+//! Configuration, the catalog/reflection pipeline, the location lookup, and project scaffolding.
+//!
+//! Two of these four groups are synthetic. `gore` exposes twelve commands at its top level that
+//! have no subcommand of their own; giving each a tool would make the least-reached half of the
+//! CLI take up half the tool list. They are bundled here along the lines the guide already draws:
+//! the catalog pipeline is one page (`catalogs-and-models`), project scaffolding is another.
+//!
+//! `gore_location` is not one of those bundles: `gore location` is a real subcommand family, and
+//! it is the only tool here a model reaches for *while writing a mod* rather than while
+//! regenerating data, so it keeps its own name in the tool list.
+//!
+//! Every `summary` and `help` string below is copied verbatim from the corresponding clap doc
+//! comment so that a reviewer can diff this file against `crates/gore/src/main.rs` by eye.
+
+use crate::spec::{
+    ArgForm::{Long, Positional},
+    ArgKind::{Enum, Int, Path, Str},
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_NORMAL,
+};
+
+/// The single validated config key, from the `ConfigKey` value enum. clap renders variants in
+/// kebab-case, so `GamePath` reaches the command line as `game-path`.
+const CONFIG_KEYS: &[&str] = &["game-path"];
+
+/// From the `CatalogKind` value enum.
+const CATALOG_KINDS: &[&str] = &["item", "npc", "knowledge"];
+
+// ---------------------------------------------------------------------------------------------
+// gore_config
+// ---------------------------------------------------------------------------------------------
+
+const CONFIG_KEY: ArgSpec = ArgSpec::new(
+    "key",
+    Positional { order: 0 },
+    Enum(CONFIG_KEYS),
+    "Config key to act on.",
+    true,
+);
+
+const CONFIG_SET_ARGS: &[ArgSpec] = &[
+    CONFIG_KEY,
+    ArgSpec::new(
+        "value",
+        Positional { order: 1 },
+        Str,
+        "New value. A game path is stored absolutized, so a relative value is resolved now rather \
+         than against whatever directory a later command runs from.",
+        true,
+    ),
+];
+
+const CONFIG_KEY_ONLY: &[ArgSpec] = &[CONFIG_KEY];
+
+const CONFIG_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new("set", "Set a config value", CONFIG_SET_ARGS, Safety::write(), T_FAST)
+        .guide("getting-started"),
+    CommandSpec::new(
+        "get",
+        "Print a single config value (exit non-zero if unset)",
+        CONFIG_KEY_ONLY,
+        Safety::read(),
+        T_FAST,
+    )
+    .guide("getting-started"),
+    CommandSpec::new("unset", "Clear a single config value", CONFIG_KEY_ONLY, Safety::write(), T_FAST)
+        .guide("getting-started"),
+    CommandSpec::new(
+        "list",
+        "Print all config values and, for the game path, the resolved root + source",
+        &[],
+        Safety::read(),
+        T_FAST,
+    )
+    .guide("getting-started"),
+    CommandSpec::new("path", "Print the path of the config.json file", &[], Safety::read(), T_FAST),
+    CommandSpec::new(
+        "detect",
+        "Auto-detect the game via Steam and save it as game-path",
+        &[],
+        Safety::write(),
+        T_FAST,
+    )
+    .guide("getting-started"),
+];
+
+pub const CONFIG: GroupSpec = GroupSpec {
+    tool: "gore_config",
+    title: "gore config",
+    cli: "config",
+    summary: "Read and write the shared per-user configuration — above all the game install path, \
+              which almost every other command falls back to.",
+    shape: GroupShape::Nested,
+    commands: CONFIG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_catalog  (synthetic: the reflection + catalog pipeline)
+// ---------------------------------------------------------------------------------------------
+
+const DUMP_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "sdk_dir",
+        Positional { order: 0 },
+        Path,
+        "Path to the CXXHeaderDump/ directory",
+        true,
+    ),
+    ArgSpec::new("out", Long("out"), Path, "Output model.json path", true),
+];
+
+const STUBS_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("model", Positional { order: 0 }, Path, "Path to model.json", true),
+    ArgSpec::new("out", Long("out"), Path, "Output directory for .lua stub files", true),
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Only emit classes whose name starts with PREFIX",
+        false,
+    ),
+];
+
+const CATALOG_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("kind", Long("kind"), Enum(CATALOG_KINDS), "Catalog kind to generate", true),
+    ArgSpec::new("dump", Positional { order: 0 }, Path, "Path to UE4SS_ObjectDump.txt", true),
+    ArgSpec::new(
+        "script_cache",
+        Long("script-cache"),
+        Path,
+        "Shipping script cache used to enrich knowledge captions (only affects --kind knowledge)",
+        false,
+    ),
+    ArgSpec::new("out", Long("out"), Path, "Output catalog JSON path", true),
+];
+
+const STORY_CATALOG_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "exe",
+        Long("exe"),
+        Path,
+        "Exact game executable used by this installed generation.",
+        true,
+    ),
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Exact Shipping precompiled AngelScript cache.",
+        true,
+    ),
+    ArgSpec::new("binds", Long("binds"), Path, "Exact Binds precompiled AngelScript cache.", true),
+    ArgSpec::new("out", Long("out"), Path, "Output story_catalog.v1 JSON path.", true),
+];
+
+const LOCATION_CATALOG_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "source",
+        Positional { order: 0 },
+        Path,
+        r"Path to G1R\Script\Map\MainMap\InteractionSpots.json (default: inside the resolved game)",
+        false,
+    )
+    .with_default("the InteractionSpots.json of the resolved game install"),
+    ArgSpec::new("out", Long("out"), Path, "Output location_catalog.json path", true),
+];
+
+const GUI_MODEL_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("model", Long("model"), Path, "Path to model.json (output of `dump`)", true),
+    ArgSpec::new("catalog", Long("catalog"), Path, "Path to item_catalog.json", true),
+    ArgSpec::new("out", Long("out"), Path, "Output GUI model JSON path", true),
+];
+
+const SYNC_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dump",
+        Long("dump"),
+        Path,
+        "Path to game_data.json (output of the gore-dump mod)",
+        true,
+    ),
+    ArgSpec::new(
+        "catalog",
+        Long("catalog"),
+        Path,
+        "Path to item_catalog.json (the item allow-list)",
+        true,
+    ),
+    ArgSpec::new("out", Long("out"), Path, "Output GUI model JSON path", true),
+];
+
+const DUMP_MOD_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "model",
+        Long("model"),
+        Path,
+        "Path to model.json (field schema; output of `dump`+`gui-model`)",
+        true,
+    ),
+    ArgSpec::new(
+        "catalog",
+        Long("catalog"),
+        Path,
+        "Path to item_catalog.json (the item allow-list)",
+        true,
+    ),
+    ArgSpec::new("out", Long("out"), Path, "Mods directory to write the gore-dump/ folder into", true),
+];
+
+const CATALOG_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "dump",
+        "Parse UE4SS SDK dump into gore-reflect reflection model JSON",
+        DUMP_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "stubs",
+        "Generate LuaLS/EmmyLua type stubs from model.json",
+        STUBS_ARGS,
+        // Writes one `.lua` per class into `out`, overwriting whatever is there. The class names
+        // come from the model file this layer does not read -- so the files cannot be named ahead
+        // of time, but an empty or absent `out` still has nothing in them to lose.
+        Safety::write().clobbers_dir(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "catalog",
+        "Generate a catalog JSON from a UE4SS object dump",
+        CATALOG_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "story-catalog",
+        "Build a strict, generation-sealed NPC and quest-parent catalog.",
+        STORY_CATALOG_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "location-catalog",
+        "Build the named-location catalog from the game's InteractionSpots.json",
+        LOCATION_CATALOG_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "gui-model",
+        "Convert a gore reflection model into a gore-mod GUI shape JSON",
+        GUI_MODEL_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "sync",
+        "Refresh the gore-mod GUI model from a runtime game-data dump (with real default values), \
+         produced in-game by the gore-dump UE4SS mod",
+        SYNC_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "dump-mod",
+        "Generate the gore-dump UE4SS mod (reads live CDO stat values in-game -> \
+         gore_game_data.json, the input to `sync`)",
+        DUMP_MOD_ARGS,
+        // Always writes the fixed `gore-dump/` folder inside the directory it is given.
+        Safety::write().also_writes(&[("out", Derived::Child("gore-dump"))])
+            .installs_via(&["out"]),
+        T_NORMAL,
+    )
+    .guide("catalogs-and-models"),
+];
+
+pub const CATALOG: GroupSpec = GroupSpec {
+    tool: "gore_catalog",
+    title: "gore catalog pipeline",
+    cli: "",
+    summary: "The reflection and catalog pipeline: turn a UE4SS SDK/object dump into the \
+              model.json, catalogs and GUI shapes the rest of the toolkit reads. These are \
+              regeneration steps, run once per game build, not per mod.",
+    shape: GroupShape::Flat,
+    commands: CATALOG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_location
+// ---------------------------------------------------------------------------------------------
+
+const LOCATION_RESOLVE_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "name",
+    Positional { order: 0 },
+    Str,
+    "Spot name, e.g. FP_OC_STAND_YARD_1 (case-insensitive)",
+    true,
+)];
+
+const LOCATION_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "area",
+        Long("area"),
+        Str,
+        "Keep only spots in this area code (e.g. OC). See the `areas` table of the catalog",
+        false,
+    ),
+    ArgSpec::new(
+        "prefix",
+        Long("prefix"),
+        Str,
+        "Keep only spots whose name starts with this (e.g. FP)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max names to print. The result says how many matched when it stops here",
+        false,
+    )
+    .with_default("200"),
+];
+
+const LOCATION_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "resolve",
+        "Look one spot name up: area, coordinates and yaw, or the near names it was not",
+        LOCATION_RESOLVE_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("catalogs-and-models"),
+    CommandSpec::new(
+        "list",
+        "List spot names, narrowed by area code and/or name prefix",
+        LOCATION_LIST_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("catalogs-and-models"),
+];
+
+pub const LOCATION: GroupSpec = GroupSpec {
+    tool: "gore_location",
+    title: "gore location lookup",
+    cli: "location",
+    summary: "Check a waypoint or interaction-spot name against the catalog bundled in this \
+              binary — no game install, no dump, no regeneration step. The teleport helpers \
+              resolve an unknown FName to nothing at all and log nothing, so a typo is a silent \
+              no-op in game; this is where it turns into an error instead.",
+    shape: GroupShape::Nested,
+    commands: LOCATION_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_project  (synthetic: making and shipping a UE4SS Lua mod)
+// ---------------------------------------------------------------------------------------------
+
+const SCAFFOLD_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "mod_name",
+        Positional { order: 0 },
+        Str,
+        "Mod name (becomes the directory name under mods-dir). Must be a single path component.",
+        true,
+    ),
+    ArgSpec::new("out", Long("out"), Path, "Mods directory (e.g. ue4ss/Mods/)", true),
+];
+
+const GEN_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("overrides", Positional { order: 0 }, Path, "Path to overrides.toml", true),
+    ArgSpec::new("out", Long("out"), Path, "Mods directory to write the mod folder into", true),
+    ArgSpec::new(
+        "model",
+        Long("model"),
+        Path,
+        "Path to model.json for validation (optional; skips validation if absent)",
+        false,
+    ),
+];
+
+const PACKAGE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new("mod_dir", Positional { order: 0 }, Path, "Path to the mod directory", true),
+    ArgSpec::new("out", Long("out"), Path, "Output zip path", true),
+];
+
+const DEPLOY_SHARED_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "src",
+        Long("src"),
+        Path,
+        "Source shared/ dir. Defaults to a copy located relative to the gore executable.",
+        false,
+    ),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root (the folder containing G1R/). Falls back to the configured game path, \
+         then Steam auto-detect.",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+];
+
+const PROJECT_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "scaffold",
+        "Create a UE4SS Lua mod skeleton directory",
+        SCAFFOLD_ARGS,
+        // The CLI refuses only when `Scripts/main.lua` is already there, so an existing
+        // non-Lua UE4SS mod under the same name is entered and its `enabled.txt` truncated.
+        // Unlike `gen`, the folder is fully derivable -- `<out>/<mod_name>` -- so a fresh name
+        // still needs no flag and only the collision is gated.
+        Safety::write().also_writes(&[("out", Derived::ChildOfArg("mod_name"))])
+            .installs_via(&["out"]),
+        T_FAST,
+    )
+    .guide("items"),
+    CommandSpec::new(
+        "gen",
+        "Compile overrides.toml into a UE4SS Lua mod",
+        GEN_ARGS,
+        // `out` is a Mods directory that always exists, and the folder actually rewritten is
+        // `<out>/<name from overrides.toml>` -- a path this layer cannot compute without parsing
+        // that file. cmd/gen.rs rewrites enabled.txt and Scripts/main.lua unconditionally, so an
+        // existing mod (generated or hand-edited) is replaced. Not gateable, therefore gated.
+        Safety::mutate(),
+        T_NORMAL,
+    )
+    .gated_because(
+        "rewrites the `enabled.txt` and `Scripts/main.lua` of the mod folder named inside \
+         overrides.toml, whether that mod was generated or written by hand",
+    )
+    .guide("items"),
+    CommandSpec::new(
+        "package",
+        "Zip a mod folder into distributable UE4SS layout",
+        PACKAGE_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("items"),
+    // The only command in this group that reaches into the installation: it copies the shared Lua
+    // SDK into the game's ue4ss/Mods/shared.
+    CommandSpec::new(
+        "deploy-shared",
+        "Deploy the gore-lua shared SDK into the game's ue4ss/Mods/shared.",
+        DEPLOY_SHARED_ARGS,
+        Safety::mutate(),
+        T_NORMAL,
+    )
+    .gated_because(
+        "copies the shared Lua SDK into the game's own `ue4ss/Mods/shared`, replacing the copy \
+         installed there",
+    )
+    .guide("items"),
+];
+
+pub const PROJECT: GroupSpec = GroupSpec {
+    tool: "gore_project",
+    title: "gore Lua mod project",
+    cli: "",
+    summary: "Author and ship a UE4SS Lua mod: scaffold a skeleton, compile overrides.toml into \
+              Lua, zip it for distribution, and install the shared Lua SDK the generated mods need.",
+    shape: GroupShape::Flat,
+    commands: PROJECT_COMMANDS,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_group_sizes_match_the_cli() {
+        assert_eq!(CONFIG.commands.len(), 6);
+        assert_eq!(CATALOG.commands.len(), 8);
+        assert_eq!(LOCATION.commands.len(), 2);
+        assert_eq!(PROJECT.commands.len(), 4);
+    }
+
+    #[test]
+    fn the_config_commands_are_deliberately_ungated() {
+        // `set`, `unset` and `detect` do rewrite an existing config.json, which the rest of the
+        // table would call a mutation. They are the one deliberate exception, for two reasons.
+        //
+        // What they change is a preference, not content: one absolute path, visible through
+        // `config list`, restored by running `set` again. Nothing a user or the game produced is
+        // lost. And the primer tells the model to reach for exactly this when a command cannot
+        // find the game — gating it would leave that advice unfollowable and turn the single most
+        // common setup failure into a dead end the agent cannot clear.
+        //
+        // The exception is stated in the guide, not just here, because it is the one place the
+        // "rewriting an existing file needs --allow-write" rule does not hold.
+        for sub in ["set", "unset", "detect"] {
+            let command = CONFIG.command(sub).expect("exists");
+            assert!(
+                !command.safety.worst_case().needs_write_permission(),
+                "`config {sub}` is gated; if that is intended, the guide and primer must say so"
+            );
+            assert!(command.safety.installs_via.is_empty());
+            assert!(command.safety.truncates.is_empty());
+        }
+    }
+
+    #[test]
+    fn exactly_the_commands_whose_targets_cannot_be_checked_are_gated() {
+        // `deploy-shared` copies the SDK into the game's `ue4ss/Mods`; `gen` rewrites
+        // `<out>/<name from overrides.toml>`, and TOML is not something this layer parses. Neither
+        // path can be computed from the arguments, so both are gated outright.
+        //
+        // `stubs` is deliberately not here any more. It writes one `.lua` per class under names it
+        // takes from the model file, which is just as unpreflightable — but the directory those
+        // files land in is not, so it is gated on an occupied `out` instead of on every call.
+        let mutating: Vec<&str> = [CONFIG, CATALOG, LOCATION, PROJECT]
+            .iter()
+            .flat_map(|group| group.commands.iter())
+            .filter(|command| command.safety.worst_case().needs_write_permission())
+            .map(|command| command.sub)
+            .collect();
+        assert_eq!(mutating, vec!["gen", "deploy-shared"]);
+
+        let stubs = CATALOG.command("stubs").expect("exists");
+        assert!(!stubs.safety.worst_case().needs_write_permission());
+        assert_eq!(stubs.safety.clobbers_dir, &["out"]);
+    }
+}

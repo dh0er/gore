@@ -1,5 +1,8 @@
 {
   "@@locale": "en",
+  "recoveryAction": "Recover",
+  "recoveryRequiredConfirm": "Recover the interrupted deployment and remove any partially deployed files?",
+  "statusRecoveryRequired": "Recovery required",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Settings",

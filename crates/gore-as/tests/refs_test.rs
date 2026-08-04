@@ -1,6 +1,9 @@
 use gore_as::cache::refs::RefResolver;
 
-const SAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../work/reversing/gore-as/samples");
+const SAMPLES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../work/reversing/gore-as/samples"
+);
 
 fn read_sample(name: &str) -> Option<Vec<u8>> {
     std::fs::read(format!("{SAMPLES}/{name}")).ok()
@@ -14,9 +17,17 @@ fn resolves_richtest_member_and_type() {
     };
     let r = RefResolver::build(&b).expect("build resolver");
     // method1's LoadThisR: type-id 0x8003366 (GoreTestClass), byte offset 40 -> field1.
-    assert_eq!(r.member(0x8003366, 40), Some("field1"), "member resolves to field1");
+    assert_eq!(
+        r.member(0x8003366, 40),
+        Some("field1"),
+        "member resolves to field1"
+    );
     // the GoreTestClass type-id resolves to its name.
-    assert_eq!(r.type_by_id(0x8003366), Some("GoreTestClass"), "type-id -> GoreTestClass");
+    assert_eq!(
+        r.type_by_id(0x8003366),
+        Some("GoreTestClass"),
+        "type-id -> GoreTestClass"
+    );
 }
 
 /// Resolver must parse the real cache's tables without desync (env-gated).

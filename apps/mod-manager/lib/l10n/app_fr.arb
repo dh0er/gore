@@ -1,5 +1,8 @@
 {
   "@@locale": "fr",
+  "recoveryAction": "Récupérer",
+  "recoveryRequiredConfirm": "Récupérer le déploiement interrompu et supprimer les fichiers partiellement déployés ?",
+  "statusRecoveryRequired": "Récupération requise",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Paramètres",

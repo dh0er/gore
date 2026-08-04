@@ -1,5 +1,8 @@
 {
   "@@locale": "it",
+  "recoveryAction": "Ripristina",
+  "recoveryRequiredConfirm": "Ripristinare la distribuzione interrotta e rimuovere i file distribuiti parzialmente?",
+  "statusRecoveryRequired": "Ripristino necessario",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mod",
   "tabSettings": "Impostazioni",

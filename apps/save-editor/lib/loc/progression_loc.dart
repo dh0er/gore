@@ -1,3 +1,5 @@
+import 'package:goresave/l10n/app_localizations.dart';
+
 import 'game_lang.dart';
 
 /// Localized-text resolvers for progression ids (quest names, dialog-knowledge
@@ -58,7 +60,8 @@ bool _hasLongNumber(String s) {
 /// gore-save's loc/quest coverage examples.
 String _toSnake(String s) {
   final out = StringBuffer();
-  String? last() => out.isEmpty ? null : out.toString().substring(out.length - 1);
+  String? last() =>
+      out.isEmpty ? null : out.toString().substring(out.length - 1);
   var prevLowerOrDigit = false;
   for (final ch in s.split('')) {
     if (ch == '_' || ch == '-') {
@@ -75,12 +78,17 @@ String _toSnake(String s) {
       prevLowerOrDigit = false;
     } else if (isDigit) {
       final l = last();
-      if (l != null && l.compareTo('a') >= 0 && l.compareTo('z') <= 0) out.write('_');
+      if (l != null && l.compareTo('a') >= 0 && l.compareTo('z') <= 0) {
+        out.write('_');
+      }
       out.write(ch);
       prevLowerOrDigit = true;
     } else {
       final l = last();
-      if (isLower && l != null && l.compareTo('0') >= 0 && l.compareTo('9') <= 0) {
+      if (isLower &&
+          l != null &&
+          l.compareTo('0') >= 0 &&
+          l.compareTo('9') <= 0) {
         out.write('_');
       }
       out.write(ch);
@@ -117,21 +125,115 @@ String? localizedQuestName(
   String questId,
 ) {
   if (catalog.isEmpty || questId.isEmpty) return null;
-  final body =
-      (questId.startsWith('Quest_') ? questId.substring(6) : questId).toLowerCase();
+  final body = (questId.startsWith('Quest_') ? questId.substring(6) : questId)
+      .toLowerCase();
   return resolveGameText(catalog, 'quest-$body-name', lang);
 }
+
+/// Localized quest journal description for a quest class id, e.g.
+/// `Quest_OldCamp_OCCHAPTER1_BRINGLIST` maps to
+/// `quest-oldcamp_occhapter1_bringlist-description`.
+///
+/// Main journal quests have descriptions while structural group/chapter rows
+/// and most objectives do not, making this a useful root-quest discriminator.
+String? localizedQuestDescription(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String questId,
+) {
+  if (catalog.isEmpty || questId.isEmpty) return null;
+  final body = (questId.startsWith('Quest_') ? questId.substring(6) : questId)
+      .toLowerCase();
+  return resolveGameText(catalog, 'quest-$body-description', lang);
+}
+
+/// Broad kind of one value in a character's dialog-knowledge set.
+///
+/// The bundled catalog classifies its known entries as [choice], [info], or
+/// [topic]. Saves can additionally contain `Voiceline_*` values that are not
+/// represented in that catalog, so callers must also classify by id.
+enum KnowledgeEntryType { choice, info, voiceLine, topic, other }
+
+/// Classifies a dialog-knowledge [entry] using exact catalog metadata first,
+/// then the stable prefixes used by the save format.
+KnowledgeEntryType knowledgeEntryType(String entry, {String? catalogCategory}) {
+  final normalizedCategory = catalogCategory?.trim().toLowerCase().replaceAll(
+    RegExp(r'[_\-\s]'),
+    '',
+  );
+  switch (normalizedCategory) {
+    case 'choice':
+      return KnowledgeEntryType.choice;
+    case 'info':
+    case 'information':
+      return KnowledgeEntryType.info;
+    case 'voiceline':
+      return KnowledgeEntryType.voiceLine;
+    case 'topic':
+      return KnowledgeEntryType.topic;
+  }
+
+  final normalizedEntry = entry.trim().toLowerCase().replaceAll('-', '_');
+  if (normalizedEntry.startsWith('voiceline_') ||
+      normalizedEntry.startsWith('voice_line_')) {
+    return KnowledgeEntryType.voiceLine;
+  }
+  if (normalizedEntry.startsWith('choice')) {
+    return KnowledgeEntryType.choice;
+  }
+  if (normalizedEntry.startsWith('info')) {
+    return KnowledgeEntryType.info;
+  }
+  if (normalizedEntry.startsWith('topic')) {
+    return KnowledgeEntryType.topic;
+  }
+  return KnowledgeEntryType.other;
+}
+
+/// Localized label for a dialog-knowledge type badge.
+String knowledgeEntryTypeLabel(
+  AppLocalizations l10n,
+  KnowledgeEntryType type,
+) => switch (type) {
+  KnowledgeEntryType.choice => l10n.knowledgeCategoryChoice,
+  KnowledgeEntryType.info => l10n.knowledgeCategoryInfo,
+  KnowledgeEntryType.voiceLine => l10n.knowledgeTypeVoiceLine,
+  KnowledgeEntryType.topic => l10n.knowledgeCategoryTopic,
+  KnowledgeEntryType.other => l10n.knowledgeTypeOther,
+};
 
 /// Localized text for a dialog-knowledge entry, or null. Handles:
 ///  - `Voiceline_<id>_AlkimiaLocalization` → exact inner id (single line)
 ///  - `Choice<Name>` / `Topic_<Name>` / `Info_*` → `info_<snake>` (+variant)
-///  - purely numeric node ids → null (no catalog text)
+///  - an exact cache-derived caption key when [locKey] is provided
+///  - a cache-derived literal [caption] when the game uses `FText::FromString`
+///  - numeric node ids without exact metadata return null rather than guessing
 String? localizedKnowledgeEntry(
   Map<String, Map<String, String>> catalog,
   GameLang lang,
-  String entry,
-) {
-  if (catalog.isEmpty || entry.isEmpty) return null;
+  String entry, {
+  String? locKey,
+  String? caption,
+  AppLocalizations? l10n,
+}) {
+  if (entry.isEmpty) return null;
+
+  // Generated numeric ids cannot be mapped by spelling, but the Shipping
+  // cache retains the exact localization key assigned to the class Caption.
+  if (catalog.isNotEmpty && locKey != null && locKey.trim().isNotEmpty) {
+    final exact = resolveGameText(catalog, locKey, lang);
+    if (exact != null) return exact;
+  }
+  if (caption != null && caption.trim().isNotEmpty) {
+    return switch (caption.trim()) {
+      '[Forced Conversation]' =>
+        l10n?.knowledgeCaptionForcedConversation ?? caption,
+      '[Followup Topic]' => l10n?.knowledgeCaptionFollowupTopic ?? caption,
+      '[Fallback Topic]' => l10n?.knowledgeCaptionFallbackTopic ?? caption,
+      _ => caption,
+    };
+  }
+  if (catalog.isEmpty) return null;
   final lower = entry.toLowerCase();
 
   // Voiceline wrapper: strip prefix + trailing _AlkimiaLocalization.
@@ -152,10 +254,130 @@ String? localizedKnowledgeEntry(
       : snake.startsWith('topic_')
       ? snake.substring('topic_'.length)
       : snake;
-  final stems = <String>{snake, 'info_$body', 'dia_$body', 'info_$snake', 'dia_$snake'};
+  final stems = <String>{
+    snake,
+    'info_$body',
+    'dia_$body',
+    'info_$snake',
+    'dia_$snake',
+  };
   for (final stem in stems) {
     final r = _resolveStem(catalog, lang, stem);
     if (r != null) return r;
   }
   return null;
+}
+
+/// Player-facing fallback for a knowledge id when neither extracted game text
+/// nor cache-derived Caption metadata is available. It deliberately avoids
+/// echoing the raw token: separators and camel-case are humanized, while opaque
+/// generated hashes collapse to their broad dialog kind. The exact id remains
+/// available through the opt-in "show object ids" setting.
+String readableKnowledgeEntry(String entry, [AppLocalizations? l10n]) {
+  String fallback(String english, String? localized) => localized ?? english;
+  final trimmed = entry.trim();
+  if (trimmed.isEmpty) {
+    return fallback('Dialog entry', l10n?.fallbackDialogEntry);
+  }
+  final lower = trimmed.toLowerCase();
+  if (_hasLongNumber(trimmed)) {
+    if (lower.startsWith('choice')) {
+      return fallback('Dialog choice', l10n?.fallbackDialogChoice);
+    }
+    if (lower.startsWith('topic')) {
+      return fallback('Dialog topic', l10n?.fallbackDialogTopic);
+    }
+    if (lower.startsWith('info')) {
+      return fallback('Dialog information', l10n?.fallbackDialogInformation);
+    }
+    return fallback('Dialog entry', l10n?.fallbackDialogEntry);
+  }
+
+  var snake = _toSnake(trimmed);
+  if (snake.startsWith('voiceline_')) {
+    snake = snake.substring('voiceline_'.length);
+  }
+  const locSuffix = '_alkimia_localization';
+  if (snake.endsWith(locSuffix)) {
+    snake = snake.substring(0, snake.length - locSuffix.length);
+  }
+  final words = snake
+      .split('_')
+      .where((word) => word.isNotEmpty)
+      .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
+      .join(' ');
+  return words.isEmpty
+      ? fallback('Dialog entry', l10n?.fallbackDialogEntry)
+      : words;
+}
+
+/// Humanizes a technical quest name for the rare no-localization fallback.
+/// The journal still exposes the exact quest id when object ids are enabled,
+/// but its primary title remains readable while the loc catalog is missing or
+/// still loading.
+String readableQuestEntry(String value, [AppLocalizations? l10n]) {
+  var token = value.trim();
+  if (token.isEmpty) return l10n?.fallbackQuest ?? 'Quest';
+  token = token.split('/').last.split('.').last;
+  token = token.replaceFirst(
+    RegExp(r'^Quest[_\- ]*', caseSensitive: false),
+    '',
+  );
+  for (final camp in const ['OC', 'NC', 'SC']) {
+    token = token.replaceAll(
+      RegExp('${camp}CHAPTER', caseSensitive: false),
+      '${camp}_Chapter_',
+    );
+  }
+
+  final words = <String>[];
+  final current = StringBuffer();
+  void flush() {
+    if (current.isEmpty) return;
+    words.add(current.toString());
+    current.clear();
+  }
+
+  bool upper(int c) => c >= 0x41 && c <= 0x5a;
+  bool lower(int c) => c >= 0x61 && c <= 0x7a;
+  bool digit(int c) => c >= 0x30 && c <= 0x39;
+  for (var i = 0; i < token.length; i++) {
+    final c = token.codeUnitAt(i);
+    if (c == 0x5f || c == 0x2d || c == 0x20) {
+      flush();
+      continue;
+    }
+    final previous = i == 0 ? null : token.codeUnitAt(i - 1);
+    final next = i + 1 < token.length ? token.codeUnitAt(i + 1) : null;
+    final boundary =
+        current.isNotEmpty &&
+        ((upper(c) &&
+                previous != null &&
+                (lower(previous) || digit(previous))) ||
+            (upper(c) &&
+                previous != null &&
+                upper(previous) &&
+                next != null &&
+                lower(next)) ||
+            (digit(c) && previous != null && !digit(previous)) ||
+            (!digit(c) && previous != null && digit(previous)));
+    if (boundary) flush();
+    current.writeCharCode(c);
+  }
+  flush();
+
+  final readable = words
+      .map((word) {
+        if (word.toUpperCase() == 'OBJ') {
+          return l10n?.fallbackObjective ?? 'Objective';
+        }
+        if (word.length <= 3 && word == word.toUpperCase()) return word;
+        if (word == word.toUpperCase() || word == word.toLowerCase()) {
+          final lowerWord = word.toLowerCase();
+          return '${lowerWord[0].toUpperCase()}${lowerWord.substring(1)}';
+        }
+        return word;
+      })
+      .join(' ');
+  return readable.isEmpty ? (l10n?.fallbackQuest ?? 'Quest') : readable;
 }

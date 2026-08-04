@@ -37,6 +37,10 @@ void main() {
         isA<ManagerStatusNothingDeployed>(),
       );
       expect(
+        await statusFor({'state': 'recovery_required'}),
+        isA<ManagerStatusRecoveryRequired>(),
+      );
+      expect(
         await statusFor({'state': 'in_sync', 'loadout': []}),
         isA<ManagerStatusInSync>(),
       );

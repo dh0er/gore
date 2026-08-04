@@ -11,7 +11,8 @@ import 'field_schema.dart';
 /// model.json unless the user has loaded a fresh game-data dump
 /// ([dumpPathProvider]), in which case that file is read instead — that's how a
 /// post-release dump refreshes the editor without a rebuild. When a class is
-/// absent from the model, [kDefaultItemFields] is used.
+/// absent from the model, it remains non-editable; no bounds or fields are
+/// guessed from its name.
 final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   final catalogJson = await rootBundle.loadString('assets/item_catalog.json');
 
@@ -22,12 +23,12 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   // model.json shape:
   // { "classes": { "ItFo_Apple": { "fields": [ { "name", "type", "default" } ] } } }
   //
-  // The bundled assets/model.json is the COMPLETE base (schema + real default
-  // values for every catalog id). A loaded game-data dump (dumpPathProvider) is
-  // an OPTIONAL refresh from the user's installed game version: it OVERLAYS the
-  // bundle per class, but only for classes it actually carries fields for — so a
-  // missing, unreadable, partial, or empty dump (a gore-dump run that found no
-  // CDOs writes `{"classes":{}}`) can never strip a class's fields.
+  // The bundled assets/model.json is the COMPLETE authority for each
+  // `(catalog class, field name, raw type)` triple. A loaded game-data dump is
+  // untrusted and may refresh only scalar defaults for exact bundled triples;
+  // it can neither add a field to another class nor replace schema metadata.
+  // A missing, unreadable, partial, or empty dump therefore leaves the bundled
+  // schema and defaults intact.
   final bundled = await rootBundle.loadString('assets/model.json');
   final modelClasses = <String, Object?>{
     ...?(jsonDecode(bundled) as Map<String, Object?>?)?['classes']
@@ -38,15 +39,11 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
   if (dumpPath != null) {
     try {
       final dumpStr = await File(dumpPath).readAsString();
-      final dumpClasses = (jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
-          as Map<String, Object?>?;
+      final dumpClasses =
+          (jsonDecode(dumpStr) as Map<String, Object?>?)?['classes']
+              as Map<String, Object?>?;
       if (dumpClasses != null) {
-        dumpClasses.forEach((id, cls) {
-          final fields = (cls as Map<String, Object?>?)?['fields'] as List?;
-          if (fields != null && fields.isNotEmpty) {
-            modelClasses[id] = cls; // overlay only classes the dump really has
-          }
-        });
+        _overlayExactDumpDefaults(modelClasses, dumpClasses);
       }
     } catch (_) {
       // unreadable/invalid dump -> keep the bundled base
@@ -62,6 +59,99 @@ final catalogProvider = FutureProvider<List<CatalogItem>>((ref) async {
         ),
   ]..sort((a, b) => a.id.compareTo(b.id));
 });
+
+/// Apply only unambiguous, type-valid defaults from a user-selected dump.
+///
+/// The bundled per-class field list remains the schema authority. In
+/// particular, a globally known specialized field cannot be attached to a
+/// different catalog class by a corrupt dump. Duplicate dump entries are
+/// ambiguous and therefore ignored for that exact pair.
+void _overlayExactDumpDefaults(
+  Map<String, Object?> bundledClasses,
+  Map<String, Object?> dumpClasses,
+) {
+  for (final dumpClass in dumpClasses.entries) {
+    final bundledClassValue = bundledClasses[dumpClass.key];
+    final dumpedClassValue = dumpClass.value;
+    if (bundledClassValue is! Map<String, Object?> ||
+        dumpedClassValue is! Map<String, Object?>) {
+      continue;
+    }
+    final bundledFieldsValue = bundledClassValue['fields'];
+    final dumpedFieldsValue = dumpedClassValue['fields'];
+    if (bundledFieldsValue is! List ||
+        dumpedFieldsValue is! List ||
+        dumpedFieldsValue.isEmpty) {
+      continue;
+    }
+    final bundledClass = bundledClassValue;
+    final bundledFields = bundledFieldsValue;
+    final dumpedFields = dumpedFieldsValue;
+
+    final defaults = <(String, String), Object?>{};
+    final ambiguous = <(String, String)>{};
+    for (final dumpedField in dumpedFields.whereType<Map<String, Object?>>()) {
+      final name = dumpedField['name'];
+      final rawType = dumpedField['type'];
+      if (name is! String ||
+          rawType is! String ||
+          !dumpedField.containsKey('default')) {
+        continue;
+      }
+      final key = (name, rawType);
+      if (ambiguous.contains(key) || defaults.containsKey(key)) {
+        defaults.remove(key);
+        ambiguous.add(key);
+        continue;
+      }
+      defaults[key] = dumpedField['default'];
+    }
+
+    var changed = false;
+    final mergedFields = <Object?>[];
+    for (final bundledFieldValue in bundledFields) {
+      if (bundledFieldValue is! Map<String, Object?>) {
+        mergedFields.add(bundledFieldValue);
+        continue;
+      }
+      final name = bundledFieldValue['name'];
+      final rawType = bundledFieldValue['type'];
+      if (name is! String || rawType is! String) {
+        mergedFields.add(bundledFieldValue);
+        continue;
+      }
+      final key = (name, rawType);
+      if (ambiguous.contains(key) || !defaults.containsKey(key)) {
+        mergedFields.add(bundledFieldValue);
+        continue;
+      }
+
+      final candidate = <String, Object?>{
+        ...bundledFieldValue,
+        'default': defaults[key],
+      };
+      try {
+        final parsed = FieldSchema.fromItemModelJson(candidate);
+        if (parsed.defaultValue == null) {
+          mergedFields.add(bundledFieldValue);
+          continue;
+        }
+      } on FormatException {
+        mergedFields.add(bundledFieldValue);
+        continue;
+      }
+      mergedFields.add(candidate);
+      changed = true;
+    }
+
+    if (changed) {
+      bundledClasses[dumpClass.key] = <String, Object?>{
+        ...bundledClass,
+        'fields': mergedFields,
+      };
+    }
+  }
+}
 
 /// Editable fields for a catalog class, taken from the model. A class absent
 /// from the model (or with no listed fields) gets NO fields and is therefore
@@ -80,10 +170,11 @@ List<FieldSchema> _fieldsFor(
   final parsed = editableFields(
     rawFields
         .whereType<Map<String, Object?>>()
-        .map(FieldSchema.fromJson)
+        .where(isProvenItemModelField)
+        .map(FieldSchema.fromItemModelJson)
         .toList(),
   );
-  return parsed.isEmpty ? const [] : mergeDefaultBounds(parsed);
+  return parsed;
 }
 
 /// Drop fields the editor cannot present a working control for. An enum field
@@ -92,32 +183,6 @@ List<FieldSchema> _fieldsFor(
 /// validateField rejects for every value — i.e. visible but impossible to
 /// edit or export. Skip those rather than show a broken control.
 List<FieldSchema> editableFields(List<FieldSchema> fields) => [
-      for (final f in fields)
-        if (f.type != FieldType.enum_ || f.enumValues.isNotEmpty) f,
-    ];
-
-/// Overlay the [kDefaultItemFields] min/max bounds onto matching parsed model
-/// fields. The bundled model.json carries only name/type per field, so without
-/// this the well-known scalar fields (m_Value, m_MaxStack, m_Weight, m_Mass)
-/// would have null bounds and validateField would accept out-of-range values
-/// like m_MaxStack = 0 or a negative weight — and since export no longer runs
-/// native range validation, those would reach the generated mod. A bound that
-/// the parsed field already specifies is left untouched.
-List<FieldSchema> mergeDefaultBounds(List<FieldSchema> parsed) {
-  final defaultsByName = {for (final f in kDefaultItemFields) f.name: f};
-  return [
-    for (final f in parsed)
-      if (defaultsByName[f.name] case final def?)
-        FieldSchema(
-          name: f.name,
-          type: f.type,
-          minValue: f.minValue ?? def.minValue,
-          maxValue: f.maxValue ?? def.maxValue,
-          enumValues: f.enumValues,
-          enumBackingValues: f.enumBackingValues,
-          defaultValue: f.defaultValue,
-        )
-      else
-        f,
-  ];
-}
+  for (final f in fields)
+    if (f.type != FieldType.enum_ || f.enumValues.isNotEmpty) f,
+];

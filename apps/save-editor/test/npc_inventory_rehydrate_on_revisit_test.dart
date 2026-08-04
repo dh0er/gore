@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// Regression test for Bug #7: switching away from an edited NPC inventory and
 /// returning must REHYDRATE the card from the queued per-NPC draft. Editing a
@@ -21,6 +24,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -78,11 +84,12 @@ void main() {
       await tester.pumpAndSettle();
 
       final write = core.requests.lastWhere((r) => r.command == 'write_save');
-      final edits =
-          (write.payload['edits'] as List).cast<Map<String, Object?>>();
+      final edits = (write.payload['edits'] as List)
+          .cast<Map<String, Object?>>();
       expect(edits, hasLength(2));
-      final values =
-          edits.map((e) => e['value'] as Map<String, Object?>).toList();
+      final values = edits
+          .map((e) => e['value'] as Map<String, Object?>)
+          .toList();
       expect(values.every((v) => v['actorId'] == 'Lizard-A'), isTrue);
       final counts = values.map((v) => v['count']).toSet();
       expect(counts, {11, 22});
@@ -161,11 +168,7 @@ class _TwoItemNpcInventoryCoreService implements GoresaveCoreService {
               'status': 'decoded',
               'preview': false,
               'decompressedSize': 9,
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'playerName': 'Hero',

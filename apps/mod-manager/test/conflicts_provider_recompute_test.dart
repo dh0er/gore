@@ -4,6 +4,7 @@ import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/library/domain/conflicts_provider.dart';
 import 'package:gore_manager/library/domain/library_notifier.dart';
+import 'package:gore_manager/library/domain/models.dart';
 
 /// A stateful core service whose `mgr_library_list` reports a SINGLE mod (id
 /// `m1`) whose components can be swapped between refreshes — simulating a
@@ -72,6 +73,16 @@ class _StatefulFake implements GoreCoreFfiService {
 List<Map<String, Object?>> _loc(List<String> targets) => [
       {'type': 'loc_patch', 'rel': 'loc/edits.json', 'targets': targets},
     ];
+
+List<Map<String, Object?>> _lua({required bool opaque}) => [
+  {
+    'type': 'ue4ss_lua',
+    'name': 'Runtime',
+    'rel': 'ue4ss/Runtime',
+    'targets': const ['A.Value'],
+    'opaque': opaque,
+  },
+];
 
 /// Drive the container until every pending microtask/future settles.
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
@@ -142,5 +153,55 @@ void main() {
       baseline,
       reason: 'an unchanged library must not re-run analyze',
     );
+  });
+
+  test(
+    'conflictsProvider re-analyzes when only UE4SS opacity changes',
+    () async {
+      final fake = _StatefulFake(_lua(opaque: false));
+      final container = ProviderContainer(
+        overrides: [coreServiceProvider.overrideWithValue(fake)],
+      );
+      addTearDown(container.dispose);
+      container.listen(libraryProvider, (_, _) {});
+      container.listen(conflictsProvider, (_, _) {});
+
+      await container.read(conflictsProvider.future);
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+      final baseline = fake.analyzeCount;
+
+      fake.setComponents(_lua(opaque: true));
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+
+      expect(fake.analyzeCount, greaterThan(baseline));
+    },
+  );
+
+  test('unknown info advisory is ordered but has no winner', () {
+    const conflict = ConflictView(
+      kind: 'ue4ss_unknown',
+      target: '<unknown>',
+      modIds: ['later', 'earlier'],
+      severity: 'info',
+    );
+    final chain = orderConflictChain(conflict, const ['earlier', 'later']);
+    expect(chain.modIds, const ['earlier', 'later']);
+    expect(chain.winnerId, isNull);
+  });
+
+  test('proven soft conflict keeps later-wins winner', () {
+    const conflict = ConflictView(
+      kind: 'cdo',
+      target: 'A.Value',
+      modIds: ['later', 'earlier'],
+      severity: 'soft',
+    );
+    final chain = orderConflictChain(conflict, const ['earlier', 'later']);
+    expect(chain.modIds, const ['earlier', 'later']);
+    expect(chain.winnerId, 'later');
   });
 }

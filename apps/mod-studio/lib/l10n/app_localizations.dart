@@ -775,6 +775,5401 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A mod-manager loadout is active. Undeploy it in gore-manager first.'**
   String get managerDeployActive;
+
+  /// No description provided for @projectOpenManagedRevision3.
+  ///
+  /// In en, this message translates to:
+  /// **'Open mod project…'**
+  String get projectOpenManagedRevision3;
+
+  /// No description provided for @projectVerifyCurrentHead.
+  ///
+  /// In en, this message translates to:
+  /// **'Check project'**
+  String get projectVerifyCurrentHead;
+
+  /// No description provided for @projectManagedRevision3Title.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod project'**
+  String get projectManagedRevision3Title;
+
+  /// No description provided for @projectClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close project'**
+  String get projectClose;
+
+  /// No description provided for @projectCloseFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project could not be closed: {error}'**
+  String projectCloseFailed(String error);
+
+  /// No description provided for @projectRoot.
+  ///
+  /// In en, this message translates to:
+  /// **'Root'**
+  String get projectRoot;
+
+  /// No description provided for @projectId.
+  ///
+  /// In en, this message translates to:
+  /// **'Project ID'**
+  String get projectId;
+
+  /// No description provided for @projectRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Project revision'**
+  String get projectRevision;
+
+  /// No description provided for @projectHeadSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Head SHA-256'**
+  String get projectHeadSha256;
+
+  /// No description provided for @projectSnapshotBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Snapshot bytes'**
+  String get projectSnapshotBytes;
+
+  /// No description provided for @projectNoCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'No current project'**
+  String get projectNoCurrent;
+
+  /// No description provided for @projectManagedRevision3Opened.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod project opened.'**
+  String get projectManagedRevision3Opened;
+
+  /// No description provided for @projectManagedRevision3OpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod project could not be opened: {error}'**
+  String projectManagedRevision3OpenFailed(String error);
+
+  /// No description provided for @projectManagedRevision3Verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Project checked.'**
+  String get projectManagedRevision3Verified;
+
+  /// No description provided for @projectManagedRevision3VerifyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project check failed: {error}'**
+  String projectManagedRevision3VerifyFailed(String error);
+
+  /// No description provided for @projectManagedRevision3RequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The project could not be checked safely. Recover or reopen it before continuing.'**
+  String get projectManagedRevision3RequiresReopen;
+
+  /// No description provided for @projectManagedRevision3VerifyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover or reopen the project before checking it again.'**
+  String get projectManagedRevision3VerifyBlocked;
+
+  /// No description provided for @projectTransitionCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.'**
+  String get projectTransitionCleanupWarning;
+
+  /// No description provided for @projectNewManagedRevision3.
+  ///
+  /// In en, this message translates to:
+  /// **'New mod project…'**
+  String get projectNewManagedRevision3;
+
+  /// No description provided for @projectCreateGamePathRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Set the Gothic 1 Remake game path in Settings before creating a mod project.'**
+  String get projectCreateGamePathRequired;
+
+  /// No description provided for @projectCreateDirectoryPickerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create mod project here'**
+  String get projectCreateDirectoryPickerTitle;
+
+  /// No description provided for @projectManagedRevision3Created.
+  ///
+  /// In en, this message translates to:
+  /// **'Created mod project {projectId}'**
+  String projectManagedRevision3Created(String projectId);
+
+  /// No description provided for @projectManagedRevision3CreateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod project creation failed: {error}'**
+  String projectManagedRevision3CreateFailed(String error);
+
+  /// No description provided for @projectCreateDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a mod project'**
+  String get projectCreateDialogTitle;
+
+  /// No description provided for @projectCreateNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project name'**
+  String get projectCreateNameLabel;
+
+  /// No description provided for @projectCreateNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'The name shown in Mod Studio.'**
+  String get projectCreateNameHelper;
+
+  /// No description provided for @projectCreateVersionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get projectCreateVersionLabel;
+
+  /// No description provided for @projectCreateVersionHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'A starting version, such as 0.1.0.'**
+  String get projectCreateVersionHelper;
+
+  /// No description provided for @projectCreateAuthorLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Author'**
+  String get projectCreateAuthorLabel;
+
+  /// No description provided for @projectCreateAuthorHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Your name or mod-team name.'**
+  String get projectCreateAuthorHelper;
+
+  /// No description provided for @projectCreateLocalesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Authoring languages'**
+  String get projectCreateLocalesLabel;
+
+  /// No description provided for @projectCreateLocalesHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Comma-separated canonical tags, for example: en, de, en-US.'**
+  String get projectCreateLocalesHelper;
+
+  /// No description provided for @projectCreateBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'This creates an empty managed offline project. It does not build, deploy, or run a mod, and it does not change game files or save files.'**
+  String get projectCreateBoundary;
+
+  /// No description provided for @projectCreateSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Create project'**
+  String get projectCreateSubmit;
+
+  /// No description provided for @projectCreateMetadataRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} is required.'**
+  String projectCreateMetadataRequired(String label);
+
+  /// No description provided for @projectCreateMetadataNoOuterWhitespace.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} cannot start or end with whitespace.'**
+  String projectCreateMetadataNoOuterWhitespace(String label);
+
+  /// No description provided for @projectCreateMetadataControlCharacters.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} cannot contain control characters.'**
+  String projectCreateMetadataControlCharacters(String label);
+
+  /// No description provided for @projectCreateMetadataMalformed.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} contains malformed text.'**
+  String projectCreateMetadataMalformed(String label);
+
+  /// No description provided for @projectCreateMetadataTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} exceeds its {maxBytes}-byte UTF-8 limit.'**
+  String projectCreateMetadataTooLong(String label, int maxBytes);
+
+  /// No description provided for @projectCreateLocalesRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter at least one authoring language.'**
+  String get projectCreateLocalesRequired;
+
+  /// No description provided for @projectCreateLocalesEmptyEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove the empty authoring-language entry.'**
+  String get projectCreateLocalesEmptyEntry;
+
+  /// No description provided for @projectCreateLocalesTooMany.
+  ///
+  /// In en, this message translates to:
+  /// **'Use at most {maxLocales} authoring languages.'**
+  String projectCreateLocalesTooMany(int maxLocales);
+
+  /// No description provided for @projectCreateLocaleBoundedAscii.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" must be bounded ASCII.'**
+  String projectCreateLocaleBoundedAscii(String locale);
+
+  /// No description provided for @projectCreateLocaleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" needs a 2-8 letter lowercase language.'**
+  String projectCreateLocaleLanguage(String locale);
+
+  /// No description provided for @projectCreateLocaleInvalidSegment.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" has an invalid segment.'**
+  String projectCreateLocaleInvalidSegment(String locale);
+
+  /// No description provided for @projectCreateLocaleNotCanonical.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" is not canonical; use \"{canonical}\".'**
+  String projectCreateLocaleNotCanonical(String locale, String canonical);
+
+  /// No description provided for @managedWorkspaceOverviewLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Overview'**
+  String get managedWorkspaceOverviewLabel;
+
+  /// No description provided for @managedWorkspaceContentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Content'**
+  String get managedWorkspaceContentLabel;
+
+  /// No description provided for @managedWorkspaceDataAssetsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedWorkspaceDataAssetsLabel;
+
+  /// No description provided for @managedContentWorkspaceLibraryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'This mod'**
+  String get managedContentWorkspaceLibraryLabel;
+
+  /// No description provided for @managedWorkspaceHomeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Home'**
+  String get managedWorkspaceHomeLabel;
+
+  /// No description provided for @managedWorkspaceStoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Story'**
+  String get managedWorkspaceStoryLabel;
+
+  /// No description provided for @managedWorkspaceSettingsExpertLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings & Expert'**
+  String get managedWorkspaceSettingsExpertLabel;
+
+  /// No description provided for @managedProjectHistoryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Project history'**
+  String get managedProjectHistoryTitle;
+
+  /// No description provided for @managedProjectHistoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Return to an earlier project version without erasing the versions that came after it.'**
+  String get managedProjectHistoryDescription;
+
+  /// No description provided for @managedProjectHistoryBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'History changes only this managed project. It does not modify the game installation or save files.'**
+  String get managedProjectHistoryBoundary;
+
+  /// No description provided for @managedProjectHistoryRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh project history'**
+  String get managedProjectHistoryRefresh;
+
+  /// No description provided for @managedProjectHistoryLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading project history…'**
+  String get managedProjectHistoryLoading;
+
+  /// No description provided for @managedProjectHistoryLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project history could not be loaded'**
+  String get managedProjectHistoryLoadFailed;
+
+  /// No description provided for @managedProjectHistoryRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get managedProjectHistoryRetry;
+
+  /// No description provided for @managedProjectHistoryCurrentVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Current version'**
+  String get managedProjectHistoryCurrentVersion;
+
+  /// No description provided for @managedProjectHistoryPreviousVersions.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous versions'**
+  String get managedProjectHistoryPreviousVersions;
+
+  /// No description provided for @managedProjectHistoryUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo last change'**
+  String get managedProjectHistoryUndo;
+
+  /// No description provided for @managedProjectHistoryRestoreVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore this version'**
+  String get managedProjectHistoryRestoreVersion;
+
+  /// No description provided for @managedProjectHistoryRestoreTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project version?'**
+  String get managedProjectHistoryRestoreTitle;
+
+  /// No description provided for @managedProjectHistoryRestoreBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The content from revision {revision} will be saved as new revision {nextRevision}. The current version remains in history.'**
+  String managedProjectHistoryRestoreBody(int revision, int nextRevision);
+
+  /// No description provided for @managedProjectHistoryRestoreBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the project changes. The game installation and save files remain untouched.'**
+  String get managedProjectHistoryRestoreBoundary;
+
+  /// No description provided for @managedProjectHistoryCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedProjectHistoryCancel;
+
+  /// No description provided for @managedProjectHistoryRestore.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore'**
+  String get managedProjectHistoryRestore;
+
+  /// No description provided for @managedProjectHistoryRestoring.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring project version…'**
+  String get managedProjectHistoryRestoring;
+
+  /// No description provided for @managedProjectHistoryRestoreFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project version could not be restored safely. Refresh the history before trying again.'**
+  String get managedProjectHistoryRestoreFailed;
+
+  /// No description provided for @managedProjectHistoryRestoreSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Revision {revision} was restored as a new project version.'**
+  String managedProjectHistoryRestoreSucceeded(int revision);
+
+  /// No description provided for @managedProjectHistoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No previous project versions have been recorded yet.'**
+  String get managedProjectHistoryEmpty;
+
+  /// No description provided for @managedProjectHistoryRecordingStartsAt.
+  ///
+  /// In en, this message translates to:
+  /// **'History recording starts at revision {revision}; older versions were not guessed from storage.'**
+  String managedProjectHistoryRecordingStartsAt(int revision);
+
+  /// No description provided for @managedProjectHistoryTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'Older project versions have expired from history. Every version shown here is still retained and authenticated by the current project history.'**
+  String get managedProjectHistoryTruncated;
+
+  /// No description provided for @managedProjectHistoryRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Revision {revision}'**
+  String managedProjectHistoryRevision(int revision);
+
+  /// No description provided for @managedProjectHistoryCurrentBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Current'**
+  String get managedProjectHistoryCurrentBadge;
+
+  /// No description provided for @managedProjectHistoryDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish or discard the open text edit before restoring another project version.'**
+  String get managedProjectHistoryDirtyBlocked;
+
+  /// No description provided for @managedProjectHistoryBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Another project action is still in progress.'**
+  String get managedProjectHistoryBusy;
+
+  /// No description provided for @managedProjectHistoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This managed project session does not support authenticated history.'**
+  String get managedProjectHistoryUnavailable;
+
+  /// No description provided for @managedSectionStoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'NPCs, quests, and dialogue.'**
+  String get managedSectionStoryDescription;
+
+  /// No description provided for @managedStoryWorkspaceLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the current Story drafts…'**
+  String get managedStoryWorkspaceLoading;
+
+  /// No description provided for @managedStoryWorkspaceAuthorityNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Project-only NPC and Quest drafts. Build readiness has not been evaluated; runtime behavior remains unqualified.'**
+  String get managedStoryWorkspaceAuthorityNotice;
+
+  /// No description provided for @managedStoryWorkspaceSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search NPC and Quest names, objectives, speakers, or IDs'**
+  String get managedStoryWorkspaceSearchHint;
+
+  /// No description provided for @managedStoryWorkspaceCreatingNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating NPC draft…'**
+  String get managedStoryWorkspaceCreatingNpc;
+
+  /// No description provided for @managedStoryWorkspaceCreatingQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Quest draft…'**
+  String get managedStoryWorkspaceCreatingQuest;
+
+  /// No description provided for @managedStoryWorkspaceCreateNpcOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Character + first greeting'**
+  String get managedStoryWorkspaceCreateNpcOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreatingNpcOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Character + first greeting…'**
+  String get managedStoryWorkspaceCreatingNpcOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreateQuestOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Quest + opening line'**
+  String get managedStoryWorkspaceCreateQuestOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreatingQuestOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Quest + opening line…'**
+  String get managedStoryWorkspaceCreatingQuestOpening;
+
+  /// No description provided for @managedStoryWorkspaceCreateAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced creation options'**
+  String get managedStoryWorkspaceCreateAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceCreateNpcAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Character draft only (advanced)'**
+  String get managedStoryWorkspaceCreateNpcAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceCreateQuestAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Quest draft only (advanced)'**
+  String get managedStoryWorkspaceCreateQuestAdvanced;
+
+  /// No description provided for @managedStoryWorkspaceMutationRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this project before changing Story content.'**
+  String get managedStoryWorkspaceMutationRequiresReopen;
+
+  /// No description provided for @managedStoryWorkspaceMutationDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before changing Story content.'**
+  String get managedStoryWorkspaceMutationDirtyBlocked;
+
+  /// No description provided for @managedStoryWorkspaceEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No NPC or Quest drafts yet'**
+  String get managedStoryWorkspaceEmpty;
+
+  /// No description provided for @managedStoryWorkspaceNoMatches.
+  ///
+  /// In en, this message translates to:
+  /// **'No NPC or Quest drafts match this search'**
+  String get managedStoryWorkspaceNoMatches;
+
+  /// No description provided for @managedStoryWorkspaceSelectDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Select an NPC or Quest draft to continue'**
+  String get managedStoryWorkspaceSelectDraft;
+
+  /// No description provided for @managedStoryWorkspaceLoadErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Story drafts could not be opened'**
+  String get managedStoryWorkspaceLoadErrorTitle;
+
+  /// No description provided for @managedStoryWorkspaceCheckpointMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while Story was loading. Refresh the exact current checkpoint and try again.'**
+  String get managedStoryWorkspaceCheckpointMismatch;
+
+  /// No description provided for @managedStoryWorkspacePublishedSelectionStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved Story draft could not be selected at its exact project revision. Check the current Story list before continuing.'**
+  String get managedStoryWorkspacePublishedSelectionStale;
+
+  /// No description provided for @managedStoryWorkspaceCheckpointSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC and Quest drafts: {count} · project revision {revision}'**
+  String managedStoryWorkspaceCheckpointSummary(int count, int revision);
+
+  /// No description provided for @managedStoryWorkspaceLoadErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact current Story view could not be read: {error}'**
+  String managedStoryWorkspaceLoadErrorDetails(String error);
+
+  /// No description provided for @managedStoryWorkspaceCreateErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'The Story draft could not be created: {error}'**
+  String managedStoryWorkspaceCreateErrorDetails(String error);
+
+  /// No description provided for @managedStoryWorkspaceDetailsSheetLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{entityName} Story details'**
+  String managedStoryWorkspaceDetailsSheetLabel(String entityName);
+
+  /// No description provided for @managedStoryWorkspaceRemovePairUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This draft is not an exact removable draft and generated-script pair.'**
+  String get managedStoryWorkspaceRemovePairUnavailable;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Another Story action is still in progress.'**
+  String get managedStoryWorkspaceRemoveBusy;
+
+  /// No description provided for @managedStoryWorkspaceRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this managed project before removing a draft.'**
+  String get managedStoryWorkspaceRemoveRequiresReopen;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 incoming project reference must be removed first.} other{{count} incoming project references must be removed first.}}'**
+  String managedStoryWorkspaceRemoveBlocked(int count);
+
+  /// No description provided for @managedStoryWorkspaceRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft from project?'**
+  String get managedStoryWorkspaceRemoveDialogTitle;
+
+  /// No description provided for @managedStoryWorkspaceRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'This removes the draft \'{draftName}\' together with its uniquely owned generated script \'{scriptName}\'.'**
+  String managedStoryWorkspaceRemoveDialogSummary(
+    String draftName,
+    String scriptName,
+  );
+
+  /// No description provided for @managedStoryWorkspaceRemoveNoUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'This dialog has no local rollback. After removal, Project History or global Undo can restore an earlier version while it remains available.'**
+  String get managedStoryWorkspaceRemoveNoUndo;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the current project registry is changed. The game installation and save games stay unchanged.'**
+  String get managedStoryWorkspaceRemoveBoundary;
+
+  /// No description provided for @managedStoryWorkspaceRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedStoryWorkspaceRemoveCancel;
+
+  /// No description provided for @managedStoryWorkspaceRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft'**
+  String get managedStoryWorkspaceRemoveConfirm;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft is still referenced'**
+  String get managedStoryWorkspaceRemoveBlockedTitle;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open every source below and remove its project reference before trying again.'**
+  String get managedStoryWorkspaceRemoveBlockedDescription;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{sourceName} · {role}'**
+  String managedStoryWorkspaceRemoveBlockerLabel(
+    String sourceName,
+    String role,
+  );
+
+  /// No description provided for @managedStoryWorkspaceRemoveOpenBlocker.
+  ///
+  /// In en, this message translates to:
+  /// **'Open referencing source'**
+  String get managedStoryWorkspaceRemoveOpenBlocker;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedStoryWorkspaceRemoveBlockedClose;
+
+  /// No description provided for @managedStoryWorkspaceRemoveSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed \'{draftName}\' and its generated script from the project. Game files and save games were not changed.'**
+  String managedStoryWorkspaceRemoveSucceeded(String draftName);
+
+  /// No description provided for @managedStoryWorkspaceRemoveError.
+  ///
+  /// In en, this message translates to:
+  /// **'The draft was not removed. The Story view was refreshed without retrying automatically: {error}'**
+  String managedStoryWorkspaceRemoveError(String error);
+
+  /// No description provided for @managedSectionLocalizationVoiceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write and translate project dialog, then review each language\'s takes, selection, and target in the same workspace.'**
+  String get managedSectionLocalizationVoiceDescription;
+
+  /// No description provided for @managedLocalizationProjectTextsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project texts'**
+  String get managedLocalizationProjectTextsLabel;
+
+  /// No description provided for @managedLocalizationSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search project texts'**
+  String get managedLocalizationSearchLabel;
+
+  /// No description provided for @managedLocalizationRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get managedLocalizationRefresh;
+
+  /// No description provided for @managedLocalizationEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No project text yet'**
+  String get managedLocalizationEmptyTitle;
+
+  /// No description provided for @managedLocalizationEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a dialog line to start writing and translating text.'**
+  String get managedLocalizationEmptyDescription;
+
+  /// No description provided for @managedLocalizationLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project texts could not be opened'**
+  String get managedLocalizationLoadFailed;
+
+  /// No description provided for @managedLocalizationSelectText.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a project text to edit'**
+  String get managedLocalizationSelectText;
+
+  /// No description provided for @managedLocalizationLanguagesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Languages'**
+  String get managedLocalizationLanguagesLabel;
+
+  /// No description provided for @managedLocalizationUsedByLines.
+  ///
+  /// In en, this message translates to:
+  /// **'Used by dialog lines'**
+  String get managedLocalizationUsedByLines;
+
+  /// No description provided for @managedLocalizationVoiceContextTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice for this dialog line'**
+  String get managedLocalizationVoiceContextTitle;
+
+  /// No description provided for @managedLocalizationVoiceSelectLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a dialog line above'**
+  String get managedLocalizationVoiceSelectLine;
+
+  /// No description provided for @managedLocalizationVoiceSetupExists.
+  ///
+  /// In en, this message translates to:
+  /// **'setup exists'**
+  String get managedLocalizationVoiceSetupExists;
+
+  /// No description provided for @managedLocalizationVoiceSetupMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'no setup yet'**
+  String get managedLocalizationVoiceSetupMissing;
+
+  /// No description provided for @managedLocalizationNoLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Not used by a dialog line yet'**
+  String get managedLocalizationNoLine;
+
+  /// No description provided for @managedLocalizationSpeakerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Speaker label'**
+  String get managedLocalizationSpeakerLabel;
+
+  /// No description provided for @managedLocalizationAddLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Add language'**
+  String get managedLocalizationAddLanguage;
+
+  /// No description provided for @managedLocalizationRemoveLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove language'**
+  String get managedLocalizationRemoveLanguage;
+
+  /// No description provided for @managedLocalizationLanguageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'For example de, en, or pt-BR'**
+  String get managedLocalizationLanguageHint;
+
+  /// No description provided for @managedLocalizationLanguageExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This language is already present.'**
+  String get managedLocalizationLanguageExists;
+
+  /// No description provided for @managedLocalizationAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'Add'**
+  String get managedLocalizationAdd;
+
+  /// No description provided for @managedLocalizationSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Project text saved'**
+  String get managedLocalizationSaved;
+
+  /// No description provided for @managedLocalizationVoiceLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'This text has recorded voice takes, so its transcript is locked in this editor.'**
+  String get managedLocalizationVoiceLocked;
+
+  /// No description provided for @managedLocalizationVoiceSlotRemovalLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'This language is connected to a Voice slot and cannot be removed here.'**
+  String get managedLocalizationVoiceSlotRemovalLocked;
+
+  /// No description provided for @managedLocalizationMinimumLanguageLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep at least one language for this project text.'**
+  String get managedLocalizationMinimumLanguageLocked;
+
+  /// No description provided for @managedLocalizationSharedNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'This project text is shared. Saving changes updates every listed dialog line.'**
+  String get managedLocalizationSharedNotice;
+
+  /// No description provided for @managedLocalizationOfflineNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes are saved only to this managed project. Build and in-game behavior remain separate.'**
+  String get managedLocalizationOfflineNotice;
+
+  /// No description provided for @managedLocalizationUnsavedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard unsaved changes?'**
+  String get managedLocalizationUnsavedTitle;
+
+  /// No description provided for @managedLocalizationUnsavedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This project has unsaved edits. Switching now would discard them.'**
+  String get managedLocalizationUnsavedDescription;
+
+  /// No description provided for @managedLocalizationVoiceUnsavedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save text before continuing?'**
+  String get managedLocalizationVoiceUnsavedTitle;
+
+  /// No description provided for @managedLocalizationVoiceUnsavedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Save these text changes and continue directly to the selected action, keep editing, or deliberately discard the text changes.'**
+  String get managedLocalizationVoiceUnsavedDescription;
+
+  /// No description provided for @managedLocalizationDiscardAndContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard and continue'**
+  String get managedLocalizationDiscardAndContinue;
+
+  /// No description provided for @managedLocalizationSaveAndContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'Save and continue'**
+  String get managedLocalizationSaveAndContinue;
+
+  /// No description provided for @managedLocalizationGlobalAddVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Add take for any line'**
+  String get managedLocalizationGlobalAddVoice;
+
+  /// No description provided for @managedLocalizationGlobalManageVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage takes for any line'**
+  String get managedLocalizationGlobalManageVoice;
+
+  /// No description provided for @managedLocalizationGlobalResolveVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve target for any line'**
+  String get managedLocalizationGlobalResolveVoice;
+
+  /// No description provided for @managedVoiceFolderImportTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Import recordings folder'**
+  String get managedVoiceFolderImportTitle;
+
+  /// No description provided for @managedVoiceFolderImportDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review a folder of named Ogg recordings, then add every ready take in one all-or-nothing project update.'**
+  String get managedVoiceFolderImportDescription;
+
+  /// No description provided for @managedVoiceFolderImportChooseFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose recordings folder'**
+  String get managedVoiceFolderImportChooseFolder;
+
+  /// No description provided for @managedVoiceFolderImportDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before importing recordings.'**
+  String get managedVoiceFolderImportDirtyBlocked;
+
+  /// No description provided for @managedVoiceFolderImportSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported {count} recordings in project revision {revision}. They are project-only Recorded takes; selection, game files, and saves were not changed.'**
+  String managedVoiceFolderImportSaved(int count, int revision);
+
+  /// No description provided for @managedVoiceTakeSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice take saved in project revision {revision}. It is saved to the project only and is not yet usable in game.'**
+  String managedVoiceTakeSaved(int revision);
+
+  /// No description provided for @managedVoiceSelectionCleared.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice selection cleared in project revision {revision}. Voice build remains a separate offline step; runtime remains unqualified.'**
+  String managedVoiceSelectionCleared(int revision);
+
+  /// No description provided for @managedVoiceSelectionSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'Approved Voice take selected in project revision {revision}. Voice build remains a separate offline step; runtime remains unqualified.'**
+  String managedVoiceSelectionSelected(int revision);
+
+  /// No description provided for @managedVoiceTargetUnresolvedSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'No installed archive member matched. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetUnresolvedSaved(int revision);
+
+  /// No description provided for @managedVoiceTargetResolvedSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'One installed archive member was sealed. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetResolvedSaved(int revision);
+
+  /// No description provided for @managedVoiceTargetAmbiguousSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed archive members matched; nothing was chosen implicitly. Voice target evidence saved in project revision {revision}.'**
+  String managedVoiceTargetAmbiguousSaved(int count, int revision);
+
+  /// No description provided for @managedLocalizationDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard changes'**
+  String get managedLocalizationDiscard;
+
+  /// No description provided for @managedLocalizationKeepEditing.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep editing'**
+  String get managedLocalizationKeepEditing;
+
+  /// No description provided for @managedLocalizationStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this text was open. Refresh and try again.'**
+  String get managedLocalizationStale;
+
+  /// No description provided for @managedLocalizationReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The project must be reopened before text editing can continue.'**
+  String get managedLocalizationReopen;
+
+  /// No description provided for @managedLocalizationInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Check that every language and dialog text is valid and not empty.'**
+  String get managedLocalizationInvalid;
+
+  /// No description provided for @managedLocalizationSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project text could not be saved.'**
+  String get managedLocalizationSaveFailed;
+
+  /// No description provided for @managedLocalizationVoiceActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.'**
+  String get managedLocalizationVoiceActionFailed;
+
+  /// No description provided for @managedSectionSettingsExpertDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings and the read-only DataAsset Lab are available.'**
+  String get managedSectionSettingsExpertDescription;
+
+  /// No description provided for @managedSettingsExpertDataAssetLabLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset Lab'**
+  String get managedSettingsExpertDataAssetLabLabel;
+
+  /// No description provided for @managedSectionStatusHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get managedSectionStatusHeading;
+
+  /// No description provided for @managedSectionActionsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Actions'**
+  String get managedSectionActionsHeading;
+
+  /// No description provided for @managedCapabilityAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Available'**
+  String get managedCapabilityAvailable;
+
+  /// No description provided for @managedCapabilityPartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get managedCapabilityPartial;
+
+  /// No description provided for @managedCapabilityPlanned.
+  ///
+  /// In en, this message translates to:
+  /// **'Planned'**
+  String get managedCapabilityPlanned;
+
+  /// No description provided for @managedCapabilityUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Unavailable'**
+  String get managedCapabilityUnavailable;
+
+  /// No description provided for @managedProjectSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact-current offline authoring workspace'**
+  String get managedProjectSubtitle;
+
+  /// No description provided for @managedProjectLandingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Start a mod project'**
+  String get managedProjectLandingTitle;
+
+  /// No description provided for @managedProjectLandingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a project, open an existing project folder, or restore a project backup.'**
+  String get managedProjectLandingDescription;
+
+  /// No description provided for @managedProjectTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical project details'**
+  String get managedProjectTechnicalDetails;
+
+  /// No description provided for @managedProjectRecoveryContentLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover or reopen the managed project before reading its content.'**
+  String get managedProjectRecoveryContentLocked;
+
+  /// No description provided for @managedProjectRecoveryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Studio will safely reopen this project while keeping its lock. This does not change the game or any save.'**
+  String get managedProjectRecoveryDescription;
+
+  /// No description provided for @managedProjectRecoveryTry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try recovery'**
+  String get managedProjectRecoveryTry;
+
+  /// No description provided for @managedProjectRecoveryTrying.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying recovery…'**
+  String get managedProjectRecoveryTrying;
+
+  /// No description provided for @managedProjectRecoveryAlternative.
+  ///
+  /// In en, this message translates to:
+  /// **'If recovery does not work, close and open the project again.'**
+  String get managedProjectRecoveryAlternative;
+
+  /// No description provided for @managedProjectRecoverySucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Project recovery completed. You can continue working.'**
+  String get managedProjectRecoverySucceeded;
+
+  /// No description provided for @managedProjectRecoveryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery did not complete. Try again, or close and open the project again.'**
+  String get managedProjectRecoveryFailed;
+
+  /// No description provided for @managedProjectRecoveryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery is not available for this project. Close and open the project again.'**
+  String get managedProjectRecoveryUnavailable;
+
+  /// No description provided for @managedDashboardUntitledProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Untitled project'**
+  String get managedDashboardUntitledProject;
+
+  /// No description provided for @managedDashboardDraftStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft'**
+  String get managedDashboardDraftStatus;
+
+  /// No description provided for @managedDashboardProjectVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get managedDashboardProjectVersion;
+
+  /// No description provided for @managedDashboardProjectAuthor.
+  ///
+  /// In en, this message translates to:
+  /// **'Author'**
+  String get managedDashboardProjectAuthor;
+
+  /// No description provided for @managedDashboardNotProvided.
+  ///
+  /// In en, this message translates to:
+  /// **'Not provided'**
+  String get managedDashboardNotProvided;
+
+  /// No description provided for @managedDashboardContentCounts.
+  ///
+  /// In en, this message translates to:
+  /// **'My mod / Changes'**
+  String get managedDashboardContentCounts;
+
+  /// No description provided for @managedDashboardChangesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Everything currently saved in this exact project, grouped by what you can work on. Generated helpers stay attached only when their relationship is proven.'**
+  String get managedDashboardChangesDescription;
+
+  /// No description provided for @managedDashboardNpcDrafts.
+  ///
+  /// In en, this message translates to:
+  /// **'Characters'**
+  String get managedDashboardNpcDrafts;
+
+  /// No description provided for @managedDashboardQuestDrafts.
+  ///
+  /// In en, this message translates to:
+  /// **'Quests'**
+  String get managedDashboardQuestDrafts;
+
+  /// No description provided for @managedDashboardDialogLines.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog'**
+  String get managedDashboardDialogLines;
+
+  /// No description provided for @managedDashboardVoiceTakes.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get managedDashboardVoiceTakes;
+
+  /// No description provided for @managedDashboardAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedDashboardAssets;
+
+  /// No description provided for @managedDashboardItemPatches.
+  ///
+  /// In en, this message translates to:
+  /// **'Items'**
+  String get managedDashboardItemPatches;
+
+  /// No description provided for @managedDashboardLocalizationEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'Project text'**
+  String get managedDashboardLocalizationEntries;
+
+  /// No description provided for @managedDashboardVoiceSlots.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice target'**
+  String get managedDashboardVoiceSlots;
+
+  /// No description provided for @managedDashboardGeneratedScripts.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated script'**
+  String get managedDashboardGeneratedScripts;
+
+  /// No description provided for @managedDashboardSelectedVoiceTake.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected take'**
+  String get managedDashboardSelectedVoiceTake;
+
+  /// No description provided for @managedDashboardTechnicalContent.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical content'**
+  String get managedDashboardTechnicalContent;
+
+  /// No description provided for @managedDashboardTechnicalContentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Generated or problematic helpers that cannot be safely assigned to an author-facing change.'**
+  String get managedDashboardTechnicalContentDescription;
+
+  /// No description provided for @managedDashboardEmptyChangesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No changes yet'**
+  String get managedDashboardEmptyChangesTitle;
+
+  /// No description provided for @managedDashboardEmptyChangesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Create, Content, or Story to add the first project change. Nothing has been written to the game or a save.'**
+  String get managedDashboardEmptyChangesDescription;
+
+  /// No description provided for @managedDashboardOpenChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Open this exact project change'**
+  String get managedDashboardOpenChange;
+
+  /// No description provided for @managedDashboardChangeActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This project change is no longer current. Reload the project overview and try again.'**
+  String get managedDashboardChangeActionFailed;
+
+  /// No description provided for @managedDashboardUnresolvedReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'Unresolved references'**
+  String get managedDashboardUnresolvedReferences;
+
+  /// No description provided for @managedDashboardReadiness.
+  ///
+  /// In en, this message translates to:
+  /// **'What works now'**
+  String get managedDashboardReadiness;
+
+  /// No description provided for @managedDashboardOfflineAuthoringTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline authoring available'**
+  String get managedDashboardOfflineAuthoringTitle;
+
+  /// No description provided for @managedDashboardOfflineAuthoringDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create and edit supported project content without changing the game installation or save files.'**
+  String get managedDashboardOfflineAuthoringDescription;
+
+  /// No description provided for @managedDashboardGeneralBuildBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'General mod build unavailable'**
+  String get managedDashboardGeneralBuildBlockedTitle;
+
+  /// No description provided for @managedDashboardGeneralBuildBlockedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Only sealed offline Voice bundles can be built; a complete playable mod cannot be built yet.'**
+  String get managedDashboardGeneralBuildBlockedDescription;
+
+  /// No description provided for @managedDashboardRuntimeUnqualifiedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime not yet verified'**
+  String get managedDashboardRuntimeUnqualifiedTitle;
+
+  /// No description provided for @managedDashboardRuntimeUnqualifiedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Studio has not proven this project content inside the running game.'**
+  String get managedDashboardRuntimeUnqualifiedDescription;
+
+  /// No description provided for @managedDashboardReferenceIntegrityTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference integrity'**
+  String get managedDashboardReferenceIntegrityTitle;
+
+  /// No description provided for @managedDashboardReferenceIntegrityDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This count checks project references only; it is not build or runtime readiness.'**
+  String get managedDashboardReferenceIntegrityDescription;
+
+  /// No description provided for @managedDashboardMissingGameTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game setup required'**
+  String get managedDashboardMissingGameTitle;
+
+  /// No description provided for @managedDashboardMissingGameDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.'**
+  String get managedDashboardMissingGameDescription;
+
+  /// No description provided for @managedDashboardCreateHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get managedDashboardCreateHeading;
+
+  /// No description provided for @managedDashboardToolsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Project tools'**
+  String get managedDashboardToolsHeading;
+
+  /// No description provided for @managedContentOpenInStory.
+  ///
+  /// In en, this message translates to:
+  /// **'Open in Story'**
+  String get managedContentOpenInStory;
+
+  /// No description provided for @managedContentOpenInStoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue this Quest or NPC in the complete Story workspace.'**
+  String get managedContentOpenInStoryDescription;
+
+  /// No description provided for @managedContentOpenInStoryRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this project before opening Story.'**
+  String get managedContentOpenInStoryRequiresReopen;
+
+  /// No description provided for @managedContentOpenInStoryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Story could not be opened. The project was not changed.'**
+  String get managedContentOpenInStoryFailed;
+
+  /// No description provided for @managedStoryWorkbenchActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open this editor. Please try again.'**
+  String get managedStoryWorkbenchActionFailed;
+
+  /// No description provided for @managedDashboardLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading project overview'**
+  String get managedDashboardLoading;
+
+  /// No description provided for @managedDashboardLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'Project overview unavailable'**
+  String get managedDashboardLoadError;
+
+  /// No description provided for @managedDashboardLoadErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The verified project overview could not be loaded. Project content was not changed.'**
+  String get managedDashboardLoadErrorDescription;
+
+  /// No description provided for @managedDashboardRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedDashboardRetry;
+
+  /// No description provided for @managedActionNewNpcTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New NPC'**
+  String get managedActionNewNpcTitle;
+
+  /// No description provided for @managedActionNewNpcDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a bounded offline NPC draft from verified installed-game evidence.'**
+  String get managedActionNewNpcDescription;
+
+  /// No description provided for @managedNpcDraftSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft saved in project revision {projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.'**
+  String managedNpcDraftSaved(int projectRevision);
+
+  /// No description provided for @managedNpcOpeningRecipeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Character + first greeting'**
+  String get managedNpcOpeningRecipeTitle;
+
+  /// No description provided for @managedNpcOpeningRecipeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended: create a project-only Character draft, then write and insert its first localized greeting. This uses two project checkpoints and does not create a playable conversation or spawn.'**
+  String get managedNpcOpeningRecipeDescription;
+
+  /// No description provided for @managedNpcOpeningRecipeIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'This guided flow first saves the Character draft, then opens its first greeting line. If you stop after step 1, the draft stays saved. It does not create dialog logic, runtime behavior, a spawn, or change the game or save files.'**
+  String get managedNpcOpeningRecipeIntroduction;
+
+  /// No description provided for @managedNpcOpeningRecipeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start guided Character'**
+  String get managedNpcOpeningRecipeStart;
+
+  /// No description provided for @managedNpcOpeningGreetingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Step 2 of 2: First greeting'**
+  String get managedNpcOpeningGreetingTitle;
+
+  /// No description provided for @managedNpcOpeningGreetingIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write the first localized greeting line for this Character draft. Saving creates the line and its text, then inserts it at the start of the draft\'s greeting list. It does not add choices, conditions, effects, or playable conversation behavior.'**
+  String get managedNpcOpeningGreetingIntroduction;
+
+  /// No description provided for @managedNpcOpeningRecipePartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft saved in project revision {projectRevision}; no greeting was added. Continue in Story > Dialog & Voice.'**
+  String managedNpcOpeningRecipePartial(int projectRevision);
+
+  /// No description provided for @managedNpcOpeningRecipeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided Character could not be started. The exact project checkpoint is unchanged; game and save files were not changed.'**
+  String get managedNpcOpeningRecipeFailed;
+
+  /// No description provided for @managedNpcOpeningRecipeStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow stopped because its exact project checkpoint or publication could not be verified. No further step will run automatically; inspect Story and continue manually.'**
+  String get managedNpcOpeningRecipeStopped;
+
+  /// No description provided for @managedNpcOpeningRecipeRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.'**
+  String get managedNpcOpeningRecipeRequiresReopen;
+
+  /// No description provided for @managedNpcOpeningRecipeComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Character draft and first greeting saved in project revision {projectRevision}. Draft only: no playable conversation or spawn was created; game and save files were not changed.'**
+  String managedNpcOpeningRecipeComplete(int projectRevision);
+
+  /// No description provided for @managedActionNewQuestTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New Quest'**
+  String get managedActionNewQuestTitle;
+
+  /// No description provided for @managedActionNewQuestDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create an offline Quest draft with objectives and verified parent identities.'**
+  String get managedActionNewQuestDescription;
+
+  /// No description provided for @managedQuestOpeningRecipeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest + opening line'**
+  String get managedQuestOpeningRecipeTitle;
+
+  /// No description provided for @managedQuestOpeningRecipeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended: create a Quest draft, then write and insert its first localized line. This uses two project checkpoints and does not create a playable conversation.'**
+  String get managedQuestOpeningRecipeDescription;
+
+  /// No description provided for @managedQuestOpeningRecipeIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'This guided flow first saves the Quest, then opens its first dialog line. If you stop after step 1, the Quest stays saved. It does not create a playable conversation or change the game or save files.'**
+  String get managedQuestOpeningRecipeIntroduction;
+
+  /// No description provided for @managedQuestOpeningRecipeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start guided Quest'**
+  String get managedQuestOpeningRecipeStart;
+
+  /// No description provided for @managedQuestOpeningLineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Step 2 of 2: Opening dialog line'**
+  String get managedQuestOpeningLineTitle;
+
+  /// No description provided for @managedQuestOpeningLineIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write the first localized line for this Quest. Saving creates the line and its text, then inserts it at the start of the Quest transcript.'**
+  String get managedQuestOpeningLineIntroduction;
+
+  /// No description provided for @managedQuestOpeningRecipePreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest saved in project revision {projectRevision}. Preparing the opening line...'**
+  String managedQuestOpeningRecipePreparing(int projectRevision);
+
+  /// No description provided for @managedQuestOpeningRecipePartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest saved in project revision {projectRevision}; no opening line was added. Continue in Story > Dialog & Voice.'**
+  String managedQuestOpeningRecipePartial(int projectRevision);
+
+  /// No description provided for @managedQuestOpeningRecipeFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided Quest could not start. No project changes were published.'**
+  String get managedQuestOpeningRecipeFailed;
+
+  /// No description provided for @managedQuestOpeningRecipeStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow stopped because the exact current project changed. No further step will run automatically; inspect Story and continue manually.'**
+  String get managedQuestOpeningRecipeStopped;
+
+  /// No description provided for @managedQuestOpeningRecipeRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The guided flow could not safely continue. Reopen this project and inspect Story before retrying or continuing manually.'**
+  String get managedQuestOpeningRecipeRequiresReopen;
+
+  /// No description provided for @managedQuestOpeningRecipeComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest and opening line saved in project revision {projectRevision}. Draft only: no playable conversation, game, or save files were changed.'**
+  String managedQuestOpeningRecipeComplete(int projectRevision);
+
+  /// No description provided for @managedActionNewDialogLineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add dialog line'**
+  String get managedActionNewDialogLineTitle;
+
+  /// No description provided for @managedActionNewDialogLineDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write localized project text or connect an unused text already in this project. This does not create a playable dialog topic.'**
+  String get managedActionNewDialogLineDescription;
+
+  /// No description provided for @managedActionNewDialogLineSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog line saved in project revision {projectRevision}. The game and save files were not changed.'**
+  String managedActionNewDialogLineSaved(int projectRevision);
+
+  /// No description provided for @managedDialogLineIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write a new localized dialog line or connect text that already belongs to this project.'**
+  String get managedDialogLineIntroduction;
+
+  /// No description provided for @managedDialogLineBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only project files change. This does not create an AngelScript topic or a playable dialog, and it never changes the game installation or save files. The speaker field is only a label; it does not link an NPC.'**
+  String get managedDialogLineBoundary;
+
+  /// No description provided for @managedDialogLineCreateMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Write new text'**
+  String get managedDialogLineCreateMode;
+
+  /// No description provided for @managedDialogLineReuseMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use project text'**
+  String get managedDialogLineReuseMode;
+
+  /// No description provided for @managedDialogLineNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Line name'**
+  String get managedDialogLineNameLabel;
+
+  /// No description provided for @managedDialogLineNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Mine entrance greeting'**
+  String get managedDialogLineNameHint;
+
+  /// No description provided for @managedDialogLineSpeakerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Speaker label (optional)'**
+  String get managedDialogLineSpeakerLabel;
+
+  /// No description provided for @managedDialogLineSpeakerHint.
+  ///
+  /// In en, this message translates to:
+  /// **'For example, Viper'**
+  String get managedDialogLineSpeakerHint;
+
+  /// No description provided for @managedDialogLineLocaleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Language'**
+  String get managedDialogLineLocaleLabel;
+
+  /// No description provided for @managedDialogLineTextLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog text'**
+  String get managedDialogLineTextLabel;
+
+  /// No description provided for @managedDialogLineReuseSearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Search unused project text'**
+  String get managedDialogLineReuseSearch;
+
+  /// No description provided for @managedDialogLineNoReusableText.
+  ///
+  /// In en, this message translates to:
+  /// **'There is no unused, structurally intact project text to connect. Write new text instead.'**
+  String get managedDialogLineNoReusableText;
+
+  /// No description provided for @managedDialogLineCreateSlotLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare this language for Voice'**
+  String get managedDialogLineCreateSlotLabel;
+
+  /// No description provided for @managedDialogLineCreateSlotHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Creates an empty unresolved Voice slot in the project. It does not add or deploy a recording.'**
+  String get managedDialogLineCreateSlotHelp;
+
+  /// No description provided for @managedDialogLineCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedDialogLineCancel;
+
+  /// No description provided for @managedDialogLineSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save to project'**
+  String get managedDialogLineSave;
+
+  /// No description provided for @managedDialogLineSaving.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving…'**
+  String get managedDialogLineSaving;
+
+  /// No description provided for @managedDialogLineLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact project content…'**
+  String get managedDialogLineLoading;
+
+  /// No description provided for @managedDialogLineLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact current project content could not be read. Nothing was changed.'**
+  String get managedDialogLineLoadFailed;
+
+  /// No description provided for @managedDialogLineRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedDialogLineRetry;
+
+  /// No description provided for @managedDialogLineStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this window was open. Close it and try again from the current project.'**
+  String get managedDialogLineStale;
+
+  /// No description provided for @managedDialogLineRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The current project can no longer be verified safely. Close this window and reopen the managed project.'**
+  String get managedDialogLineRequiresReopen;
+
+  /// No description provided for @managedDialogLineInvalidInput.
+  ///
+  /// In en, this message translates to:
+  /// **'Check the highlighted project input and choose an exact current option.'**
+  String get managedDialogLineInvalidInput;
+
+  /// No description provided for @managedDialogLineSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The dialog line could not be saved safely. No game or save files were changed.'**
+  String get managedDialogLineSaveFailed;
+
+  /// No description provided for @managedDialogLineDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get managedDialogLineDone;
+
+  /// No description provided for @managedDialogLineAddRecording.
+  ///
+  /// In en, this message translates to:
+  /// **'Add recording'**
+  String get managedDialogLineAddRecording;
+
+  /// No description provided for @managedActionAddVoiceTakeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add Voice take'**
+  String get managedActionAddVoiceTakeTitle;
+
+  /// No description provided for @managedActionAddVoiceTakeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Import an Ogg Vorbis recording for an existing project dialog line without deploying it.'**
+  String get managedActionAddVoiceTakeDescription;
+
+  /// No description provided for @managedActionAddVoiceTakeRequiresDialogLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Create or repair a dialog line with one valid localization entry before using Voice tools.'**
+  String get managedActionAddVoiceTakeRequiresDialogLine;
+
+  /// No description provided for @managedActionManageVoiceTakesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage Voice takes'**
+  String get managedActionManageVoiceTakesTitle;
+
+  /// No description provided for @managedActionManageVoiceTakesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review takes and select approved recordings for Voice slots.'**
+  String get managedActionManageVoiceTakesDescription;
+
+  /// No description provided for @managedActionResolveVoiceTargetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve Voice target'**
+  String get managedActionResolveVoiceTargetTitle;
+
+  /// No description provided for @managedActionResolveVoiceTargetDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Match project Voice slots to exact installed archive members without changing the game.'**
+  String get managedActionResolveVoiceTargetDescription;
+
+  /// No description provided for @managedActionBuildVoiceBundleTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build Voice bundle'**
+  String get managedActionBuildVoiceBundleTitle;
+
+  /// No description provided for @managedActionBuildVoiceBundleDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Build a sealed offline existing-member bundle; deployment is not performed.'**
+  String get managedActionBuildVoiceBundleDescription;
+
+  /// No description provided for @managedActionDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits'**
+  String get managedActionDataAssetsTitle;
+
+  /// No description provided for @managedActionDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect installed packages and stage verified fixed-width value edits in the project.'**
+  String get managedActionDataAssetsDescription;
+
+  /// No description provided for @managedActionBrowseProjectContentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse exact project content and its resolved or unresolved references.'**
+  String get managedActionBrowseProjectContentDescription;
+
+  /// No description provided for @managedActionSettingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get managedActionSettingsTitle;
+
+  /// No description provided for @managedActionSettingsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure the Gothic 1 Remake installation and Mod Studio preferences.'**
+  String get managedActionSettingsDescription;
+
+  /// No description provided for @projectStarterSetupOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created safely, but the starter setup did not open. The valid empty project remains current.'**
+  String projectStarterSetupOpenFailed(String projectId);
+
+  /// No description provided for @projectStarterOutcomeUnverified.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created, but Mod Studio cannot verify the starter outcome. Reopen the managed project before continuing; the game and save files were not changed.'**
+  String projectStarterOutcomeUnverified(String projectId);
+
+  /// No description provided for @projectStarterNpcCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created. The NPC starter was not added, so the valid empty project remains current.'**
+  String projectStarterNpcCancelled(String projectId);
+
+  /// No description provided for @projectStarterNpcSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starter saved in project revision {projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.'**
+  String projectStarterNpcSaved(int projectRevision);
+
+  /// No description provided for @projectStarterQuestCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created. The Quest starter was not added, so the valid empty project remains current.'**
+  String projectStarterQuestCancelled(String projectId);
+
+  /// No description provided for @projectStarterQuestSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starter saved in project revision {projectRevision}. It remains build-blocked and runtime-unqualified.'**
+  String projectStarterQuestSaved(int projectRevision);
+
+  /// No description provided for @projectStarterSemanticsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project starter'**
+  String get projectStarterSemanticsLabel;
+
+  /// No description provided for @projectStarterPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'How would you like to start?'**
+  String get projectStarterPrompt;
+
+  /// No description provided for @projectStarterWriteBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Choosing a starter performs no writes. The project is created only after you submit this form and choose an empty folder.'**
+  String get projectStarterWriteBoundary;
+
+  /// No description provided for @projectStarterEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Empty project'**
+  String get projectStarterEmptyTitle;
+
+  /// No description provided for @projectStarterEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create only the managed project. Add content whenever you are ready.'**
+  String get projectStarterEmptyDescription;
+
+  /// No description provided for @projectStarterNpcDraftTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC Draft'**
+  String get projectStarterNpcDraftTitle;
+
+  /// No description provided for @projectStarterNpcDraftDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create the empty project first, then open the existing guided NPC Draft setup.'**
+  String get projectStarterNpcDraftDescription;
+
+  /// No description provided for @projectStarterQuestDraftTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest Draft'**
+  String get projectStarterQuestDraftTitle;
+
+  /// No description provided for @projectStarterQuestDraftDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create the empty project first, then open the existing guided Quest Draft setup.'**
+  String get projectStarterQuestDraftDescription;
+
+  /// No description provided for @projectStarterPartialOutcome.
+  ///
+  /// In en, this message translates to:
+  /// **'For an NPC or Quest starter, canceling the guided setup or a Draft failure leaves a valid empty project. No starter selection writes to the game or a save.'**
+  String get projectStarterPartialOutcome;
+
+  /// No description provided for @managedContentWorkspaceBrowseLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse'**
+  String get managedContentWorkspaceBrowseLabel;
+
+  /// No description provided for @managedContentWorkspaceVerifiedEditsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified edits'**
+  String get managedContentWorkspaceVerifiedEditsLabel;
+
+  /// No description provided for @managedItemsBundledReferenceBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundled reference'**
+  String get managedItemsBundledReferenceBadge;
+
+  /// No description provided for @managedItemsBundledReferenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only reference shipped with Mod Studio. It has not been refreshed or generation-qualified against your configured game installation.'**
+  String get managedItemsBundledReferenceBoundary;
+
+  /// No description provided for @managedItemsNoKnownFields.
+  ///
+  /// In en, this message translates to:
+  /// **'No modeled scalar fields are available for this item.'**
+  String get managedItemsNoKnownFields;
+
+  /// No description provided for @managedItemsCategorySpecial.
+  ///
+  /// In en, this message translates to:
+  /// **'Special'**
+  String get managedItemsCategorySpecial;
+
+  /// No description provided for @managedItemsCategoryArmor.
+  ///
+  /// In en, this message translates to:
+  /// **'Armor'**
+  String get managedItemsCategoryArmor;
+
+  /// No description provided for @managedItemsExactSchemaBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project schema'**
+  String get managedItemsExactSchemaBadge;
+
+  /// No description provided for @managedItemsEditableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed edit'**
+  String get managedItemsEditableBadge;
+
+  /// No description provided for @managedItemsBuildPendingBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Build support pending'**
+  String get managedItemsBuildPendingBadge;
+
+  /// No description provided for @managedItemsInvalidNumber.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a valid number.'**
+  String get managedItemsInvalidNumber;
+
+  /// No description provided for @managedItemsNumberOutsideNativeRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a value from {minimum} to {maximum}.'**
+  String managedItemsNumberOutsideNativeRange(String minimum, String maximum);
+
+  /// No description provided for @managedItemsAuthoringBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes are saved only to this managed project. This editor does not write to the game or a save. Item bundle build is not available yet.'**
+  String get managedItemsAuthoringBoundary;
+
+  /// No description provided for @managedItemsCurrentChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No item changes} =1{1 changed field} other{{count} changed fields}}'**
+  String managedItemsCurrentChanges(int count);
+
+  /// No description provided for @managedItemsChangeField.
+  ///
+  /// In en, this message translates to:
+  /// **'Change this field'**
+  String get managedItemsChangeField;
+
+  /// No description provided for @managedItemsUseGameDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Use game default'**
+  String get managedItemsUseGameDefault;
+
+  /// No description provided for @managedItemsSaveChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Save item changes'**
+  String get managedItemsSaveChanges;
+
+  /// No description provided for @managedItemsRevertItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Revert item to game defaults'**
+  String get managedItemsRevertItem;
+
+  /// No description provided for @managedItemsClearChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear all item changes'**
+  String get managedItemsClearChanges;
+
+  /// No description provided for @managedItemsNoUnsavedChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'No unsaved changes.'**
+  String get managedItemsNoUnsavedChanges;
+
+  /// No description provided for @managedItemsSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Item changes saved in project revision {revision}.'**
+  String managedItemsSaved(int revision);
+
+  /// No description provided for @managedItemsSaveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or item catalog changed. Nothing was saved. Reload the current item data before editing again.'**
+  String get managedItemsSaveStale;
+
+  /// No description provided for @managedItemsSaveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The project checkpoint can no longer be verified safely. Nothing was saved. Use project recovery, or close and reopen the project.'**
+  String get managedItemsSaveRequiresReopen;
+
+  /// No description provided for @managedItemsSaveNoChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'There is no current item change to save. Reload the item data to continue.'**
+  String get managedItemsSaveNoChanges;
+
+  /// No description provided for @managedItemsSaveUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This change no longer fits the current safe item schema. Nothing was saved. Reload the item data before continuing.'**
+  String get managedItemsSaveUnsupported;
+
+  /// No description provided for @managedItemsSaveUnexpected.
+  ///
+  /// In en, this message translates to:
+  /// **'Item changes could not be saved safely. Nothing was changed. Reopen the project and try again.'**
+  String get managedItemsSaveUnexpected;
+
+  /// No description provided for @managedItemsReloadDiscardDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload item data and discard this draft'**
+  String get managedItemsReloadDiscardDraft;
+
+  /// No description provided for @managedItemsCatalogLoadTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Items are unavailable'**
+  String get managedItemsCatalogLoadTitle;
+
+  /// No description provided for @managedItemsCatalogStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or exact item catalog changed before the item data could be loaded. Nothing was changed.'**
+  String get managedItemsCatalogStale;
+
+  /// No description provided for @managedItemsCatalogRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project checkpoint can no longer be verified safely. Recover the project, or close and reopen it, before editing items.'**
+  String get managedItemsCatalogRequiresReopen;
+
+  /// No description provided for @managedItemsCatalogUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This project contains item data that the current exact game schema cannot edit safely. Nothing was changed.'**
+  String get managedItemsCatalogUnsupported;
+
+  /// No description provided for @managedItemsCatalogLoadUnexpected.
+  ///
+  /// In en, this message translates to:
+  /// **'The item data could not be loaded safely. Nothing was changed. Try loading it again.'**
+  String get managedItemsCatalogLoadUnexpected;
+
+  /// No description provided for @managedItemsCatalogReload.
+  ///
+  /// In en, this message translates to:
+  /// **'Reload item data'**
+  String get managedItemsCatalogReload;
+
+  /// No description provided for @managedItemsUnsupportedSchema.
+  ///
+  /// In en, this message translates to:
+  /// **'This item change no longer matches the current safe catalog or field schema. You can still revert the whole item.'**
+  String get managedItemsUnsupportedSchema;
+
+  /// No description provided for @managedItemsDefaultUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Game default not recorded'**
+  String get managedItemsDefaultUnknown;
+
+  /// No description provided for @managedItemsGameDefault.
+  ///
+  /// In en, this message translates to:
+  /// **'Game default: {value}'**
+  String managedItemsGameDefault(String value);
+
+  /// No description provided for @managedItemsModValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod value'**
+  String get managedItemsModValue;
+
+  /// No description provided for @managedContentScopeBaseGameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Base game'**
+  String get managedContentScopeBaseGameLabel;
+
+  /// No description provided for @managedContentScopeInstalledLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed'**
+  String get managedContentScopeInstalledLabel;
+
+  /// No description provided for @managedBaseGameBrowserTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Supported Base game starting points'**
+  String get managedBaseGameBrowserTitle;
+
+  /// No description provided for @managedBaseGameBrowserDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse exact installed-game evidence that Mod Studio can currently inspect or use as a safe Draft starting point. This is not a complete vanilla-content catalog.'**
+  String get managedBaseGameBrowserDescription;
+
+  /// No description provided for @managedBaseGameBrowserLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact Base game evidence…'**
+  String get managedBaseGameBrowserLoading;
+
+  /// No description provided for @managedBaseGameBrowserRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Read a fresh exact catalog'**
+  String get managedBaseGameBrowserRefresh;
+
+  /// No description provided for @managedBaseGameBrowserSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search supported Base game content'**
+  String get managedBaseGameBrowserSearchLabel;
+
+  /// No description provided for @managedBaseGameBrowserFilterNpcs.
+  ///
+  /// In en, this message translates to:
+  /// **'NPCs'**
+  String get managedBaseGameBrowserFilterNpcs;
+
+  /// No description provided for @managedBaseGameBrowserFilterQuests.
+  ///
+  /// In en, this message translates to:
+  /// **'Quests'**
+  String get managedBaseGameBrowserFilterQuests;
+
+  /// No description provided for @managedBaseGameBrowserNpcSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starting points'**
+  String get managedBaseGameBrowserNpcSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserQuestSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starting points'**
+  String get managedBaseGameBrowserQuestSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserExperimentalNpcSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect-only NPC archetypes'**
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserSearchForExperimental.
+  ///
+  /// In en, this message translates to:
+  /// **'Search to include broader static-linkage NPC evidence. Those rows cannot create a Draft.'**
+  String get managedBaseGameBrowserSearchForExperimental;
+
+  /// No description provided for @managedBaseGameBrowserEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No supported Base game result matches this search.'**
+  String get managedBaseGameBrowserEmpty;
+
+  /// No description provided for @managedBaseGameBrowserLoadErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Base game evidence unavailable'**
+  String get managedBaseGameBrowserLoadErrorTitle;
+
+  /// No description provided for @managedBaseGameBrowserLoadErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact supported catalog could not be read. No project, game, or save files were changed.'**
+  String get managedBaseGameBrowserLoadErrorDescription;
+
+  /// No description provided for @managedBaseGameBrowserOfflineDraftBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline Draft supported'**
+  String get managedBaseGameBrowserOfflineDraftBadge;
+
+  /// No description provided for @managedBaseGameBrowserInspectOnlyBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect only'**
+  String get managedBaseGameBrowserInspectOnlyBadge;
+
+  /// No description provided for @managedBaseGameBrowserCreateNpcDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as NPC starting point'**
+  String get managedBaseGameBrowserCreateNpcDraft;
+
+  /// No description provided for @managedBaseGameBrowserCreateQuestDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as Quest starting point'**
+  String get managedBaseGameBrowserCreateQuestDraft;
+
+  /// No description provided for @managedBaseGameBrowserSpawnClass.
+  ///
+  /// In en, this message translates to:
+  /// **'Spawn definition'**
+  String get managedBaseGameBrowserSpawnClass;
+
+  /// No description provided for @managedBaseGameBrowserActorBlueprint.
+  ///
+  /// In en, this message translates to:
+  /// **'Actor Blueprint'**
+  String get managedBaseGameBrowserActorBlueprint;
+
+  /// No description provided for @managedBaseGameBrowserExperimentalResultsCapped.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 inspect-only matches. Refine the search for more specific results.'**
+  String get managedBaseGameBrowserExperimentalResultsCapped;
+
+  /// No description provided for @managedInstalledBrowserLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading the exact installed package inventory…'**
+  String get managedInstalledBrowserLoading;
+
+  /// No description provided for @managedInstalledBrowserCompleteSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed package candidates'**
+  String managedInstalledBrowserCompleteSummary(int count);
+
+  /// No description provided for @managedInstalledBrowserPartialSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed package candidates — partial result'**
+  String managedInstalledBrowserPartialSummary(int count);
+
+  /// No description provided for @managedInstalledBrowserCompleteDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Directory metadata was read and the installed snapshot stayed exact.'**
+  String get managedInstalledBrowserCompleteDescription;
+
+  /// No description provided for @managedInstalledBrowserPartialDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Some package metadata was missing or noncanonical, so results are useful for discovery but not complete.'**
+  String get managedInstalledBrowserPartialDescription;
+
+  /// No description provided for @managedInstalledBrowserAuthorityNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'This scope exposes installed DataAsset package metadata only. Inspecting or copying a path grants no build, deployment, runtime, or game-write authority.'**
+  String get managedInstalledBrowserAuthorityNotice;
+
+  /// No description provided for @managedInstalledBrowserRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Read a fresh exact snapshot'**
+  String get managedInstalledBrowserRefresh;
+
+  /// No description provided for @managedInstalledBrowserSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search installed DataAssets'**
+  String get managedInstalledBrowserSearchLabel;
+
+  /// No description provided for @managedInstalledBrowserSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Asset name or /Game path'**
+  String get managedInstalledBrowserSearchHint;
+
+  /// No description provided for @managedInstalledBrowserSearchPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Type an asset name or /Game path to search.'**
+  String get managedInstalledBrowserSearchPrompt;
+
+  /// No description provided for @managedInstalledBrowserNoMatchesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching installed DataAsset'**
+  String get managedInstalledBrowserNoMatchesTitle;
+
+  /// No description provided for @managedInstalledBrowserNoMatchesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Try another asset name or a broader /Game path.'**
+  String get managedInstalledBrowserNoMatchesDescription;
+
+  /// No description provided for @managedInstalledBrowserResultLimitDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 matches. Refine the search to narrow the exact snapshot.'**
+  String get managedInstalledBrowserResultLimitDescription;
+
+  /// No description provided for @managedInstalledBrowserKindBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset package'**
+  String get managedInstalledBrowserKindBadge;
+
+  /// No description provided for @managedInstalledBrowserMetadataOnlyBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Metadata only'**
+  String get managedInstalledBrowserMetadataOnlyBadge;
+
+  /// No description provided for @managedInstalledBrowserOpenInspector.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect exact package'**
+  String get managedInstalledBrowserOpenInspector;
+
+  /// No description provided for @managedInstalledBrowserErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed package inventory unavailable'**
+  String get managedInstalledBrowserErrorTitle;
+
+  /// No description provided for @managedInstalledBrowserErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact installed snapshot could not be read. No project, game, or save files were changed.'**
+  String get managedInstalledBrowserErrorDescription;
+
+  /// No description provided for @managedGlobalSearchScopeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search all'**
+  String get managedGlobalSearchScopeLabel;
+
+  /// No description provided for @managedGlobalSearchTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Search all content'**
+  String get managedGlobalSearchTitle;
+
+  /// No description provided for @managedGlobalSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC, quest, line, asset, ID, or /Game path'**
+  String get managedGlobalSearchLabel;
+
+  /// No description provided for @managedGlobalSearchAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get managedGlobalSearchAction;
+
+  /// No description provided for @managedGlobalSearchClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear'**
+  String get managedGlobalSearchClear;
+
+  /// No description provided for @managedGlobalSearchPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a search to read the three sources independently.'**
+  String get managedGlobalSearchPrompt;
+
+  /// No description provided for @managedGlobalSearchNoResults.
+  ///
+  /// In en, this message translates to:
+  /// **'No matches in this source.'**
+  String get managedGlobalSearchNoResults;
+
+  /// No description provided for @managedGlobalSearchLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact source…'**
+  String get managedGlobalSearchLoading;
+
+  /// No description provided for @managedGlobalSearchFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This source could not be read.'**
+  String get managedGlobalSearchFailed;
+
+  /// No description provided for @managedGlobalSearchComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Complete'**
+  String get managedGlobalSearchComplete;
+
+  /// No description provided for @managedGlobalSearchPartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get managedGlobalSearchPartial;
+
+  /// No description provided for @managedGlobalSearchTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 matches. Refine the search.'**
+  String get managedGlobalSearchTruncated;
+
+  /// No description provided for @managedGlobalSearchOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get managedGlobalSearchOpen;
+
+  /// No description provided for @managedGlobalSearchCreateDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Draft'**
+  String get managedGlobalSearchCreateDraft;
+
+  /// No description provided for @managedGlobalSearchInspect.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect'**
+  String get managedGlobalSearchInspect;
+
+  /// No description provided for @managedGlobalSearchKindModEntity.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod content'**
+  String get managedGlobalSearchKindModEntity;
+
+  /// No description provided for @managedGlobalSearchKindModAsset.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod asset'**
+  String get managedGlobalSearchKindModAsset;
+
+  /// No description provided for @managedGlobalSearchKindBaseNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starting point'**
+  String get managedGlobalSearchKindBaseNpc;
+
+  /// No description provided for @managedGlobalSearchKindBaseQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starting point'**
+  String get managedGlobalSearchKindBaseQuest;
+
+  /// No description provided for @managedGlobalSearchKindExperimentalNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC evidence'**
+  String get managedGlobalSearchKindExperimentalNpc;
+
+  /// No description provided for @managedGlobalSearchReadinessExact.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current project'**
+  String get managedGlobalSearchReadinessExact;
+
+  /// No description provided for @managedGlobalSearchReadinessProblems.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact, with problems'**
+  String get managedGlobalSearchReadinessProblems;
+
+  /// No description provided for @managedGlobalSearchResultStale.
+  ///
+  /// In en, this message translates to:
+  /// **'This result is no longer in the current project. Search again.'**
+  String get managedGlobalSearchResultStale;
+
+  /// No description provided for @managedStoryWorkbenchDraftBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft only'**
+  String get managedStoryWorkbenchDraftBadge;
+
+  /// No description provided for @managedStoryWorkbenchBuildBlockedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Build blocked'**
+  String get managedStoryWorkbenchBuildBlockedBadge;
+
+  /// No description provided for @managedStoryWorkbenchRuntimeUnqualifiedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime not verified'**
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge;
+
+  /// No description provided for @managedStoryWorkbenchOverviewTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Journey'**
+  String get managedStoryWorkbenchOverviewTab;
+
+  /// No description provided for @managedStoryWorkbenchProfileTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get managedStoryWorkbenchProfileTab;
+
+  /// No description provided for @managedStoryWorkbenchStoryTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Story'**
+  String get managedStoryWorkbenchStoryTab;
+
+  /// No description provided for @managedStoryWorkbenchLogicTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Logic'**
+  String get managedStoryWorkbenchLogicTab;
+
+  /// No description provided for @managedStoryWorkbenchRoutineTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Routine'**
+  String get managedStoryWorkbenchRoutineTab;
+
+  /// No description provided for @managedStoryWorkbenchInventoryTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Inventory'**
+  String get managedStoryWorkbenchInventoryTab;
+
+  /// No description provided for @managedStoryWorkbenchDialogVoiceTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog & Voice'**
+  String get managedStoryWorkbenchDialogVoiceTab;
+
+  /// No description provided for @managedStoryWorkbenchReferencesTab.
+  ///
+  /// In en, this message translates to:
+  /// **'References'**
+  String get managedStoryWorkbenchReferencesTab;
+
+  /// No description provided for @managedStoryWorkbenchProblemsChecksTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems & Checks'**
+  String get managedStoryWorkbenchProblemsChecksTab;
+
+  /// No description provided for @managedStoryWorkbenchEditOverview.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & objectives'**
+  String get managedStoryWorkbenchEditOverview;
+
+  /// No description provided for @managedStoryWorkbenchEditStory.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit description & connections'**
+  String get managedStoryWorkbenchEditStory;
+
+  /// No description provided for @managedStoryWorkbenchEditLogic.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit states & transitions'**
+  String get managedStoryWorkbenchEditLogic;
+
+  /// No description provided for @managedStoryWorkbenchInspectQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Open source & compiler checks'**
+  String get managedStoryWorkbenchInspectQuest;
+
+  /// No description provided for @managedStoryWorkbenchInspectNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'Open profile & compiler checks'**
+  String get managedStoryWorkbenchInspectNpc;
+
+  /// No description provided for @managedStoryWorkbenchMoreActions.
+  ///
+  /// In en, this message translates to:
+  /// **'More actions'**
+  String get managedStoryWorkbenchMoreActions;
+
+  /// No description provided for @managedStoryWorkbenchRemoveDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft…'**
+  String get managedStoryWorkbenchRemoveDraft;
+
+  /// No description provided for @managedStoryWorkbenchRemovingDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Removing draft…'**
+  String get managedStoryWorkbenchRemovingDraft;
+
+  /// No description provided for @managedStoryWorkbenchReviewRemovalBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'Review removal blockers'**
+  String get managedStoryWorkbenchReviewRemovalBlockers;
+
+  /// No description provided for @managedStoryWorkbenchCapabilityUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Not modeled yet'**
+  String get managedStoryWorkbenchCapabilityUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcStoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest and story relationships are not modeled for NPC drafts yet.'**
+  String get managedStoryWorkbenchNpcStoryUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcRoutineUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Routine and world placement are not modeled yet.'**
+  String get managedStoryWorkbenchNpcRoutineUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcInventoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Inventory, equipment, and trading are not modeled yet.'**
+  String get managedStoryWorkbenchNpcInventoryUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.'**
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchQuestDialogVoiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.'**
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNoReferenceProblems.
+  ///
+  /// In en, this message translates to:
+  /// **'No unresolved project references'**
+  String get managedStoryWorkbenchNoReferenceProblems;
+
+  /// No description provided for @managedStoryWorkbenchReferenceProblemCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 unresolved project reference} other{{count} unresolved project references}}'**
+  String managedStoryWorkbenchReferenceProblemCount(int count);
+
+  /// No description provided for @managedStoryWorkbenchReferenceScopeNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference status only; this is not build or runtime readiness.'**
+  String get managedStoryWorkbenchReferenceScopeNotice;
+
+  /// No description provided for @managedStoryWorkbenchTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details'**
+  String get managedStoryWorkbenchTechnicalDetails;
+
+  /// No description provided for @managedStoryWorkbenchQuestKindLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest draft'**
+  String get managedStoryWorkbenchQuestKindLabel;
+
+  /// No description provided for @managedStoryWorkbenchNpcKindLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC draft'**
+  String get managedStoryWorkbenchNpcKindLabel;
+
+  /// No description provided for @managedStoryWorkbenchQuestTitleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest title'**
+  String get managedStoryWorkbenchQuestTitleLabel;
+
+  /// No description provided for @managedStoryWorkbenchTechnicalIdLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical ID'**
+  String get managedStoryWorkbenchTechnicalIdLabel;
+
+  /// No description provided for @managedStoryWorkbenchObjectivesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Objectives'**
+  String get managedStoryWorkbenchObjectivesLabel;
+
+  /// No description provided for @managedStoryWorkbenchUniqueNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Unique name'**
+  String get managedStoryWorkbenchUniqueNameLabel;
+
+  /// No description provided for @managedStoryWorkbenchModuleNamespaceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Module namespace'**
+  String get managedStoryWorkbenchModuleNamespaceLabel;
+
+  /// No description provided for @managedStoryWorkbenchQuestGiverLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest giver'**
+  String get managedStoryWorkbenchQuestGiverLabel;
+
+  /// No description provided for @managedStoryWorkbenchRuntimeParentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime parent'**
+  String get managedStoryWorkbenchRuntimeParentLabel;
+
+  /// No description provided for @managedStoryWorkbenchLogicDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.'**
+  String get managedStoryWorkbenchLogicDescription;
+
+  /// No description provided for @managedStoryWorkbenchOutgoingHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Outgoing'**
+  String get managedStoryWorkbenchOutgoingHeading;
+
+  /// No description provided for @managedStoryWorkbenchNoOutgoingReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'No projected references'**
+  String get managedStoryWorkbenchNoOutgoingReferences;
+
+  /// No description provided for @managedStoryWorkbenchIncomingHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Incoming'**
+  String get managedStoryWorkbenchIncomingHeading;
+
+  /// No description provided for @managedStoryWorkbenchNoIncomingReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'No incoming project references'**
+  String get managedStoryWorkbenchNoIncomingReferences;
+
+  /// No description provided for @managedStoryWorkbenchSemanticIdentityLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Semantic identity'**
+  String get managedStoryWorkbenchSemanticIdentityLabel;
+
+  /// No description provided for @managedStoryWorkbenchOriginLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Origin'**
+  String get managedStoryWorkbenchOriginLabel;
+
+  /// No description provided for @managedStoryWorkbenchEntityRevisionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Entity revision'**
+  String get managedStoryWorkbenchEntityRevisionLabel;
+
+  /// No description provided for @managedStoryWorkbenchStableIdLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Stable ID'**
+  String get managedStoryWorkbenchStableIdLabel;
+
+  /// No description provided for @managedStoryWorkbenchReferenceResolvedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference resolved'**
+  String get managedStoryWorkbenchReferenceResolvedLabel;
+
+  /// No description provided for @managedStoryWorkbenchReferenceUnresolvedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference unresolved'**
+  String get managedStoryWorkbenchReferenceUnresolvedLabel;
+
+  /// No description provided for @managedProblemsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems & readiness'**
+  String get managedProblemsTitle;
+
+  /// No description provided for @managedProblemsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'See what needs attention and open the exact affected project content.'**
+  String get managedProblemsDescription;
+
+  /// No description provided for @managedProblemsScopeNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Every status covers only its named scope. A clear reference check does not mean the mod can be built or tested in-game.'**
+  String get managedProblemsScopeNotice;
+
+  /// No description provided for @managedProblemsRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh problems'**
+  String get managedProblemsRefresh;
+
+  /// No description provided for @managedProblemsPartialTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Some checks are unavailable'**
+  String get managedProblemsPartialTitle;
+
+  /// No description provided for @managedProblemsDataAssetsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits could not be checked. Other exact project findings are still shown.'**
+  String get managedProblemsDataAssetsUnavailable;
+
+  /// No description provided for @managedProblemsOverviewHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Readiness by area'**
+  String get managedProblemsOverviewHeading;
+
+  /// No description provided for @managedProblemsSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search problems'**
+  String get managedProblemsSearchLabel;
+
+  /// No description provided for @managedProblemsClearSearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear problem search'**
+  String get managedProblemsClearSearch;
+
+  /// No description provided for @managedProblemsListHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems'**
+  String get managedProblemsListHeading;
+
+  /// No description provided for @managedProblemsEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No modeled structural problems found'**
+  String get managedProblemsEmptyTitle;
+
+  /// No description provided for @managedProblemsEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact checks currently modeled by Mod Studio found nothing to repair.'**
+  String get managedProblemsEmptyDescription;
+
+  /// No description provided for @managedProblemsEmptyBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler evidence was not evaluated, the full managed build is unavailable, and runtime behavior remains unqualified.'**
+  String get managedProblemsEmptyBoundary;
+
+  /// No description provided for @managedProblemsFilteredEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching problems'**
+  String get managedProblemsFilteredEmptyTitle;
+
+  /// No description provided for @managedProblemsFilteredEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Change the search or category filter to see other findings.'**
+  String get managedProblemsFilteredEmptyDescription;
+
+  /// No description provided for @managedProblemsSelectTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a problem'**
+  String get managedProblemsSelectTitle;
+
+  /// No description provided for @managedProblemsSelectDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a finding to see what it means and the safest available next action.'**
+  String get managedProblemsSelectDescription;
+
+  /// No description provided for @managedProblemsDetailHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problem details'**
+  String get managedProblemsDetailHeading;
+
+  /// No description provided for @managedProblemsCloseDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Close problem details'**
+  String get managedProblemsCloseDetail;
+
+  /// No description provided for @managedProblemsCategoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Area'**
+  String get managedProblemsCategoryLabel;
+
+  /// No description provided for @managedProblemsSeverityLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Attention'**
+  String get managedProblemsSeverityLabel;
+
+  /// No description provided for @managedProblemsSourceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence'**
+  String get managedProblemsSourceLabel;
+
+  /// No description provided for @managedProblemsOpenSourceEntity.
+  ///
+  /// In en, this message translates to:
+  /// **'Open source content'**
+  String get managedProblemsOpenSourceEntity;
+
+  /// No description provided for @managedProblemsOpenReferencedAsset.
+  ///
+  /// In en, this message translates to:
+  /// **'Open referenced asset'**
+  String get managedProblemsOpenReferencedAsset;
+
+  /// No description provided for @managedProblemsOpenDataAssetEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'Open DataAsset edits'**
+  String get managedProblemsOpenDataAssetEdits;
+
+  /// No description provided for @managedProblemsActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact target could not be opened. Refresh the project problems and try again.'**
+  String get managedProblemsActionFailed;
+
+  /// No description provided for @managedProblemsActionProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the exact project target'**
+  String get managedProblemsActionProgress;
+
+  /// No description provided for @managedProblemsCategoryReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'References'**
+  String get managedProblemsCategoryReferences;
+
+  /// No description provided for @managedProblemsCategorySetup.
+  ///
+  /// In en, this message translates to:
+  /// **'Setup'**
+  String get managedProblemsCategorySetup;
+
+  /// No description provided for @managedProblemsCategoryDataAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedProblemsCategoryDataAssets;
+
+  /// No description provided for @managedProblemsSeverityInformation.
+  ///
+  /// In en, this message translates to:
+  /// **'Information'**
+  String get managedProblemsSeverityInformation;
+
+  /// No description provided for @managedProblemsSeverityWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedProblemsSeverityWarning;
+
+  /// No description provided for @managedProblemsSeverityBlocking.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocks this scope'**
+  String get managedProblemsSeverityBlocking;
+
+  /// No description provided for @managedProblemsScopeReferencesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference integrity'**
+  String get managedProblemsScopeReferencesTitle;
+
+  /// No description provided for @managedProblemsScopeReferencesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Checks exact links between current project content and assets.'**
+  String get managedProblemsScopeReferencesDescription;
+
+  /// No description provided for @managedProblemsScopeDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edit registry'**
+  String get managedProblemsScopeDataAssetsTitle;
+
+  /// No description provided for @managedProblemsScopeDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Checks whether the exact current list of saved DataAsset edits could be read.'**
+  String get managedProblemsScopeDataAssetsDescription;
+
+  /// No description provided for @managedProblemsScopeGameTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game setup'**
+  String get managedProblemsScopeGameTitle;
+
+  /// No description provided for @managedProblemsScopeGameDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Shows whether a game installation is configured for bounded read-only tools.'**
+  String get managedProblemsScopeGameDescription;
+
+  /// No description provided for @managedProblemsScopeCompilerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Source & compiler evidence'**
+  String get managedProblemsScopeCompilerTitle;
+
+  /// No description provided for @managedProblemsScopeCompilerDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler checks run only when you explicitly open and start them for one exact entity.'**
+  String get managedProblemsScopeCompilerDescription;
+
+  /// No description provided for @managedProblemsScopeBuildTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed project build'**
+  String get managedProblemsScopeBuildTitle;
+
+  /// No description provided for @managedProblemsScopeBuildDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'A complete build path for managed NPC, Quest, dialog, and DataAsset edits is not available yet.'**
+  String get managedProblemsScopeBuildDescription;
+
+  /// No description provided for @managedProblemsScopeRuntimeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'In-game behavior'**
+  String get managedProblemsScopeRuntimeTitle;
+
+  /// No description provided for @managedProblemsScopeRuntimeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'No general runtime, save, deployment, or cleanup qualification is claimed.'**
+  String get managedProblemsScopeRuntimeDescription;
+
+  /// No description provided for @managedProblemsReadinessClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Checked within this scope'**
+  String get managedProblemsReadinessClear;
+
+  /// No description provided for @managedProblemsReadinessIssues.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedProblemsReadinessIssues;
+
+  /// No description provided for @managedProblemsReadinessUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Check unavailable'**
+  String get managedProblemsReadinessUnavailable;
+
+  /// No description provided for @managedProblemsReadinessNotEvaluated.
+  ///
+  /// In en, this message translates to:
+  /// **'Not evaluated'**
+  String get managedProblemsReadinessNotEvaluated;
+
+  /// No description provided for @managedProblemsReadinessBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Build path unavailable'**
+  String get managedProblemsReadinessBlocked;
+
+  /// No description provided for @managedProblemsReadinessUnqualified.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime unqualified'**
+  String get managedProblemsReadinessUnqualified;
+
+  /// No description provided for @managedProblemsEvidenceContent.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current project content'**
+  String get managedProblemsEvidenceContent;
+
+  /// No description provided for @managedProblemsEvidenceDataAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current DataAsset registry'**
+  String get managedProblemsEvidenceDataAssets;
+
+  /// No description provided for @managedProblemsEvidenceConfiguration.
+  ///
+  /// In en, this message translates to:
+  /// **'Current app configuration'**
+  String get managedProblemsEvidenceConfiguration;
+
+  /// No description provided for @managedProblemsEvidenceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence source unavailable'**
+  String get managedProblemsEvidenceUnavailable;
+
+  /// No description provided for @managedProblemsEvidenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Known capability boundary'**
+  String get managedProblemsEvidenceBoundary;
+
+  /// No description provided for @managedProblemsForeignReferenceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference points to another project'**
+  String get managedProblemsForeignReferenceTitle;
+
+  /// No description provided for @managedProblemsMissingEntityTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project content is missing'**
+  String get managedProblemsMissingEntityTitle;
+
+  /// No description provided for @managedProblemsEntityKindTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project content has the wrong type'**
+  String get managedProblemsEntityKindTitle;
+
+  /// No description provided for @managedProblemsMissingAssetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file is missing'**
+  String get managedProblemsMissingAssetTitle;
+
+  /// No description provided for @managedProblemsAssetLengthTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file has an unexpected size'**
+  String get managedProblemsAssetLengthTitle;
+
+  /// No description provided for @managedProblemsAssetTypeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file has an unexpected type'**
+  String get managedProblemsAssetTypeTitle;
+
+  /// No description provided for @managedProblemsGameSetupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game installation is not configured'**
+  String get managedProblemsGameSetupTitle;
+
+  /// No description provided for @managedProblemsDataAssetRegistryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits could not be checked'**
+  String get managedProblemsDataAssetRegistryTitle;
+
+  /// No description provided for @managedProblemsDataAssetOfflineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edit is draft-only'**
+  String get managedProblemsDataAssetOfflineTitle;
+
+  /// No description provided for @managedProblemsEntityReferenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open {source} and repair this exact project-content link.'**
+  String managedProblemsEntityReferenceDescription(String source);
+
+  /// No description provided for @managedProblemsAssetReferenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open {source} and repair this exact project-file link.'**
+  String managedProblemsAssetReferenceDescription(String source);
+
+  /// No description provided for @managedProblemsDataAssetRegistryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh the exact current project. No conclusion is drawn about saved DataAsset edits until this source is available.'**
+  String get managedProblemsDataAssetRegistryDescription;
+
+  /// No description provided for @managedProblemsDataAssetOfflineDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved edit for {targetPath} can be reviewed in DataAsset edits, but it cannot be emitted by a managed project build or claimed as working in-game yet.'**
+  String managedProblemsDataAssetOfflineDescription(String targetPath);
+
+  /// No description provided for @projectExportActionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create project backup…'**
+  String get projectExportActionTitle;
+
+  /// No description provided for @projectExportActionDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write an exact restorable backup of the current saved project checkpoint.'**
+  String get projectExportActionDescription;
+
+  /// No description provided for @projectExportActionDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before creating a project backup.'**
+  String get projectExportActionDirtyBlocked;
+
+  /// No description provided for @projectExportDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create project backup'**
+  String get projectExportDialogTitle;
+
+  /// No description provided for @projectExportPortableCopyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restorable Mod Studio project backup'**
+  String get projectExportPortableCopyTitle;
+
+  /// No description provided for @projectExportPortableCopyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This writes the exact current saved project checkpoint to a new .goremod file. It can be restored into a new project folder later; the open project stays current and unchanged.'**
+  String get projectExportPortableCopyDescription;
+
+  /// No description provided for @projectExportCapabilityBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'This backup is not a playable mod, build, deployment, or runtime qualification. Creating it does not read or change the game or any save.'**
+  String get projectExportCapabilityBoundary;
+
+  /// No description provided for @projectExportKeepOriginal.
+  ///
+  /// In en, this message translates to:
+  /// **'A restore preserves this project\'s identity and history. Use Clone or Save As for a separate project identity when those workflows become available.'**
+  String get projectExportKeepOriginal;
+
+  /// No description provided for @projectExportFileNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'New project-backup file'**
+  String get projectExportFileNameLabel;
+
+  /// No description provided for @projectExportFileNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a new backup file name ending in .goremod.'**
+  String get projectExportFileNameHelper;
+
+  /// No description provided for @projectExportChooseDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose destination folder'**
+  String get projectExportChooseDestination;
+
+  /// No description provided for @projectExportNoDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'No destination folder selected'**
+  String get projectExportNoDestination;
+
+  /// No description provided for @projectExportNewFile.
+  ///
+  /// In en, this message translates to:
+  /// **'New file'**
+  String get projectExportNewFile;
+
+  /// No description provided for @projectExportCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get projectExportCancel;
+
+  /// No description provided for @projectExportClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get projectExportClose;
+
+  /// No description provided for @projectExportSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Create backup'**
+  String get projectExportSubmit;
+
+  /// No description provided for @projectExportExporting.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating backup…'**
+  String get projectExportExporting;
+
+  /// No description provided for @projectExportParentRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an existing destination folder.'**
+  String get projectExportParentRequired;
+
+  /// No description provided for @projectExportParentAbsolute.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an absolute existing destination folder.'**
+  String get projectExportParentAbsolute;
+
+  /// No description provided for @projectExportParentLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected destination is a link. Choose a real existing folder.'**
+  String get projectExportParentLink;
+
+  /// No description provided for @projectExportParentInspectFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination folder could not be inspected safely. Nothing was created.'**
+  String get projectExportParentInspectFailed;
+
+  /// No description provided for @projectExportFileNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new project-backup file name.'**
+  String get projectExportFileNameRequired;
+
+  /// No description provided for @projectExportFileNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The file name must be at most 128 ASCII characters.'**
+  String get projectExportFileNameTooLong;
+
+  /// No description provided for @projectExportFileNameInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Start with a letter or digit, use only ASCII letters, digits, dots, underscores, or hyphens, and end with .goremod.'**
+  String get projectExportFileNameInvalid;
+
+  /// No description provided for @projectExportFileNameReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That file name is reserved by Windows.'**
+  String get projectExportFileNameReserved;
+
+  /// No description provided for @projectExportOutputExists.
+  ///
+  /// In en, this message translates to:
+  /// **'That file already exists. Choose a new file name; existing files are never overwritten.'**
+  String get projectExportOutputExists;
+
+  /// No description provided for @projectExportOutputLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The new file path is a link. Choose a different file name.'**
+  String get projectExportOutputLink;
+
+  /// No description provided for @projectExportOutputRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination was rejected before the new local file was created. Nothing was created. Choose a different file name or destination folder.'**
+  String get projectExportOutputRejected;
+
+  /// No description provided for @projectExportStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before backup creation started. No output was created. Close this window and open Create project backup again.'**
+  String get projectExportStale;
+
+  /// No description provided for @projectExportRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project can no longer be verified as current. No output was created. Close this window and recover or reopen the project.'**
+  String get projectExportRequiresReopen;
+
+  /// No description provided for @projectExportUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This managed project session cannot create exact restorable backups. Nothing was created.'**
+  String get projectExportUnsupported;
+
+  /// No description provided for @projectExportFailedBeforeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'The project backup could not be prepared exactly. Nothing was created.'**
+  String get projectExportFailedBeforeStart;
+
+  /// No description provided for @projectExportPrepublicationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup creation stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.'**
+  String get projectExportPrepublicationFailed;
+
+  /// No description provided for @projectExportMayExist.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup creation did not return a verified receipt. Do not retry. Close this window and check the destination: {output}'**
+  String projectExportMayExist(String output);
+
+  /// No description provided for @projectExportResultMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The completed backup does not match this checkpoint or destination. Do not retry; inspect the destination: {output}'**
+  String projectExportResultMismatch(String output);
+
+  /// No description provided for @projectExportPublished.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact restorable project backup was created as a new local file.'**
+  String get projectExportPublished;
+
+  /// No description provided for @projectExportPublishedCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact restorable project backup was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.'**
+  String get projectExportPublishedCleanupWarning;
+
+  /// No description provided for @projectExportPublicationUncertain.
+  ///
+  /// In en, this message translates to:
+  /// **'The local file may have been created. Do not retry. Check whether this destination exists: {output}'**
+  String projectExportPublicationUncertain(String output);
+
+  /// No description provided for @projectExportArchiveBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive bytes'**
+  String get projectExportArchiveBytes;
+
+  /// No description provided for @projectExportArchiveSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive SHA-256'**
+  String get projectExportArchiveSha256;
+
+  /// No description provided for @projectExportCurrentProjectUnchanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The current project remains open and unchanged. The game and saves were not touched.'**
+  String get projectExportCurrentProjectUnchanged;
+
+  /// No description provided for @projectRestoreActionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project backup…'**
+  String get projectRestoreActionTitle;
+
+  /// No description provided for @projectRestoreActionDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify an exact .goremod backup, restore it into a new folder, and open that project safely.'**
+  String get projectRestoreActionDescription;
+
+  /// No description provided for @projectRestoreDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project backup'**
+  String get projectRestoreDialogTitle;
+
+  /// No description provided for @projectRestoreNoticeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore into a new project folder'**
+  String get projectRestoreNoticeTitle;
+
+  /// No description provided for @projectRestoreNoticeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a restorable Mod Studio .goremod backup. Studio verifies the complete archive before creating a new project folder and preserves the backed-up project identity and history.'**
+  String get projectRestoreNoticeDescription;
+
+  /// No description provided for @projectRestoreCapabilityBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore does not build, deploy, launch, or qualify the mod at runtime. It does not read or change the game or any save.'**
+  String get projectRestoreCapabilityBoundary;
+
+  /// No description provided for @projectRestoreChooseBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose backup file'**
+  String get projectRestoreChooseBackup;
+
+  /// No description provided for @projectRestoreNoBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'No verified backup selected'**
+  String get projectRestoreNoBackup;
+
+  /// No description provided for @projectRestoreInspecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Verifying backup…'**
+  String get projectRestoreInspecting;
+
+  /// No description provided for @projectRestoreVerified.
+  ///
+  /// In en, this message translates to:
+  /// **'This exact V2 project backup is complete and restorable.'**
+  String get projectRestoreVerified;
+
+  /// No description provided for @projectRestoreSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup file'**
+  String get projectRestoreSource;
+
+  /// No description provided for @projectRestoreProjectRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Project revision'**
+  String get projectRestoreProjectRevision;
+
+  /// No description provided for @projectRestoreArchiveBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive bytes'**
+  String get projectRestoreArchiveBytes;
+
+  /// No description provided for @projectRestoreStoreObjects.
+  ///
+  /// In en, this message translates to:
+  /// **'Stored project objects'**
+  String get projectRestoreStoreObjects;
+
+  /// No description provided for @projectRestoreInvalidSource.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected file is not a valid exact project backup. Nothing was created.'**
+  String get projectRestoreInvalidSource;
+
+  /// No description provided for @projectRestoreInspectionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The backup could not be verified completely. Nothing was created.'**
+  String get projectRestoreInspectionFailed;
+
+  /// No description provided for @projectRestoreUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project restore is unavailable on this system. Nothing was created.'**
+  String get projectRestoreUnavailable;
+
+  /// No description provided for @projectRestoreChooseDestinationParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose parent folder'**
+  String get projectRestoreChooseDestinationParent;
+
+  /// No description provided for @projectRestoreNoDestinationParent.
+  ///
+  /// In en, this message translates to:
+  /// **'No parent folder selected'**
+  String get projectRestoreNoDestinationParent;
+
+  /// No description provided for @projectRestoreFolderNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'New project folder name'**
+  String get projectRestoreFolderNameLabel;
+
+  /// No description provided for @projectRestoreFolderNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio creates this new folder; it must not already exist.'**
+  String get projectRestoreFolderNameHelper;
+
+  /// No description provided for @projectRestoreNewFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'New project folder'**
+  String get projectRestoreNewFolder;
+
+  /// No description provided for @projectRestoreFolderNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new project folder name.'**
+  String get projectRestoreFolderNameRequired;
+
+  /// No description provided for @projectRestoreFolderNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name is too long.'**
+  String get projectRestoreFolderNameTooLong;
+
+  /// No description provided for @projectRestoreFolderNameInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Use one ordinary folder name without path separators, control characters, a trailing dot, or a trailing space.'**
+  String get projectRestoreFolderNameInvalid;
+
+  /// No description provided for @projectRestoreFolderNameReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That folder name is reserved by Windows.'**
+  String get projectRestoreFolderNameReserved;
+
+  /// No description provided for @projectRestoreDestinationExists.
+  ///
+  /// In en, this message translates to:
+  /// **'That destination already exists. Choose a new folder name; existing content is never overwritten.'**
+  String get projectRestoreDestinationExists;
+
+  /// No description provided for @projectRestoreDestinationLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The new project destination is a link. Choose a different folder name.'**
+  String get projectRestoreDestinationLink;
+
+  /// No description provided for @projectRestoreDestinationInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination was rejected before a project receipt was created. Nothing was opened. Choose a different new folder after verifying the backup again.'**
+  String get projectRestoreDestinationInvalid;
+
+  /// No description provided for @projectRestoreInspectionExpired.
+  ///
+  /// In en, this message translates to:
+  /// **'The backup changed after verification. Nothing was opened. Verify the backup again before choosing another destination.'**
+  String get projectRestoreInspectionExpired;
+
+  /// No description provided for @projectRestoreMaterializationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore did not return a verified project receipt. Nothing was opened. Do not reuse this attempt; inspect the chosen destination before starting again.'**
+  String get projectRestoreMaterializationFailed;
+
+  /// No description provided for @projectRestorePublicationUncertain.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio cannot prove whether the project folder ‘{destination}’ was published. Nothing was opened. Do not retry this restore; inspect that destination first.'**
+  String projectRestorePublicationUncertain(String destination);
+
+  /// No description provided for @projectRestoreStale.
+  ///
+  /// In en, this message translates to:
+  /// **'This restore window is no longer current. Nothing was opened. If materialization had started, inspect the chosen destination before trying anything else.'**
+  String get projectRestoreStale;
+
+  /// No description provided for @projectRestoreCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get projectRestoreCancel;
+
+  /// No description provided for @projectRestoreClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get projectRestoreClose;
+
+  /// No description provided for @projectRestoreSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore and open'**
+  String get projectRestoreSubmit;
+
+  /// No description provided for @projectRestoreRestoring.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring…'**
+  String get projectRestoreRestoring;
+
+  /// No description provided for @projectRestoreSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project backup was restored into the new folder.'**
+  String get projectRestoreSucceeded;
+
+  /// No description provided for @projectRestoreSucceededCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project backup was restored, but private temporary cleanup was incomplete. The restored project is valid; do not repeat the restore.'**
+  String get projectRestoreSucceededCleanupWarning;
+
+  /// No description provided for @projectRestoreOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Project backup restored and opened.'**
+  String get projectRestoreOpened;
+
+  /// No description provided for @projectRestoreOpenedCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Project backup restored and opened. Private temporary cleanup was incomplete; do not repeat the restore.'**
+  String get projectRestoreOpenedCleanupWarning;
+
+  /// No description provided for @projectRestoreOpening.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the restored project safely…'**
+  String get projectRestoreOpening;
+
+  /// No description provided for @projectRestoreOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project folder ‘{destination}’ was restored, but Studio could not prove it safe to open. Any previously open project remains current; otherwise no project was opened. Do not repeat the restore; inspect or open the restored folder separately.'**
+  String projectRestoreOpenFailed(String destination);
+
+  /// No description provided for @projectRestoreCandidateCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'No project was adopted. Studio could not completely clean up the rejected candidate session. Restart Mod Studio before opening the restored destination manually.'**
+  String get projectRestoreCandidateCleanupWarning;
+
+  /// No description provided for @managedVoiceTakeRemoveAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from this line…'**
+  String get managedVoiceTakeRemoveAction;
+
+  /// No description provided for @managedVoiceTakeRemoveTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove this recording from the current dialog line and language'**
+  String get managedVoiceTakeRemoveTooltip;
+
+  /// No description provided for @managedVoiceTakeRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove Voice take?'**
+  String get managedVoiceTakeRemoveDialogTitle;
+
+  /// No description provided for @managedVoiceTakeRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove “{take}” from {line} ({locale})?'**
+  String managedVoiceTakeRemoveDialogSummary(
+    String take,
+    String line,
+    String locale,
+  );
+
+  /// No description provided for @managedVoiceTakeRemoveScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the link for this dialog line and language is removed. Other project uses remain unchanged.'**
+  String get managedVoiceTakeRemoveScope;
+
+  /// No description provided for @managedVoiceTakeRemoveInternalRetention.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio file remains stored internally. This action does not free project storage and has no undo yet.'**
+  String get managedVoiceTakeRemoveInternalRetention;
+
+  /// No description provided for @managedVoiceTakeRemoveGameBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation and save games are not changed.'**
+  String get managedVoiceTakeRemoveGameBoundary;
+
+  /// No description provided for @managedVoiceTakeRemoveSelectedWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This is the active take. Removing it also clears the selection atomically. No replacement is chosen automatically, so Voice build remains blocked until an Approved take is selected.'**
+  String get managedVoiceTakeRemoveSelectedWarning;
+
+  /// No description provided for @managedVoiceTakeRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedVoiceTakeRemoveCancel;
+
+  /// No description provided for @managedVoiceTakeRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from line'**
+  String get managedVoiceTakeRemoveConfirm;
+
+  /// No description provided for @managedVoiceTakeRemoveUniqueSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The take was removed from this line and from the current project graph. Its internal audio data remains retained.'**
+  String get managedVoiceTakeRemoveUniqueSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveSharedSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The link was removed from this line and language. The take remains available to its other project uses, and its internal audio data remains retained.'**
+  String get managedVoiceTakeRemoveSharedSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveSelectionClearedSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The active selection was cleared atomically. No replacement was selected; Voice build is blocked until an Approved take is selected.'**
+  String get managedVoiceTakeRemoveSelectionClearedSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before the take could be removed. Reload the latest Voice takes and review the action again.'**
+  String get managedVoiceTakeRemoveStale;
+
+  /// No description provided for @managedVoiceTakeRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal result could not be confirmed. Do not retry. Close this window and reopen or recover the managed project.'**
+  String get managedVoiceTakeRemoveRequiresReopen;
+
+  /// No description provided for @managedVoiceTakeRemoveSavedUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal was saved, but the latest project could not be confirmed. Do not repeat the removal. Close this window and reopen or recover the managed project.'**
+  String get managedVoiceTakeRemoveSavedUnconfirmed;
+
+  /// No description provided for @managedVoiceTakeRemoveSavedReloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal was saved, but the latest Voice takes could not be loaded. Reload the takes; the removal will not be repeated.'**
+  String get managedVoiceTakeRemoveSavedReloadFailed;
+
+  /// No description provided for @managedVoiceTakeRemoveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The take was not removed: {error}'**
+  String managedVoiceTakeRemoveFailed(String error);
+
+  /// No description provided for @managedVoiceTakeRemoveReloadConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved removal was confirmed from the latest project.'**
+  String get managedVoiceTakeRemoveReloadConfirmed;
+
+  /// No description provided for @managedVoiceSlotRemoveAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove empty Voice setup…'**
+  String get managedVoiceSlotRemoveAction;
+
+  /// No description provided for @managedVoiceSlotRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove empty Voice setup?'**
+  String get managedVoiceSlotRemoveDialogTitle;
+
+  /// No description provided for @managedVoiceSlotRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove the empty {locale} Voice setup from {line}?'**
+  String managedVoiceSlotRemoveDialogSummary(String line, String locale);
+
+  /// No description provided for @managedVoiceSlotRemoveRetention.
+  ///
+  /// In en, this message translates to:
+  /// **'The dialog text stays in the project. No recording, audio blob, game file, or save is deleted.'**
+  String get managedVoiceSlotRemoveRetention;
+
+  /// No description provided for @managedVoiceSlotRemoveTargetWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This also removes the stored installed-target evidence for this line and language. The installed archive itself remains untouched.'**
+  String get managedVoiceSlotRemoveTargetWarning;
+
+  /// No description provided for @managedVoiceSlotRemoveRecreate.
+  ///
+  /// In en, this message translates to:
+  /// **'You can add a new take later; the required Voice setup will then be created again automatically.'**
+  String get managedVoiceSlotRemoveRecreate;
+
+  /// No description provided for @managedVoiceSlotRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep setup'**
+  String get managedVoiceSlotRemoveCancel;
+
+  /// No description provided for @managedVoiceSlotRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove setup'**
+  String get managedVoiceSlotRemoveConfirm;
+
+  /// No description provided for @managedVoiceSlotRemoveSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.'**
+  String get managedVoiceSlotRemoveSuccess;
+
+  /// No description provided for @managedVoiceSlotPlanSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Recording planned. An empty Voice setup was added for this line and language. No audio, game file, or save was changed; build and runtime remain unqualified.'**
+  String get managedVoiceSlotPlanSuccess;
+
+  /// No description provided for @managedVoiceSlotRemoveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.'**
+  String get managedVoiceSlotRemoveStale;
+
+  /// No description provided for @managedVoiceSlotRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen the managed project before removing this Voice setup.'**
+  String get managedVoiceSlotRemoveRequiresReopen;
+
+  /// No description provided for @managedVoiceSlotRemoveSavedUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The result could not be confirmed and the empty Voice setup may have been saved. Do not repeat the removal. Close this window, reopen the managed project, and inspect the line.'**
+  String get managedVoiceSlotRemoveSavedUnconfirmed;
+
+  /// No description provided for @managedVoiceSlotRemoveSavedReloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The empty Voice setup was saved, but reloading failed. Reload to confirm it; the removal will not be repeated.'**
+  String get managedVoiceSlotRemoveSavedReloadFailed;
+
+  /// No description provided for @managedVoiceSlotRemoveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The empty Voice setup could not be removed: {error}'**
+  String managedVoiceSlotRemoveFailed(String error);
+
+  /// No description provided for @managedVoiceSlotRemoveReloadConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved empty Voice setup removal confirmed from the latest project.'**
+  String get managedVoiceSlotRemoveReloadConfirmed;
+
+  /// No description provided for @managedVoicePreviewTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview selected local Ogg'**
+  String get managedVoicePreviewTooltip;
+
+  /// No description provided for @managedVoicePreviewOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Opened the selected local recording for author preview. This does not approve or qualify the audio for the game.'**
+  String get managedVoicePreviewOpened;
+
+  /// No description provided for @managedVoicePreviewFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The local recording preview could not be opened: {error}'**
+  String managedVoicePreviewFailed(String error);
+
+  /// No description provided for @managedStoryWorkbenchEditNpcProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & archetype'**
+  String get managedStoryWorkbenchEditNpcProfile;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Next step: Dialog & Voice'**
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.'**
+  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription;
+
+  /// No description provided for @managedStoryWorkbenchContinueToNpcDialogVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Continue to Dialog & Voice'**
+  String get managedStoryWorkbenchContinueToNpcDialogVoice;
+
+  /// No description provided for @managedStoryWorkbenchNpcDisplayNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Character name'**
+  String get managedStoryWorkbenchNpcDisplayNameLabel;
+
+  /// No description provided for @managedNpcProfileEditTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & archetype'**
+  String get managedNpcProfileEditTitle;
+
+  /// No description provided for @managedNpcProfileEditDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Change the friendly character name or choose another verified structural starting point.'**
+  String get managedNpcProfileEditDescription;
+
+  /// No description provided for @managedNpcProfileEditNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Character name'**
+  String get managedNpcProfileEditNameLabel;
+
+  /// No description provided for @managedNpcProfileEditNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Shown to authors in this project.'**
+  String get managedNpcProfileEditNameHint;
+
+  /// No description provided for @managedNpcProfileEditArchetypeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Archetype / base character'**
+  String get managedNpcProfileEditArchetypeLabel;
+
+  /// No description provided for @managedNpcProfileEditArchetypeHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'This does not edit appearance, stats, faction, routine, inventory, dialog, or spawn.'**
+  String get managedNpcProfileEditArchetypeHelp;
+
+  /// No description provided for @managedNpcProfileEditBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the offline project draft changes. The game installation and save games remain unchanged.'**
+  String get managedNpcProfileEditBoundary;
+
+  /// No description provided for @managedNpcProfileEditLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading current NPC details…'**
+  String get managedNpcProfileEditLoading;
+
+  /// No description provided for @managedNpcProfileEditCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedNpcProfileEditCancel;
+
+  /// No description provided for @managedNpcProfileEditClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedNpcProfileEditClose;
+
+  /// No description provided for @managedNpcProfileEditSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save changes'**
+  String get managedNpcProfileEditSave;
+
+  /// No description provided for @managedNpcProfileEditSaving.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving…'**
+  String get managedNpcProfileEditSaving;
+
+  /// No description provided for @managedNpcProfileEditRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedNpcProfileEditRetry;
+
+  /// No description provided for @managedNpcProfileEditLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC details and verified archetypes could not be loaded. No files were changed.'**
+  String get managedNpcProfileEditLoadFailed;
+
+  /// No description provided for @managedNpcProfileEditCatalogChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The verified archetypes changed while this editor was open. Review and choose the archetype again before saving.'**
+  String get managedNpcProfileEditCatalogChanged;
+
+  /// No description provided for @managedNpcProfileEditCurrentArchetypeUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The current NPC archetype is no longer represented exactly by this game catalog. No replacement was guessed.'**
+  String get managedNpcProfileEditCurrentArchetypeUnavailable;
+
+  /// No description provided for @managedNpcProfileEditStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this editor was open. Close it and reopen the NPC from the refreshed Story view.'**
+  String get managedNpcProfileEditStale;
+
+  /// No description provided for @managedNpcProfileEditRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The save result cannot be verified. Do not retry. Close this editor and reopen or recover the managed project.'**
+  String get managedNpcProfileEditRequiresReopen;
+
+  /// No description provided for @managedNpcProfileEditSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The NPC changes could not be saved safely. Nothing was built, deployed, or written into the game.'**
+  String get managedNpcProfileEditSaveFailed;
+
+  /// No description provided for @managedNpcProfileEditNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a character name.'**
+  String get managedNpcProfileEditNameRequired;
+
+  /// No description provided for @managedNpcProfileEditNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The character name must be at most 256 UTF-8 bytes.'**
+  String get managedNpcProfileEditNameTooLong;
+
+  /// No description provided for @managedNpcProfileEditNameControl.
+  ///
+  /// In en, this message translates to:
+  /// **'The character name contains an unsupported control character.'**
+  String get managedNpcProfileEditNameControl;
+
+  /// No description provided for @managedNpcProfileEditReviewSelection.
+  ///
+  /// In en, this message translates to:
+  /// **'Review and choose an archetype before saving.'**
+  String get managedNpcProfileEditReviewSelection;
+
+  /// No description provided for @managedNpcProfileEditDiscardTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard NPC changes?'**
+  String get managedNpcProfileEditDiscardTitle;
+
+  /// No description provided for @managedNpcProfileEditDiscardBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your unsaved name and archetype choice will be lost.'**
+  String get managedNpcProfileEditDiscardBody;
+
+  /// No description provided for @managedNpcProfileEditKeepEditing.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep editing'**
+  String get managedNpcProfileEditKeepEditing;
+
+  /// No description provided for @managedNpcProfileEditDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard'**
+  String get managedNpcProfileEditDiscard;
+
+  /// No description provided for @managedNpcProfileEditSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} was saved in project revision {revision}. It remains an offline, build-blocked draft.'**
+  String managedNpcProfileEditSaved(String name, int revision);
+
+  /// No description provided for @managedVoiceBuildReadinessTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness'**
+  String get managedVoiceBuildReadinessTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh Voice readiness'**
+  String get managedVoiceBuildReadinessRefresh;
+
+  /// No description provided for @managedVoiceBuildReadinessChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking exact Voice readiness'**
+  String get managedVoiceBuildReadinessChecking;
+
+  /// No description provided for @managedVoiceBuildReadinessLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness could not be verified for the current project. No build is available from this result.'**
+  String get managedVoiceBuildReadinessLoadError;
+
+  /// No description provided for @managedVoiceBuildReadinessReadyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice is ready'**
+  String get managedVoiceBuildReadinessReadyTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice needs attention'**
+  String get managedVoiceBuildReadinessBlockedTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{readySlots} of {totalSlots} Voice slots are ready.'**
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots);
+
+  /// No description provided for @managedVoiceBuildReadinessBlockedBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'No bundle was created and deployment was not performed.'**
+  String get managedVoiceBuildReadinessBlockedBoundary;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildBundle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build bundle'**
+  String get managedVoiceBuildReadinessBuildBundle;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildReleaseGuidance.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice content is ready. Open Build & Release to create the offline bundle.'**
+  String get managedVoiceBuildReadinessBuildReleaseGuidance;
+
+  /// No description provided for @managedVoiceBuildReadinessConfigureGameGuidance.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice content is ready. Configure the game installation before creating an offline bundle.'**
+  String get managedVoiceBuildReadinessConfigureGameGuidance;
+
+  /// No description provided for @managedVoiceBuildReadinessHideBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide blockers'**
+  String get managedVoiceBuildReadinessHideBlockers;
+
+  /// No description provided for @managedVoiceBuildReadinessShowBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Show 1 blocker} other{Show {count} blockers}}'**
+  String managedVoiceBuildReadinessShowBlockers(int count);
+
+  /// No description provided for @managedVoiceBuildReadinessWorkflowFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice workflow could not be opened. Refresh and try again.'**
+  String get managedVoiceBuildReadinessWorkflowFailed;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildWorkflowFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice build workflow could not be opened.'**
+  String get managedVoiceBuildReadinessBuildWorkflowFailed;
+
+  /// No description provided for @managedVoiceBuildReadinessExactRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project revision {revision}'**
+  String managedVoiceBuildReadinessExactRevision(int revision);
+
+  /// No description provided for @managedVoiceBuildReadinessResolveTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve target'**
+  String get managedVoiceBuildReadinessResolveTarget;
+
+  /// No description provided for @managedVoiceBuildReadinessManageTakes.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage takes'**
+  String get managedVoiceBuildReadinessManageTakes;
+
+  /// No description provided for @managedVoiceBuildBlockerNoSlots.
+  ///
+  /// In en, this message translates to:
+  /// **'No Voice setups exist in this project.'**
+  String get managedVoiceBuildBlockerNoSlots;
+
+  /// No description provided for @managedVoiceBuildBlockerPayloadBudget.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice recordings exceed the safe bundle memory budget.'**
+  String get managedVoiceBuildBlockerPayloadBudget;
+
+  /// No description provided for @managedVoiceBuildBlockerUnresolvedTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve this Voice target.'**
+  String get managedVoiceBuildBlockerUnresolvedTarget;
+
+  /// No description provided for @managedVoiceBuildBlockerAmbiguousTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'This Voice target is ambiguous.'**
+  String get managedVoiceBuildBlockerAmbiguousTarget;
+
+  /// No description provided for @managedVoiceBuildBlockerUnqualifiedAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'This target is not a sealed existing-member replacement.'**
+  String get managedVoiceBuildBlockerUnqualifiedAdd;
+
+  /// No description provided for @managedVoiceBuildBlockerMissingTake.
+  ///
+  /// In en, this message translates to:
+  /// **'Select an approved Voice take.'**
+  String get managedVoiceBuildBlockerMissingTake;
+
+  /// No description provided for @managedVoiceBuildBlockerTakeNotApproved.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice take is not approved.'**
+  String get managedVoiceBuildBlockerTakeNotApproved;
+
+  /// No description provided for @managedVoiceBuildBlockerCodecUnqualified.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice take uses an unsupported codec.'**
+  String get managedVoiceBuildBlockerCodecUnqualified;
+
+  /// No description provided for @managedVoiceBuildBlockerSlotLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'This project exceeds the 1024-slot Voice bundle limit.'**
+  String get managedVoiceBuildBlockerSlotLimit;
+
+  /// No description provided for @managedVoiceBuildOfflineNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline build only. This creates a sealed existing-member Voice bundle. It does not deploy or write to the game.'**
+  String get managedVoiceBuildOfflineNotice;
+
+  /// No description provided for @managedVoiceBuildNewFolderName.
+  ///
+  /// In en, this message translates to:
+  /// **'New folder name'**
+  String get managedVoiceBuildNewFolderName;
+
+  /// No description provided for @managedVoiceBuildNewFolderHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle must be written to a brand-new child folder.'**
+  String get managedVoiceBuildNewFolderHelp;
+
+  /// No description provided for @managedVoiceBuildChooseParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose parent folder'**
+  String get managedVoiceBuildChooseParent;
+
+  /// No description provided for @managedVoiceBuildNoParentSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'No parent folder selected'**
+  String get managedVoiceBuildNoParentSelected;
+
+  /// No description provided for @managedVoiceBuildNewOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'New output'**
+  String get managedVoiceBuildNewOutput;
+
+  /// No description provided for @managedVoiceBuildOfflineBundle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build offline bundle'**
+  String get managedVoiceBuildOfflineBundle;
+
+  /// No description provided for @managedVoiceBuildParentInspectFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The parent folder could not be inspected safely. No build or deployment was attempted.'**
+  String get managedVoiceBuildParentInspectFailed;
+
+  /// No description provided for @managedVoiceBuildChooseExistingParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an existing parent folder.'**
+  String get managedVoiceBuildChooseExistingParent;
+
+  /// No description provided for @managedVoiceBuildTargetSymlink.
+  ///
+  /// In en, this message translates to:
+  /// **'The target path is a symlink. Choose a different new folder name.'**
+  String get managedVoiceBuildTargetSymlink;
+
+  /// No description provided for @managedVoiceBuildTargetExists.
+  ///
+  /// In en, this message translates to:
+  /// **'The target already exists. Choose a different new folder name.'**
+  String get managedVoiceBuildTargetExists;
+
+  /// No description provided for @managedVoiceBuildRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project can no longer be verified as current. Close this window and reopen the managed project before building another Voice bundle.'**
+  String get managedVoiceBuildRequiresReopen;
+
+  /// No description provided for @managedVoiceBuildStaleCheckpoint.
+  ///
+  /// In en, this message translates to:
+  /// **'The managed project changed while this window was open. Close this build window and open it again from the current project.'**
+  String get managedVoiceBuildStaleCheckpoint;
+
+  /// No description provided for @managedVoiceBuildFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice bundle could not be built exactly. No deployment was attempted. Before retrying, choose a new folder name if output was created.'**
+  String get managedVoiceBuildFailed;
+
+  /// No description provided for @managedVoiceBuildPlanFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness could not be verified for the exact current project. Output selection and build are unavailable until verification succeeds.'**
+  String get managedVoiceBuildPlanFailed;
+
+  /// No description provided for @managedVoiceBuildParentAbsolute.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an absolute existing parent folder.'**
+  String get managedVoiceBuildParentAbsolute;
+
+  /// No description provided for @managedVoiceBuildParentSymlink.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected parent is a symlink. Choose a real existing folder.'**
+  String get managedVoiceBuildParentSymlink;
+
+  /// No description provided for @managedVoiceBuildFolderRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new folder name.'**
+  String get managedVoiceBuildFolderRequired;
+
+  /// No description provided for @managedVoiceBuildFolderWhitespace.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name cannot start or end with whitespace.'**
+  String get managedVoiceBuildFolderWhitespace;
+
+  /// No description provided for @managedVoiceBuildFolderTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name is too long.'**
+  String get managedVoiceBuildFolderTooLong;
+
+  /// No description provided for @managedVoiceBuildFolderPortable.
+  ///
+  /// In en, this message translates to:
+  /// **'Use one portable folder name without separators or reserved characters.'**
+  String get managedVoiceBuildFolderPortable;
+
+  /// No description provided for @managedVoiceBuildFolderWindowsReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That folder name is reserved by Windows.'**
+  String get managedVoiceBuildFolderWindowsReserved;
+
+  /// No description provided for @managedVoiceBuildExecutableUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed game executable could not be read. Finish any game update and check the configured installation before trying again. No deployment was attempted.'**
+  String get managedVoiceBuildExecutableUnavailable;
+
+  /// No description provided for @managedVoiceBuildExecutableMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed game executable no longer matches this project generation. Re-import or retarget the managed project before building again. No deployment was attempted.'**
+  String get managedVoiceBuildExecutableMismatch;
+
+  /// No description provided for @managedVoiceBuildGameUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured Gothic 1 Remake installation is unavailable. Check it in Settings before trying again. No deployment was attempted.'**
+  String get managedVoiceBuildGameUnavailable;
+
+  /// No description provided for @managedVoiceBuildStoreGameAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'This project folder overlaps the configured game installation. Move the project outside the game folder before building. No deployment was attempted.'**
+  String get managedVoiceBuildStoreGameAlias;
+
+  /// No description provided for @managedVoiceBuildGameOutputAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle output overlaps a Gothic 1 Remake installation. Choose a parent folder outside every game installation. No deployment was attempted.'**
+  String get managedVoiceBuildGameOutputAlias;
+
+  /// No description provided for @managedVoiceBuildStoreOutputAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle output overlaps the managed project. Choose a parent folder outside the project. No deployment was attempted.'**
+  String get managedVoiceBuildStoreOutputAlias;
+
+  /// No description provided for @managedVoiceBuildOutputUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected output parent is unavailable or cannot be traversed safely. Choose a real existing parent folder outside the project and game.'**
+  String get managedVoiceBuildOutputUnavailable;
+
+  /// No description provided for @managedVoiceBuildOutputFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The new bundle folder could not be written completely. Do not use any output left there; choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildOutputFailed;
+
+  /// No description provided for @managedVoiceBuildPromotionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The sealed bundle could not be promoted into the requested new output folder. A conflicting output was left untouched and owned staging was removed. Choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildPromotionFailed;
+
+  /// No description provided for @managedVoiceBuildCleanupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice bundle was not published, but its temporary staging folder could not be removed completely. Remove the reported staging folder before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildCleanupFailed;
+
+  /// No description provided for @managedVoiceBuildPublicationUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The atomic publication may have succeeded, but its final identity or durability could not be confirmed. Do not retry, replace, or delete that exact output yet. Close this window and inspect the reported folder before deciding how to proceed. No deployment was attempted.'**
+  String get managedVoiceBuildPublicationUnconfirmed;
+
+  /// No description provided for @managedVoiceBuildStoreRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The managed project root changed while the bundle was being built. Close this window and reopen the project before building again. No deployment was attempted.'**
+  String get managedVoiceBuildStoreRootChanged;
+
+  /// No description provided for @managedVoiceBuildGameRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation changed while the bundle was being built. Finish the update or file operation, then retry with a new folder name. No deployment was attempted.'**
+  String get managedVoiceBuildGameRootChanged;
+
+  /// No description provided for @managedVoiceBuildOutputRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The output parent changed while the bundle was being built. Finish the file operation, verify the parent, then retry with a new folder name. No deployment was attempted.'**
+  String get managedVoiceBuildOutputRootChanged;
+
+  /// No description provided for @managedVoiceBuildVerifyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The written bundle could not be verified exactly. Do not use that output; choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildVerifyFailed;
+
+  /// No description provided for @managedVoiceBuildBundleInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice content could not be lowered into one exact sealed bundle. Reopen the project, review its Voice slots, and try again. No deployment was attempted.'**
+  String get managedVoiceBuildBundleInvalid;
+
+  /// No description provided for @managedVoiceBuildInputInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice build request or output path exceeds the safe supported limits. Choose a shorter new output path and try again. No deployment was attempted.'**
+  String get managedVoiceBuildInputInvalid;
+
+  /// No description provided for @managedVoiceBuildResponseLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle was too large to return an exact build receipt. Do not use any unreceipted output; choose a new folder only after reducing the Voice build. No deployment was attempted.'**
+  String get managedVoiceBuildResponseLimit;
+
+  /// No description provided for @managedVoiceBuildBuiltTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed Voice bundle built'**
+  String get managedVoiceBuildBuiltTitle;
+
+  /// No description provided for @managedVoiceBuildOfflineReceipt.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline receipt only. Deployment was not performed.'**
+  String get managedVoiceBuildOfflineReceipt;
+
+  /// No description provided for @managedVoiceBuildBasisRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Basis project revision'**
+  String get managedVoiceBuildBasisRevision;
+
+  /// No description provided for @managedVoiceBuildOutputLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Output'**
+  String get managedVoiceBuildOutputLabel;
+
+  /// No description provided for @managedVoiceBuildArchiveEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive edits'**
+  String get managedVoiceBuildArchiveEdits;
+
+  /// No description provided for @managedVoiceBuildBundleFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundle files'**
+  String get managedVoiceBuildBundleFiles;
+
+  /// No description provided for @managedVoiceBuildSealedBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed bytes'**
+  String get managedVoiceBuildSealedBytes;
+
+  /// No description provided for @managedVoiceBuildBundleSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundle SHA-256'**
+  String get managedVoiceBuildBundleSha256;
+
+  /// No description provided for @managedVoiceBuildParentPickerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose Voice bundle parent'**
+  String get managedVoiceBuildParentPickerTitle;
+
+  /// No description provided for @managedVoiceBuildBuiltMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed Voice bundle built at {output}. Deployment was not performed.'**
+  String managedVoiceBuildBuiltMessage(String output);
+
+  /// No description provided for @managedVoiceBuildBlockedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice build blocked by {count} exact requirements. No bundle was created or deployed.'**
+  String managedVoiceBuildBlockedMessage(int count);
+
+  /// No description provided for @managedTextureSetupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the game installation'**
+  String get managedTextureSetupTitle;
+
+  /// No description provided for @managedTextureSetupDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Textures are read from the configured Gothic 1 Remake installation. Nothing is changed in the game or project.'**
+  String get managedTextureSetupDescription;
+
+  /// No description provided for @managedTextureSetupAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Settings'**
+  String get managedTextureSetupAction;
+
+  /// No description provided for @managedTextureLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the installed texture catalog…'**
+  String get managedTextureLoading;
+
+  /// No description provided for @managedTextureLoadingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The first exact scan can take several minutes. Mod Studio runs only one scan at a time and queues the latest refresh.'**
+  String get managedTextureLoadingDescription;
+
+  /// No description provided for @managedTextureCatalogCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed textures'**
+  String managedTextureCatalogCount(int count);
+
+  /// No description provided for @managedTextureSearchCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{matches} matches · {total} total'**
+  String managedTextureSearchCount(int matches, int total);
+
+  /// No description provided for @managedTextureEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No textures found'**
+  String get managedTextureEmptyTitle;
+
+  /// No description provided for @managedTextureEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact installed catalog contains no texture entries.'**
+  String get managedTextureEmptyDescription;
+
+  /// No description provided for @managedTextureErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Texture catalog unavailable'**
+  String get managedTextureErrorTitle;
+
+  /// No description provided for @managedTextureErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed texture catalog could not be loaded for this exact game build.'**
+  String get managedTextureErrorDescription;
+
+  /// No description provided for @managedTextureRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedTextureRetry;
+
+  /// No description provided for @managedTextureRefreshTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh installed texture catalog'**
+  String get managedTextureRefreshTooltip;
+
+  /// No description provided for @managedTextureSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search textures'**
+  String get managedTextureSearchLabel;
+
+  /// No description provided for @managedTextureSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Name or Unreal asset path'**
+  String get managedTextureSearchHint;
+
+  /// No description provided for @managedTextureClearSearchTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear texture search'**
+  String get managedTextureClearSearchTooltip;
+
+  /// No description provided for @managedTextureSelectPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a texture to inspect its original installed image.'**
+  String get managedTextureSelectPrompt;
+
+  /// No description provided for @managedTexturePreviewLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Extracting the original texture…'**
+  String get managedTexturePreviewLoading;
+
+  /// No description provided for @managedTexturePreviewErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview unavailable'**
+  String get managedTexturePreviewErrorTitle;
+
+  /// No description provided for @managedTexturePreviewErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The original texture could not be extracted from the selected game build.'**
+  String get managedTexturePreviewErrorDescription;
+
+  /// No description provided for @managedTexturePreviewRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry preview'**
+  String get managedTexturePreviewRetry;
+
+  /// No description provided for @managedTextureBackToCatalog.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to textures'**
+  String get managedTextureBackToCatalog;
+
+  /// No description provided for @managedTextureInspectionOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed reference · inspect only. This does not edit the project, game installation, or a save.'**
+  String get managedTextureInspectionOnly;
+
+  /// No description provided for @managedTextureInstalledBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed source'**
+  String get managedTextureInstalledBadge;
+
+  /// No description provided for @managedTextureRegularBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Regular texture'**
+  String get managedTextureRegularBadge;
+
+  /// No description provided for @managedTextureVirtualBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Virtual texture'**
+  String get managedTextureVirtualBadge;
+
+  /// No description provided for @managedTextureVirtualLayerCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 VT layer} other{{count} VT layers}}'**
+  String managedTextureVirtualLayerCount(int count);
+
+  /// No description provided for @managedTextureMipmappedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Mipmapped'**
+  String get managedTextureMipmappedBadge;
+
+  /// No description provided for @managedTextureSingleMipBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Single mip'**
+  String get managedTextureSingleMipBadge;
+
+  /// No description provided for @managedTextureReplaceableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement supported · editing not yet available'**
+  String get managedTextureReplaceableBadge;
+
+  /// No description provided for @managedTextureNotReplaceableBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement unavailable · inspect only'**
+  String get managedTextureNotReplaceableBadge;
+
+  /// No description provided for @managedTextureUnknownReplaceabilityBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Replacement not qualified · inspect only'**
+  String get managedTextureUnknownReplaceabilityBadge;
+
+  /// No description provided for @managedTextureUnknownFormat.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown source format'**
+  String get managedTextureUnknownFormat;
+
+  /// No description provided for @managedWorkspaceTextVoiceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Text & Voice'**
+  String get managedWorkspaceTextVoiceLabel;
+
+  /// No description provided for @managedWorkspaceTestReleaseLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Test & Release'**
+  String get managedWorkspaceTestReleaseLabel;
+
+  /// No description provided for @managedTestReleaseTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Test & Release'**
+  String get managedTestReleaseTitle;
+
+  /// No description provided for @managedTestReleaseDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Check every part of your mod before creating playable files or installing them.'**
+  String get managedTestReleaseDescription;
+
+  /// No description provided for @managedTestReleaseEvidenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing is assumed ready. A checked result applies only to this exact saved project version.'**
+  String get managedTestReleaseEvidenceBoundary;
+
+  /// No description provided for @managedTestReleaseChecksHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Project checks'**
+  String get managedTestReleaseChecksHeading;
+
+  /// No description provided for @managedTestReleaseReleaseHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Playable output'**
+  String get managedTestReleaseReleaseHeading;
+
+  /// No description provided for @managedTestReleaseStatusNotChecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Not checked'**
+  String get managedTestReleaseStatusNotChecked;
+
+  /// No description provided for @managedTestReleaseStatusChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking'**
+  String get managedTestReleaseStatusChecking;
+
+  /// No description provided for @managedTestReleaseStatusChecked.
+  ///
+  /// In en, this message translates to:
+  /// **'Checked'**
+  String get managedTestReleaseStatusChecked;
+
+  /// No description provided for @managedTestReleaseStatusNeedsAttention.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedTestReleaseStatusNeedsAttention;
+
+  /// No description provided for @managedTestReleaseStatusBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked'**
+  String get managedTestReleaseStatusBlocked;
+
+  /// No description provided for @managedTestReleaseStatusNotAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Not available'**
+  String get managedTestReleaseStatusNotAvailable;
+
+  /// No description provided for @managedTestReleaseStatusAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Available'**
+  String get managedTestReleaseStatusAvailable;
+
+  /// No description provided for @managedTestReleaseEvidenceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence'**
+  String get managedTestReleaseEvidenceLabel;
+
+  /// No description provided for @managedTestReleaseStaleEvidenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This result belongs to a different project version. Run the check again.'**
+  String get managedTestReleaseStaleEvidenceDescription;
+
+  /// No description provided for @managedTestReleaseActionNotConnectedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence exists, but this action is not connected in the current workspace.'**
+  String get managedTestReleaseActionNotConnectedDescription;
+
+  /// No description provided for @managedTestReleaseProblemsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems to resolve'**
+  String get managedTestReleaseProblemsHeading;
+
+  /// No description provided for @managedTestReleaseVoiceHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice build check'**
+  String get managedTestReleaseVoiceHeading;
+
+  /// No description provided for @managedTestReleaseProjectStructureTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Project structure'**
+  String get managedTestReleaseProjectStructureTitle;
+
+  /// No description provided for @managedTestReleaseProjectStructureDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the live Problems list below for references and managed-project structure checks.'**
+  String get managedTestReleaseProjectStructureDescription;
+
+  /// No description provided for @managedTestReleaseProjectStructureAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review problems'**
+  String get managedTestReleaseProjectStructureAction;
+
+  /// No description provided for @managedTestReleaseScriptsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Scripts'**
+  String get managedTestReleaseScriptsTitle;
+
+  /// No description provided for @managedTestReleaseScriptsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Run the game compiler once across every script in this exact saved project. The result is check evidence only; its output is discarded.'**
+  String get managedTestReleaseScriptsDescription;
+
+  /// No description provided for @managedTestReleaseScriptsAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Run compiler check'**
+  String get managedTestReleaseScriptsAction;
+
+  /// No description provided for @managedProjectCompilerRetryAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry compiler check'**
+  String get managedProjectCompilerRetryAction;
+
+  /// No description provided for @managedProjectCompilerReviewAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review result / check again'**
+  String get managedProjectCompilerReviewAction;
+
+  /// No description provided for @managedProjectCompilerDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Check all project scripts'**
+  String get managedProjectCompilerDialogTitle;
+
+  /// No description provided for @managedProjectCompilerDialogIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Close Gothic 1 Remake before you start. Mod Studio temporarily checks every project script with the game compiler, restores the game installation, and discards all compiler output. This result cannot create playable files or install the mod.'**
+  String get managedProjectCompilerDialogIntroduction;
+
+  /// No description provided for @managedProjectCompilerCloseAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedProjectCompilerCloseAction;
+
+  /// No description provided for @managedProjectCompilerNoGame.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose the Gothic 1 Remake installation in Settings before running this check.'**
+  String get managedProjectCompilerNoGame;
+
+  /// No description provided for @managedProjectCompilerSafetyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation is not ready for a compiler check. Close the game or resolve the recovery warning, then retry.'**
+  String get managedProjectCompilerSafetyBlocked;
+
+  /// No description provided for @managedProjectCompilerCompiled.
+  ///
+  /// In en, this message translates to:
+  /// **'All project scripts passed at this exact saved project version. Compiler output was discarded.'**
+  String get managedProjectCompilerCompiled;
+
+  /// No description provided for @managedProjectCompilerEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'This saved project has no scripts to compile. The empty result was checked exactly.'**
+  String get managedProjectCompilerEmpty;
+
+  /// No description provided for @managedProjectCompilerRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The game compiler found problems in one or more project scripts. Fix the messages below, then retry.'**
+  String get managedProjectCompilerRejected;
+
+  /// No description provided for @managedProjectCompilerPreflightBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler did not start. Close the game and check the configured installation, then retry.'**
+  String get managedProjectCompilerPreflightBlocked;
+
+  /// No description provided for @managedProjectCompilerDrifted.
+  ///
+  /// In en, this message translates to:
+  /// **'The project or game inputs changed, or the closing audit was no longer exact. This result was discarded; run the check again for the current version.'**
+  String get managedProjectCompilerDrifted;
+
+  /// No description provided for @managedProjectCompilerRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project must be closed and reopened before another exact compiler check.'**
+  String get managedProjectCompilerRequiresReopen;
+
+  /// No description provided for @managedProjectCompilerRecoveryRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Cleanup of the private compiler output or exact restoration of the game installation could not be proven complete. Further compiler checks and installation stay blocked until a fresh safety check succeeds.'**
+  String get managedProjectCompilerRecoveryRequired;
+
+  /// No description provided for @managedProjectCompilerFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler check could not be completed or verified. No result was kept; retry when the game installation is ready.'**
+  String get managedProjectCompilerFailed;
+
+  /// No description provided for @managedProjectCompilerFailureDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler message'**
+  String get managedProjectCompilerFailureDetails;
+
+  /// No description provided for @managedProjectCompilerDiagnosticsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler messages'**
+  String get managedProjectCompilerDiagnosticsHeading;
+
+  /// No description provided for @managedProjectCompilerCaptureCaptured.
+  ///
+  /// In en, this message translates to:
+  /// **'Structured compiler messages were captured.'**
+  String get managedProjectCompilerCaptureCaptured;
+
+  /// No description provided for @managedProjectCompilerCaptureFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'The diagnostics hook was unavailable, so the normal game compiler fallback was used.'**
+  String get managedProjectCompilerCaptureFallback;
+
+  /// No description provided for @managedProjectCompilerCaptureInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler message capture could not be verified.'**
+  String get managedProjectCompilerCaptureInvalid;
+
+  /// No description provided for @managedProjectCompilerCaptureUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The diagnostics hook was unavailable after the compiler run; no second run was needed.'**
+  String get managedProjectCompilerCaptureUnavailable;
+
+  /// No description provided for @managedProjectCompilerCaptureExitUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The compiler process did not confirm that it exited.'**
+  String get managedProjectCompilerCaptureExitUnconfirmed;
+
+  /// No description provided for @managedProjectCompilerCaptureDisabled.
+  ///
+  /// In en, this message translates to:
+  /// **'Structured compiler messages were unavailable for this run.'**
+  String get managedProjectCompilerCaptureDisabled;
+
+  /// No description provided for @managedProjectCompilerSeverityError.
+  ///
+  /// In en, this message translates to:
+  /// **'Error'**
+  String get managedProjectCompilerSeverityError;
+
+  /// No description provided for @managedProjectCompilerSeverityWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Warning'**
+  String get managedProjectCompilerSeverityWarning;
+
+  /// No description provided for @managedProjectCompilerSeverityNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Note'**
+  String get managedProjectCompilerSeverityNote;
+
+  /// No description provided for @managedProjectCompilerFileLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get managedProjectCompilerFileLabel;
+
+  /// No description provided for @managedProjectCompilerLineLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Line'**
+  String get managedProjectCompilerLineLabel;
+
+  /// No description provided for @managedProjectCompilerColumnLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Column'**
+  String get managedProjectCompilerColumnLabel;
+
+  /// No description provided for @managedProjectCompilerOmittedDiagnostics.
+  ///
+  /// In en, this message translates to:
+  /// **'additional compiler messages omitted'**
+  String get managedProjectCompilerOmittedDiagnostics;
+
+  /// No description provided for @managedTestReleaseVoiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Text & Voice'**
+  String get managedTestReleaseVoiceTitle;
+
+  /// No description provided for @managedTestReleaseVoiceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the Voice build check below for the current saved project version.'**
+  String get managedTestReleaseVoiceDescription;
+
+  /// No description provided for @managedTestReleaseVoiceAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Check Voice'**
+  String get managedTestReleaseVoiceAction;
+
+  /// No description provided for @managedTestReleaseDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedTestReleaseDataAssetsTitle;
+
+  /// No description provided for @managedTestReleaseDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Staged DataAssets are visible in Problems, but no complete project-wide build evidence exists yet.'**
+  String get managedTestReleaseDataAssetsDescription;
+
+  /// No description provided for @managedTestReleaseDataAssetsAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review DataAssets'**
+  String get managedTestReleaseDataAssetsAction;
+
+  /// No description provided for @managedTestReleasePlayableBuildTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Playable files'**
+  String get managedTestReleasePlayableBuildTitle;
+
+  /// No description provided for @managedTestReleasePlayableBuildDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a checked playable build from this exact saved project version.'**
+  String get managedTestReleasePlayableBuildDescription;
+
+  /// No description provided for @managedTestReleasePlayableBuildBlockedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'No exact complete project-build evidence exists for this saved version yet.'**
+  String get managedTestReleasePlayableBuildBlockedReason;
+
+  /// No description provided for @managedTestReleaseCreatePlayableFilesAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Create playable files'**
+  String get managedTestReleaseCreatePlayableFilesAction;
+
+  /// No description provided for @managedTestReleaseDeploymentTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation'**
+  String get managedTestReleaseDeploymentTitle;
+
+  /// No description provided for @managedTestReleaseDeploymentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Install an exactly checked playable build into the configured game.'**
+  String get managedTestReleaseDeploymentDescription;
+
+  /// No description provided for @managedTestReleaseDeploymentBlockedReason.
+  ///
+  /// In en, this message translates to:
+  /// **'No exact deployable-build evidence exists for this saved project version yet.'**
+  String get managedTestReleaseDeploymentBlockedReason;
+
+  /// No description provided for @managedTestReleaseInstallAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Install'**
+  String get managedTestReleaseInstallAction;
+
+  /// No description provided for @managedProjectCommandBarCurrentSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Current section: {section}'**
+  String managedProjectCommandBarCurrentSection(String section);
+
+  /// No description provided for @managedProjectCommandBarOrientationSemantics.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {project}. Current section: {section}.'**
+  String managedProjectCommandBarOrientationSemantics(
+    String project,
+    String section,
+  );
+
+  /// No description provided for @managedProjectCommandBarUndoLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get managedProjectCommandBarUndoLabel;
+
+  /// No description provided for @managedProjectCommandBarSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get managedProjectCommandBarSearchLabel;
+
+  /// No description provided for @managedProjectCommandBarCreateLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get managedProjectCommandBarCreateLabel;
+
+  /// No description provided for @managedProjectCommandBarProblemsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems'**
+  String get managedProjectCommandBarProblemsLabel;
+
+  /// No description provided for @managedProjectCommandBarHistoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'History'**
+  String get managedProjectCommandBarHistoryLabel;
+
+  /// No description provided for @managedProjectCommandBarSettingsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get managedProjectCommandBarSettingsLabel;
+
+  /// No description provided for @managedProjectCommandBarMoreActionsTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'More project actions'**
+  String get managedProjectCommandBarMoreActionsTooltip;
+
+  /// No description provided for @managedProjectCommandBarBusyLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Finishing the current project action…'**
+  String get managedProjectCommandBarBusyLabel;
+
+  /// No description provided for @managedProjectCommandBarBusyDisabledReason.
+  ///
+  /// In en, this message translates to:
+  /// **'Wait for the current project action to finish.'**
+  String get managedProjectCommandBarBusyDisabledReason;
 }
 
 class _AppLocalizationsDelegate

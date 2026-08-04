@@ -1,4 +1,5 @@
 pub mod as_cache;
+pub mod asset;
 pub mod audio;
 pub mod catalog;
 pub mod config;
@@ -7,14 +8,37 @@ pub mod dump;
 pub mod dump_mod;
 pub mod gen;
 pub mod gui_model;
+pub mod guide;
 pub mod loc;
+pub mod location;
+pub mod location_catalog;
+pub mod mcp;
 pub mod mgr;
 pub mod modcmd;
 pub mod package;
 pub mod scaffold;
+pub mod story_catalog;
 pub mod stubs;
 pub mod sync;
 pub mod texture;
+pub mod voice;
+
+/// Case-insensitive substring test shared by every bounded listing's `--filter`.
+///
+/// It lives here rather than beside one of them because the two commands answer the same question
+/// about different files, and a fold that drifted apart would make `voice list --filter X` and
+/// `audio list --filter X` disagree about what "contains" means -- silently, and only for the
+/// callers whose text is not plain ASCII.
+///
+/// The fold is `str::to_lowercase`, which is what `gore_vo`'s `fold_case` applies to a voice
+/// `--basename`. Folding only ASCII would move a false negative one code point up instead of
+/// removing it: German archives are the documented target, and `--filter MÜLLER` must not report
+/// nothing about an archive where `extract --basename DIA_MÜLLER_01.OGG` resolves. `needle` is
+/// already lowercased by the caller, once per run rather than once per candidate; an empty needle
+/// keeps everything.
+pub fn contains_case_insensitive(haystack: &str, lowercase_needle: &str) -> bool {
+    haystack.to_lowercase().contains(lowercase_needle)
+}
 
 /// Validate that `name` is a safe single-component mod name that can be
 /// appended to a path without escaping the parent directory.
@@ -89,5 +113,23 @@ mod mod_name_tests {
     #[test]
     fn path_with_prefix_rejected() {
         assert!(validate_mod_name("subdir/MyMod").is_err());
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::contains_case_insensitive;
+
+    #[test]
+    fn the_shared_filter_folds_past_ascii_so_one_spelling_is_not_two_answers() {
+        // Both listings feed this from a `--filter` a person typed. `to_ascii_lowercase` would keep
+        // `MÜLLER` from matching `DIA_Müller_01.ogg` and answer "no such recording" about a file
+        // that is right there, and an FMOD bank with an umlaut in a sample name would go the same
+        // way. An empty needle is a filter that was given nothing to exclude, so it excludes
+        // nothing.
+        assert!(contains_case_insensitive("DIA_Müller_01.ogg", "müller"));
+        assert!(contains_case_insensitive("SFX_UI_Click", "ui_click"));
+        assert!(contains_case_insensitive("anything", ""));
+        assert!(!contains_case_insensitive("SFX_UI_Click", "orcdog"));
     }
 }

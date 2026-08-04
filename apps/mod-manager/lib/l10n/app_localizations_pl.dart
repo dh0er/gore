@@ -9,6 +9,16 @@ class AppLocalizationsPl extends AppLocalizations {
   AppLocalizationsPl([String locale = 'pl']) : super(locale);
 
   @override
+  String get recoveryAction => 'Odzyskaj';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Odzyskać przerwane wdrożenie i usunąć częściowo wdrożone pliki?';
+
+  @override
+  String get statusRecoveryRequired => 'Wymagane odzyskiwanie';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

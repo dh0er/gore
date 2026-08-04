@@ -1,5 +1,8 @@
 {
   "@@locale": "de",
+  "recoveryAction": "Wiederherstellen",
+  "recoveryRequiredConfirm": "Unterbrochene Bereitstellung wiederherstellen und alle teilweise bereitgestellten Dateien entfernen?",
+  "statusRecoveryRequired": "Wiederherstellung erforderlich",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Einstellungen",

@@ -75,7 +75,10 @@ impl DataType {
 
     /// Base type keyword/name without any leading `const` (for value lookups).
     pub fn base_name(&self, refs: &RefResolver) -> String {
-        self.render(refs).trim_start_matches("const ").trim_end_matches('@').to_string()
+        self.render(refs)
+            .trim_start_matches("const ")
+            .trim_end_matches('@')
+            .to_string()
     }
 }
 

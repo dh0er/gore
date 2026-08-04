@@ -1,113 +1,172 @@
-# AngelScript decompiler — completeness & known gaps
+# AngelScript decompiler — completeness and known gaps
 
-**Status: NOT complete.** The decompiler recovers the overwhelming majority of function
-bodies, but a small tail cannot be reconstructed correctly and is emitted as
-signature-preserving **stubs**. This document records exactly what is missing and why, so the
-gaps are not mistaken for finished work.
+**Status: complete body coverage for the measured 2026-07-12 build 24169431 baseline, but not
+lossless.** The current emitter reconstructs every ordinary function body it writes from the
+shipped cache. When it cannot prove that a body is correct, it still keeps the declaration and
+emits a clearly marked, signature-preserving stub instead of silently inventing logic; the measured
+24169431 cache has no such fallback body. This retained historical measurement is not a current-build
+qualification.
 
-## Headline numbers
+## Retained measured baseline
 
-Measured on the full shipped cache (`PrecompiledScript_Shipping.Cache`, 7264 modules,
-~162,831 functions), with the Binds.Cache native API loaded:
+Measured on 2026-07-12 against build 24169431, the then-current hotfix
+`PrecompiledScript_Shipping.Cache` (SHA-256
+`1018F1CFE6B99A650EECB33AFB96752D691D2088EAD27808971B812F04ECB4C2`), with the matching
+`Binds.Cache` loaded and **without** `GORE_AS_STUBLIST`:
 
 | Metric | Value |
 |--------|-------|
-| Functions with a fully recovered body | ~160,578 (**98.62%**) |
-| Functions emitted as a stub | ~2,253 (**1.38%**) |
-| — of which proactive (category A, no loop) | ~1,046 |
-| — of which force-stubbed compile failures (category B) | ~1,207 |
-| Modules containing ≥1 stub | 620 / 7265 |
-| In-game compile (all modules) | **100%** — the emitted tree compiles |
+| Emitted modules | 7,305 |
+| Raw cache function records | 156,251 |
+| Emitted body-bearing functions | 55,403 |
+| Bodies emitted without a fallback stub | 55,403 (**100%**) |
+| Signature-preserving stubs | 0 (**0%**) |
+| Modules containing at least one stub | 0 |
 
-The 100% compile rate is *not* the same as 100% recovery: it is achieved by stubbing the
-functions the decompiler cannot render correctly (see *force-stub loop* below). Every stub is
-a real gap. The category-B count is inflated by the force-stub mechanism keying on
-`Class::method` *names*, so stubbing one failing overload also stubs its (possibly fine)
-same-named siblings — the true unrecoverable count is somewhat lower.
+The counts describe functions that `emit-all` emits. A non-stub body is one the structurer could
+render; this percentage is **not** a semantic byte-faithfulness score. Deep argument/dataflow
+mistakes can exist in otherwise complete-looking source and are measured separately by the
+semantic `bytediff` oracle and game compiler. Compiler-generated special functions such
+as `__InitDefaults` are intentionally omitted from editable source. Existing-module edits can now
+carry the proven base records, compiler wrappers, behavior functions, and full method tables
+byte-for-byte through the strict base-keyspace remap path, but authored source changes to those
+defaults are deliberately refused. Separately, the offline `default-sites` / `patch-default` path
+can change a uniquely proven, branch-free direct scalar assignment using a semantic selector and
+raw compare-and-swap guard. It cannot reconstruct or edit arbitrary class-default data. A fresh
+whole-tree game-compiler run reached
+the real generator and the diagnostics callback hook captured concrete file/line/column errors
+before the compiler exited without publishing a development cache. Those diagnostics exposed
+three generic emitter residues, which are fixed in the current tree. A final controlled compile of
+the 7,305-module, zero-stub tree completed successfully with the hardened helper and produced a
+structurally complete 91,181,145-byte development cache (SHA-256
+`FD868A0B46E71E93552F774435940FB9146216156C9E2160DE80C9FBCBED0EC1`). A separate intentional unknown-symbol
+compile proved normal `file:line:column: error` output and correctly accepted no cache. Both
+transactions restored every installed source, JIT artifact, proxy, and shipping cache byte-for-byte.
+The percentages still measure decompiler body coverage, not semantic byte identity.
 
-## What a stub is
+Reproduce the measurement with:
 
-Only the **body** is replaced; the declaration is byte-correct, so the module still compiles
-and every other function around it is real source:
+```text
+GORE_AS_BINDS=.../Binds.Cache gore as emit-all <cache> <out>
+rg -o 'stub \[[^]]+\]' <out>
+```
+
+`emit-all` now distinguishes raw cache function records from functions for which it actually
+writes an editable body. It also prints exact stubbed module/function totals, so no filename-based
+estimate is needed.
+
+## Remaining stubs
+
+None in the measured 24169431 corpus. This is retained historical evidence, not a measurement of a
+newer current build and not a promise that arbitrary future bytecode shapes will recover: every
+unsupported or unproved construct still takes the visible signature-preserving stub path.
+
+These are proactive stubs from the structured emitter. The old force-stub workflow and its
+thousands of name-keyed compile-failure stubs are no longer part of this baseline.
+
+The generalized `Thiscall1` stack-frame fix removed 17 fallback bodies in the measured 24169431
+baseline. It uses
+the opcode's physical stack arity independently from rendered argument arity, preserving deferred
+outer `FName`/object arguments while consuming compiler-injected inner defaults. This cleared all
+repeated `SetupTransitions` delegate cases and also corrected deep arguments in already
+non-stubbed bodies; no function-name-specific rewrite is involved. The latter is why stub counts
+alone must never be treated as a semantic-completeness proof.
+
+All formerly residual operand/type stubs are now recovered generically. Owner-safe native bind
+arity inference recovered the integer/static-name cases; a strictly typed PSF copy-constructor
+proof recovered the remaining copy patterns; and native struct-field enum metadata now wins over
+the enclosing handle-owner fallback for `LoadRObjR`/`LoadVObjR -> PshRPtr`. Positive real-cache
+tests and negative bytecode mutations cover each proof. There are no function-name-specific
+exceptions.
+
+## What a stub means
+
+Only the body is replaced. The class/function declaration, parameters, return type and relevant
+annotations remain available, while the original bytecode can still be inspected with
+`gore as disasm`:
 
 ```angelscript
 bool DoesEntryApplyToCurrentSituation_Implementation()
 {
-    // body not fully recovered — stub [<reason>]
-    bool __r; return __r;
+    // body not fully recovered — stub [argmismatch:argtype]
+    return false;
 }
 ```
 
-A stub preserves the signature (name, parameter types, return type, `UFUNCTION()`/`UPROPERTY()`
-markers, `const`) but **loses the original logic**. The raw bytecode for a stubbed function is
-still inspectable via `gore as disasm <needle>`.
+A stub is therefore safe and visible, but it is not a faithful implementation. Editing one
+requires reconstructing its body manually or first extending the decompiler.
 
-## Two categories of gap
+## Root causes and next work
 
-### A. The decompiler genuinely cannot render the body (~1,046 functions, "raw" stubs)
+1. **Generated defaults are retained; direct scalars have a narrow offline patch path.**
+   `compile-module --op edit` carries
+   existing `__InitDefaults` plus every emitter-omitted executable record only after exact
+   header/tail/reference, declaration/layout, method-table, and cache-wide collision proofs. An
+   authored CDO `default` token, new-symbol remap, unsupported `__*` shape, or any metadata drift
+   fails closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
+   inspect and copy-on-write patch only a unique, branch-free
+   `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
+   (including parsed-kind proof for script enums),
+   a v4 `(module, class, field_owner, field, value_type, ancestry_profile)` identity with proven target-to-owner ancestry, raw
+   CAS, one terminal `RET`, and full-cache postconditions. Complex expressions, structs, and
+   containers remain unsupported by that scalar workflow. Separately, `gore as tag-map-sites` and
+   `patch-tag-map` can inspect and copy-on-write patch only an already-present entry in the sealed
+   native `GameplayTag`-to-`float32` map shape; they cannot add a key or map, resize bytecode, or
+   author arbitrary map defaults. See
+   [`docs/guide/angelscript-defaults.md`](../../docs/guide/angelscript-defaults.md). A faithful
+   source representation is still required before arbitrary class-default authoring can be
+   claimed; new modules may continue to use explicit defaults through `--op add`.
+2. **Whole-tree compiler gate -- passed for the then-current installed 1.0.3 hotfix.** The shipping
+   build suppresses AngelScript diagnostics from
+   stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
+   callback-body fingerprint to attach to the per-error `asSMessageInfo` callback. It prints normal
+   file/line/column diagnostics only when the raw signature is unique and all five message-field
+   offsets verify, and automatically falls back to the unhooked compiler when either gate is absent
+   or injection cannot be confirmed. Controlled runs with the predecessor capture helper exposed
+   concrete generic emitter residues, compiled the corrected whole tree successfully, and surfaced
+   the expected normalized error for an intentional failure. The exact shipped
+   structure-hardened helper (`17E0AD3033C31ADD311E3C25BA63615E481C83DCF8E96E83D9B3AC088E55C01C`)
+   has now repeated both gates on installed 1.0.3: the corrected whole tree compiled to a
+   structurally complete 91,321,157-byte cache, while an intentional unknown-symbol compile
+   returned the normal `file:line:column: error` diagnostic and accepted no output. Both runs
+   preserved the complete loose-source and JIT trees byte-for-byte. Archived 1.0.0 through 1.0.3
+   executables pass the same offline structural check; runtime injection remains proven only on
+   the installed 1.0.3 executable.
 
-These stub *regardless* of the compiler — the structured emitter detects it cannot produce a
-correct body and bails out proactively. Reason codes appear in the stub comment; regenerate
-the breakdown with:
+   The compiler library now also exposes a bounded structured report instead of forcing callers
+   to recover diagnostics from formatted error strings. It retains file, line, column, severity,
+   and message together with one of `Captured`, `CaptureInvalid`, `UnavailableFallback`,
+   `UnavailableWithoutFallback`, `ProcessExitUnconfirmed`, or `Disabled`. True signature, hook, or
+   preflight unavailability runs the normal generator exactly once. If the first generator has
+   already exited before capture becomes available, `UnavailableWithoutFallback` keeps that first
+   result and never starts a second process. Invalid, truncated, oversized, or unrepresentable
+   capture becomes `CaptureInvalid` and rejects an otherwise usable cache; it is not treated as
+   clean hook unavailability. An unconfirmed compiler-process exit exposes no possibly
+   live-written diagnostics, preserves recovery artifacts, and never starts a fallback. Raw and
+   formatted capture are capped at 8 MiB; the structured envelope permits at most 65,536 records,
+   32 KiB per filename, 64 KiB per message, and 16 MiB retained diagnostic text. This is a native
+   API foundation. The managed exact-current Quest and NPC compiler checks now consume this
+   structured report while compiling their derived managed source. That integration does not widen
+   executable-generation admission, callback-runtime qualification, or the managed source scope;
+   unsupported diagnostics continue through the normal fallback contract.
 
-```
-GORE_AS_BINDS=.../Binds.Cache gore as emit-all <cache> <out>   # no GORE_AS_STUBLIST
-grep -rhoE 'stub \[[^]]*\]' <out> | sort | uniq -c | sort -rn
-```
-
-| Reason | Count | Why |
-|--------|-------|-----|
-| `argmismatch:argint` | ~492 | A call argument the decompiler recovered as a plain integer where the callee wants a different scalar/enum/handle — the operand's real type isn't pinned by any side table. |
-| `argmismatch:argtype` | ~376 | A call argument whose recovered struct/object type can't match the callee parameter — same root cause (no slot-type inference). |
-| `opcode-uncovered` | ~164 | The function uses an asBC opcode the stack machine in `cache/structure.rs` does not yet model (and the conservative fixes now bail here rather than silently dropping it). |
-| `argmismatch:copyctor` | ~12 | A compiler-generated struct copy-constructor / `opAssign` on `this` — has no hand-written source form to recover. |
-| `unresolved-operand` | ~2 | A comparison/operand left a `?` placeholder: the value tested was produced by an op whose result the decompiler couldn't track. |
-
-### B. The body decompiles but does not COMPILE (~1,207 functions, force-stubbed)
-
-The structured emitter produces a body, but the in-game AngelScript compiler rejects it, so the
-**force-stub loop** routes it to a clean stub (emit → headless compile → collect the failing
-`Compiling Class::method` lines → `GORE_AS_STUBLIST` → re-emit → repeat until the compiler
-reports zero diagnostics). The dominant rejection classes:
-
-| Class | Why it's hard |
-|-------|---------------|
-| **Arg-type mismatch** (`int` → `FGameplayTag` / `FRememberedPerception`, `EPerceptionCharacterType` → `int`, …) | The decompiler recovers arg *values* and *count* but not always the exact *type*. Bytecode is type-erased at the operand level; reconstructing the precise struct/enum type of a temporary needs full slot-type inference that isn't implemented. |
-| **GAS gameplay-tag / delegate patterns** | These rely on the `__STATIC_NAME(idx)` accessor and delegate-handle plumbing, where the recovered statement boundaries break the dataflow (the resolved `n"Tag"` value isn't threaded into the call that consumes it). The tag/delegate argument ends up dropped or misplaced. |
-| **`'X' is not a member of 'int'`** | A local the decompiler couldn't type is hoisted as the default `int`, but the body uses it as a struct/object. Correct typing needs the same slot-type inference. |
-| **`No default constructor`** | A recovered default-return / default-local of a value type that has no parameterless constructor. |
-| **`Illegal operation`, `loses precision`, `Result of expression unused`** | Residual mis-modelled arithmetic / cast / discarded-value cases. |
-
-Key property: these functions almost always fail for **several** of the above reasons at once,
-so fixing any single class does not reduce the stub count much — the function only flips to
-"compiles" when *every* defect in it is fixed. That is why the remaining tail is stubborn.
-
-## Why the gaps exist (root causes)
-
-1. **Type erasure in bytecode.** asBC addresses operands by stack slot, not by type. Names and
-   high-level types are reconstructed from side tables (FunctionReferences params/returns,
-   PropertyReferences, the class hierarchy, Binds.Cache native signatures). Where a temporary's
-   type isn't pinned by any of those, the decompiler guesses (`int` default) — wrong guesses
-   become compile errors. **Full slot-type inference is the single biggest missing piece.**
-2. **Native signatures only carry arity, not always exact param types at the call.** Binds.Cache
-   gives `(class, name) → arity` (used to trim phantom args), but the per-argument type
-   reconstruction at a call site still depends on operand tracking.
-3. **Statement-boundary loss in compiler-generated idioms.** GAS tag/delegate registration and
-   struct copy/destruct behaviours don't map 1:1 to source statements; the stack-machine
-   reconstruction splits them in ways that lose the original dataflow.
-4. **Unmodelled opcodes.** A handful of asBC ops aren't yet handled (category A above).
-
-## Path to higher completeness (not yet done)
-
-- **Slot-type inference pass**: propagate types across the operand stack (from known producers
-  — call returns, field loads, casts — to consumers) so temporaries get their real struct/enum
-  type instead of the `int` default. This would address arg-type mismatches and the
-  `not-a-member-of-int` class — the largest buckets.
-- **Model the remaining asBC opcodes** to clear category A `opcode-uncovered`.
-- **GAS idiom recognition**: special-case the tag-event / delegate-handle registration patterns
-  to thread the `n"Tag"` value into its consuming call.
-
-Until then: per-module editing of any **non-stub** function (99.4% of functions) round-trips
-cleanly; editing a **stub** function means rewriting its body by hand (signature is provided,
-raw bytecode available via `disasm`). See `work/reversing/gore-as/` (local scratch) for the
-headless compile harness and the current force-stub list.
+The mixed-RVO switch in `MakeNewCrimeRegisterData` is recovered with a per-exit proof: each early
+bare-RET edge must contain exactly one resolved RVO store, and removing that store in the negative
+regression atomically restores the stub. `UCBT_CompleteSequence::Tick` is now recovered by a
+bounded symbolic header-DAG proof plus single-entry, dominance, unique-backedge and fully
+structured-body gates. Its switch accepts only the exact backward loop-continue target as an early
+exit, stops at the proven loop exit, and leaves the physically later default and outer return tail
+under their correct owners. Elided header temporaries additionally require path-local definitions
+and a whole-body/exit no-read-before-overwrite proof. Numeric constants preserve IEEE and unsigned
+high-bit values; copy and cast chains retain destination signedness; enum-byte constants with
+unknown underlying signedness fail closed; and full-register jumps require a proven canonical
+boolean rather than a one-byte register copy. Synthetic negative regressions cover those type and
+liveness gates plus a second/wrong backedge, side-effecting or non-boolean header, outside entries,
+an enclosing-loop break target and ambiguous joins; every deviation atomically restores the
+`JMPP` stub path. The final zero-stub emission passes the whole-tree game compiler. A targeted
+semantic-oracle gate for `UCBT_CompleteSequence::Tick` aligns all 104 original operations and
+classifies the remaining differences as benign N1/N2/N4/N5 build/allocation noise with zero
+semantic differences. That is a qualification of the formerly stubbed function, not a claim that
+the entire emitted corpus is byte-identical. Use the generated-default limitations and the semantic
+oracle, rather than compileability or zero stubs alone, when deciding whether a broad edit is
+faithful.

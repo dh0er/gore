@@ -15,10 +15,16 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     // symlinked path must not pass. The walker skips symlinks, so a symlinked
     // required file would otherwise validate but be omitted from the zip.
     if !is_real_file(&enabled_txt) {
-        bail!("mod missing required real file 'enabled.txt' in '{}'", mod_dir.display());
+        bail!(
+            "mod missing required real file 'enabled.txt' in '{}'",
+            mod_dir.display()
+        );
     }
     if !is_real_file(&main_lua) {
-        bail!("mod missing required real file 'Scripts/main.lua' in '{}'", mod_dir.display());
+        bail!(
+            "mod missing required real file 'Scripts/main.lua' in '{}'",
+            mod_dir.display()
+        );
     }
 
     // The final path component is the mod name, used as the top directory
@@ -56,9 +62,8 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
     // symlink whose target is inside the mod dir), canonicalize follows it; a
     // non-existent `out` resolves to its canonical parent + filename. Either
     // landing inside the mod dir would let File::create truncate a source file.
-    let resolved_out = fs::canonicalize(&out).unwrap_or_else(|_| {
-        out_parent_abs.join(out.file_name().unwrap_or_default())
-    });
+    let resolved_out = fs::canonicalize(&out)
+        .unwrap_or_else(|_| out_parent_abs.join(out.file_name().unwrap_or_default()));
     if out_parent_abs.starts_with(&mod_dir_abs) || resolved_out.starts_with(&mod_dir_abs) {
         bail!(
             "output path '{}' resolves inside the mod directory '{}'; choose a location outside it",
@@ -66,18 +71,24 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
             mod_dir.display()
         );
     }
-    let zip_file = File::create(&out)
-        .with_context(|| format!("creating zip '{}'", out.display()))?;
+    let zip_file =
+        File::create(&out).with_context(|| format!("creating zip '{}'", out.display()))?;
     let mut zip = ZipWriter::new(zip_file);
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     // The zip was just created; if it lives inside mod_dir, exclude it from the
     // walk so the archive doesn't try to package itself.
     let out_canon = fs::canonicalize(&out).ok();
 
     // Walk mod_dir recursively and add every file, prefixed with mod_name/
-    add_dir_to_zip(&mut zip, &mod_dir, &mod_dir, &mod_name, options, out_canon.as_deref())?;
+    add_dir_to_zip(
+        &mut zip,
+        &mod_dir,
+        &mod_dir,
+        &mod_name,
+        options,
+        out_canon.as_deref(),
+    )?;
 
     zip.finish().context("finalizing zip")?;
     println!("Packaged mod -> {}", out.display());
@@ -87,7 +98,9 @@ pub fn run(mod_dir: PathBuf, out: PathBuf) -> Result<()> {
 /// True only for a real regular file (not a directory, not a symlink). Uses
 /// symlink_metadata so a symlinked path is rejected (the walker skips symlinks).
 fn is_real_file(path: &Path) -> bool {
-    fs::symlink_metadata(path).map(|m| m.is_file()).unwrap_or(false)
+    fs::symlink_metadata(path)
+        .map(|m| m.is_file())
+        .unwrap_or(false)
 }
 
 fn add_dir_to_zip(
@@ -138,8 +151,8 @@ fn add_dir_to_zip(
             add_dir_to_zip(zip, base, &path, mod_name, options, out_skip)?;
         } else {
             zip.start_file(&zip_name, options)?;
-            let content = fs::read(&path)
-                .with_context(|| format!("reading '{}'", path.display()))?;
+            let content =
+                fs::read(&path).with_context(|| format!("reading '{}'", path.display()))?;
             zip.write_all(&content)?;
         }
     }
@@ -161,7 +174,10 @@ mod package_tests {
         fs::create_dir_all(mod_dir.join("Scripts")).unwrap();
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
-        assert!(run(mod_dir, out).is_err(), "a directory at enabled.txt must fail");
+        assert!(
+            run(mod_dir, out).is_err(),
+            "a directory at enabled.txt must fail"
+        );
     }
 
     #[cfg(unix)]
@@ -175,7 +191,10 @@ mod package_tests {
         // out.zip lives OUTSIDE mod_dir but symlinks to a source file INSIDE it.
         let out = tmp.path().join("out.zip");
         std::os::unix::fs::symlink(mod_dir.join("Scripts").join("main.lua"), &out).unwrap();
-        assert!(run(mod_dir.clone(), out).is_err(), "symlinked output into mod dir must be rejected");
+        assert!(
+            run(mod_dir.clone(), out).is_err(),
+            "symlinked output into mod dir must be rejected"
+        );
         assert_eq!(
             fs::read_to_string(mod_dir.join("Scripts").join("main.lua")).unwrap(),
             "-- lua",
@@ -193,7 +212,10 @@ mod package_tests {
         fs::write(mod_dir.join("enabled.txt"), "").unwrap();
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("out.zip");
-        assert!(run(mod_dir, out).is_err(), "unsafe archive-root name must be rejected");
+        assert!(
+            run(mod_dir, out).is_err(),
+            "unsafe archive-root name must be rejected"
+        );
     }
 
     #[cfg(unix)]
@@ -212,8 +234,10 @@ mod package_tests {
         let names: Vec<String> = (0..archive.len())
             .map(|i| archive.by_index(i).unwrap().name().to_string())
             .collect();
-        assert!(!names.iter().any(|n| n.contains("../")),
-            "backslash must not be normalized into a traversal: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.contains("../")),
+            "backslash must not be normalized into a traversal: {names:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -228,7 +252,10 @@ mod package_tests {
         std::os::unix::fs::symlink(&real, mod_dir.join("enabled.txt")).unwrap();
         fs::write(mod_dir.join("Scripts").join("main.lua"), "-- lua").unwrap();
         let out = tmp.path().join("MyMod.zip");
-        assert!(run(mod_dir, out).is_err(), "a symlinked enabled.txt must be rejected");
+        assert!(
+            run(mod_dir, out).is_err(),
+            "a symlinked enabled.txt must be rejected"
+        );
     }
 
     #[cfg(unix)]
@@ -251,10 +278,14 @@ mod package_tests {
         let names: Vec<String> = (0..archive.len())
             .map(|i| archive.by_index(i).unwrap().name().to_string())
             .collect();
-        assert!(!names.iter().any(|n| n.contains("secret.txt")),
-            "must not follow the symlink: {names:?}");
-        assert!(!names.iter().any(|n| n.contains("/link")),
-            "symlink itself must not be archived: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.contains("secret.txt")),
+            "must not follow the symlink: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("/link")),
+            "symlink itself must not be archived: {names:?}"
+        );
     }
 
     #[test]
@@ -328,10 +359,16 @@ mod package_tests {
         // Output inside the mod dir must be rejected BEFORE any file is created
         // (otherwise File::create could truncate a source file).
         let out_zip = mod_dir.join("MyMod.zip");
-        assert!(run(mod_dir.clone(), out_zip.clone()).is_err(), "in-mod-dir output must be rejected");
+        assert!(
+            run(mod_dir.clone(), out_zip.clone()).is_err(),
+            "in-mod-dir output must be rejected"
+        );
         assert!(!out_zip.exists(), "no archive should have been created");
         // A source file inside the mod dir must remain intact.
-        assert_eq!(fs::read_to_string(scripts_dir.join("main.lua")).unwrap(), "-- lua");
+        assert_eq!(
+            fs::read_to_string(scripts_dir.join("main.lua")).unwrap(),
+            "-- lua"
+        );
     }
 
     #[test]

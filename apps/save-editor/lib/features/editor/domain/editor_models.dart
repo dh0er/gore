@@ -10,17 +10,33 @@ class TypedPropertyHit {
     required this.type,
     required this.value,
     required this.editable,
+    this.id = '',
+    this.source = 'private',
+    this.kind = 'scalar',
+    this.structType,
+    this.editValue,
+    this.childCount = 0,
+    this.depth = 0,
   });
 
   factory TypedPropertyHit.fromJson(Map<String, Object?> json) {
     return TypedPropertyHit(
       path:
-          (json['path'] as List?)?.whereType<String>().toList(growable: false) ??
+          (json['path'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       display: json['display'] as String? ?? '',
       type: json['type'] as String? ?? '',
       value: json['value'] as String? ?? '',
       editable: json['editable'] as bool? ?? false,
+      id: json['id'] as String? ?? '',
+      source: json['source'] as String? ?? 'private',
+      kind: json['kind'] as String? ?? 'scalar',
+      structType: json['structType'] as String?,
+      editValue: json['editValue'],
+      childCount: (json['childCount'] as num?)?.toInt() ?? 0,
+      depth: (json['depth'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -30,6 +46,63 @@ class TypedPropertyHit {
   final String type;
   final String value;
   final bool editable;
+
+  /// Stable within one parsed save, independent of the active search/filter.
+  final String id;
+  final String source;
+  final String kind;
+  final String? structType;
+
+  /// Lossless JSON shape accepted by `private.typed.setValue`.
+  final Object? editValue;
+  final int childCount;
+  final int depth;
+
+  String get stableId => id.isEmpty ? '$source:${path.join('/')}' : id;
+
+  bool get isNativeStruct => kind == 'nativeStruct';
+}
+
+class TypedSearchSummary {
+  const TypedSearchSummary({
+    this.sources = const {},
+    this.kinds = const {},
+    this.types = const {},
+    this.editable = 0,
+    this.readOnly = 0,
+    this.typedSources = const [],
+  });
+
+  factory TypedSearchSummary.fromJson(Map<String, Object?> json) {
+    Map<String, int> counts(Object? raw) {
+      if (raw is! Map) return const {};
+      return {
+        for (final entry in raw.entries)
+          if (entry.key is String && entry.value is num)
+            entry.key as String: (entry.value as num).toInt(),
+      };
+    }
+
+    return TypedSearchSummary(
+      sources: counts(json['sources']),
+      kinds: counts(json['kinds']),
+      types: counts(json['types']),
+      editable: (json['editable'] as num?)?.toInt() ?? 0,
+      readOnly: (json['readOnly'] as num?)?.toInt() ?? 0,
+      typedSources:
+          (json['typedSources'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
+          const [],
+    );
+  }
+
+  final Map<String, int> sources;
+  final Map<String, int> kinds;
+  final Map<String, int> types;
+  final int editable;
+  final int readOnly;
+  final List<String> typedSources;
 }
 
 /// Result of a typed property search over the decoded private payload.
@@ -39,6 +112,9 @@ class TypedSearchResult {
     this.offset = 0,
     this.limit = 50,
     this.total = 0,
+    this.source = 'private',
+    this.summary = const TypedSearchSummary(),
+    this.warnings = const [],
     this.error,
   });
 
@@ -53,6 +129,17 @@ class TypedSearchResult {
       offset: (json['offset'] as num?)?.toInt() ?? 0,
       limit: (json['limit'] as num?)?.toInt() ?? 50,
       total: (json['total'] as num?)?.toInt() ?? 0,
+      source: json['source'] as String? ?? 'private',
+      summary: json['summary'] is Map
+          ? TypedSearchSummary.fromJson(
+              (json['summary'] as Map).cast<String, Object?>(),
+            )
+          : const TypedSearchSummary(),
+      warnings:
+          (json['warnings'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
+          const [],
     );
   }
 
@@ -60,6 +147,9 @@ class TypedSearchResult {
   final int offset;
   final int limit;
   final int total;
+  final String source;
+  final TypedSearchSummary summary;
+  final List<String> warnings;
   final String? error;
 
   /// Zero-based index of the current page.
@@ -208,8 +298,9 @@ class DifficultySettings {
     );
   }
 
-  static DifficultySettings? maybeFromJson(Object? json) =>
-      json is Map ? DifficultySettings.fromJson(json.cast<String, Object?>()) : null;
+  static DifficultySettings? maybeFromJson(Object? json) => json is Map
+      ? DifficultySettings.fromJson(json.cast<String, Object?>())
+      : null;
 
   final String? preset;
   final String? combat;
@@ -258,6 +349,7 @@ class SaveSlot {
     this.persistentProfileId,
     this.screenshot,
     this.difficulty,
+    this.isExternal = false,
   });
 
   factory SaveSlot.fromJson(Map<String, Object?> json) {
@@ -282,6 +374,47 @@ class SaveSlot {
       persistentProfileId: (json['persistentProfileId'] as num?)?.toInt(),
       screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
       difficulty: DifficultySettings.maybeFromJson(json['difficulty']),
+      isExternal: json['isExternal'] as bool? ?? false,
+    );
+  }
+
+  /// Build the sidebar entry for a save opened directly from an arbitrary
+  /// file. Detached saves deliberately carry no PersistentDataList profile:
+  /// an embedded numeric profile id is not proof that the file belongs to a
+  /// profile in the currently scanned game folder.
+  factory SaveSlot.fromInspection(
+    SaveInspection inspection, {
+    required bool isExternal,
+  }) {
+    final path = inspection.path ?? '';
+    final normalized = path.replaceAll('\\', '/');
+    final fileName = normalized.split('/').last;
+    final dot = fileName.lastIndexOf('.');
+    final slot = dot > 0 ? fileName.substring(0, dot) : fileName;
+    return SaveSlot(
+      path: path,
+      slot: slot.isEmpty ? 'external' : slot,
+      format: inspection.format,
+      fileSize: inspection.size,
+      sha1: inspection.sha1,
+      status: 'ok',
+      playerSaveName: inspection.playerSaveName,
+      persistentPlayerSaveName: isExternal
+          ? null
+          : inspection.persistentPlayerSaveName,
+      slotName: inspection.slotName,
+      compressionMethod: inspection.compressionMethod,
+      chunkCount: inspection.chunkCount,
+      chapterId: inspection.chapterId,
+      mapName: inspection.mapName,
+      timePlayedSeconds: inspection.timePlayedSeconds,
+      timeLoadedSeconds: inspection.timeLoadedSeconds,
+      quickSave: inspection.quickSave,
+      autoSave: inspection.autoSave,
+      persistentProfileId: isExternal ? null : inspection.persistentProfileId,
+      screenshot: inspection.screenshot,
+      difficulty: inspection.difficulty,
+      isExternal: isExternal,
     );
   }
 
@@ -305,6 +438,15 @@ class SaveSlot {
   final int? persistentProfileId;
   final ScreenshotSummary? screenshot;
   final DifficultySettings? difficulty;
+
+  /// True when this slot was opened directly and is not registered in the
+  /// scanned folder's PersistentDataList.sav.
+  final bool isExternal;
+
+  /// PersistentDataList still references this slot, but its expected `.sav`
+  /// file is absent. Missing rows remain visible for cleanup and are never
+  /// inspectable as save files.
+  bool get isMissing => status == 'missing';
 
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;
@@ -346,6 +488,7 @@ class SaveInspection {
     this.privateTotalChunkCount,
     this.privatePlayer = const PrivatePlayerSummary(),
     this.privateInventory = const PrivateInventorySummary(),
+    this.privateNpc = const PrivateNpcSummary(),
     this.privateProgression = const ProgressionOverview(),
     this.privateTypedParseStatus,
     this.privateTypedPropertyCount,
@@ -360,10 +503,12 @@ class SaveInspection {
     final privatePlayer = (private?['player'] as Map?)?.cast<String, Object?>();
     final privateInventory = (private?['inventory'] as Map?)
         ?.cast<String, Object?>();
+    final privateNpc = (private?['npc'] as Map?)?.cast<String, Object?>();
     final privateProgression = (private?['progression'] as Map?)
         ?.cast<String, Object?>();
     final privateStatus = private?['status'] as String?;
-    final typedParse = (private?['typedParse'] as Map?)?.cast<String, Object?>();
+    final typedParse = (private?['typedParse'] as Map?)
+        ?.cast<String, Object?>();
     return SaveInspection(
       format: json['format'] as String? ?? 'UNKNOWN',
       path: json['path'] as String?,
@@ -405,6 +550,7 @@ class SaveInspection {
       privateTotalChunkCount: (private?['totalChunkCount'] as num?)?.toInt(),
       privatePlayer: PrivatePlayerSummary.fromJson(privatePlayer),
       privateInventory: PrivateInventorySummary.fromJson(privateInventory),
+      privateNpc: PrivateNpcSummary.fromJson(privateNpc),
       privateProgression: ProgressionOverview.fromJson(privateProgression),
       privateTypedParseStatus: typedParse?['status'] as String?,
       privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
@@ -450,6 +596,7 @@ class SaveInspection {
 
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
+  final PrivateNpcSummary privateNpc;
   final ProgressionOverview privateProgression;
 
   /// Status of the strict typed property parse of the decoded private payload
@@ -468,6 +615,31 @@ class SaveInspection {
     const encoder = JsonEncoder.withIndent('  ');
     return encoder.convert(raw);
   }
+}
+
+/// NPC capabilities emitted by `inspect_save` under `private.npc`.
+///
+/// Relationship persistence needs a compatible `RelationshipByGlobalId` map;
+/// having a typed NPC attribute map alone is not enough. The UI therefore uses
+/// this per-save capability instead of assuming every decoded save can accept
+/// `private.npc.setRelationship`.
+class PrivateNpcSummary {
+  const PrivateNpcSummary({this.hasNpcs = false, this.writable = const []});
+
+  factory PrivateNpcSummary.fromJson(Map<String, Object?>? json) {
+    return PrivateNpcSummary(
+      hasNpcs: json?['hasNpcs'] == true,
+      writable:
+          (json?['writable'] as List?)?.whereType<String>().toList() ??
+          const [],
+    );
+  }
+
+  final bool hasNpcs;
+  final List<String> writable;
+
+  bool get canSetRelationship =>
+      writable.contains('private.npc.setRelationship');
 }
 
 class PrivatePlayerSummary {
@@ -618,6 +790,7 @@ class PrivateInventorySummary {
     this.scriptPaths = const [],
     this.properties = const [],
     this.writable = const [],
+    this.misalignedSlots = 0,
   });
 
   factory PrivateInventorySummary.fromJson(Map<String, Object?>? json) {
@@ -653,6 +826,10 @@ class PrivateInventorySummary {
       writable:
           (json?['writable'] as List?)?.whereType<String>().toList() ??
           const [],
+      misalignedSlots:
+          ((json?['slotIntegrity'] as Map?)?['misalignedSlots'] as num?)
+              ?.toInt() ??
+          0,
     );
   }
 
@@ -672,6 +849,18 @@ class PrivateInventorySummary {
   final List<String> scriptPaths;
   final List<String> properties;
   final List<String> writable;
+
+  /// Inventory slots anywhere in the save whose stored id no longer matches the
+  /// position they sit in — damage an older version of this editor left behind.
+  /// The game resolves a slot by that position, so it acts on the wrong item
+  /// until the save is repaired.
+  final int misalignedSlots;
+
+  /// Whether the core offers the whole-save slot repair for this save. The
+  /// WARNING keys off [misalignedSlots] alone — a save can be damaged without
+  /// the repair being on offer, and the reader still needs to know.
+  bool get canRepairSlots =>
+      misalignedSlots > 0 && writable.contains('private.inventory.repairSlots');
 
   bool get hasData =>
       candidateCount > 0 ||
@@ -727,12 +916,15 @@ class PrivateInventoryItem {
       count: (json['count'] as num?)?.toInt(),
       removable: json['removable'] as bool? ?? false,
       equipped: json['equipped'] as bool? ?? false,
-      upgrades: (json['upgrades'] as List?)
+      upgrades:
+          (json['upgrades'] as List?)
               ?.whereType<Map<Object?, Object?>>()
-              .map((u) => ArmorUpgrade(
-                    key: u['key'] as String? ?? '',
-                    value: u['value'] as String? ?? '',
-                  ))
+              .map(
+                (u) => ArmorUpgrade(
+                  key: u['key'] as String? ?? '',
+                  value: u['value'] as String? ?? '',
+                ),
+              )
               .toList() ??
           const [],
       slotId: (json['slotId'] as num?)?.toInt(),
@@ -905,6 +1097,7 @@ class BackupEntry {
     this.createdEpoch,
     this.playerSaveName,
     this.slotName,
+    this.name,
   });
 
   factory BackupEntry.fromJson(Map<Object?, Object?> json) {
@@ -918,6 +1111,7 @@ class BackupEntry {
       scope: json['scope'] as String? ?? 'save',
       playerSaveName: json['playerSaveName'] as String?,
       slotName: json['slotName'] as String?,
+      name: json['name'] as String?,
     );
   }
 
@@ -930,6 +1124,14 @@ class BackupEntry {
   final String scope;
   final String? playerSaveName;
   final String? slotName;
+
+  /// User-given label, kept beside the backup files. `null` when the user never
+  /// named this backup — the file name is the title then.
+  final String? name;
+
+  /// What to head the entry with: the label when there is one, else the file
+  /// name (which stays visible either way).
+  String get title => name?.isNotEmpty == true ? name! : fileName;
 
   bool get canRestore =>
       (scope == 'save' || scope == 'persistent_data_list') && status == 'ok';

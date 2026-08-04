@@ -45,9 +45,7 @@ use crate::bits::{BitReader, BitReaderRev};
 use crate::{Error, Result};
 use alloc::vec::Vec;
 
-use super::block::{
-    classify, parse_quantum_header, parse_stream_header, Quantum, QUANTUM_LEN,
-};
+use super::block::{classify, parse_quantum_header, parse_stream_header, Quantum, QUANTUM_LEN};
 
 /// Largest quantum the Kraken decoder produces in one inner step (128 KiB). A 256 KiB quantum
 /// is internally split into two of these, sharing history.
@@ -69,7 +67,10 @@ pub(crate) enum LzEvent {
     LzChunk { chunk_len: usize },
     /// The current LZ chunk's copy loop materialized a match covering the chunk-relative
     /// output range `[match_start, match_end)`.
-    Match { match_start: usize, match_end: usize },
+    Match {
+        match_start: usize,
+        match_end: usize,
+    },
 }
 
 /// [`decompress`], instrumented: identical decoding (the plain wrapper passes a no-op
@@ -159,8 +160,7 @@ fn decode_quantum<F: FnMut(LzEvent)>(
         if chunk.len() < 4 {
             return Err(Error::Truncated);
         }
-        let chunkhdr =
-            (chunk[0] as u32) << 16 | (chunk[1] as u32) << 8 | chunk[2] as u32;
+        let chunkhdr = (chunk[0] as u32) << 16 | (chunk[1] as u32) << 8 | chunk[2] as u32;
 
         if chunkhdr & 0x80_0000 == 0 {
             // Stored as entropy without any match copying: the chunk header *is* the array
@@ -186,7 +186,9 @@ fn decode_quantum<F: FnMut(LzEvent)>(
                 // `dst_start` is the global origin, so matches and the keyframe seed are
                 // relative to the entire stream, not the quantum.
                 let offset = dpos;
-                observe(LzEvent::LzChunk { chunk_len: dst_count });
+                observe(LzEvent::LzChunk {
+                    chunk_len: dst_count,
+                });
                 read_lz_table(mode, lz, out, dpos, dst_count, offset, scratch)?;
                 process_lz_runs(mode, out, dpos, dst_count, 0, scratch, observe)?;
                 src_pos += 3 + inner_size;
@@ -223,12 +225,14 @@ impl Scratch {
         let cap = quantum_cap.max(1);
         let try_vec_u8 = |n: usize| -> Result<Vec<u8>> {
             let mut v = Vec::new();
-            v.try_reserve_exact(n).map_err(|_| Error::OutputTooLarge(n))?;
+            v.try_reserve_exact(n)
+                .map_err(|_| Error::OutputTooLarge(n))?;
             Ok(v)
         };
         let try_vec_i32 = |n: usize| -> Result<Vec<i32>> {
             let mut v = Vec::new();
-            v.try_reserve_exact(n).map_err(|_| Error::OutputTooLarge(n))?;
+            v.try_reserve_exact(n)
+                .map_err(|_| Error::OutputTooLarge(n))?;
             Ok(v)
         };
         Ok(Scratch {
@@ -429,7 +433,10 @@ fn unpack_offsets(
         if multi_dist_scale != 1 {
             let extra = packed_offs_extra.ok_or(Error::Corrupt("kraken: missing offs extra"))?;
             for (k, o) in offs.iter_mut().enumerate() {
-                let low = *extra.get(k).ok_or(Error::Corrupt("kraken: offs extra short"))? as i32;
+                let low = *extra
+                    .get(k)
+                    .ok_or(Error::Corrupt("kraken: offs extra short"))?
+                    as i32;
                 *o = multi_dist_scale * *o - low;
             }
         }
@@ -460,7 +467,9 @@ fn unpack_offsets(
     for (i, &v) in packed_litlen.iter().enumerate() {
         let mut v = v as u32;
         if v == 255 {
-            let extra = *u32_len.get(u).ok_or(Error::Corrupt("kraken: u32 len underflow"))?;
+            let extra = *u32_len
+                .get(u)
+                .ok_or(Error::Corrupt("kraken: u32 len underflow"))?;
             v = extra.wrapping_add(255);
             u += 1;
         }
@@ -517,7 +526,9 @@ fn process_lz_runs<F: FnMut(LzEvent)>(
 
         // litlen == 3 → pull a long length from the len stream.
         if litlen == 3 {
-            litlen = *len.get(leni).ok_or(Error::Corrupt("kraken: len underflow"))? as usize;
+            litlen = *len
+                .get(leni)
+                .ok_or(Error::Corrupt("kraken: len underflow"))? as usize;
             leni += 1;
         }
         // Fresh offset candidate from the offs stream into slot 6.
@@ -547,14 +558,19 @@ fn process_lz_runs<F: FnMut(LzEvent)>(
         let m = if matchlen != 15 {
             matchlen + 2
         } else {
-            let extra = *len.get(leni).ok_or(Error::Corrupt("kraken: len underflow"))? as usize;
+            let extra = *len
+                .get(leni)
+                .ok_or(Error::Corrupt("kraken: len underflow"))? as usize;
             leni += 1;
             14 + extra
         };
         if m > dst_end - d {
             return Err(Error::Corrupt("kraken: match length out of bounds"));
         }
-        observe(LzEvent::Match { match_start: d - dpos, match_end: d + m - dpos });
+        observe(LzEvent::Match {
+            match_start: d - dpos,
+            match_end: d + m - dpos,
+        });
         copy_match(out, d, copyfrom, m);
         d += m;
     }
@@ -687,8 +703,7 @@ mod tests {
             let krk = read_vector(&std::format!("{name}.krk"));
             let raw = read_vector(&std::format!("{name}.raw"));
             assert_eq!(raw.len(), *len, "{name} raw len");
-            let out = decompress(&krk, *len)
-                .unwrap_or_else(|e| panic!("decode {name}: {e:?}"));
+            let out = decompress(&krk, *len).unwrap_or_else(|e| panic!("decode {name}: {e:?}"));
             assert_eq!(out, raw, "{name} roundtrip");
         }
     }

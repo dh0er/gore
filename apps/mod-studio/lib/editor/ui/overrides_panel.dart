@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 import '../../audio/domain/audio_replacements_notifier.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
+import '../../project/dialog_topics_notifier.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
 import '../domain/override_entry.dart';
@@ -11,7 +12,8 @@ import '../domain/overrides_notifier.dart';
 
 /// Unified "Changes" panel: lists every staged mod change across all
 /// domains (item value overrides, localized text edits, audio replacements,
-/// texture replacements, AngelScript modules), each row individually removable,
+/// texture replacements, AngelScript modules, runtime dialog topics), each row
+/// individually removable,
 /// searchable across all sections, with per-section and global clear actions.
 class OverridesPanel extends ConsumerStatefulWidget {
   const OverridesPanel({super.key});
@@ -42,6 +44,8 @@ class _OverridesPanelState extends ConsumerState<OverridesPanel> {
     final textures       = ref.read(textureReplacementsProvider.notifier);
     final scriptState    = ref.watch(scriptModsProvider);
     final scripts        = ref.read(scriptModsProvider.notifier);
+    final topicState     = ref.watch(dialogTopicsProvider);
+    final topics         = ref.read(dialogTopicsProvider.notifier);
 
     final scheme = Theme.of(context).colorScheme;
     final l10n   = AppLocalizations.of(context);
@@ -74,10 +78,14 @@ class _OverridesPanelState extends ConsumerState<OverridesPanel> {
       for (final e in scriptState.entries)
         if (matches([e.moduleName, e.relPath])) e,
     ];
+    final topicEntries = <DialogTopicDefinition>[
+      for (final e in topicState.entries)
+        if (matches([e.id, e.participantName, e.topicClass, e.sentinelClass])) e,
+    ];
 
-    final total   = overridesState.count + locState.entryCount + audioState.count + textureState.count + scriptState.count;
+    final total   = overridesState.count + locState.entryCount + audioState.count + textureState.count + scriptState.count + topicState.count;
     final isEmpty = total == 0;
-    final visible = overrideEntries.length + locPairs.length + audioEntries.length + textureEntries.length + scriptEntries.length;
+    final visible = overrideEntries.length + locPairs.length + audioEntries.length + textureEntries.length + scriptEntries.length + topicEntries.length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -110,6 +118,7 @@ class _OverridesPanelState extends ConsumerState<OverridesPanel> {
                         audio.clearAll();
                         textures.clearAll();
                         scripts.clearAll();
+                        topics.clearAll();
                       },
               ),
             ],
@@ -152,6 +161,15 @@ class _OverridesPanelState extends ConsumerState<OverridesPanel> {
                           ),
                           for (final row in locPairs)
                             _LocRow(row: row, notifier: locEdits),
+                        ],
+                        if (topicEntries.isNotEmpty) ...[
+                          _SectionHeader(
+                            'Runtime dialog topics',
+                            clearKey: const ValueKey('clear-section-dialog-topics'),
+                            onClear: topics.clearAll,
+                          ),
+                          for (final entry in topicEntries)
+                            _DialogTopicRow(entry: entry, notifier: topics),
                         ],
                         if (audioEntries.isNotEmpty) ...[
                           _SectionHeader(
@@ -322,6 +340,54 @@ class _LocRow extends StatelessWidget {
             icon: const Icon(Icons.remove_circle_outline, size: 18),
             tooltip: AppLocalizations.of(context).removeOverride,
             onPressed: () => notifier.removeEdit(row.locId, row.set),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DialogTopicRow extends StatelessWidget {
+  const _DialogTopicRow({required this.entry, required this.notifier});
+
+  final DialogTopicDefinition entry;
+  final DialogTopicsNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${entry.id}  ·  ${entry.participantName}',
+                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '${entry.topicClass}  →  ${entry.sentinelClass}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: scheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: ValueKey<String>('remove-dialog-topic-${entry.key}'),
+            icon: const Icon(Icons.remove_circle_outline, size: 18),
+            tooltip: AppLocalizations.of(context).removeOverride,
+            onPressed: () => notifier.remove(entry.id),
           ),
         ],
       ),

@@ -25,9 +25,9 @@ pub mod catalog;
 mod donor;
 
 use crate::properties::{self, ContainerEdit, PropertyValue};
-use crate::{map_key_string, struct_member, CoreError};
+use crate::{CoreError, map_key_string, struct_member};
 use catalog::{Kind, SkillDef};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The map key of the controlled protagonist's character-state entry.
 pub const HERO: &str = "Hero";
@@ -47,8 +47,7 @@ fn locate_active_effects<'a>(
     root: &'a properties::RootObject,
     actor: &str,
 ) -> Option<(Vec<String>, &'a [PropertyValue])> {
-    let (base_path, map_prop) =
-        properties::find_property_by_name(root, "ActiveEffectsByGlobalId")?;
+    let (base_path, map_prop) = properties::find_property_by_name(root, "ActiveEffectsByGlobalId")?;
     let PropertyValue::Map { entries, .. } = &map_prop.value else {
         return None;
     };
@@ -73,7 +72,8 @@ pub fn actor_has_active_effects(root: &properties::RootObject, actor: &str) -> b
 /// The current tier value for a learned skill. A suffix-less class (binary
 /// skill) has no tier, so its "learned" value is the sentinel `Learned`.
 fn current_value(tier: Option<&str>) -> String {
-    tier.map(str::to_string).unwrap_or_else(|| "Learned".to_string())
+    tier.map(str::to_string)
+        .unwrap_or_else(|| "Learned".to_string())
 }
 
 /// The ordered tier option VALUES a skill's dropdown offers, each as
@@ -380,7 +380,11 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
             // element.
             match same_category_donor.or(any_donor) {
                 Some(donor_idx) => {
-                    container_edit(payload, &array_path, ContainerEdit::ArrayDuplicate(donor_idx))?;
+                    container_edit(
+                        payload,
+                        &array_path,
+                        ContainerEdit::ArrayDuplicate(donor_idx),
+                    )?;
                     // ArrayDuplicate inserts the copy right after the source.
                     retarget_def(payload, &array_path, donor_idx + 1, &target_class)
                 }
@@ -435,7 +439,9 @@ fn container_edit(
         &edit,
     )?;
     properties::parse_private_root(&patched).map_err(|err| {
-        CoreError::Parse(format!("skill container edit produced an inconsistent payload: {err}"))
+        CoreError::Parse(format!(
+            "skill container edit produced an inconsistent payload: {err}"
+        ))
     })?;
     *payload = patched;
     Ok(())
@@ -466,7 +472,9 @@ fn retarget_def(
         new_class,
     )?;
     properties::parse_private_root(&patched).map_err(|err| {
-        CoreError::Parse(format!("skill Def retarget produced an inconsistent payload: {err}"))
+        CoreError::Parse(format!(
+            "skill Def retarget produced an inconsistent payload: {err}"
+        ))
     })?;
     *payload = patched;
     Ok(())

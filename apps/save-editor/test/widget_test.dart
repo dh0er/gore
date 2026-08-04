@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 void main() {
   testWidgets('renders editor shell with fake save data', (tester) async {
@@ -22,6 +25,9 @@ void main() {
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
+          ),
         ],
         child: const GoresaveApp(),
       ),
@@ -35,10 +41,27 @@ void main() {
     expect(find.text('Public save name'), findsOneWidget);
     // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
-    expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('Profile 0'), findsOneWidget);
+    expect(find.text('1 hr 56 min'), findsOneWidget);
+    expect(find.text('Profile 0'), findsWidgets);
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
+    // The profile menu contains only real profiles and the dedicated Other
+    // saves view; file opening is offered inside that view, not in this menu.
+    await tester.tap(find.byTooltip('Switch profile'));
+    await tester.pumpAndSettle();
+    expect(find.text('Other saves'), findsOneWidget);
+    expect(find.text('Open file'), findsNothing);
+    await tester.tapAt(const Offset(900, 500));
+    await tester.pumpAndSettle();
+
+    // Every registered save exposes its authoritative profile association on
+    // Overview (the fake fixture has profile 0 selected).
+    expect(find.text('Save profile'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<int>), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('remove-selected-save-profile')),
+      findsOneWidget,
+    );
 
     // The header shows the save's screenshot on the Overview tab.
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
@@ -117,21 +140,31 @@ void main() {
       scrollable: find.byType(Scrollable).last,
     );
     expect(find.text('Health'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Health base'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Health current'), findsOneWidget);
-    await tester.enterText(find.widgetWithText(TextField, 'Health base'), '77');
+    expect(
+      find.byKey(const ValueKey('legacy-attribute:Health:base')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('legacy-attribute:Health:current')),
+      findsOneWidget,
+    );
     await tester.enterText(
-      find.widgetWithText(TextField, 'Health current'),
+      find.byKey(const ValueKey('legacy-attribute:Health:base')),
+      '77',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('legacy-attribute:Health:current')),
       '66',
     );
     await tester.pump();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.text('Position'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
+    // The player's transform editor now lives in the Charaktere → Position
+    // sub-tab (its only home; two copies would both drive the one 'transform'
+    // pending key). It renders there regardless of privateTypedVerified, so
+    // this legacy fixture still reaches it.
+    await tester.tap(find.widgetWithText(Tab, 'Position'));
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Location X'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Y'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Z'), findsOneWidget);
@@ -287,7 +320,7 @@ void main() {
     // Factions remains alongside Quests in this sidebar.
     expect(find.text('Factions'), findsOneWidget);
     // Quests detail loads and shows the fake quest name.
-    expect(find.text('SLEEPER'), findsOneWidget);
+    expect(find.text('Sleeper'), findsOneWidget);
 
     // Search quests — filter is inside the Quests detail's TextField.
     await tester.enterText(
@@ -296,7 +329,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('SLEEPER'), findsOneWidget);
+    expect(find.text('Sleeper'), findsOneWidget);
 
     // Two TabBars now exist in the tree: the scrollable top-level bar and the
     // Charaktere tab's inner sub-tab bar (kept alive off-screen). Drag the
@@ -306,7 +339,8 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Backups'), warnIfMissed: false);
     await tester.pumpAndSettle();
 
-    expect(find.text('G1R-001.sav.bak.200'), findsOneWidget);
+    // Twice: as the unnamed backup's title, and as its "File" fact below.
+    expect(find.text('G1R-001.sav.bak.200'), findsNWidgets(2));
     expect(find.text('Before edit'), findsOneWidget);
 
     await tester.tap(
@@ -331,7 +365,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Profile backups'), findsOneWidget);
-    expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
+    // Title plus "File" fact, same as the slot backup above.
+    expect(find.text('PersistentDataList.sav.bak.250'), findsNWidgets(2));
     expect(find.text('Before companion edit'), findsOneWidget);
     // Companion (PersistentDataList.sav) backups are restorable: restoring one
     // targets PersistentDataList.sav in the save folder, not the selected slot.
@@ -351,6 +386,112 @@ void main() {
       'path': r'C:\tmp\saves\PersistentDataList.sav',
       'backupPath': r'C:\tmp\saves\PersistentDataList.sav.bak.250',
     });
+  });
+
+  testWidgets('All data shows source-aware nodes and edits a native vector', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(Tab, 'All data'));
+    await tester.pumpAndSettle();
+
+    final search = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(search.payload['includeNodes'], isTrue);
+    expect(search.payload['source'], 'private');
+    expect(find.text('PRIVATE typed'), findsOneWidget);
+    expect(find.text('Transform › Location'), findsOneWidget);
+    expect(find.text('nativeStruct'), findsOneWidget);
+    expect(find.text('12 children'), findsOneWidget);
+    expect(find.widgetWithText(TextFormField, 'X'), findsOneWidget);
+    final titleBottom = tester
+        .getBottomLeft(find.text('Transform › Location'))
+        .dy;
+    final badgeTop = tester.getTopLeft(find.text('nativeStruct')).dy;
+    expect(
+      badgeTop - titleBottom,
+      lessThan(20),
+      reason: 'single-line titles must not reserve three lines above badges',
+    );
+    final containerRow = find.byKey(const ValueKey('private:2'));
+    final containerTitle = find.descendant(
+      of: containerRow,
+      matching: find.text('Events'),
+    );
+    final containerBadge = find.descendant(
+      of: containerRow,
+      matching: find.text('array'),
+    );
+    expect(
+      tester.getTopLeft(containerBadge).dy -
+          tester.getBottomLeft(containerTitle).dy,
+      lessThan(20),
+      reason: 'read-only container cards use the same compact title layout',
+    );
+    final containerCard = find.descendant(
+      of: containerRow,
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(
+      tester.getSize(containerCard).height,
+      lessThan(110),
+      reason: 'a one-line read-only value must not reserve four text lines',
+    );
+    final containerValue = find.descendant(
+      of: containerRow,
+      matching: find.text('12 elements'),
+    );
+    expect(
+      (tester.getTopLeft(containerTitle).dy -
+              tester.getTopLeft(containerValue).dy)
+          .abs(),
+      lessThan(3),
+      reason: 'card information and its value must share the top alignment',
+    );
+
+    final queryField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.textInputAction == TextInputAction.search,
+    );
+    final initialSearchCount = core.requests
+        .where((request) => request.command == 'search_typed_properties')
+        .length;
+    await tester.enterText(queryField, 'Location');
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      core.requests
+          .where((request) => request.command == 'search_typed_properties')
+          .length,
+      initialSearchCount,
+      reason: 'typing must not enqueue an exhaustive scan per keystroke',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final submittedSearch = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(submittedSearch.payload['query'], 'Location');
+
+    await tester.enterText(find.widgetWithText(TextFormField, 'X'), '9');
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
   });
 
   testWidgets('Settings debug section exposes codec status and inspection '
@@ -388,10 +529,26 @@ void main() {
     await tester.tap(find.text('Advanced (debug)'));
     await tester.pumpAndSettle();
 
-    // Codec self-test status (the fake core reports a ready codec) and the raw
-    // inspection JSON of the loaded save both appear.
+    // Codec status and the ID preference appear, but the raw JSON remains
+    // collapsed until explicitly opened.
     expect(find.text('Codec ready'), findsOneWidget);
     expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Show additional technical IDs'), findsOneWidget);
+    expect(find.textContaining('"format"'), findsNothing);
+    final objectIdsToggle = find.ancestor(
+      of: find.text('Show additional technical IDs'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isFalse);
+
+    await tester.tap(find.text('Show additional technical IDs'));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isTrue);
+
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+
     expect(find.textContaining('"format"'), findsOneWidget);
   });
 
@@ -501,6 +658,54 @@ void main() {
     expect(editableText.controller.text, originalName);
   });
 
+  testWidgets(
+    'invalid-only draft enables Reset, blocks Save, and guards rescan',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(_FakeCoreService()),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(GoresaveApp)),
+      );
+      container.read(editorProvider.notifier).setStoryStateEditInvalid(true);
+      await tester.pump();
+
+      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
+      final saveFinder = find.widgetWithText(FilledButton, 'Save (1)');
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(saveFinder).onPressed, isNull);
+
+      await tester.tap(find.byTooltip('Rescan save folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('Discard unsaved changes?'), findsOneWidget);
+      expect(
+        find.text(
+          'Rescanning reloads every save and discards your 1 unsaved change.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(resetFinder);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
+    },
+  );
+
   testWidgets('shows loading spinner in main editor view', (tester) async {
     final core = _SlowInspectCoreService();
     await tester.pumpWidget(
@@ -537,6 +742,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -593,6 +801,128 @@ void main() {
     );
     expect(oreDelete.onPressed, isNotNull);
   });
+
+  testWidgets('profile menu opens a dedicated persistent Other saves list', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _UnassignedProfileCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Neither detached save leaks into profile 0's sidebar.
+    expect(find.text('Older unassigned'), findsNothing);
+    expect(find.text('Newest unassigned'), findsNothing);
+    expect(find.text('Assigned save'), findsAtLeastNWidgets(1));
+
+    await tester.tap(find.byTooltip('Switch profile'));
+    await tester.pumpAndSettle();
+
+    final otherSavesRow = find.byKey(
+      const ValueKey('profile-menu-other-saves'),
+    );
+    expect(otherSavesRow, findsOneWidget);
+    expect(find.text('Other saves'), findsOneWidget);
+    expect(find.text('Open file'), findsNothing);
+    expect(find.text('Newest unassigned'), findsNothing);
+    expect(find.text('Older unassigned'), findsNothing);
+
+    await tester.tap(otherSavesRow);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('other-saves-open-file')), findsOneWidget);
+    expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
+    expect(find.text('Older unassigned'), findsOneWidget);
+    expect(find.text('Assigned save'), findsNothing);
+    expect(find.byTooltip('Remove entry'), findsNWidgets(2));
+
+    await tester.tap(
+      find.byKey(const ValueKey(r'remove-other-save-C:\tmp\saves\G1R-002.sav')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Older unassigned'), findsNothing);
+    expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
+  });
+
+  testWidgets(
+    'missing profile save is marked, not inspectable, and removable after confirmation',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _MissingProfileCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Lost save'), findsOneWidget);
+      expect(
+        find.text(
+          'File missing: G1R-009.sav is missing. It may have been deleted, moved, or renamed; '
+          'the profile still references it.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      // Tapping the disabled row cannot turn its expected path into a failed
+      // inspection. Cleanup remains available via its separate unlink action.
+      await tester.tap(find.text('Lost save'));
+      await tester.pump();
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('remove-save-profile-0-G1R-009')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Remove save from profile?'), findsOneWidget);
+      expect(
+        core.requests.where(
+          (request) => request.command == 'remove_save_from_profile',
+        ),
+        isEmpty,
+      );
+
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Remove from profile'),
+      );
+      await tester.pumpAndSettle();
+
+      final remove = core.requests.singleWhere(
+        (request) => request.command == 'remove_save_from_profile',
+      );
+      expect(remove.payload['slot'], 'G1R-009');
+      expect(remove.payload['profileId'], 0);
+      expect(find.text('Lost save'), findsNothing);
+    },
+  );
 }
 
 class _RecordedRequest {
@@ -851,6 +1181,53 @@ class _FakeCoreService implements GoresaveCoreService {
             'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.300',
           },
         };
+      case 'search_typed_properties':
+        return {
+          'ok': true,
+          'data': {
+            'source': payload['source'] ?? 'private',
+            'offset': payload['offset'] ?? 0,
+            'limit': payload['limit'] ?? 50,
+            'total': 2,
+            'count': 2,
+            'summary': {
+              'sources': {'private': 2},
+              'kinds': {'nativeStruct': 1, 'array': 1},
+              'types': {'StructProperty': 1, 'ArrayProperty': 1},
+              'editable': 1,
+              'readOnly': 1,
+              'typedSources': ['private'],
+            },
+            'results': [
+              {
+                'id': 'private:1',
+                'source': 'private',
+                'path': ['Transform', 'Location'],
+                'display': 'Transform › Location',
+                'type': 'StructProperty',
+                'structType': 'Vector',
+                'kind': 'nativeStruct',
+                'value': 'x: 1, y: 2, z: 3',
+                'editValue': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+                'editable': true,
+                'childCount': 0,
+                'depth': 1,
+              },
+              {
+                'id': 'private:2',
+                'source': 'private',
+                'path': ['Events'],
+                'display': 'Events',
+                'type': 'ArrayProperty',
+                'kind': 'array',
+                'value': '12 elements',
+                'editable': false,
+                'childCount': 12,
+                'depth': 0,
+              },
+            ],
+          },
+        };
       case 'query_progression':
         final section = payload['section'] as String? ?? 'quests';
         if (section == 'quests') {
@@ -963,6 +1340,130 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _MissingProfileCoreService extends _FakeCoreService {
+  var _removed = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': _removed
+              ? <Object?>[]
+              : [
+                  {
+                    'path': r'C:\tmp\saves\G1R-009.sav',
+                    'slot': 'G1R-009',
+                    'format': 'MISSING',
+                    'fileSize': 0,
+                    'sha1': '',
+                    'status': 'missing',
+                    'persistentPlayerSaveName': 'Lost save',
+                    'persistentProfileId': 0,
+                  },
+                ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': _removed ? <String>[] : ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+    if (command == 'remove_save_from_profile') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      _removed = true;
+      return {
+        'ok': true,
+        'data': {
+          'slot': payload['slot'],
+          'profileId': payload['profileId'],
+          'bytesChanged': true,
+          'backupPath': null,
+          'persistentBackupPath':
+              r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _UnassignedProfileCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'assigned',
+              'status': 'ok',
+              'playerSaveName': 'Assigned save',
+              'timePlayedSeconds': 100.0,
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'old',
+              'status': 'ok',
+              'playerSaveName': 'Older unassigned',
+              'timePlayedSeconds': 10.0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-003.sav',
+              'slot': 'G1R-003',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'new',
+              'status': 'ok',
+              'playerSaveName': 'Newest unassigned',
+              'timePlayedSeconds': 20.0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
   }
 }
 

@@ -15,6 +15,7 @@ use std::fmt::Write as _;
 
 use super::cfg::{self, Cfg};
 use super::disasm::{disassemble, Instr};
+use super::isa::BcType;
 use super::refs::RefResolver;
 use super::types::DataType;
 use super::walk_modules::FuncCode;
@@ -69,25 +70,49 @@ struct Arg {
 }
 impl Arg {
     fn int(s: String) -> Arg {
-        Arg { s, is_int: true, ..Default::default() }
+        Arg {
+            s,
+            is_int: true,
+            ..Default::default()
+        }
     }
     fn iconst(s: String, cbits: ConstBits) -> Arg {
-        Arg { s, is_int: true, cbits: Some(cbits), ..Default::default() }
+        Arg {
+            s,
+            is_int: true,
+            cbits: Some(cbits),
+            ..Default::default()
+        }
     }
     fn obj(s: String) -> Arg {
-        Arg { s, ..Default::default() }
+        Arg {
+            s,
+            ..Default::default()
+        }
     }
     fn typed(s: String, ty: Option<String>) -> Arg {
-        Arg { s, ty, ..Default::default() }
+        Arg {
+            s,
+            ty,
+            ..Default::default()
+        }
     }
     /// A `PSF`-pushed slot address (out / RVO / in-place-ctor receiver), carrying the slot's
     /// recovered type so the construct can render `slot = <ty>(args)`.
     fn psf(s: String, ty: Option<String>) -> Arg {
-        Arg { s, ty, is_psf: true, ..Default::default() }
+        Arg {
+            s,
+            ty,
+            is_psf: true,
+            ..Default::default()
+        }
     }
     /// A synthesized implicit `__WorldContext` marker (see `is_ctx`).
     fn ctx() -> Arg {
-        Arg { is_ctx: true, ..Default::default() }
+        Arg {
+            is_ctx: true,
+            ..Default::default()
+        }
     }
     /// Tag this arg as originating from a plain push opcode (see `carryable`). Applied at the
     /// `block_stmts` push SITES, deliberately not inside the constructors — `build_call` also
@@ -145,7 +170,18 @@ pub fn body_statements(f: &FuncCode, refs: &RefResolver, depth: usize) -> String
 /// - `fields`: the owning class's field name -> base type name, so a `this.field = <int>`
 ///   assignment casts the RHS to a `bool`/enum field.
 #[allow(clippy::too_many_arguments)]
-pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, super_ctor: Option<&str>, ret_ty: Option<&DataType>, fields: Option<&HashMap<String, String>>, param_types: Option<&[String]>, class_name: Option<&str>, local_types: Option<&HashMap<i32, String>>, hints: Option<&ArgSlotHints>) -> String {
+pub fn body_statements_ctor(
+    f: &FuncCode,
+    refs: &RefResolver,
+    depth: usize,
+    super_ctor: Option<&str>,
+    ret_ty: Option<&DataType>,
+    fields: Option<&HashMap<String, String>>,
+    param_types: Option<&[String]>,
+    class_name: Option<&str>,
+    local_types: Option<&HashMap<i32, String>>,
+    hints: Option<&ArgSlotHints>,
+) -> String {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(e) => return format!("{}// disasm error: {e}\n", "    ".repeat(depth)),
@@ -161,11 +197,42 @@ pub fn body_statements_ctor(f: &FuncCode, refs: &RefResolver, depth: usize, supe
     // self-correcting on observed offsets. Built once per function; consulted by slot_name/slot_type.
     let (param_off_map, rvo_off) = super::decompile::build_param_off_map_rvo(f, &instrs, refs);
     let keep_ints = hints.map(|h| &h.keep_ints);
-    let ctx = Ctx { f, refs, instrs: &instrs, super_ctor, ret_ty, fields, param_types, class_name, local_types, float_slots, param_off_map, rvo_off, keep_ints, rvo_switch_region: std::cell::Cell::new(false) };
-    let idx_of: HashMap<usize, usize> =
-        g.blocks.iter().enumerate().map(|(i, b)| (b.start_dw, i)).collect();
+    let ctx = Ctx {
+        f,
+        refs,
+        instrs: &instrs,
+        super_ctor,
+        ret_ty,
+        fields,
+        param_types,
+        class_name,
+        local_types,
+        float_slots,
+        param_off_map,
+        rvo_off,
+        keep_ints,
+        rvo_switch_region: std::cell::Cell::new(false),
+    };
+    let idx_of: HashMap<usize, usize> = g
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.start_dw, i))
+        .collect();
     let mut body = String::new();
-    let mut st = Structurer { ctx: &ctx, g: &g, idx_of: &idx_of, exit_join: None, exit_join_is_ret: false, exit_ret_rows_ok: false, exit_rvo_return: false, exit_scan_floor: 0, carry: None, loop_scope: None };
+    let mut st = Structurer {
+        ctx: &ctx,
+        g: &g,
+        idx_of: &idx_of,
+        exit_join: None,
+        exit_join_is_ret: false,
+        exit_ret_rows_ok: false,
+        exit_rvo_return: false,
+        exit_mixed_rvo_ret_rows_ok: false,
+        exit_scan_floor: 0,
+        carry: None,
+        loop_scope: None,
+    };
     st.emit_range(0, g.blocks.len(), depth, &mut body);
     body
 }
@@ -201,7 +268,9 @@ fn strip_return_assign(v: &str) -> &str {
 fn fold_rvo_return(region: &str) -> Option<String> {
     let lines: Vec<&str> = region.lines().collect();
     // locate the synthetic `return __return;` (there must be exactly the tail exit)
-    let ret_idx = lines.iter().rposition(|l| l.trim_end() == "return __return;" || l.trim() == "return __return;")?;
+    let ret_idx = lines
+        .iter()
+        .rposition(|l| l.trim_end() == "return __return;" || l.trim() == "return __return;")?;
     if ret_idx == 0 {
         return None; // no preceding store line at all
     }
@@ -228,6 +297,36 @@ fn fold_rvo_return(region: &str) -> Option<String> {
     Some(format!("{}\n", out.join("\n")))
 }
 
+/// Return the resolved RHS of exactly one synthetic hidden-RVO-slot store in `stmts`.
+///
+/// A mixed switch can have both ordinary `break -> JOIN` paths and early struct-value returns
+/// lowered as `__return = value; ...cleanup...; JMP shared_RET`.  Such a bare-RET edge is safe to
+/// recover only when its own source block proves the out-slot write.  Requiring exactly one clean
+/// store keeps the proof local and fail-closed: a missing, duplicate, unresolved, or self-referent
+/// write leaves the whole switch on the existing stub path.
+fn single_clean_rvo_store(stmts: &[String]) -> Option<&str> {
+    let mut value = None;
+    for stmt in stmts {
+        let t = stmt.trim();
+        if !t.starts_with("__return =") {
+            continue;
+        }
+        let val = t.strip_prefix("__return = ")?.strip_suffix(';')?.trim();
+        if value.is_some()
+            || val.is_empty()
+            || val.contains('\u{1}')
+            || val.contains('\u{2}')
+            || val == UNRESOLVED
+            || val.contains("__return")
+            || val.contains(RVODEF)
+        {
+            return None;
+        }
+        value = Some(val);
+    }
+    value
+}
+
 /// batch-27b: if `v` is a top-level assignment expression `lhs = rhs` with a PLAIN slot /
 /// member-path lhs (the batch-26 operator/RVO fold shapes: `local_4 = this.GetDisplayName()`,
 /// `local_18 = (a + b)`), return the lhs. The in-game compiler rejects an assignment
@@ -249,7 +348,9 @@ fn assign_lhs(v: &str) -> Option<&str> {
             b' ' if depth == 0 && b[i + 1] == b'=' && b[i + 2] == b' ' => {
                 let lhs = v[..i].trim();
                 let plain = !lhs.is_empty()
-                    && lhs.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.');
+                    && lhs
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.');
                 return plain.then_some(lhs);
             }
             _ => {}
@@ -287,7 +388,10 @@ fn is_lvalue_arg(arg: &Arg) -> bool {
     }
     // plain member/local path: identifier chars + `.` only, and the HEAD must be an assignable
     // root (`this`, a `local_` slot, or a plain identifier param) — never a call/index/literal.
-    if !s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.') {
+    if !s
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
+    {
         return false;
     }
     let head = s.split('.').next().unwrap_or(s);
@@ -295,8 +399,30 @@ fn is_lvalue_arg(arg: &Arg) -> bool {
         // a bare param/slot name (`Foo`, `local_3`) with no `.` is assignable; a bare `this`
         // was already rejected. A dotted head that is a plain identifier (a param.member) is
         // also assignable. Require the head be a valid identifier start (not a digit).
-        head.bytes().next().is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        head.bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
     }
+}
+
+/// A `$beh0` value copy-constructor whose source is a PSF slot is recoverable only when every
+/// available type witness agrees: one parameter, PSF receiver/source, identical recovered slot
+/// types, and a behavior owner equal to that type. This is the compiler's
+/// `PSF source; PSF destination; CALLSYS T::$beh0(const T&)` local-copy lowering. Any missing
+/// or conflicting witness stays on the historical drop path.
+fn is_proven_same_type_psf_copy(
+    recv: &Arg,
+    args: &[Arg],
+    owner: Option<&str>,
+    param_count: Option<usize>,
+) -> bool {
+    let Some(dst_ty) = recv.ty.as_deref() else {
+        return false;
+    };
+    recv.is_psf
+        && param_count == Some(1)
+        && owner == Some(dst_ty)
+        && matches!(args, [src] if src.is_psf && src.ty.as_deref() == Some(dst_ty))
 }
 
 /// Decompile a function to a self-contained `function(...) { ... }` (readable, not recompilable).
@@ -305,7 +431,13 @@ pub fn decompile(f: &FuncCode, refs: &RefResolver) -> String {
         .param_names
         .iter()
         .enumerate()
-        .map(|(i, n)| if n.is_empty() { format!("arg{i}") } else { n.clone() })
+        .map(|(i, n)| {
+            if n.is_empty() {
+                format!("arg{i}")
+            } else {
+                n.clone()
+            }
+        })
         .collect();
     // Pass the return type so RVO / value-return functions decompile faithfully in the CLI
     // (the ret_ty-less `body_statements` path renders `return;` for a struct-by-value return,
@@ -361,12 +493,34 @@ struct Ctx<'a> {
 /// whose return type is the matching-width float family IS the float return payload, so its
 /// `SetV*` constants are IEEE-754 bits too (e.g. the per-case `SetV8 w4, 0xc04b...` returns
 /// in `GetScanSweepAngleDeg` are -55.0, not -4590434657685733376).
-fn float_operand_slots(instrs: &[Instr], ret_ty: Option<&DataType>) -> std::collections::HashSet<i32> {
+fn float_operand_slots(
+    instrs: &[Instr],
+    ret_ty: Option<&DataType>,
+) -> std::collections::HashSet<i32> {
     let is_float_op = |n: &str| {
-        matches!(n,
-            "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
-            | "ADDIf" | "SUBIf" | "MULIf" | "CMPf" | "CMPIf"
-            | "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd" | "CMPd")
+        matches!(
+            n,
+            "ADDf"
+                | "SUBf"
+                | "MULf"
+                | "DIVf"
+                | "MODf"
+                | "NEGf"
+                | "IncVf"
+                | "DecVf"
+                | "ADDIf"
+                | "SUBIf"
+                | "MULIf"
+                | "CMPf"
+                | "CMPIf"
+                | "ADDd"
+                | "SUBd"
+                | "MULd"
+                | "DIVd"
+                | "MODd"
+                | "NEGd"
+                | "CMPd"
+        )
     };
     let mut slots = std::collections::HashSet::new();
     let ret_tok = ret_ty.map(|t| t.token);
@@ -447,16 +601,22 @@ impl Ctx<'_> {
         match v {
             Some(v) => {
                 let v = strip_return_assign(&v).to_string();
-                let declared_bool = v
+                let declared_ty = v
                     .strip_prefix("local_")
                     .and_then(|d| d.parse::<i32>().ok())
-                    .and_then(|n| self.slot_type(n))
-                    .as_deref()
-                    == Some("bool");
+                    .and_then(|n| self.slot_type(n));
                 let v = match self.ret_ty {
-                    Some(rt) if looks_int(&v) && !declared_bool => {
-                        let tn = if rt.token == 0x41 { "bool".to_string() } else { rt.base_name(self.refs) };
-                        cast_to_typename(&v, &tn).unwrap_or(v)
+                    Some(rt) if looks_int(&v) => {
+                        let tn = if rt.token == 0x41 {
+                            "bool".to_string()
+                        } else {
+                            rt.base_name(self.refs)
+                        };
+                        if declared_ty.as_deref() == Some(tn.as_str()) {
+                            v
+                        } else {
+                            cast_to_typename(&v, &tn).unwrap_or(v)
+                        }
                     }
                     _ => v,
                 };
@@ -468,7 +628,10 @@ impl Ctx<'_> {
                 // Gate: bare local slot, BOTH heads known object types (U*/A*), and the
                 // return head provably derives from the slot head (script hierarchy, or the
                 // engine axioms in `provably_derived`) — never wrapped when unsure.
-                let v = match (self.ret_ty, v.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok())) {
+                let v = match (
+                    self.ret_ty,
+                    v.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
+                ) {
                     (Some(rt), Some(slot)) => {
                         let rh = rt.base_name(self.refs);
                         match self.slot_type(slot) {
@@ -495,7 +658,10 @@ impl Ctx<'_> {
     /// capture would be discarded).
     fn ret_via_rvo(&self) -> bool {
         self.rvo_off.is_some()
-            && !self.ret_ty.map(|t| is_enum_name(&t.base_name(self.refs))).unwrap_or(true)
+            && !self
+                .ret_ty
+                .map(|t| is_enum_name(&t.base_name(self.refs)))
+                .unwrap_or(true)
     }
 
     /// True when the function returns a value BY REFERENCE (`T& f()`): the return payload is a
@@ -507,7 +673,9 @@ impl Ctx<'_> {
     /// Used to opt those predecessor blocks into rendering their trailing ref-pending as
     /// `return <chain>;` (the cross-block reference carry).
     fn ret_is_ref(&self) -> bool {
-        self.ret_ty.map(|t| t.token != 0x52 && t.is_reference).unwrap_or(false)
+        self.ret_ty
+            .map(|t| t.token != 0x52 && t.is_reference)
+            .unwrap_or(false)
     }
 
     /// The frame slot that carries this function's RETURN value OUT (batch-43, Fix 1):
@@ -537,7 +705,10 @@ impl Ctx<'_> {
             return None;
         }
         let prev = &self.instrs[n - 2];
-        if matches!(prev.op.name, "LOADOBJ" | "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1") {
+        if matches!(
+            prev.op.name,
+            "LOADOBJ" | "CpyVtoR4" | "CpyVtoR8" | "CpyVtoR1"
+        ) {
             if let Some(&wd) = prev.words.first() {
                 return Some(wd as i16 as i32);
             }
@@ -573,12 +744,23 @@ impl Ctx<'_> {
     fn param_src_ok(&self, name: &str) -> bool {
         // Locate the param by its rendered name (stored name, or the `arg{idx}` fallback that
         // `param_or_arg` emits for an unnamed param).
-        let idx = self.f.param_names.iter().position(|n| !n.is_empty() && n == name)
+        let idx = self
+            .f
+            .param_names
+            .iter()
+            .position(|n| !n.is_empty() && n == name)
             .or_else(|| {
                 name.strip_prefix("arg")
                     .and_then(|d| d.parse::<usize>().ok())
-                    .filter(|&i| i < self.f.param_types.len()
-                        && self.f.param_names.get(i).map(|n| n.is_empty()).unwrap_or(false))
+                    .filter(|&i| {
+                        i < self.f.param_types.len()
+                            && self
+                                .f
+                                .param_names
+                                .get(i)
+                                .map(|n| n.is_empty())
+                                .unwrap_or(false)
+                    })
             });
         let Some(idx) = idx else { return false };
         let ty = match self.f.param_types.get(idx) {
@@ -586,9 +768,7 @@ impl Ctx<'_> {
             None => return false,
         };
         // Object handle OR reference (a REFCPY targets handles/refs), and NON-const.
-        (ty.is_object_handle || ty.is_reference)
-            && !ty.is_read_only
-            && !ty.is_object_const
+        (ty.is_object_handle || ty.is_reference) && !ty.is_read_only && !ty.is_object_const
     }
 
     /// batch-45c (FIX-4): true when `name` is EXACTLY a declared object/reference PARAMETER —
@@ -596,12 +776,23 @@ impl Ctx<'_> {
     /// (`if (<param> == nullptr)`), a comparison that is const-safe. Never matches `this` (not a
     /// param name) or a `local_`/temp.
     fn param_object_ref(&self, name: &str) -> bool {
-        let idx = self.f.param_names.iter().position(|n| !n.is_empty() && n == name)
+        let idx = self
+            .f
+            .param_names
+            .iter()
+            .position(|n| !n.is_empty() && n == name)
             .or_else(|| {
                 name.strip_prefix("arg")
                     .and_then(|d| d.parse::<usize>().ok())
-                    .filter(|&i| i < self.f.param_types.len()
-                        && self.f.param_names.get(i).map(|n| n.is_empty()).unwrap_or(false))
+                    .filter(|&i| {
+                        i < self.f.param_types.len()
+                            && self
+                                .f
+                                .param_names
+                                .get(i)
+                                .map(|n| n.is_empty())
+                                .unwrap_or(false)
+                    })
             });
         let Some(idx) = idx else { return false };
         match self.f.param_types.get(idx) {
@@ -641,7 +832,10 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
 
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
-    matches!(n, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ")
+    matches!(
+        n,
+        "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ"
+    )
 }
 
 /// Resolve a Cast/TYPEID operand to a target typename. AngelScript bytecode typeids carry
@@ -665,11 +859,36 @@ pub(crate) fn resolve_cast_typeid(refs: &RefResolver, tid: i32) -> Option<String
 /// A primitive numeric-conversion opcode (`dst = (cast) src`); the cast is implicit in
 /// type-erased AngelScript source, so we render the plain copy `dst = src`.
 fn is_numeric_cast(n: &str) -> bool {
-    matches!(n,
-        "iTOf" | "fTOi" | "uTOf" | "fTOu" | "iTOd" | "dTOi" | "uTOd" | "dTOu"
-        | "fTOd" | "dTOf" | "iTOb" | "iTOw" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi"
-        | "i64TOi" | "iTOi64" | "uTOi64" | "i64TOf" | "fTOi64" | "i64TOd" | "dTOi64"
-        | "u64TOf" | "fTOu64" | "u64TOd" | "dTOu64")
+    matches!(
+        n,
+        "iTOf"
+            | "fTOi"
+            | "uTOf"
+            | "fTOu"
+            | "iTOd"
+            | "dTOi"
+            | "uTOd"
+            | "dTOu"
+            | "fTOd"
+            | "dTOf"
+            | "iTOb"
+            | "iTOw"
+            | "sbTOi"
+            | "swTOi"
+            | "ubTOi"
+            | "uwTOi"
+            | "i64TOi"
+            | "iTOi64"
+            | "uTOi64"
+            | "i64TOf"
+            | "fTOi64"
+            | "i64TOd"
+            | "dTOi64"
+            | "u64TOf"
+            | "fTOu64"
+            | "u64TOd"
+            | "dTOu64"
+    )
 }
 
 /// For a float/double -> integer narrowing cast, the AngelScript target type to make the
@@ -718,7 +937,11 @@ fn fmt_float(b: ConstBits, double: bool) -> String {
             (false, true, false) => format!("{:?}f", f32::MIN),
         };
     }
-    if double { format!("{v:?}") } else { format!("{:?}f", v as f32) }
+    if double {
+        format!("{v:?}")
+    } else {
+        format!("{:?}f", v as f32)
+    }
 }
 
 /// Render the constant last written to `slot` as a float/double literal. None if untracked.
@@ -741,8 +964,52 @@ struct Cmp {
 /// last-pushed entry (top of stack); the rest are args in push order. Operator-overload
 /// methods (opAssign/opAdd/opEquals/...) render as the source operator. Returns None for
 /// compiler-generated behaviors ($behN construct/destruct) that have no source form.
+///
+/// `Thiscall1` is a Hazelight VM opcode with a fixed stack delta of -3 dwords: one
+/// 32-bit operand plus the two-dword receiver pointer. That physical frame is independent
+/// of the source declaration. In particular, template helpers such as `TArray::Last()`
+/// have zero rendered parameters but still push the default `IndexFromEnd = 0` operand.
+/// Use this physical arity for the nested-call stack split while leaving the declaration /
+/// Binds arity in charge of which operands are rendered at source level.
+fn call_frame_arity(opcode: &str, declared: Option<usize>) -> Option<usize> {
+    if opcode == "Thiscall1" {
+        Some(1)
+    } else {
+        declared
+    }
+}
+
+/// Remove one call's physical frame from the top of the abstract operand stack, preserving
+/// deeper operands that belong to an enclosing call. Literal constants and proven member
+/// reads are valid deferred enclosing arguments; untracked int-slot temporaries are not.
+fn take_call_frame(stack: &mut Vec<Arg>, need: Option<usize>) -> Vec<Arg> {
+    match need {
+        Some(k) if stack.len() > k => {
+            let own = stack.split_off(stack.len() - k);
+            stack.retain(|x| !x.is_int || x.cbits.is_some() || x.keep);
+            own
+        }
+        _ => std::mem::take(stack),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option<&str>, params: Option<&[DataType]>, native_arity: Option<usize>, trusted_arity: Option<usize>, target_owner: Option<&str>, cur_class: Option<&str>, non_virtual: bool, ret_ty: Option<&str>, ret_is_ref: bool, global_shadowed: bool, refs: &RefResolver) -> Option<String> {
+fn build_call(
+    stack: &mut Vec<Arg>,
+    f: &str,
+    is_method: bool,
+    super_ctor: Option<&str>,
+    params: Option<&[DataType]>,
+    native_arity: Option<usize>,
+    trusted_arity: Option<usize>,
+    target_owner: Option<&str>,
+    cur_class: Option<&str>,
+    non_virtual: bool,
+    ret_ty: Option<&str>,
+    ret_is_ref: bool,
+    global_shadowed: bool,
+    refs: &RefResolver,
+) -> Option<String> {
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
@@ -819,9 +1086,13 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // (Append's `const FString&in` fed by a ToString RVO local) as the out-slot, stealing the
     // arg (`.Append()`) and prefixing a bogus `out =` (48 in-game errors). `ret_is_ref` carries
     // the T3 DataType's bIsReference; every RVO probe is gated on it.
-    fn tyhead(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+    fn tyhead(s: &str) -> &str {
+        s.split('<').next().unwrap_or(s)
+    }
     let rvo_slot = !ret_is_ref
-        && ret_ty.map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T'))).unwrap_or(false)
+        && ret_ty
+            .map(|t| matches!(tyhead(t).bytes().next(), Some(b'F') | Some(b'T')))
+            .unwrap_or(false)
         && {
             // The hidden RVO out-slot sits BELOW the receiver for a method (top = receiver) and
             // ON TOP for a free call (no receiver pushed). Same data-driven evidence gate as the
@@ -835,21 +1106,7 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             }
         };
     let need = trusted_arity.map(|n| n + is_method as usize + rvo_slot as usize);
-    let collected: Vec<Arg> = match need {
-        Some(k) if stack.len() > k => {
-            // Split off this call's own operands (top `k`); the deeper entries belong to an
-            // ENCLOSING call. Drop STRANDED slot-sourced ints (SetV*+PshV4 temporaries) left over
-            // from an unmodeled push — preserving them pollutes the enclosing call's arg list and
-            // force-stubs it (regression). BUT keep PshC4/PshC8 LITERAL consts (cbits set): those
-            // are almost always real pending args of the enclosing/chained call — a float Distance,
-            // an int MinCount, a builder-chain weight/cooldown — that the enclosing call needs
-            // (proven: IsCloseToCharacter(a, b, 699.0) lost its 699.0 to this drop).
-            let own = stack.split_off(stack.len() - k);
-            stack.retain(|x| !x.is_int || x.cbits.is_some() || x.keep);
-            own
-        }
-        _ => std::mem::take(stack),
-    };
+    let collected: Vec<Arg> = take_call_frame(stack, need);
     // Implicit `__WorldContext` markers occupied a stack slot so the split arithmetic matched the
     // native's real frame (whose declared arity counts the hidden WorldContextObject param). They
     // are NOT source args — the UE-AngelScript compiler auto-injects the world context — so strip
@@ -877,7 +1134,8 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         .filter(|(j, x)| x.is_ctx && collected.len() - 1 - j <= overhead)
         .count();
     let ctx_trail = ctx_count - ctx_lead;
-    let mut a: Vec<Arg> = collected.into_iter()
+    let mut a: Vec<Arg> = collected
+        .into_iter()
         .filter(|x| !x.is_ctx && !x.s.is_empty() && x.s != UNRESOLVED)
         .collect();
     let params = params.map(|p| {
@@ -889,7 +1147,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
     // arity is authoritative — prefer it over the script FunctionReferences param count. Falls back.
     // Subtract any stripped implicit-context markers (they inflate both the frame and the arity;
     // the params fallback is already ctx-stripped above).
-    let arity = native_arity.map(|n| n.saturating_sub(ctx_count)).or_else(|| params.map(|p| p.len()));
+    let arity = native_arity
+        .map(|n| n.saturating_sub(ctx_count))
+        .or_else(|| params.map(|p| p.len()));
     // Receiver: a METHOD call always pushes its receiver as the top entry (the cache param count is
     // unreliable here — it often COUNTS the implicit `this`), so detect by the bIsMethod flag.
     let has_recv = is_method && !a.is_empty();
@@ -908,7 +1168,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // and are lowered as `recv <op> arg` below. Their PSF'd value arg can share the return
         // type's head (e.g. `member.opAssign(states)` returning `TArray` with a PSF'd `TArray`
         // value), which would falsely match the out-slot probe and rewrite `states = opAssign()`.
-        fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+        fn head(s: &str) -> &str {
+            s.split('<').next().unwrap_or(s)
+        }
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
         if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
             if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
@@ -920,12 +1182,16 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 // (`local_54 = local_6.RotateAngleAxis(local_48, local_62);` with w48 the
                 // true dest). Single-PSF cases (the 495-site Iterator/GetActorLocation
                 // population) pick the same entry — no regression surface.
-                if let Some(pos) = a.iter().rposition(|x| x.is_psf
-                    && x.ty.as_deref().map(head) == Some(rh)) {
+                if let Some(pos) = a
+                    .iter()
+                    .rposition(|x| x.is_psf && x.ty.as_deref().map(head) == Some(rh))
+                {
                     let out = a.remove(pos).s;
                     if let Some(w) = arity {
                         let w = w.min(a.len());
-                        if a.len() > w { a.drain(..a.len() - w); }
+                        if a.len() > w {
+                            a.drain(..a.len() - w);
+                        }
                     }
                     maybe_reverse_args(&mut a, params, refs);
                     // Include the receiver — this is a METHOD RVO struct-return (has_recv popped
@@ -933,7 +1199,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                     // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
                     // signatures". `this`-receivers render `this.Method()` (legal, matches the
                     // normal method-render path below).
-                    return Some(format!("{out} = {}.{f}({})", wrap_uobject_recv(&recv, target_owner, refs), render_args(&a, params, refs)));
+                    return Some(format!(
+                        "{out} = {}.{f}({})",
+                        wrap_uobject_recv(&recv, target_owner, refs),
+                        render_args(&a, params, refs)
+                    ));
                 }
             }
         }
@@ -946,7 +1216,8 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // compound assigns (`x += dead_temp`). Gate on the SAME data-driven rvo_slot probe
         // that already widened the split window: a ref-returning operator pushes no dest and
         // can never match (ret_is_ref + F/T-head are inside rvo_slot).
-        if is_operator && rvo_slot
+        if is_operator
+            && rvo_slot
             && a.last()
                 .map(|x| x.is_psf && x.ty.as_deref().map(head) == ret_ty.map(head))
                 .unwrap_or(false)
@@ -954,7 +1225,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             let dest = a.pop().unwrap();
             if let Some(w) = arity {
                 let w = w.min(a.len());
-                if a.len() > w { a.drain(..a.len() - w); }
+                if a.len() > w {
+                    a.drain(..a.len() - w);
+                }
             }
             match (assign_op(f), binop_method(f), a.first()) {
                 (Some(op), _, Some(rhs)) => {
@@ -963,13 +1236,17 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                     if op == "=" && recv.s == "this" {
                         return Some(amm("copyctor"));
                     }
-                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                    let r = params
+                        .and_then(|p| p.first())
+                        .map(|pt| cast_arg(rhs, pt, refs))
                         .unwrap_or_else(|| rhs.s.clone());
                     return Some(format!("{} {op} {}", recv.s, r));
                 }
                 (None, Some(op), Some(rhs)) => {
                     // pure binop: the DEST receives the result.
-                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                    let r = params
+                        .and_then(|p| p.first())
+                        .map(|pt| cast_arg(rhs, pt, refs))
                         .unwrap_or_else(|| rhs.s.clone());
                     return Some(format!("{} = ({} {op} {})", dest.s, recv.s, r));
                 }
@@ -1023,7 +1300,9 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             }
             match a.first() {
                 Some(rhs) => {
-                    let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                    let r = params
+                        .and_then(|p| p.first())
+                        .map(|pt| cast_arg(rhs, pt, refs))
                         .unwrap_or_else(|| rhs.s.clone());
                     return Some(format!("{} {op} {}", recv.s, r));
                 }
@@ -1032,14 +1311,20 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         }
         if let Some(op) = binop_method(f) {
             if let Some(rhs) = a.first() {
-                let r = params.and_then(|p| p.first()).map(|pt| cast_arg(rhs, pt, refs))
+                let r = params
+                    .and_then(|p| p.first())
+                    .map(|pt| cast_arg(rhs, pt, refs))
                     .unwrap_or_else(|| rhs.s.clone());
                 return Some(format!("({} {op} {})", recv.s, r));
             }
         }
         maybe_reverse_args(&mut a, params, refs);
         cast_container_args(f, recv.ty.as_deref(), &mut a);
-        Some(format!("{}.{f}({})", wrap_uobject_recv(&recv, target_owner, refs), render_args(&a, params, refs)))
+        Some(format!(
+            "{}.{f}({})",
+            wrap_uobject_recv(&recv, target_owner, refs),
+            render_args(&a, params, refs)
+        ))
     } else {
         if refs.is_type_name(f) {
             // A factory GLOBAL whose name collides with a registered type name. Two flavours:
@@ -1089,7 +1374,10 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 maybe_reverse_args(&mut a, params, refs);
                 let rendered = render_args(&a, params, refs);
                 // Never emit a sentinel-marked / unresolved arg list (a definite mismatch): bail.
-                if !rendered.contains('\u{2}') && !rendered.contains('\u{1}') && rendered != UNRESOLVED {
+                if !rendered.contains('\u{2}')
+                    && !rendered.contains('\u{1}')
+                    && rendered != UNRESOLVED
+                {
                     return Some(format!("{f}({rendered})"));
                 }
             }
@@ -1120,11 +1408,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
             // Owner: the callee's ObjectType when recorded; else the RETURN type — a generated
             // accessor returns exactly the component class it is generated on, so the return
             // head is the qualifying class (`UPyrolaserOriginPointComponent Get(AActor, FName)`).
-            let owner = target_owner
-                .filter(|o| o.starts_with('U'))
-                .or_else(|| ret_ty
+            let owner = target_owner.filter(|o| o.starts_with('U')).or_else(|| {
+                ret_ty
                     .map(|t| t.split('<').next().unwrap_or(t))
-                    .filter(|t| t.starts_with('U') && refs.is_type_name(t)));
+                    .filter(|t| t.starts_with('U') && refs.is_type_name(t))
+            });
             if let Some(owner) = owner {
                 maybe_reverse_args(&mut a, params, refs);
                 return Some(format!("{owner}::{f}({})", render_args(&a, params, refs)));
@@ -1138,8 +1426,11 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
         // names a genuine global (over-qualification is harmless), so gated call sites render
         // qualified. Computed AFTER the early-returns above so name-based matches (behaviours,
         // is_type_name ctors, owner-qualified Get/GetOrCreate/Create, operators) are untouched.
-        let f: std::borrow::Cow<str> =
-            if global_shadowed { format!("::{f}").into() } else { f.into() };
+        let f: std::borrow::Cow<str> = if global_shadowed {
+            format!("::{f}").into()
+        } else {
+            f.into()
+        };
         // Free-call RVO struct-return (mirror of the method Fix-b3 arm): a free/static function
         // returning a struct BY VALUE pushes a hidden PSF out-slot. Recover `out = f(args)`
         // instead of leaking the out-slot as a leading arg (GotoPosition/Say/GiveItemTo/
@@ -1157,12 +1448,16 @@ fn build_call(stack: &mut Vec<Arg>, f: &str, is_method: bool, super_ctor: Option
                 // (`local_36 = ApplyFormat(local_44, local_14); local_40.Append(local_44);`
                 // — 6 GA_Falling errors + 1 by-accident int-overload mis-bind). Single-PSF
                 // sites (string-literal Specifier, CombatSituations ×8) pick the same entry.
-                if let Some(pos) = a.iter().rposition(|x| x.is_psf
-                    && x.ty.as_deref().map(tyhead) == Some(rh)) {
+                if let Some(pos) = a
+                    .iter()
+                    .rposition(|x| x.is_psf && x.ty.as_deref().map(tyhead) == Some(rh))
+                {
                     let out = a.remove(pos).s;
                     if let Some(w) = arity {
                         let w = w.min(a.len());
-                        if a.len() > w { a.drain(..a.len() - w); }
+                        if a.len() > w {
+                            a.drain(..a.len() - w);
+                        }
                     }
                     maybe_reverse_args(&mut a, params, refs);
                     return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
@@ -1223,11 +1518,15 @@ fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> Str
             _ => &[],
         }
     }
-    let Some(rt) = recv.ty.as_deref() else { return recv.s.clone() };
+    let Some(rt) = recv.ty.as_deref() else {
+        return recv.s.clone();
+    };
     if recv.s == "this" || !BASE_RECV.contains(&rt) {
         return recv.s.clone();
     }
-    let Some(o) = owner else { return recv.s.clone() };
+    let Some(o) = owner else {
+        return recv.s.clone();
+    };
     if o == rt
         || !matches!(o.bytes().next(), Some(b'U') | Some(b'A'))
         || engine_ancestors(rt).contains(&o)
@@ -1268,8 +1567,11 @@ fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usi
         let (ph, ah) = (head(&pt.base_name(refs)), head(at));
         if is_value(&ph) && is_value(&ah) && ph != ah {
             n += 1;
-        } else if is_obj(&ph) && is_obj(&ah) && ah != ph
-            && refs.is_script_class(&ah) && refs.is_script_class(&ph)
+        } else if is_obj(&ph)
+            && is_obj(&ah)
+            && ah != ph
+            && refs.is_script_class(&ah)
+            && refs.is_script_class(&ph)
             && !refs.is_subclass(&ah, &ph)
         {
             n += 1;
@@ -1325,8 +1627,12 @@ fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefR
 fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
     let Some(t) = recv_ty else { return };
     let t = t.trim_start_matches("const ");
-    let Some((head, rest)) = t.split_once('<') else { return };
-    let Some(inner) = rest.strip_suffix('>') else { return };
+    let Some((head, rest)) = t.split_once('<') else {
+        return;
+    };
+    let Some(inner) = rest.strip_suffix('>') else {
+        return;
+    };
     // top-level comma split (subtypes can nest: TMap<ECombatRole, TArray<int>>)
     let mut subs: Vec<&str> = Vec::new();
     let (mut depth, mut start) = (0usize, 0usize);
@@ -1345,7 +1651,9 @@ fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
     let expect: &[&str] = match (head, method, subs.len()) {
         // single-value element methods (capture shapes: Add(int) 28x, Contains(int) 10x,
         // AddUnique/Remove(int) 2x) — the arg is the element type T.
-        ("TArray" | "TSet", "Add" | "AddUnique" | "Remove" | "RemoveSingle" | "Contains", 1) => &subs[..1],
+        ("TArray" | "TSet", "Add" | "AddUnique" | "Remove" | "RemoveSingle" | "Contains", 1) => {
+            &subs[..1]
+        }
         // Add(K, V) takes both subtypes positionally.
         ("TMap", "Add", 2) => &subs[..2],
         // key-first methods: only the K arg is wrapped (Find's 2nd arg is the V out-slot,
@@ -1394,7 +1702,8 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 // compare the type "head" (before any `<...>`) so covariant template
                 // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged.
                 let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
-                let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+                let is_value =
+                    |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
                 let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
                 let (ph, ah) = (head(&pt.base_name(refs)), head(at));
                 // value types (F/E/T) have no inheritance — any head mismatch is wrong.
@@ -1406,8 +1715,11 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 // objects (U*/A*): an arg that isn't the param or a subclass of it is wrong —
                 // but only when BOTH are known script classes (else an engine upcast we can't
                 // verify; stay conservative and allow it).
-                if is_obj(&ph) && is_obj(&ah) && ah != ph
-                    && refs.is_script_class(&ah) && refs.is_script_class(&ph)
+                if is_obj(&ph)
+                    && is_obj(&ah)
+                    && ah != ph
+                    && refs.is_script_class(&ah)
+                    && refs.is_script_class(&ph)
                     && !refs.is_subclass(&ah, &ph)
                 {
                     return amm("argtype");
@@ -1433,8 +1745,10 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         if pt.token != 5 {
             if let Some(at) = &arg.ty {
                 if is_enum_name(at)
-                    && matches!(pt.base_name(refs).as_str(),
-                        "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64")
+                    && matches!(
+                        pt.base_name(refs).as_str(),
+                        "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64"
+                    )
                 {
                     return format!("int({})", arg.s);
                 }
@@ -1445,8 +1759,8 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
     // an integer constant feeding a float/double param carries IEEE-754 bits, not an int.
     if let Some(cb) = arg.cbits {
         match pt.token {
-            0x50 => return fmt_float(cb, false),        // float32 -> `Nf` literal
-            0x51 | 0x5E => return fmt_float(cb, true),  // float (64-bit here) / double -> plain
+            0x50 => return fmt_float(cb, false), // float32 -> `Nf` literal
+            0x51 | 0x5E => return fmt_float(cb, true), // float (64-bit here) / double -> plain
             _ => {}
         }
     }
@@ -1500,7 +1814,13 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
 /// emits the store BARE prefixed with the [`CONSTSTORE`] marker; the emitter strips it and
 /// declares the destination local `const T` (assigning a later NON-const value to a const
 /// handle stays legal, so mixed-source slots are safe).
-fn downcast(rhs: String, src_ty: Option<String>, src_const: bool, dst_ty: Option<&String>, refs: &RefResolver) -> String {
+fn downcast(
+    rhs: String,
+    src_ty: Option<String>,
+    src_const: bool,
+    dst_ty: Option<&String>,
+    refs: &RefResolver,
+) -> String {
     let is_obj = |s: &str| s.starts_with('U') || s.starts_with('A');
     match (src_ty, dst_ty) {
         (Some(s), Some(d)) if is_obj(&s) && is_obj(d) && s != *d => {
@@ -1528,8 +1848,8 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
         return c; // bool / enum
     }
     match tyname {
-        "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16" | "uint64"
-        | "float" | "float32" | "double" | "?" => rhs.to_string(),
+        "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16" | "uint64" | "float"
+        | "float32" | "double" | "?" => rhs.to_string(),
         _ => UNRESOLVED.to_string(),
     }
 }
@@ -1547,7 +1867,10 @@ fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
 /// Template heads (`TSubclassOf<...>`) and value types never qualify.
 fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
     fn head(s: &str) -> &str {
-        s.split('<').next().unwrap_or(s).trim_start_matches("const ")
+        s.split('<')
+            .next()
+            .unwrap_or(s)
+            .trim_start_matches("const ")
     }
     let (dst, src) = (head(dst), head(src));
     let is_obj = |s: &str| {
@@ -1643,8 +1966,12 @@ fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
 /// pure pre-join getters of the proven population, so re-evaluating the read at the join
 /// observes the same element.
 fn is_pure_elem_read(s: &str) -> bool {
-    let Some((recv, call)) = s.split_once(".opIndex(") else { return false };
-    let Some(args) = call.strip_suffix(')') else { return false };
+    let Some((recv, call)) = s.split_once(".opIndex(") else {
+        return false;
+    };
+    let Some(args) = call.strip_suffix(')') else {
+        return false;
+    };
     // batch-33c: receiver widened from bare locals to `this.`-rooted plain member chains
     // (`this.m_MinionsDieHandles.opIndex(local_6)` — MCQueen OnMinionDie's dropped
     // UDelegateHandleContainer arg). The purity argument is unchanged: the D7-constrained
@@ -1655,7 +1982,9 @@ fn is_pure_elem_read(s: &str) -> bool {
         !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
     } else if let Some(rest) = recv.strip_prefix("this.") {
         !rest.is_empty()
-            && rest.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
     } else {
         false
     };
@@ -1672,10 +2001,16 @@ fn is_pure_elem_read(s: &str) -> bool {
 /// getters are pure reads: re-evaluating at the diamond join cannot observe a different
 /// value (the D7-constrained arms cannot advance an iterator).
 fn is_pure_iter_get(s: &str) -> bool {
-    let Some(recv) = s.strip_suffix(".GetKey()").or_else(|| s.strip_suffix(".GetValue()")) else {
+    let Some(recv) = s
+        .strip_suffix(".GetKey()")
+        .or_else(|| s.strip_suffix(".GetValue()"))
+    else {
         return false;
     };
-    !recv.is_empty() && recv.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+    !recv.is_empty()
+        && recv
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
 }
 
 /// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
@@ -1721,7 +2056,26 @@ fn flush_store(out: &mut Vec<String>, dst: String, rhs: Option<String>) {
 
 /// Escape a string literal for AS source.
 fn esc(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Type carried by a member-address register when `PshRPtr` turns it back into a call
+/// argument. Prefer the field's precise script value type; native structs have no field-value
+/// metadata in the script cache, so an independently resolved native ENUM type is the next
+/// trustworthy witness. `owner_fallback` is PropertyReferences' declaring/owner type and stays
+/// last: it is useful for member receivers, but is not the field's value type.
+fn member_ref_push_type(
+    precise_value: Option<&str>,
+    native_enum: Option<&str>,
+    owner_fallback: Option<&str>,
+) -> Option<String> {
+    precise_value
+        .or(native_enum)
+        .or(owner_fallback)
+        .map(str::to_string)
 }
 
 /// Decompile one block's instruction range into statements; also return the
@@ -1742,33 +2096,40 @@ fn block_stmts(ctx: &Ctx, lo: usize, hi: usize) -> (Vec<String>, Option<Cmp>) {
 /// statement — the reference lvalue survives the block boundary the RET-row scan-back cannot
 /// cross. Only the by-reference pending (`pending_is_ref`) qualifies; any other trailing
 /// pending flushes as a bare statement exactly as before.
-fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail: bool) -> (Vec<String>, Option<Cmp>, Vec<Arg>) {
+fn block_stmts_in(
+    ctx: &Ctx,
+    lo: usize,
+    hi: usize,
+    init: Vec<Arg>,
+    ret_ref_tail: bool,
+) -> (Vec<String>, Option<Cmp>, Vec<Arg>) {
     let mut out = Vec::new();
     let mut cmp: Option<Cmp> = None;
     let mut cond: Option<(String, bool)> = None; // (bool value tested by a jump, is-bool-typed)
-    // batch-30c: true when a compare / register-load executed AFTER the newest call —
-    // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
+                                                 // batch-30c: true when a compare / register-load executed AFTER the newest call —
+                                                 // order gate for the stale-cmp-vs-live-bool-pending decision at conditional jumps.
     let mut test_after_call = true;
     let mut stack: Vec<Arg> = init; // pushed pointer/value expressions
     let mut value_reg: Option<String> = None;
     let mut obj_reg: Option<String> = None;
     let mut ref_reg: Option<String> = None; // Idiom-B member address
     let mut ref_reg_ty: Option<String> = None; // field type name behind ref_reg (for casts)
-    // batch-32b (N5, TMap::Find reversal): the field's PRECISE value type behind ref_reg,
-    // resolved through the this-class fields map / cross-module class-fields index ONLY —
-    // never the member_type OWNER-type fallback (`CrimeEntry.Directness` typed FCrimeEntry
-    // instead of ECrimeDirectness false-flagged the reversed order in arg_mismatch_count,
-    // suppressing the correct `Find(Key, out)` flip). Consumed ONLY by the PshRPtr arg-push
-    // (arg typing for scoring/cast pairing); the RDR/WRTV wrap logic keeps reading
-    // `ref_reg_ty` so member-store renders are unchanged. None = unknown = status quo.
+                                               // batch-32b (N5, TMap::Find reversal): the field's PRECISE value type behind ref_reg,
+                                               // resolved through the this-class fields map / cross-module class-fields index ONLY —
+                                               // never the member_type OWNER-type fallback (`CrimeEntry.Directness` typed FCrimeEntry
+                                               // instead of ECrimeDirectness false-flagged the reversed order in arg_mismatch_count,
+                                               // suppressing the correct `Find(Key, out)` flip). Consumed ONLY by the PshRPtr arg-push
+                                               // (arg typing for scoring/cast pairing); the RDR/WRTV wrap logic keeps reading
+                                               // `ref_reg_ty` so member-store renders are unchanged. None = unknown = status quo.
     let mut ref_reg_vty: Option<String> = None;
     // batch-25a (G2): ENUM value type of a native struct's field behind ref_reg, from the
-    // in-crate native-field table (`refs::native_field_type`). Consumed ONLY by the WRTV1
-    // guard so the render becomes `field = EEnum(slot)` instead of the bool-wrap.
+    // in-crate/native-API field metadata (`refs::native_field_type`). Used by the WRTV1 guard
+    // and, when the precise script-field channel is absent, by PshRPtr's call-argument typing.
+    // The lookup is enum-filtered at every assignment, so non-enum native fields remain unknown.
     let mut ref_reg_nfty: Option<String> = None;
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
-    // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
-    // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
+                                                                  // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
+                                                                  // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
     let mut member_read_slots: std::collections::HashSet<i32> = std::collections::HashSet::new();
     // batch-41d: slots currently holding a CONST object handle (a const-returning CALL result,
     // batch-20/21 `downcast` CONSTSTORE, or a const-member-read RefCpyV, batch-32d). A REFCPY
@@ -1799,9 +2160,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
     let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
-    // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
-    // `pending_ty` is the const-stripped base name (comparisons everywhere key on it), so the
-    // constness travels in this parallel flag; the STOREOBJ arm uses it to Cast-strip.
+                                               // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
+                                               // `pending_ty` is the const-stripped base name (comparisons everywhere key on it), so the
+                                               // constness travels in this parallel flag; the STOREOBJ arm uses it to Cast-strip.
     let mut pending_const: bool = false;
     // batch-29a (C8): the last CALL* returns BY REFERENCE (ret DataType.is_reference from the
     // cache) — the following RDRx dereferences the register the call just filled, so the RDR
@@ -1916,7 +2277,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 let off = w(ins, 0);
                 if ctx.slot_type(off).as_deref() == Some("bool") {
                     stack.push(Arg::typed(name(off), Some("bool".to_string())).carry());
-                } else if matches!(ctx.slot_type(off).as_deref(), Some("float" | "float32" | "double")) {
+                } else if matches!(
+                    ctx.slot_type(off).as_deref(),
+                    Some("float" | "float32" | "double")
+                ) {
                     // batch-20 Class C: a float-family slot pushed by value is a REAL arg (e.g.
                     // SetByCallerMagnitude's Magnitude pushed before a chained GetSpec()); typed
                     // (is_int=false) it survives the nested-call stack-split retain and renders
@@ -1931,13 +2295,29 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     stack.push(Arg::iconst(name(off), cb).carry());
                 } else if member_read_slots.contains(&off) {
                     // Member-read value (this.XP_... amount) — a real arg the retain must keep.
-                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() }.carry());
+                    stack.push(
+                        Arg {
+                            s: name(off),
+                            is_int: true,
+                            keep: true,
+                            ..Default::default()
+                        }
+                        .carry(),
+                    );
                 } else if ctx.keep_ints.is_some_and(|s| s.contains(&off)) {
                     // batch-25g (spec family G kin): the emit-side pairing proved every value
                     // push of this slot feeds a KNOWN int-family parameter — a real arg
                     // (Math::Min's second operand below a nested call), not a stranded SetV
                     // temporary; the nested-call retain must keep it.
-                    stack.push(Arg { s: name(off), is_int: true, keep: true, ..Default::default() }.carry());
+                    stack.push(
+                        Arg {
+                            s: name(off),
+                            is_int: true,
+                            keep: true,
+                            ..Default::default()
+                        }
+                        .carry(),
+                    );
                 } else {
                     stack.push(Arg::int(name(off)).carry());
                 }
@@ -2015,7 +2395,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // channel so unresolvable fields keep the status-quo behavior.
                         None => (
                             ref_reg.clone().unwrap_or_else(|| UNRESOLVED.into()),
-                            ref_reg_vty.clone().or_else(|| ref_reg_ty.clone()),
+                            member_ref_push_type(
+                                ref_reg_vty.as_deref(),
+                                ref_reg_nfty.as_deref(),
+                                ref_reg_ty.as_deref(),
+                            ),
                         ),
                     };
                     stack.push(Arg::typed(s, ty));
@@ -2024,7 +2408,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "PGA" | "PshGPtr" | "PshG4" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if ctx.refs.global_is_string(ptr) {
-                    stack.push(Arg::obj(format!("\"{}\"", esc(ctx.refs.global_by_ptr(ptr).unwrap_or("")))).carry());
+                    stack.push(
+                        Arg::obj(format!(
+                            "\"{}\"",
+                            esc(ctx.refs.global_by_ptr(ptr).unwrap_or(""))
+                        ))
+                        .carry(),
+                    );
                 } else {
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
                     if let Some(cls) = nm.strip_prefix("__StaticType_") {
@@ -2052,7 +2442,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "ADDSi" => {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                let field = ctx
+                    .refs
+                    .member(tid, off)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("field_0x{off:x}"));
                 // field VALUE type — from the enclosing class map, else (batch-21 Class B) the
                 // injected per-class field maps keyed by the ADDSi type-id's class name, which
                 // resolve FOREIGN script-class/struct members correctly (`SaveState.WeatherModifiers`
@@ -2061,36 +2455,40 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // NOT the field's value type; using it poisons foreign member reads (e.g.
                 // `HitResult.BoneName` typed as `FHitResult` instead of `FName`) -> false
                 // value-head mismatch -> spurious argtype stub. None = unknown = conservative match.
-                let fty = ctx.fields.and_then(|m| m.get(&field)).cloned().or_else(|| {
-                    ctx.refs
-                        .type_by_id(tid)
-                        .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
-                        .map(|s| s.to_string())
-                })
-                // batch-25e (E): composed CONTAINER types of KNOWN native-class fields — the
-                // receiver's `TMap<K, V>` must reach cast_container_args or the int keys of
-                // Add/FindOrAdd/Find on e.g. `m_CustomCollisionResponse` never get their enum
-                // wrap (native owners store no field value type in the script cache).
-                // Table-driven (refs::known_native_field_subtype), capture-candidate-verified.
-                .or_else(|| {
-                    ctx.refs
-                        .type_by_id(tid)
-                        .and_then(|cls| ctx.refs.known_native_field_subtype(cls, &field))
-                        .map(|s| s.to_string())
-                })
-                // batch-40 (specs/rgt-and-methods-triage.md PART 1): the FLOAT-FAMILY-gated
-                // precise field type for a NATIVE-struct member store — mirrors the LoadThisR/
-                // LoadRObjR Idiom-B path (line ~1915/1941). The stack-built Idiom-A member store
-                // (`PSF; ADDSi field; PopRPtr; WRTV4 <constSlot>`) never consulted native_field_type
-                // for float, so a `SetV4 w,0x437a0000` const feeding `FLightValues.SourceWidth`
-                // (float32) left `top.ty = None` -> `ref_reg_ty = None` -> the WRTV float_lit
-                // reinterpret didn't fire -> `SourceWidth = 1132068864` (int bits of 250.0f), which
-                // the AS compiler then iTOf-coerces to 1.13e9 (WideShot camera / SetupTransitions
-                // weights, ~140 fns). float_field_type only ever returns float/float32/double, so
-                // this is the PROVABLY-float gate the safety rule demands; every non-float field
-                // stays None and the int RHS is untouched. Absent binds (raw baseline) this
-                // resolves None too, so the stub gate is unaffected.
-                .or_else(|| float_field_type(ctx.refs, tid, &field));
+                let fty = ctx
+                    .fields
+                    .and_then(|m| m.get(&field))
+                    .cloned()
+                    .or_else(|| {
+                        ctx.refs
+                            .type_by_id(tid)
+                            .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
+                            .map(|s| s.to_string())
+                    })
+                    // batch-25e (E): composed CONTAINER types of KNOWN native-class fields — the
+                    // receiver's `TMap<K, V>` must reach cast_container_args or the int keys of
+                    // Add/FindOrAdd/Find on e.g. `m_CustomCollisionResponse` never get their enum
+                    // wrap (native owners store no field value type in the script cache).
+                    // Table-driven (refs::known_native_field_subtype), capture-candidate-verified.
+                    .or_else(|| {
+                        ctx.refs
+                            .type_by_id(tid)
+                            .and_then(|cls| ctx.refs.known_native_field_subtype(cls, &field))
+                            .map(|s| s.to_string())
+                    })
+                    // batch-40 (specs/rgt-and-methods-triage.md PART 1): the FLOAT-FAMILY-gated
+                    // precise field type for a NATIVE-struct member store — mirrors the LoadThisR/
+                    // LoadRObjR Idiom-B path (line ~1915/1941). The stack-built Idiom-A member store
+                    // (`PSF; ADDSi field; PopRPtr; WRTV4 <constSlot>`) never consulted native_field_type
+                    // for float, so a `SetV4 w,0x437a0000` const feeding `FLightValues.SourceWidth`
+                    // (float32) left `top.ty = None` -> `ref_reg_ty = None` -> the WRTV float_lit
+                    // reinterpret didn't fire -> `SourceWidth = 1132068864` (int bits of 250.0f), which
+                    // the AS compiler then iTOf-coerces to 1.13e9 (WideShot camera / SetupTransitions
+                    // weights, ~140 fns). float_field_type only ever returns float/float32/double, so
+                    // this is the PROVABLY-float gate the safety rule demands; every non-float field
+                    // stays None and the int RHS is untouched. Absent binds (raw baseline) this
+                    // resolves None too, so the stub gate is unaffected.
+                    .or_else(|| float_field_type(ctx.refs, tid, &field));
                 // batch-25a (G2): when the normal chain can't type the field (NATIVE struct
                 // owner), consult the in-crate native-field table — carried in the SEPARATE
                 // nfty channel so only the WRTV1 guard sees it (never the call-arg gates).
@@ -2110,7 +2508,8 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     top.nfty = nfty;
                     // batch-32d: const object-handle native field (always assigned so a
                     // stale flag from an earlier chain link can never leak forward).
-                    top.nf_const = ctx.refs
+                    top.nf_const = ctx
+                        .refs
                         .type_by_id(tid)
                         .and_then(|cls| ctx.refs.native_field_const_object(cls, &field))
                         .map(|s| s.to_string());
@@ -2121,7 +2520,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "LoadThisR" => {
                 let off = ins.words.first().copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                let field = ctx
+                    .refs
+                    .member(tid, off)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("field_0x{off:x}"));
                 // The class field-type map holds the real field VALUE type; member_type()
                 // resolves PropertyReferences OldTypeId which is the OWNER class, not the
                 // field type — so prefer the map and only fall back to member_type.
@@ -2131,10 +2534,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // int(...) wrap instead of the bare precision-warning render. Gated to
                 // float names only: a broad flip (e.g. foreign bool fields going bare
                 // where the unknowable int(...) wrap compiles today) would regress.
-                ref_reg_ty = ctx.fields.and_then(|m| m.get(&field)).cloned()
+                ref_reg_ty = ctx
+                    .fields
+                    .and_then(|m| m.get(&field))
+                    .cloned()
                     .or_else(|| float_field_type(ctx.refs, tid, &field))
                     .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string()));
-                ref_reg_nfty = ctx.refs.type_by_id(tid)
+                ref_reg_nfty = ctx
+                    .refs
+                    .type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
                     .map(|s| s.to_string());
@@ -2154,18 +2562,25 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 let obj = name(w(ins, 0));
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let field = ctx.refs.member(tid, off).map(|s| s.to_string()).unwrap_or_else(|| format!("field_0x{off:x}"));
+                let field = ctx
+                    .refs
+                    .member(tid, off)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("field_0x{off:x}"));
                 // batch-30c: float-family-gated precise resolution first (see LoadThisR) —
                 // e.g. `local = Start.Z;` (FVector, double) into an int slot must know the
                 // source is float so the RDR8 wrap fires.
                 ref_reg_ty = float_field_type(ctx.refs, tid, &field)
                     .or_else(|| ctx.refs.member_type(tid, off).map(|s| s.to_string())); // foreign object field
-                ref_reg_nfty = ctx.refs.type_by_id(tid)
+                ref_reg_nfty = ctx
+                    .refs
+                    .type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
                     .map(|s| s.to_string());
                 // batch-32b: precise value type (poison-free sources only — see decl comment).
-                ref_reg_vty = ctx.refs
+                ref_reg_vty = ctx
+                    .refs
                     .type_by_id(tid)
                     .and_then(|cls| ctx.refs.field_type_by_class(cls, &field))
                     .map(|s| s.to_string());
@@ -2196,22 +2611,31 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         Some("?") => true,
                         Some(t) => {
                             let t = t.trim_start_matches("const ");
-                            matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
-                                && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                            matches!(
+                                t.bytes().next(),
+                                Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T')
+                            ) && t
+                                .as_bytes()
+                                .get(1)
+                                .map(|c| c.is_ascii_uppercase())
+                                .unwrap_or(false)
                         }
                     };
                     let float_src = matches!(
-                        pending_ty.as_deref().map(|t| t.trim_start_matches("const ")),
+                        pending_ty
+                            .as_deref()
+                            .map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
                     );
                     // batch-30c: RDR8 joins the wrap when the source is KNOWN float-family —
                     // a float64 read into an int slot warns (module-killer); int64 reads
                     // (the reason RDR8 was excluded) stay bare via !float_src.
-                    let rhs = if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
-                        format!("int({p})")
-                    } else {
-                        enum_to_int(p, pending_ty.as_deref(), dst_is_int)
-                    };
+                    let rhs =
+                        if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
+                            format!("int({p})")
+                        } else {
+                            enum_to_int(p, pending_ty.as_deref(), dst_is_int)
+                        };
                     out.push(format!("{} = {rhs};", name(dst_slot)));
                     member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
                     pending_ty = None;
@@ -2235,8 +2659,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         None => true,
                         Some(t) => {
                             let t = t.trim_start_matches("const ");
-                            matches!(t.bytes().next(), Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T'))
-                                && t.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+                            matches!(
+                                t.bytes().next(),
+                                Some(b'U') | Some(b'A') | Some(b'F') | Some(b'T')
+                            ) && t
+                                .as_bytes()
+                                .get(1)
+                                .map(|c| c.is_ascii_uppercase())
+                                .unwrap_or(false)
                         }
                     };
                     // A KNOWN float-family member read into an int-declared slot keeps the
@@ -2245,17 +2675,20 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // batch-21's inherited-fields map these reads were mostly `None`-typed and
                     // took the unknowable wrap; a KNOWN bool/int stays bare — proven clean.)
                     let float_src = matches!(
-                        ref_reg_ty.as_deref().map(|t| t.trim_start_matches("const ")),
+                        ref_reg_ty
+                            .as_deref()
+                            .map(|t| t.trim_start_matches("const ")),
                         Some("float" | "float32" | "double")
                     );
                     // batch-30c: RDR8 joins the wrap for KNOWN float-family members (the
                     // float64 member -> int slot precision-warning residue: foreign script
                     // config floats, FVector.Z/FRotator.Yaw); int64 member reads stay bare.
-                    let rhs = if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
-                        format!("int({r})")
-                    } else {
-                        enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
-                    };
+                    let rhs =
+                        if dst_is_int && (unknowable || float_src) && (n != "RDR8" || float_src) {
+                            format!("int({r})")
+                        } else {
+                            enum_to_int(r.clone(), ref_reg_ty.as_deref(), dst_is_int)
+                        };
                     out.push(format!("{} = {rhs};", name(dst_slot)));
                     member_read_slots.insert(dst_slot); // real data value, not a SetV temporary
                 }
@@ -2275,13 +2708,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // the pending is a RESOLVED `.opIndex(` call expr (ends ')', no sentinel/unresolved)
                 // — so the lvalue is provable and the store cannot target a garbage receiver.
                 let opindex_lvalue = if ref_reg.is_none() && pending_is_ref {
-                    pending.as_deref().filter(|p| {
-                        p.contains(".opIndex(")
-                            && p.ends_with(')')
-                            && !p.contains('\u{2}')
-                            && !p.contains('\u{1}')
-                            && *p != UNRESOLVED
-                    }).map(|p| p.to_string())
+                    pending
+                        .as_deref()
+                        .filter(|p| {
+                            p.contains(".opIndex(")
+                                && p.ends_with(')')
+                                && !p.contains('\u{2}')
+                                && !p.contains('\u{1}')
+                                && *p != UNRESOLVED
+                        })
+                        .map(|p| p.to_string())
                 } else {
                     None
                 };
@@ -2295,8 +2731,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     let slot = w(ins, 0);
                     let raw = name(slot);
                     let rhs = match ref_reg_ty.as_deref() {
-                        Some("float32") => float_lit(&set_consts, slot, false).unwrap_or(raw.clone()),
-                        Some("float") | Some("double") => float_lit(&set_consts, slot, true).unwrap_or(raw.clone()),
+                        Some("float32") => {
+                            float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
+                        }
+                        Some("float") | Some("double") => {
+                            float_lit(&set_consts, slot, true).unwrap_or(raw.clone())
+                        }
                         _ => raw,
                     };
                     out.push(format!("{lval} = {rhs};"));
@@ -2308,9 +2748,17 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     let raw = name(slot);
                     // a constant slot stored into a float/double field carries IEEE-754 bits,
                     // not an int — decode it; else apply the bool/enum/incompatible cast.
+                    let source_is_bool = ctx.slot_type(slot).as_deref() == Some("bool");
+                    let target_is_bool = ref_reg_ty.as_deref() == Some("bool")
+                        || ref_reg_vty.as_deref() == Some("bool");
                     let mut rhs = match ref_reg_ty.as_deref() {
-                        Some("float32") => float_lit(&set_consts, slot, false).unwrap_or(raw.clone()),
-                        Some("float") | Some("double") => float_lit(&set_consts, slot, true).unwrap_or(raw.clone()),
+                        _ if source_is_bool && target_is_bool => raw.clone(),
+                        Some("float32") => {
+                            float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
+                        }
+                        Some("float") | Some("double") => {
+                            float_lit(&set_consts, slot, true).unwrap_or(raw.clone())
+                        }
                         Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
                         _ => raw.clone(),
                     };
@@ -2331,13 +2779,25 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             let v = vty.trim_start_matches("const ");
                             let is_primitive = matches!(
                                 v,
-                                "int" | "uint" | "int8" | "int16" | "int64" | "uint8" | "uint16"
-                                | "uint64" | "float" | "float32" | "double" | "bool"
+                                "int"
+                                    | "uint"
+                                    | "int8"
+                                    | "int16"
+                                    | "int64"
+                                    | "uint8"
+                                    | "uint16"
+                                    | "uint64"
+                                    | "float"
+                                    | "float32"
+                                    | "double"
+                                    | "bool"
                             ) || is_enum_name(v);
                             if is_primitive {
                                 let cand = match v {
-                                    "float32" => float_lit(&set_consts, slot, false).unwrap_or_else(|| raw.clone()),
-                                    "float" | "double" => float_lit(&set_consts, slot, true).unwrap_or_else(|| raw.clone()),
+                                    "float32" => float_lit(&set_consts, slot, false)
+                                        .unwrap_or_else(|| raw.clone()),
+                                    "float" | "double" => float_lit(&set_consts, slot, true)
+                                        .unwrap_or_else(|| raw.clone()),
                                     _ if looks_int(&raw) => field_assign_rhs(&raw, v),
                                     _ => raw.clone(),
                                 };
@@ -2362,15 +2822,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // (rhs still UNRESOLVED), only for a 1-byte write (bool/int8/uint8 width),
                     // only for an int-family source, and renders the same `(x != 0)` bool wrap the
                     // heuristic below produces for owner-typed fields — so no working store changes.
-                    if rhs == UNRESOLVED
-                        && n == "WRTV1"
-                        && looks_int(&raw)
-                    {
+                    if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) {
                         let field_name = r.rsplit('.').next().unwrap_or("");
                         let fb = field_name.as_bytes();
-                        let is_ue_bool = fb.len() >= 2
-                            && fb[0] == b'b'
-                            && fb[1].is_ascii_uppercase();
+                        let is_ue_bool =
+                            fb.len() >= 2 && fb[0] == b'b' && fb[1].is_ascii_uppercase();
                         if is_ue_bool {
                             rhs = format!("({raw} != 0)");
                         }
@@ -2388,7 +2844,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && rhs != UNRESOLVED
                         && looks_int(&raw)
                         && ctx.slot_type(slot).as_deref() != Some("bool")
-                        && !ctx.slot_type(slot).as_deref().map(is_enum_name).unwrap_or(false)
+                        && !ctx
+                            .slot_type(slot)
+                            .as_deref()
+                            .map(is_enum_name)
+                            .unwrap_or(false)
                     {
                         if let Some(ety) = ref_reg_nfty.as_deref() {
                             if let Some(c) = cast_to_typename(&raw, ety) {
@@ -2415,7 +2875,11 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && rhs == raw
                         && rhs != UNRESOLVED
                         && ctx.slot_type(slot).as_deref() != Some("bool")
-                        && !ctx.slot_type(slot).as_deref().map(is_enum_name).unwrap_or(false)
+                        && !ctx
+                            .slot_type(slot)
+                            .as_deref()
+                            .map(is_enum_name)
+                            .unwrap_or(false)
                     {
                         rhs = format!("({rhs} != 0)");
                     }
@@ -2439,9 +2903,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 flush!();
                 let bits = ins.dwords.first().copied().unwrap_or(0);
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
-                let rhs = if ctx.float_slots.contains(&w(ins, 0)) {
+                let rhs = if ctx.slot_type(w(ins, 0)).as_deref() == Some("bool") && bits <= 1 {
+                    (bits != 0).to_string()
+                } else if ctx.float_slots.contains(&w(ins, 0)) {
                     fmt_float(ConstBits::W4(bits), false)
-                } else if ctx.slot_type(w(ins, 0)).as_deref().is_some_and(is_enum_name) {
+                } else if ctx
+                    .slot_type(w(ins, 0))
+                    .as_deref()
+                    .is_some_and(is_enum_name)
+                {
                     // batch-31c (N3 Fix 2): an ENUM-typed slot (out-param slot typing)
                     // written a raw ordinal needs the explicit conversion — AS has no
                     // implicit int->enum (`EInventoryTypes local_7 = 0;` fails).
@@ -2463,7 +2933,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 {
                     format!("({} != 0)", name(src))
                 } else if ctx.slot_type(dst).is_none()
-                    && matches!(ctx.slot_type(src).as_deref(), Some("float" | "float32" | "double"))
+                    && matches!(
+                        ctx.slot_type(src).as_deref(),
+                        Some("float" | "float32" | "double")
+                    )
                 {
                     // batch-30c: a float-family-typed slot copied into an UNTYPED
                     // (int-declared) slot is the batch-28 poison residue — the explicit
@@ -2491,7 +2964,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             }
             _ if bin_op(n).is_some() && ins.words.len() >= 3 => {
                 flush!();
-                out.push(format!("{} = {} {} {};", name(w(ins, 0)), name(w(ins, 1)), bin_op(n).unwrap(), name(w(ins, 2))));
+                out.push(format!(
+                    "{} = {} {} {};",
+                    name(w(ins, 0)),
+                    name(w(ins, 1)),
+                    bin_op(n).unwrap(),
+                    name(w(ins, 2))
+                ));
             }
             _ if iconst_op(n).is_some() => {
                 flush!();
@@ -2502,7 +2981,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 } else {
                     (bits as i32).to_string()
                 };
-                out.push(format!("{} = {} {} {};", name(w(ins, 0)), name(w(ins, 1)), iconst_op(n).unwrap(), c));
+                out.push(format!(
+                    "{} = {} {} {};",
+                    name(w(ins, 0)),
+                    name(w(ins, 1)),
+                    iconst_op(n).unwrap(),
+                    c
+                ));
             }
             "IncVi" | "IncVf" => {
                 flush!();
@@ -2514,31 +2999,46 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             }
             // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
             // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
-            // carry a slot operand. Render as a compound assignment on the recovered member expr.
+            // carry a slot operand. The recovered ref expression is evaluated exactly once by
+            // the VM; prefix ++/-- preserves that alias/evaluation-order contract and round-trips
+            // to the direct opcode. `x = x + 1` instead evaluates a complex lvalue twice and
+            // lowers to a read/add/write sequence.
             "INCi" | "INCi64" | "INCi16" | "INCi8" => {
                 flush!();
-                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} + 1;", r)); }
+                if let Some(r) = &ref_reg {
+                    out.push(format!("++{r};"));
+                }
             }
             "DECi" | "DECi64" | "DECi16" | "DECi8" => {
                 flush!();
-                if let Some(r) = &ref_reg { out.push(format!("{0} = {0} - 1;", r)); }
+                if let Some(r) = &ref_reg {
+                    out.push(format!("--{r};"));
+                }
             }
             "NEGi" | "NEGf" | "NEGd" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
             }
-            // asBC NOT (opcode 6) is the boolean logical invert. The slot is held as `int` (and
-            // is often also written with integer values like `= 1`), and AngelScript rejects `!`
-            // on int ("Illegal operation on this datatype"); render an int-safe toggle instead.
+            // asBC NOT (opcode 6) is the boolean logical invert. Proven bool locals can use the
+            // faithful source operation; unresolved/int scratch keeps the compile-safe integer
+            // toggle because AngelScript rejects `!` on int.
             "NOT" => {
                 flush!();
                 let s = name(w(ins, 0));
-                out.push(format!("{s} = int({s} == 0);"));
+                if ctx.slot_type(w(ins, 0)).as_deref() == Some("bool") {
+                    out.push(format!("{s} = !{s};"));
+                } else {
+                    out.push(format!("{s} = int({s} == 0);"));
+                }
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
                 test_after_call = true;
-                cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() });
+                cmp = Some(Cmp {
+                    a: name(w(ins, 0)),
+                    b: name(w(ins, 1)),
+                    ..Default::default()
+                });
             }
             "CMPIi" | "CMPIu" => {
                 test_after_call = true;
@@ -2546,10 +3046,21 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 let s = w(ins, 0);
                 // an enum compared to an int literal needs explicit int(enum) — AngelScript has
                 // no implicit enum<->int (e.g. `if (_AlternativeState != 0)`).
-                let a = if ctx.slot_type(s).as_deref().map(is_enum_name).unwrap_or(false) {
+                let a = if ctx
+                    .slot_type(s)
+                    .as_deref()
+                    .map(is_enum_name)
+                    .unwrap_or(false)
+                {
                     format!("int({})", name(s))
-                } else { name(s) };
-                cmp = Some(Cmp { a, b: c.to_string(), ..Default::default() });
+                } else {
+                    name(s)
+                };
+                cmp = Some(Cmp {
+                    a,
+                    b: c.to_string(),
+                    ..Default::default()
+                });
             }
             // CMPIf's dword immediate is an IEEE-754 float payload, not an int — render it as
             // a float literal so e.g. `x < 1.0f` doesn't become `x < 1065353216`.
@@ -2569,17 +3080,47 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // (`<param> == nullptr`) — the vanilla copy was dropped, leaving `local_N`
                 // unwritten. `remove` so a later reuse of the slot never re-aliases.
                 let slot = w(ins, 0);
-                let a = guard_param_alias.remove(&slot).unwrap_or_else(|| name(slot));
-                cmp = Some(Cmp { a, b: "nullptr".into(), ..Default::default() });
+                let a = guard_param_alias
+                    .remove(&slot)
+                    .unwrap_or_else(|| name(slot));
+                cmp = Some(Cmp {
+                    a,
+                    b: "nullptr".into(),
+                    ..Default::default()
+                });
             }
             // a test op turns the CMP register into a bool; it carries the real relational
             // operator (the jump only carries the true/false sense).
-            "TZ" => { if let Some(c) = &mut cmp { c.op = Some("=="); } }
-            "TNZ" => { if let Some(c) = &mut cmp { c.op = Some("!="); } }
-            "TS" => { if let Some(c) = &mut cmp { c.op = Some("<"); } }
-            "TNS" => { if let Some(c) = &mut cmp { c.op = Some(">="); } }
-            "TP" => { if let Some(c) = &mut cmp { c.op = Some(">"); } }
-            "TNP" => { if let Some(c) = &mut cmp { c.op = Some("<="); } }
+            "TZ" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some("==");
+                }
+            }
+            "TNZ" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some("!=");
+                }
+            }
+            "TS" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some("<");
+                }
+            }
+            "TNS" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some(">=");
+                }
+            }
+            "TP" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some(">");
+                }
+            }
+            "TNP" => {
+                if let Some(c) = &mut cmp {
+                    c.op = Some("<=");
+                }
+            }
             // ---- calls ----
             "CALL" | "CALLINTF" | "CALLBND" => {
                 test_after_call = false;
@@ -2629,11 +3170,17 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     if n != "CALL"
                         || !ctx.refs.is_type_name(&f)
                         || !ctx.refs.is_method_by_id(id)
-                        || ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs)).as_deref() != Some("void")
+                        || ctx
+                            .refs
+                            .func_ret_by_id(id)
+                            .map(|d| d.base_name(ctx.refs))
+                            .as_deref()
+                            != Some("void")
                     {
                         break 'idiom_c false;
                     }
-                    let Some(params) = ctx.refs.func_params_by_id(id).filter(|p| !p.is_empty()) else {
+                    let Some(params) = ctx.refs.func_params_by_id(id).filter(|p| !p.is_empty())
+                    else {
                         break 'idiom_c false;
                     };
                     let np = params.len();
@@ -2641,18 +3188,26 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // whose name is a plain local/member lvalue (never a sentinel). is_lvalue_arg
                     // rejects PSF outright (it targets the non-PSF member-store receiver), so the
                     // out-slot's plain-name check is inlined here.
-                    fn head(s: &str) -> &str { s.split('<').next().unwrap_or(s) }
+                    fn head(s: &str) -> &str {
+                        s.split('<').next().unwrap_or(s)
+                    }
                     let plain_lvalue = |s: &str| -> bool {
                         !s.is_empty()
                             && s != UNRESOLVED
                             && !s.contains('\u{1}')
                             && !s.contains('\u{2}')
-                            && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
+                            && s.bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'.')
                             && (s.starts_with("local_") || s.starts_with("this."))
                     };
-                    let out_ok = stack.last().map(|r| {
-                        r.is_psf && r.ty.as_deref().map(head) == Some(f.as_str()) && plain_lvalue(&r.s)
-                    }).unwrap_or(false);
+                    let out_ok = stack
+                        .last()
+                        .map(|r| {
+                            r.is_psf
+                                && r.ty.as_deref().map(head) == Some(f.as_str())
+                                && plain_lvalue(&r.s)
+                        })
+                        .unwrap_or(false);
                     // Need out-slot + exactly `np` args below it (STRICT: `>` not `>=` so a
                     // short stack that can't supply the full arg list bails, never guesses).
                     if !out_ok || stack.len() <= np {
@@ -2709,9 +3264,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // The class is the StaticClass func's NAMESPACE last-segment (objtype is
                     // NULL for StaticClass; the target class lives in the namespace), not the
                     // calling class — `local = UFoo::StaticClass()` from inside UBar must say UFoo.
-                    let cls = ctx.refs.staticclass_class_by_id(id)
+                    let cls = ctx
+                        .refs
+                        .staticclass_class_by_id(id)
                         .or_else(|| ctx.refs.func_owner_by_id(id))
-                        .or(ctx.class_name).unwrap_or("UObject");
+                        .or(ctx.class_name)
+                        .unwrap_or("UObject");
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
@@ -2729,17 +3287,26 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // reverted at the source instead (the RefCpyV `const_ret_getter` bail below,
                     // batch-41e).
                     pending_const = false;
-                    let na = ctx.refs.native_arity_by_id(id, &orig);
-                    // SCRIPT call by id: the cache FunctionReference param count is authoritative
-                    // (only NATIVE param lists undercount), so trust it for the EDIT B-PRIME split.
+                    // CALL/CALLINTF/CALLBND by id targets a script FunctionReference. Its cache
+                    // declaration is the exact declaration we emit, so both split and render arity
+                    // must come from that record. Consulting Binds by name here can collide with a
+                    // different native/mixin form: the Binds zero-arg
+                    // `GetGothicAbilitySystemComponent()` stole the required Character argument
+                    // from the one-arg script global at all 57 hotfix call sites. Native/default-
+                    // argument arity remains confined to CALLSYS/Thiscall1 below.
+                    let na = None;
                     let trusted = ctx.refs.func_params_by_id(id).map(|p| p.len());
                     let owner = ctx.refs.func_owner_by_id(id);
-                    let ret_is_ref = ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
+                    let ret_is_ref = ctx
+                        .refs
+                        .func_ret_by_id(id)
+                        .map(|d| d.is_reference)
+                        .unwrap_or(false);
                     pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
-                    // batch-30c: a ref-returning call clobbers the VM value register — the
-                    // same register member loads fill — so a stale member `ref_reg` can no
-                    // longer be what a later RDR reads (the 29a gate-rest: GetResult()
-                    // discarded + a stale member read consumed in its place).
+                                                 // batch-30c: a ref-returning call clobbers the VM value register — the
+                                                 // same register member loads fill — so a stale member `ref_reg` can no
+                                                 // longer be what a later RDR reads (the 29a gate-rest: GetResult()
+                                                 // discarded + a stale member read consumed in its place).
                     if ret_is_ref {
                         ref_reg = None;
                         ref_reg_ty = None;
@@ -2764,7 +3331,22 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         && owner.is_none()
                         && ctx.class_name.is_some()
                         && ctx.refs.member_name_exists(&f);
-                    build_call(&mut stack, &f, ctx.refs.is_method_by_id(id), ctx.super_ctor, ctx.refs.func_params_by_id(id), na, trusted, owner, ctx.class_name, n == "CALL", pending_ty.as_deref(), ret_is_ref, global_shadowed, ctx.refs)
+                    build_call(
+                        &mut stack,
+                        &f,
+                        ctx.refs.is_method_by_id(id),
+                        ctx.super_ctor,
+                        ctx.refs.func_params_by_id(id),
+                        na,
+                        trusted,
+                        owner,
+                        ctx.class_name,
+                        n == "CALL",
+                        pending_ty.as_deref(),
+                        ret_is_ref,
+                        global_shadowed,
+                        ctx.refs,
+                    )
                 };
                 pending_is_static_name = false;
                 pending_is_pure_elem = false;
@@ -2818,7 +3400,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         if let Some(top) = stack.last() {
                             if top.is_psf {
                                 if let Some(owner) = ctx.refs.func_owner_by_ptr(ptr) {
-                                    if matches!(owner.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+                                    if matches!(
+                                        owner.bytes().next(),
+                                        Some(b'F') | Some(b'T') | Some(b'E')
+                                    ) {
                                         default_ctor_temp.insert(top.s.clone(), owner.to_string());
                                     }
                                 }
@@ -2838,12 +3423,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // match it (return slot is not PSF'd), so it fell to the generic `$`-drop
                         // and the function returned the RVODEF default (`return __r;` — compiles,
                         // loses the value). Mirrors the CopyScript dst=="__return" capture.
-                        if recv.s == "__return" && !recv.is_psf
+                        if recv.s == "__return"
+                            && !recv.is_psf
                             && ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()) == Some(1)
                             && stack.len() >= 2
                         {
                             let src = stack[stack.len() - 2].clone();
-                            if !src.s.is_empty() && src.s != UNRESOLVED && !src.s.starts_with('\u{2}') {
+                            if !src.s.is_empty()
+                                && src.s != UNRESOLVED
+                                && !src.s.starts_with('\u{2}')
+                            {
                                 stack.truncate(stack.len() - 2);
                                 // batch-43 (Fix 2) / batch-47b (FIX-2b): a `$beh0(__return, src)`
                                 // that DEFAULT-CONSTRUCTS-then-returns the RVO struct in a block
@@ -2869,7 +3458,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // Gate (a): receiver is a PSF'd slot with a known VALUE/struct/template
                         // type (F*/T*/E*). Never a `$`/`?` placeholder, never an object (U*/A*):
                         // object construction uses ALLOC, not this in-place behaviour.
-                        let is_value = recv.ty.as_deref()
+                        let is_value = recv
+                            .ty
+                            .as_deref()
                             .and_then(|t| t.bytes().next())
                             .map(|b| matches!(b, b'F' | b'T' | b'E'))
                             .unwrap_or(false);
@@ -2885,8 +3476,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                 Some(k) if stack.len() > k => stack.split_off(stack.len() - k),
                                 _ => std::mem::take(&mut stack),
                             }
-                                .into_iter()
-                                .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED).collect();
+                            .into_iter()
+                            .filter(|x| !x.s.is_empty() && x.s != UNRESOLVED)
+                            .collect();
                             // Ctor args are reverse-pushed like every other call's (top =
                             // params[0]); rendering the collected (deepest-first) order emitted
                             // them BACKWARDS — `FTimerDynamicDelegate(n"Fn", this)` against the
@@ -2899,14 +3491,23 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             // thousands of clean `TSubclassOf<T>(nullptr)` sites outside the
                             // error tail, so the null-handle ctor provably compiles and the
                             // composed render below joins that population byte-faithfully.)
-                            // Gate (b): no arg is itself a PSF slot — that is a copy/convert ctor
-                            // whose true source is an unrecovered pending call result; rendering it
-                            // as `T(&slot)` would be wrong, so drop (prior behaviour).
+                            // Gate (b): a PSF arg normally means a copy/convert ctor whose true
+                            // source may be an unrecovered pending call result, so it stays dropped.
+                            // The strictly-proved same-type local-copy lowering is safe, however:
+                            // `PSF source:T; PSF dest:T; T::$beh0(const T&)`. Render that through
+                            // the ordinary `dest = T(source)` construct path; every missing or
+                            // conflicting type witness retains the historical drop.
                             let any_psf_arg = args.iter().any(|a| a.is_psf);
+                            let proven_psf_copy = is_proven_same_type_psf_copy(
+                                &recv,
+                                &args,
+                                ctx.refs.func_owner_by_ptr(ptr),
+                                params.map(|p| p.len()),
+                            );
                             // Gate (c): arg count matches the ctor's declared param count (no
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
-                            if !args.is_empty() && !any_psf_arg && count_ok {
+                            if !args.is_empty() && (!any_psf_arg || proven_psf_copy) && count_ok {
                                 let rendered = render_args(&args, params, ctx.refs);
                                 // Gate (d): a definite arg-type mismatch -> drop (keep prior
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
@@ -2981,7 +3582,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                 // operator arm — an FName/enum/soft-object default takes its proper
                                 // literal form; a definite value-type mismatch yields the `\u{2}`
                                 // sentinel, which the guard below turns into a status-quo drop.
-                                let r = ctx.refs.func_params_by_ptr(ptr).and_then(|p| p.first())
+                                let r = ctx
+                                    .refs
+                                    .func_params_by_ptr(ptr)
+                                    .and_then(|p| p.first())
                                     .map(|pt| cast_arg(&rhs, pt, ctx.refs))
                                     .unwrap_or_else(|| rhs.s.clone());
                                 if !r.contains('\u{2}') && !r.contains('\u{1}') {
@@ -3002,9 +3606,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     pending_ty = None;
                     pending_const = false;
                     pending_is_ref = false;
-                    let cls = ctx.refs.staticclass_class_by_ptr(ptr)
+                    let cls = ctx
+                        .refs
+                        .staticclass_class_by_ptr(ptr)
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
-                        .or(ctx.class_name).unwrap_or("UObject");
+                        .or(ctx.class_name)
+                        .unwrap_or("UObject");
                     Some(format!("{cls}::StaticClass()"))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
@@ -3027,13 +3634,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // sites (incl. the CombatMoves sentinel) — rejected as non-minimal.
                     if f == "GetDefaultObject"
                         && ctx.refs.func_owner_by_ptr(ptr) == Some("TSubclassOf")
-                        && stack.last().is_some_and(|r| {
-                            r.ty.is_none() && r.s.ends_with("::StaticClass()")
-                        })
+                        && stack
+                            .last()
+                            .is_some_and(|r| r.ty.is_none() && r.s.ends_with("::StaticClass()"))
                     {
                         pending_ty = Some("UObject".to_string());
                     }
-                    pending_const = ctx.refs.func_ret_by_ptr(ptr)
+                    pending_const = ctx
+                        .refs
+                        .func_ret_by_ptr(ptr)
                         .is_some_and(|d| d.is_object_handle && d.is_object_const);
                     let na = ctx.refs.native_arity_by_ptr(ptr, &f);
                     // A free/static native function in a namespace (Gameplay, Math, System, ...)
@@ -3054,21 +3663,43 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // the call being built (the existing top-`w` trim selects the same args; an
                     // implicit-`this` overcount steals one deeper entry that the trim then drops),
                     // and only PRESERVES deeper enclosing operands that take-all destroyed.
-                    let trusted = na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()));
+                    let trusted = call_frame_arity(
+                        n,
+                        na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len())),
+                    );
                     // target_owner (T3 ObjectType) was only wired for CALL/CALLINTF; pass it for
                     // native calls too so the UObject-receiver Cast wrap (batch19 class 1) and the
                     // generated-accessor qualification see the owning class of CALLSYS methods.
-                    let ret_is_ref = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
+                    let ret_is_ref = ctx
+                        .refs
+                        .func_ret_by_ptr(ptr)
+                        .map(|d| d.is_reference)
+                        .unwrap_or(false);
                     pending_is_ref = ret_is_ref; // batch-29a: RDR may consume this call's result
-                    // batch-30c: mirror of the by-id arm — a ref-returning native call
-                    // clobbers the value register; invalidate a stale member ref_reg.
+                                                 // batch-30c: mirror of the by-id arm — a ref-returning native call
+                                                 // clobbers the value register; invalidate a stale member ref_reg.
                     if ret_is_ref {
                         ref_reg = None;
                         ref_reg_ty = None;
                         ref_reg_nfty = None;
                         ref_reg_vty = None;
                     }
-                    build_call(&mut stack, &qualified, ctx.refs.is_method_by_ptr(ptr), ctx.super_ctor, ctx.refs.func_params_by_ptr(ptr), na, trusted, ctx.refs.func_owner_by_ptr(ptr), ctx.class_name, false, pending_ty.as_deref(), ret_is_ref, false, ctx.refs)
+                    build_call(
+                        &mut stack,
+                        &qualified,
+                        ctx.refs.is_method_by_ptr(ptr),
+                        ctx.super_ctor,
+                        ctx.refs.func_params_by_ptr(ptr),
+                        na,
+                        trusted,
+                        ctx.refs.func_owner_by_ptr(ptr),
+                        ctx.class_name,
+                        false,
+                        pending_ty.as_deref(),
+                        ret_is_ref,
+                        false,
+                        ctx.refs,
+                    )
                 };
                 // batch-31b: tag a resolved static-name FName literal (see the flag's doc).
                 // build_call returns the literal only for the accessor name; a failed gate
@@ -3093,13 +3724,32 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 pending_is_ref = false;
                 pending_is_static_name = false;
                 pending_is_pure_elem = false;
-                pending = build_call(&mut stack, &f, false, ctx.super_ctor, None, None, None, None, ctx.class_name, false, None, false, false, ctx.refs);
+                pending = build_call(
+                    &mut stack,
+                    &f,
+                    false,
+                    ctx.super_ctor,
+                    None,
+                    None,
+                    None,
+                    None,
+                    ctx.class_name,
+                    false,
+                    None,
+                    false,
+                    false,
+                    ctx.refs,
+                );
             }
             // ---- object construction ----
             "ALLOC" => {
                 let tptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let ty = ctx.refs.type_by_ptr(tptr).unwrap_or("Object").to_string();
-                let args: Vec<String> = std::mem::take(&mut stack).into_iter().filter(|a| !a.s.is_empty()).map(|a| a.s).collect();
+                let args: Vec<String> = std::mem::take(&mut stack)
+                    .into_iter()
+                    .filter(|a| !a.s.is_empty())
+                    .map(|a| a.s)
+                    .collect();
                 pending_ty = Some(ty.clone());
                 pending_const = false;
                 pending_is_ref = false;
@@ -3111,7 +3761,13 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             "STOREOBJ" => {
                 let slot = w(ins, 0);
                 let rhs = match pending.take() {
-                    Some(p) => Some(downcast(p, pending_ty.take(), std::mem::take(&mut pending_const), ctx.local_types.and_then(|m| m.get(&slot)), ctx.refs)),
+                    Some(p) => Some(downcast(
+                        p,
+                        pending_ty.take(),
+                        std::mem::take(&mut pending_const),
+                        ctx.local_types.and_then(|m| m.get(&slot)),
+                        ctx.refs,
+                    )),
                     None => obj_reg.take(),
                 };
                 // batch-41d: track whether this slot now holds a CONST object handle (the
@@ -3200,8 +3856,14 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // the out-param slot (`return this.Severities.Find(ERelationship(local_5),
                 // local_2);` — 3 "No conversion from 'bool' to 'float'" errors). Flush and
                 // use the slot; unknown types on either side keep the status-quo fold.
-                let foldable = pending.as_deref().map(|p| assign_lhs(p).is_none()).unwrap_or(true)
-                    && match (pending_ty.as_deref(), ctx.ret_ty.map(|t| t.base_name(ctx.refs))) {
+                let foldable = pending
+                    .as_deref()
+                    .map(|p| assign_lhs(p).is_none())
+                    .unwrap_or(true)
+                    && match (
+                        pending_ty.as_deref(),
+                        ctx.ret_ty.map(|t| t.base_name(ctx.refs)),
+                    ) {
                         (Some("void"), _) => false,
                         (Some(pt), Some(rt)) => ty_family(pt) == ty_family(&rt),
                         _ => true, // either side unknown -> status quo (fold)
@@ -3245,7 +3907,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 // killers) AND tests the wrong value. A non-bool pending can't be the 1-byte
                 // test value either. Flush both as their own statement and test the slot.
                 let foldable = pending_ty.as_deref() == Some("bool")
-                    && pending.as_deref().map(|p| assign_lhs(p).is_none()).unwrap_or(false);
+                    && pending
+                        .as_deref()
+                        .map(|p| assign_lhs(p).is_none())
+                        .unwrap_or(false);
                 if pending.is_some() && !foldable {
                     flush!();
                 }
@@ -3290,7 +3955,9 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // "No conversion from 'void' to 'bool'") — leave it for flush! below
                     // (statement position) and fall back to scan-back / the typed default.
                     ret_val.take().or_else(|| obj_reg.take()).or_else(|| {
-                        (pending_ty.as_deref() != Some("void")).then(|| pending.take()).flatten()
+                        (pending_ty.as_deref() != Some("void"))
+                            .then(|| pending.take())
+                            .flatten()
                     })
                 } else {
                     None
@@ -3311,7 +3978,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 if non_void
                     && !ctx.ret_via_rvo()
                     && v.as_deref().map_or(true, |s| {
-                        s.is_empty() || s.starts_with('~') || s.starts_with('$') || s.contains('\u{2}')
+                        s.is_empty()
+                            || s.starts_with('~')
+                            || s.starts_with('$')
+                            || s.contains('\u{2}')
                     })
                 {
                     v = scan_back_retval(ctx, lo + k).or(v);
@@ -3442,8 +4112,8 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                                 }
                                 // the slot is re-defined (output word 0) by another value producer
                                 // before any compare -> not this idiom, bail.
-                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
-                                | "SetV4" | "SetV8" | "SetV1"
+                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8" | "SetV4"
+                                | "SetV8" | "SetV1"
                                     if w(nx, 0) == dst_slot0 =>
                                 {
                                     break;
@@ -3563,8 +4233,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             // before any consumer -> alias-shadow, this copy is not the one read; bail.
                             if matches!(
                                 nx.op.name,
-                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
-                                    | "SetV4" | "SetV8" | "SetV1" | "STOREOBJ" | "FreeNullV8"
+                                "RefCpyV"
+                                    | "CpyRtoV4"
+                                    | "CpyRtoV8"
+                                    | "RDR4"
+                                    | "RDR8"
+                                    | "SetV4"
+                                    | "SetV8"
+                                    | "SetV1"
+                                    | "STOREOBJ"
+                                    | "FreeNullV8"
                                     | "ClrVPtr"
                             ) && w(nx, 0) == dst_slot0
                             {
@@ -3617,8 +4295,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                             // re-defined before any consumer -> alias-shadow, not this copy; bail.
                             if matches!(
                                 nx.op.name,
-                                "RefCpyV" | "CpyRtoV4" | "CpyRtoV8" | "RDR4" | "RDR8"
-                                    | "SetV4" | "SetV8" | "SetV1" | "STOREOBJ" | "FreeNullV8"
+                                "RefCpyV"
+                                    | "CpyRtoV4"
+                                    | "CpyRtoV8"
+                                    | "RDR4"
+                                    | "RDR8"
+                                    | "SetV4"
+                                    | "SetV8"
+                                    | "SetV1"
+                                    | "STOREOBJ"
+                                    | "FreeNullV8"
                                     | "ClrVPtr"
                             ) && w(nx, 0) == dst_slot0
                             {
@@ -3649,11 +4335,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // unknown/unprovable pairs render bare (status quo).
                         let dst_slot = w(ins, 0);
                         let rhs = match (dst_slot > 0).then(|| ctx.slot_type(dst_slot)).flatten() {
-                            Some(dt) if top
-                                .ty
-                                .as_deref()
-                                .map(|st| provably_derived(&dt, st, ctx.refs))
-                                .unwrap_or(false) =>
+                            Some(dt)
+                                if top
+                                    .ty
+                                    .as_deref()
+                                    .map(|st| provably_derived(&dt, st, ctx.refs))
+                                    .unwrap_or(false) =>
                             {
                                 format!("Cast<{dt}>({})", top.s)
                             }
@@ -3668,7 +4355,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // RefCpyV member-read shape (CharacterAI_Gothic:3002).
                         if top.nf_const.is_some()
                             && top.nf_const.as_deref()
-                                == (dst_slot > 0).then(|| ctx.slot_type(dst_slot)).flatten().as_deref()
+                                == (dst_slot > 0)
+                                    .then(|| ctx.slot_type(dst_slot))
+                                    .flatten()
+                                    .as_deref()
                         {
                             out.push(format!("{dst} = {CONSTSTORE}{rhs};"));
                             // batch-41d: the dest slot now holds a const object handle; a later
@@ -3727,9 +4417,8 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                     // 'const T' to 'T'" cascade, so a const member source stays dropped exactly as
                     // before. A bare `this` has no '.' and is already excluded (its back-link store
                     // stays bailed). BAIL-safe: any un-provable source keeps the current drop.
-                    let member_src = src.s.contains('.')
-                        && !src.s.contains('(')
-                        && src.nf_const.is_none();
+                    let member_src =
+                        src.s.contains('.') && !src.s.contains('(') && src.nf_const.is_none();
                     // batch-50a (opIndex-swap middle store, specs/final-tail-triage.md §3.11
                     // ShuffleItemArray): the Fisher-Yates `arr[i] = arr[j];` store has a getter
                     // call-expr SOURCE `arr[j]` (an opIndex element READ) and a member-lvalue DEST
@@ -3776,10 +4465,12 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                         // Same provably_derived gate as the RefCpyV read path; never wrap when the
                         // pair is unprovable (renders bare = status quo).
                         let rhs = match (dst.ty.as_deref(), src.ty.as_deref()) {
-                            (Some(fty), Some(sty))
-                                if provably_derived(fty, sty, ctx.refs) =>
-                            {
-                                let head = fty.split('<').next().unwrap_or(fty).trim_start_matches("const ");
+                            (Some(fty), Some(sty)) if provably_derived(fty, sty, ctx.refs) => {
+                                let head = fty
+                                    .split('<')
+                                    .next()
+                                    .unwrap_or(fty)
+                                    .trim_start_matches("const ");
                                 format!("Cast<{head}>({})", src.s)
                             }
                             _ => src.s.clone(),
@@ -3805,9 +4496,16 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 let (dst, src) = (name(w(ins, 0)), name(w(ins, 1)));
                 // a numeric conversion FROM an enum source needs an explicit int(enum) — AS has
                 // no implicit enum->int (e.g. sbTOi of an EQuestState param into an int slot).
-                let src = if ctx.slot_type(w(ins, 1)).as_deref().map(is_enum_name).unwrap_or(false) {
+                let src = if ctx
+                    .slot_type(w(ins, 1))
+                    .as_deref()
+                    .map(is_enum_name)
+                    .unwrap_or(false)
+                {
                     format!("int({src})")
-                } else { src };
+                } else {
+                    src
+                };
                 match narrowing_cast_target(n2) {
                     Some(t) => out.push(format!("{dst} = {t}({src});")),
                     None => out.push(format!("{dst} = {src};")),
@@ -3819,9 +4517,15 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
                 out.push(format!("{} = {};", name(w(ins, 0)), bits as i32));
             }
-            "CmpPtr" => cmp = Some(Cmp { a: name(w(ins, 0)), b: name(w(ins, 1)), ..Default::default() }),
+            "CmpPtr" => {
+                cmp = Some(Cmp {
+                    a: name(w(ins, 0)),
+                    b: name(w(ins, 1)),
+                    ..Default::default()
+                })
+            }
             "OBJTYPE" => stack.push(Arg::obj("objtype".into())), // +2: RTTI objtype ptr
-            "STR" => stack.push(Arg::obj("\"\"".into())),         // +3: string-constant push
+            "STR" => stack.push(Arg::obj("\"\"".into())),        // +3: string-constant push
             "PshListElmnt" => stack.push(Arg::int(name(w(ins, 0)))), // +2: list element
             // asBC_COPY (W_DW_ARG = byte-size + object-type ptr) and asBC_CopyScript (QW_ARG =
             // object-type ptr) are the SAME operation — a script value-type / struct copy =
@@ -3932,11 +4636,10 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
             // — they're unmodeled control transfers, and `cfg.rs` leaves JMPP successors unknown.
             // They fall through to the `// opcode` marker below so `stub_reason` stubs the body
             // rather than emitting recompilable source with the throw/switch silently dropped.
-            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr"
-            | "FREE" | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
+            "SUSPEND" | "JitEntry" | "PopPtr" | "SwapPtr" | "ClrHi" | "ClrVPtr" | "FREE"
+            | "FinConstruct" | "CHKREF" | "ChkRefS" | "ChkNullV" | "ChkNullS"
             | "DestructScript" | "SaveReturnValue" | "ResolveObjectPtr" | "GETOBJ"
-            | "GETOBJREF" | "GETREF"
-            | "JMP" => {}
+            | "GETOBJREF" | "GETREF" | "JMP" => {}
             // (CopyScript/COPY are handled above as `dest = src;`. FinConstruct/DestructScript
             // stay ignored: implicit AS construct/destruct that appear in nearly every function —
             // emitting/stubbing them would be wrong.) Any genuinely unmodeled opcode falls through
@@ -3962,14 +4665,26 @@ fn block_stmts_in(ctx: &Ctx, lo: usize, hi: usize, init: Vec<Arg>, ret_ref_tail:
         let chain = pending.take().unwrap();
         out.push(format!("return {chain};"));
     }
-    flush!();
+    // Final block flush: there is no later instruction that can observe the pending
+    // result metadata, so avoid the ordinary `flush!` reset assignments here. Keeping
+    // this separate also lets `clippy -D warnings` prove that every metadata write in
+    // the instruction loop has a potential consumer.
+    if let Some(s) = pending.take() {
+        // Unlike `flush_b2!`, a final pending ARGMISMATCH sentinel must surface so the emitter
+        // takes its fail-closed stub path. Filtering it here silently dropped the bad statement.
+        out.push(format!("{s};"));
+    }
     out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
-    // no binary comparison but a bool value was tested -> use it as the branch condition so
-    // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
+                                             // no binary comparison but a bool value was tested -> use it as the branch condition so
+                                             // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
     if cmp.is_none() {
         if let Some((c, is_bool)) = cond.take() {
             if !c.is_empty() && c != UNRESOLVED {
-                cmp = Some(Cmp { expr: Some(c), expr_bool: is_bool, ..Default::default() });
+                cmp = Some(Cmp {
+                    expr: Some(c),
+                    expr_bool: is_bool,
+                    ..Default::default()
+                });
             }
         }
     }
@@ -4061,6 +4776,11 @@ struct Structurer<'a> {
     /// heavily-gated G-RVO proof (`ret_via_rvo` + bare-RET join + EVERY region proves an `__return`
     /// write); any gap bails the whole switch to the stub.
     exit_rvo_return: bool,
+    /// Mixed-RVO switch mode: the switch has a normal forward JOIN for `break` paths, while one
+    /// or more case blocks return a struct through the hidden RVO slot and jump to a separate
+    /// bare RET row. Set only after EVERY such edge proves one clean block-local `__return`
+    /// store; [`Self::region_exit_stmt`] may then render those edges as `return __return;`.
+    exit_mixed_rvo_ret_rows_ok: bool,
     /// Instruction-index floor for the synthesized-return value scan (the current case
     /// region's first instruction — a value must not leak in from a preceding region).
     exit_scan_floor: usize,
@@ -4081,6 +4801,506 @@ struct Structurer<'a> {
 struct LoopScope {
     continue_off: usize,
     break_off: usize,
+}
+
+const COMPOUND_HEADER_MAX_BLOCKS: usize = 8;
+const COMPOUND_HEADER_MAX_PATHS: usize = 16;
+const COMPOUND_HEADER_MAX_EXPR_NODES: usize = 64;
+
+/// A deliberately small expression language for compiler-materialized loop predicates. It is
+/// used only while proving a bounded, side-effect-free header DAG; unsupported bytecode keeps the
+/// function on the existing stub path.
+#[derive(Clone, PartialEq, Eq)]
+enum HeaderExpr {
+    Atom(String),
+    Int(i64),
+    UInt(u64),
+    Real(String),
+    Bool(bool),
+    Cast(&'static str, Box<HeaderExpr>),
+    Cmp(Box<HeaderExpr>, HeaderRel, Box<HeaderExpr>),
+    And(Vec<HeaderExpr>),
+    Or(Vec<HeaderExpr>),
+    Not(Box<HeaderExpr>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderRel {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl HeaderRel {
+    fn negated(self) -> Self {
+        match self {
+            Self::Eq => Self::Ne,
+            Self::Ne => Self::Eq,
+            Self::Lt => Self::Ge,
+            Self::Le => Self::Gt,
+            Self::Gt => Self::Le,
+            Self::Ge => Self::Lt,
+        }
+    }
+
+    fn text(self) -> &'static str {
+        match self {
+            Self::Eq => "==",
+            Self::Ne => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+        }
+    }
+}
+
+impl HeaderExpr {
+    fn nodes(&self) -> usize {
+        match self {
+            Self::Atom(_) | Self::Int(_) | Self::UInt(_) | Self::Real(_) | Self::Bool(_) => 1,
+            Self::Cast(_, v) | Self::Not(v) => 1 + v.nodes(),
+            Self::Cmp(a, _, b) => 1 + a.nodes() + b.nodes(),
+            Self::And(v) | Self::Or(v) => 1 + v.iter().map(Self::nodes).sum::<usize>(),
+        }
+    }
+
+    fn render(&self) -> String {
+        match self {
+            Self::Atom(s) => s.clone(),
+            Self::Int(v) => v.to_string(),
+            Self::UInt(v) => v.to_string(),
+            Self::Real(v) => v.clone(),
+            Self::Bool(v) => v.to_string(),
+            Self::Cast(t, v) => format!("{t}({})", v.render()),
+            Self::Cmp(a, op, b) => format!("{} {} {}", a.render(), op.text(), b.render()),
+            Self::And(v) => v
+                .iter()
+                .map(|x| format!("({})", x.render()))
+                .collect::<Vec<_>>()
+                .join(" && "),
+            Self::Or(v) => v
+                .iter()
+                .map(|x| format!("({})", x.render()))
+                .collect::<Vec<_>>()
+                .join(" || "),
+            Self::Not(v) => format!("!({})", v.render()),
+        }
+    }
+}
+
+fn header_not(v: HeaderExpr) -> HeaderExpr {
+    match v {
+        HeaderExpr::Bool(v) => HeaderExpr::Bool(!v),
+        HeaderExpr::Cmp(a, op, b) => HeaderExpr::Cmp(a, op.negated(), b),
+        HeaderExpr::Not(v) => *v,
+        v => HeaderExpr::Not(Box::new(v)),
+    }
+}
+
+fn header_and(values: Vec<HeaderExpr>) -> HeaderExpr {
+    let mut flat = Vec::new();
+    for value in values {
+        match value {
+            HeaderExpr::Bool(false) => return HeaderExpr::Bool(false),
+            HeaderExpr::Bool(true) => {}
+            HeaderExpr::And(v) => flat.extend(v),
+            v => flat.push(v),
+        }
+    }
+    flat.dedup();
+
+    // `x == A && x != B` makes the inequality redundant when A != B, and impossible when
+    // A == B. This is enough to collapse the common compiler lowering of `x == A || x == B`
+    // without introducing a general-purpose theorem prover.
+    let equalities: Vec<(HeaderExpr, HeaderExpr)> = flat
+        .iter()
+        .filter_map(|v| match v {
+            HeaderExpr::Cmp(a, HeaderRel::Eq, b) => Some(((**a).clone(), (**b).clone())),
+            _ => None,
+        })
+        .collect();
+    for (a, b) in &equalities {
+        if flat.iter().any(
+            |v| matches!(v, HeaderExpr::Cmp(na, HeaderRel::Ne, nb) if **na == *a && **nb == *b),
+        ) {
+            return HeaderExpr::Bool(false);
+        }
+    }
+    flat.retain(|v| {
+        !matches!(v, HeaderExpr::Cmp(a, HeaderRel::Ne, b)
+        if equalities.iter().any(|(ea, eb)| {
+            **a == *ea
+                && matches!((&**b, eb), (HeaderExpr::Int(n), HeaderExpr::Int(m)) if n != m)
+        }))
+    });
+    match flat.len() {
+        0 => HeaderExpr::Bool(true),
+        1 => flat.pop().unwrap(),
+        _ => HeaderExpr::And(flat),
+    }
+}
+
+fn header_or(values: Vec<HeaderExpr>) -> HeaderExpr {
+    let mut flat = Vec::new();
+    for value in values {
+        match value {
+            HeaderExpr::Bool(true) => return HeaderExpr::Bool(true),
+            HeaderExpr::Bool(false) => {}
+            HeaderExpr::Or(v) => flat.extend(v),
+            v => flat.push(v),
+        }
+    }
+    flat.dedup();
+    match flat.len() {
+        0 => HeaderExpr::Bool(false),
+        1 => flat.pop().unwrap(),
+        _ => HeaderExpr::Or(flat),
+    }
+}
+
+#[derive(Clone)]
+struct HeaderValue {
+    expr: HeaderExpr,
+    boolish: bool,
+    /// The complete VM value register is proven to contain canonical 0/1. A one-byte
+    /// `CpyVtoR1` is boolish for JLow*, but does not prove the upper register bytes for J*.
+    full_bool: bool,
+    ty: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct HeaderState {
+    slots: HashMap<i32, HeaderValue>,
+    cmp: Option<(HeaderExpr, HeaderExpr)>,
+    value_reg: Option<HeaderValue>,
+}
+
+fn header_truth_expr(value: HeaderValue) -> Option<HeaderExpr> {
+    if !value.boolish {
+        return None;
+    }
+    Some(match value.expr {
+        HeaderExpr::Int(0) | HeaderExpr::UInt(0) => HeaderExpr::Bool(false),
+        HeaderExpr::Int(1) | HeaderExpr::UInt(1) => HeaderExpr::Bool(true),
+        v @ (HeaderExpr::Bool(_)
+        | HeaderExpr::Cmp(_, _, _)
+        | HeaderExpr::And(_)
+        | HeaderExpr::Or(_)
+        | HeaderExpr::Not(_)) => v,
+        v => v,
+    })
+}
+
+fn header_bool_jump_taken(value: HeaderValue, jump: &str) -> Option<HeaderExpr> {
+    let full_bool = value.full_bool;
+    let value = header_truth_expr(value)?;
+    Some(match jump {
+        "JLowZ" => header_not(value),
+        "JLowNZ" => value,
+        _ if !full_bool => return None,
+        "JZ" | "JNP" => header_not(value),
+        "JNZ" | "JP" => value,
+        "JS" => HeaderExpr::Bool(false),
+        "JNS" => HeaderExpr::Bool(true),
+        _ => return None,
+    })
+}
+
+/// Return whether `ins` reads and/or writes `slot` through an explicit stack-var operand. The
+/// `rW`/`wW` roles are part of the VM instruction format, so this remains conservative across the
+/// full opcode table instead of maintaining a partial mnemonic list. Taking a slot's address is an
+/// `rW` use and therefore counts as a read/escape. `ChkNullS` is the one bare-W slot operand.
+fn explicit_slot_access(ins: &Instr, slot: i32) -> (bool, bool) {
+    use BcType::*;
+    let mut reads = false;
+    let mut writes = false;
+    let mut apply = |index: usize, read: bool, write: bool| {
+        if ins.words.get(index).copied().map(s16) == Some(slot) {
+            reads |= read;
+            writes |= write;
+        }
+    };
+    match ins.op.fmt {
+        wW_ARG | wW_DW_ARG | wW_QW_ARG => apply(0, false, true),
+        rW_ARG | rW_DW_ARG | rW_QW_ARG | rW_DW_DW_ARG => apply(0, true, false),
+        wW_rW_ARG | wW_rW_DW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+        }
+        rW_rW_ARG => {
+            apply(0, true, false);
+            apply(1, true, false);
+        }
+        wW_rW_rW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+            apply(2, true, false);
+        }
+        wW_W_ARG => apply(0, false, true),
+        W_rW_ARG => apply(1, true, false),
+        rW_W_DW_ARG => apply(0, true, false),
+        W_ARG if ins.op.name == "ChkNullS" => apply(0, true, false),
+        INFO | NO_ARG | W_ARG | DW_ARG | QW_ARG | DW_DW_ARG | QW_DW_ARG | W_DW_ARG => {}
+    }
+    if ins.op.name == "NOT" && ins.words.first().copied().map(s16) == Some(slot) {
+        reads = true;
+        writes = true;
+    }
+    (reads, writes)
+}
+
+fn header_numeric_cast_target(op: &str, dst_ty: Option<&str>) -> Option<&'static str> {
+    Some(match op {
+        "iTOf" | "uTOf" | "i64TOf" | "u64TOf" => "float32",
+        "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd" => "float",
+        "fTOi" | "dTOi" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => "int",
+        "fTOu" | "dTOu" => "uint",
+        "dTOf" => "float32",
+        "iTOb" => match dst_ty? {
+            "int8" => "int8",
+            "uint8" => "uint8",
+            _ => return None,
+        },
+        "iTOw" => match dst_ty? {
+            "int16" => "int16",
+            "uint16" => "uint16",
+            _ => return None,
+        },
+        "i64TOi" => match dst_ty? {
+            "int" => "int",
+            "uint" => "uint",
+            _ => return None,
+        },
+        "iTOi64" | "uTOi64" => match dst_ty? {
+            "int64" => "int64",
+            "uint64" => "uint64",
+            _ => return None,
+        },
+        "fTOi64" | "dTOi64" => "int64",
+        "fTOu64" | "dTOu64" => "uint64",
+        _ => return None,
+    })
+}
+
+fn header_numeric_cast_source(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "iTOf" | "iTOd" | "iTOb" | "iTOw" | "iTOi64" => "int",
+        "uTOf" | "uTOd" | "uTOi64" => "uint",
+        "fTOi" | "fTOu" | "fTOd" | "fTOi64" | "fTOu64" => "float32",
+        "dTOi" | "dTOu" | "dTOf" | "dTOi64" | "dTOu64" => "float",
+        "i64TOf" | "i64TOd" | "i64TOi" => "int64",
+        "u64TOf" | "u64TOd" => "uint64",
+        "sbTOi" => "int8",
+        "swTOi" => "int16",
+        "ubTOi" => "uint8",
+        "uwTOi" => "uint16",
+        _ => return None,
+    })
+}
+
+fn header_numeric_cast_operand(op: &str, source: HeaderValue) -> Option<HeaderExpr> {
+    let source_ty = header_numeric_cast_source(op)?;
+    if source.ty.as_deref() == Some(source_ty)
+        // For an enum slot, the compiler knows the actual underlying byte/word signedness.
+        // Rendering `int(enum_value)` reproduces sb/sw/ub/uwTOi; pre-casting it to int8/uint8
+        // adds a redundant conversion and discards the enum metadata that made the opcode exact.
+        || (source.ty.as_deref().is_some_and(is_enum_name)
+            && matches!(op, "sbTOi" | "swTOi" | "ubTOi" | "uwTOi"))
+    {
+        Some(source.expr)
+    } else {
+        Some(HeaderExpr::Cast(source_ty, Box::new(source.expr)))
+    }
+}
+
+fn header_integral_width(ty: &str) -> Option<usize> {
+    Some(match ty {
+        "bool" | "int8" | "uint8" => 8,
+        "int16" | "uint16" => 16,
+        "int" | "uint" => 32,
+        "int64" | "uint64" => 64,
+        _ => return None,
+    })
+}
+
+fn header_primitive_cast_target(ty: &str) -> Option<&'static str> {
+    Some(match ty {
+        "bool" => "bool",
+        "int8" => "int8",
+        "uint8" => "uint8",
+        "int16" => "int16",
+        "uint16" => "uint16",
+        "int" => "int",
+        "uint" => "uint",
+        "int64" => "int64",
+        "uint64" => "uint64",
+        "float32" => "float32",
+        "float" | "double" | "float64" => "float",
+        _ => return None,
+    })
+}
+
+fn header_copy_type_matches_width(value: &HeaderValue, ty: &str, copy_bits: usize) -> bool {
+    match ty {
+        // Test results live in the full four-byte value register even though their source-level
+        // type is bool; this is the compiler's normal TZ -> CpyRtoV4 materialization.
+        "bool" => value.boolish && copy_bits == 32,
+        "float32" => copy_bits == 32,
+        "float" | "double" | "float64" => copy_bits == 64,
+        ty => header_integral_width(ty) == Some(copy_bits),
+    }
+}
+
+/// Retype a raw same-width VM copy using the destination slot, never the source slot. Primitive
+/// signed/unsigned copies are modulo-bit-preserving in AngelScript when written as an explicit
+/// cast. Other cross-type bit reinterpretations (notably integer/float and an enum destination
+/// with unknown underlying signedness) are rejected rather than guessed.
+fn header_copy_value(
+    mut value: HeaderValue,
+    dst_ty: Option<String>,
+    copy_bits: usize,
+) -> Option<HeaderValue> {
+    // Without the destination type a raw copy may be an integer/float bit reinterpretation. Any
+    // later numeric operation would turn that into an AngelScript numeric conversion, so reject.
+    // The sole safe exception is a proven canonical boolean materialization: its complete V4
+    // payload is 0/1 independently of the unnamed destination's inferred integer spelling.
+    let Some(dst_ty) = dst_ty else {
+        if value.boolish && value.full_bool && copy_bits == 32 {
+            value.ty = None;
+            return Some(value);
+        }
+        return None;
+    };
+    if value.ty.as_deref() == Some(dst_ty.as_str()) {
+        return header_copy_type_matches_width(&value, &dst_ty, copy_bits).then_some(value);
+    }
+
+    let dst_cast = header_primitive_cast_target(&dst_ty)?;
+    let safe = match value.ty.as_deref() {
+        Some("bool") => value.boolish && header_integral_width(&dst_ty) == Some(copy_bits),
+        Some(src) if is_enum_name(src) => header_integral_width(&dst_ty) == Some(copy_bits),
+        Some(src) => {
+            let integral = header_integral_width(src) == Some(copy_bits)
+                && header_integral_width(&dst_ty) == Some(copy_bits);
+            let same_float_width = matches!(
+                (src, dst_ty.as_str(), copy_bits),
+                ("float32", "float32", 32)
+                    | (
+                        "float" | "double" | "float64",
+                        "float" | "double" | "float64",
+                        64
+                    )
+            );
+            integral || same_float_width
+        }
+        None => {
+            header_integral_width(&dst_ty) == Some(copy_bits)
+                && matches!(
+                    &value.expr,
+                    HeaderExpr::Int(_)
+                        | HeaderExpr::UInt(_)
+                        | HeaderExpr::Bool(_)
+                        | HeaderExpr::Cmp(_, _, _)
+                        | HeaderExpr::And(_)
+                        | HeaderExpr::Or(_)
+                        | HeaderExpr::Not(_)
+                )
+        }
+    };
+    if !safe {
+        return None;
+    }
+    value.expr = HeaderExpr::Cast(dst_cast, Box::new(value.expr));
+    value.ty = Some(dst_ty);
+    Some(value)
+}
+
+/// VM integer comparisons are bit/integer operations. Casting a known float, handle, or object
+/// expression to an integer in source would be a numeric conversion and is not necessarily the
+/// bytecode operation that was executed, so only proven integral-like source values are accepted.
+fn header_is_integral_type(ty: Option<&str>) -> bool {
+    match ty {
+        None => true,
+        Some(
+            "bool" | "int8" | "uint8" | "int16" | "uint16" | "int" | "uint" | "int64" | "uint64",
+        ) => true,
+        Some(ty) => is_enum_name(ty),
+    }
+}
+
+fn header_set_value(op: &str, raw: u64, ty: Option<String>) -> Option<HeaderValue> {
+    let (expr, boolish) = match op {
+        "SetV1" => {
+            let raw = raw as u8;
+            match ty.as_deref() {
+                Some("bool") if raw <= 1 => (HeaderExpr::Int(raw as i64), true),
+                Some("int8") => (HeaderExpr::Int(raw as i8 as i64), false),
+                Some("uint8") => (HeaderExpr::UInt(raw as u64), false),
+                // A SetV1 enum's underlying byte signedness is not present in the cache's local
+                // type name. Guessing `i8` breaks 0xff followed by ubTOi, while guessing `u8`
+                // breaks sbTOi. Keep this uncommon shape on the visible fallback path.
+                Some(t) if is_enum_name(t) => return None,
+                None if raw <= 1 => (HeaderExpr::Int(raw as i64), true),
+                None => (HeaderExpr::Int(raw as i8 as i64), false),
+                _ => return None,
+            }
+        }
+        "SetV2" => {
+            let raw = raw as u16;
+            let expr = match ty.as_deref() {
+                Some("int16") | None => HeaderExpr::Int(raw as i16 as i64),
+                Some("uint16") => HeaderExpr::UInt(raw as u64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        "SetV4" => {
+            let raw = raw as u32;
+            let expr = match ty.as_deref() {
+                Some("float32") if f32::from_bits(raw).is_finite() => {
+                    HeaderExpr::Real(fmt_float(ConstBits::W4(raw), false))
+                }
+                Some("uint") => HeaderExpr::UInt(raw as u64),
+                Some("int") | None => HeaderExpr::Int(raw as i32 as i64),
+                Some(t) if is_enum_name(t) => HeaderExpr::Int(raw as i32 as i64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        "SetV8" => {
+            let expr = match ty.as_deref() {
+                Some("float" | "double" | "float64") if f64::from_bits(raw).is_finite() => {
+                    HeaderExpr::Real(fmt_float(ConstBits::W8(raw), true))
+                }
+                Some("uint64") => HeaderExpr::UInt(raw),
+                Some("int64") | None => HeaderExpr::Int(raw as i64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        _ => return None,
+    };
+    Some(HeaderValue {
+        expr,
+        boolish,
+        full_bool: false,
+        ty,
+    })
+}
+
+fn header_set_slot_type(known_ty: Option<String>, float_hint: bool, op: &str) -> Option<String> {
+    if known_ty.is_some() || !float_hint {
+        return known_ty;
+    }
+    match op {
+        "SetV4" => Some("float32".into()),
+        "SetV8" => Some("float".into()),
+        _ => None,
+    }
 }
 
 impl Structurer<'_> {
@@ -4141,13 +5361,33 @@ impl Structurer<'_> {
                 // as an `if`). A newly-detected loop never emits a linearized/lossy body.
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
-                let ls = LoopScope { continue_off: cont_off, break_off: brk_off };
+                let ls = LoopScope {
+                    continue_off: cont_off,
+                    break_off: brk_off,
+                };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
                 self.emit_range(i + 1, latch, depth + 1, out);
                 self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
+            } else if let Some((body, exit, cond, cont_off, brk_off)) =
+                self.compound_latch_loop_recoverable(i, stop)
+            {
+                // A bounded materialized top-test whose unique back-edge can occur inside a
+                // nested switch case. The physical loop body extends to the proven loop exit,
+                // including case/default blocks laid out after that back-edge.
+                let _ = writeln!(out, "{ind}while ({cond})");
+                let _ = writeln!(out, "{ind}{{");
+                let saved = self.loop_scope;
+                self.loop_scope = Some(LoopScope {
+                    continue_off: cont_off,
+                    break_off: brk_off,
+                });
+                self.emit_range(body, exit, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = exit;
             } else if let Some((test_idx, cond, body_head, break_off)) =
                 self.test_first_foreach(i, stop)
             {
@@ -4170,7 +5410,8 @@ impl Structurer<'_> {
                 // null-check diamond into this entry/join block) needs that carry, else the call
                 // renders 0-arg ("No matching signatures"). `emit_linear` starts with an EMPTY stack
                 // and dropped those args; `block_stmts_in` with `init` restores them.
-                let (mut stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                let (mut stmts, _, _) =
+                    block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
                 // batch-44d: the entry block's trailing `<coll>.Iterator()` result is dropped by
                 // build_call (the TMap/TSet Iterator lowers with NO PSF out-slot → a bare statement).
                 // The iterator local has NO default constructor, so the hoisted `TMapIterator
@@ -4194,7 +5435,10 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 let test_off = self.g.blocks[test_idx].start_dw;
-                let ls = LoopScope { continue_off: test_off, break_off };
+                let ls = LoopScope {
+                    continue_off: test_off,
+                    break_off,
+                };
                 let saved = self.loop_scope;
                 self.loop_scope = Some(ls);
                 self.emit_range(body_head, test_idx, depth + 1, out);
@@ -4202,7 +5446,12 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
             } else if let Some(latch) = self.loop_latch(i, stop) {
-                let lcmp = block_stmts(self.ctx, self.g.blocks[latch].instr_lo, self.g.blocks[latch].instr_hi).1;
+                let lcmp = block_stmts(
+                    self.ctx,
+                    self.g.blocks[latch].instr_lo,
+                    self.g.blocks[latch].instr_hi,
+                )
+                .1;
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -4215,9 +5464,16 @@ impl Structurer<'_> {
                 // recognized if/switch/break/continue/return shape (Gate 2); otherwise keep the
                 // exact status-quo `emit_linear` call byte-for-byte.
                 let latch_off = self.g.blocks[latch].start_dw;
-                let break_off = self.g.blocks[latch].succs.iter().copied().find(|&s| s > latch_off);
+                let break_off = self.g.blocks[latch]
+                    .succs
+                    .iter()
+                    .copied()
+                    .find(|&s| s > latch_off);
                 if let Some(break_off) = break_off {
-                    let ls = LoopScope { continue_off: latch_off, break_off };
+                    let ls = LoopScope {
+                        continue_off: latch_off,
+                        break_off,
+                    };
                     // `loop_scope` must be set BEFORE Gate 2 — its nested-switch dry run
                     // (`switch_span` -> `try_emit_switch`) consults it to accept loop
                     // continue/break as switch exits, so the dry run and the real emit agree.
@@ -4252,7 +5508,8 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = i + 1;
             } else if self.is_cond(i) {
-                let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+                let (stmts, cmp, leftover) =
+                    block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -4261,7 +5518,20 @@ impl Structurer<'_> {
                 let taken = b.succs.first().copied();
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
-                let cond = negate(&branch_cond(&cmp, jop));
+                let taken_cond = branch_cond(&cmp, jop);
+                let cond = cmp
+                    .as_ref()
+                    .and_then(|c| c.expr.as_deref())
+                    .and_then(|expr| {
+                        let slot = expr
+                            .strip_prefix("local_")
+                            .and_then(|digits| digits.parse::<i32>().ok());
+                        (matches!(jop, "JZ" | "JLowZ")
+                            && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref()
+                                == Some("bool"))
+                        .then(|| expr.to_string())
+                    })
+                    .unwrap_or_else(|| negate(&taken_cond));
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -4280,12 +5550,14 @@ impl Structurer<'_> {
                     // wrongly nest the rest of the body. Only skip when in loop scope AND the
                     // then-block's JMP is such an exit; the non-loop diamond path is unchanged.
                     let then_exits_loop = self.loop_scope.is_some_and(|ls| {
-                        ei > 0 && self.jump_op(ei - 1) == "JMP" &&
-                        self.g.blocks[ei - 1].succs.first().is_some_and(|&t| {
-                            t == ls.break_off || t == ls.continue_off || self.is_bare_ret_off(t)
-                        })
+                        ei > 0
+                            && self.jump_op(ei - 1) == "JMP"
+                            && self.g.blocks[ei - 1].succs.first().is_some_and(|&t| {
+                                t == ls.break_off || t == ls.continue_off || self.is_bare_ret_off(t)
+                            })
                     });
-                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" && !then_exits_loop {
+                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" && !then_exits_loop
+                    {
                         let after_idx = self.g.blocks[ei - 1]
                             .succs
                             .first()
@@ -4319,7 +5591,8 @@ impl Structurer<'_> {
             } else {
                 // (linear fallthrough-carry is out of scope — the plain arm's leftover is dropped.)
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
-                let (stmts, _, _) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
+                let (stmts, _, _) =
+                    block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -4363,7 +5636,8 @@ impl Structurer<'_> {
                 Some(j) if bi <= j => std::mem::take(&mut carry),
                 _ => Vec::new(),
             };
-            let (stmts, cmp, leftover) = block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+            let (stmts, cmp, leftover) =
+                block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
@@ -4408,15 +5682,58 @@ impl Structurer<'_> {
                 // this line into `return <val>;` to match vanilla's per-case value return.
                 "return __return;".into()
             } else if self.exit_join_is_ret {
-                self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, self.exit_scan_floor))
+                self.ctx.return_stmt(scan_back_retval_floor(
+                    self.ctx,
+                    b.instr_hi - 1,
+                    self.exit_scan_floor,
+                ))
             } else {
                 "break;".into()
             });
         }
+        // A backward edge to the enclosing loop's *proven* continue target is an early switch
+        // exit, not the switch JOIN. Keep this narrower than `break_off`: `break;` written inside
+        // a switch is lexically a switch break and cannot represent an enclosing-loop break.
+        if self
+            .loop_scope
+            .is_some_and(|ls| t == ls.continue_off && ls.continue_off < self.g.blocks[bi].start_dw)
+        {
+            return Some("continue;".into());
+        }
+        if self.exit_mixed_rvo_ret_rows_ok
+            && self.is_bare_ret_off(t)
+            && self.proves_mixed_rvo_exit(bi, t)
+        {
+            // The validating pass proved this edge's own block writes the hidden RVO slot before
+            // any cleanup and the jump. Keep the store and cleanup in order, then return its
+            // copied value; folding to the original source local could use it after destruction.
+            return Some("return __return;".into());
+        }
         if self.exit_ret_rows_ok && self.is_bare_ret_off(t) {
-            return Some(self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, self.exit_scan_floor)));
+            return Some(self.ctx.return_stmt(scan_back_retval_floor(
+                self.ctx,
+                b.instr_hi - 1,
+                self.exit_scan_floor,
+            )));
         }
         None
+    }
+
+    /// Prove one mixed-RVO early-return edge locally. This deliberately does not accept a store
+    /// in a predecessor: every `JMP -> bare RET` must carry its own clean out-slot write so no CFG
+    /// dominance guess can turn an uninitialised `__return` into a source return.
+    fn proves_mixed_rvo_exit(&self, bi: usize, target: usize) -> bool {
+        if !self.ctx.ret_via_rvo() || !self.is_bare_ret_off(target) {
+            return false;
+        }
+        let b = &self.g.blocks[bi];
+        if self.ctx.instrs[b.instr_hi - 1].op.name != "JMP"
+            || b.succs.first().copied() != Some(target)
+        {
+            return false;
+        }
+        let (stmts, _) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
+        single_clean_rvo_store(&stmts).is_some()
     }
 
     /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
@@ -4450,7 +5767,11 @@ impl Structurer<'_> {
         // recover the returned value from the block's trailing register write (scan floored to
         // this block so no value leaks in from a preceding block).
         if self.is_bare_ret_off(t) {
-            return Some(self.ctx.return_stmt(scan_back_retval_floor(self.ctx, b.instr_hi - 1, b.instr_lo)));
+            return Some(self.ctx.return_stmt(scan_back_retval_floor(
+                self.ctx,
+                b.instr_hi - 1,
+                b.instr_lo,
+            )));
         }
         None
     }
@@ -4466,7 +5787,10 @@ impl Structurer<'_> {
         let ls = self.loop_scope?;
         let b = &self.g.blocks[bi];
         let jop = self.jump_op(bi);
-        if !matches!(jop, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") {
+        if !matches!(
+            jop,
+            "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ"
+        ) {
             return None;
         }
         if b.succs.len() != 2 {
@@ -4502,7 +5826,10 @@ impl Structurer<'_> {
         for bi in lo..hi {
             let b = &self.g.blocks[bi];
             let jop = self.jump_op(bi);
-            if !matches!(jop, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") {
+            if !matches!(
+                jop,
+                "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ"
+            ) {
                 continue;
             }
             if b.succs.len() != 2 {
@@ -4510,12 +5837,14 @@ impl Structurer<'_> {
             }
             // an inner forward diamond (both succs strictly inside the body), OR a conditional
             // exit to break/continue/an in-body return
-            let forward_inner = b.succs.iter().all(|&s| {
-                self.idx_of.get(&s).is_some_and(|&si| si > bi && si <= hi)
-            });
-            let exits = b.succs.iter().any(|&s| {
-                s == ls.break_off || s == ls.continue_off || self.is_bare_ret_off(s)
-            });
+            let forward_inner = b
+                .succs
+                .iter()
+                .all(|&s| self.idx_of.get(&s).is_some_and(|&si| si > bi && si <= hi));
+            let exits = b
+                .succs
+                .iter()
+                .any(|&s| s == ls.break_off || s == ls.continue_off || self.is_bare_ret_off(s));
             if forward_inner || exits {
                 return true;
             }
@@ -4554,12 +5883,23 @@ impl Structurer<'_> {
             // over its own body, then skip past its latch.
             if let Some(inner) = self.loop_latch(bi, hi) {
                 let inner_off = self.g.blocks[inner].start_dw;
-                let inner_break = self.g.blocks[inner].succs.iter().copied().find(|&s| s > inner_off);
+                let inner_break = self.g.blocks[inner]
+                    .succs
+                    .iter()
+                    .copied()
+                    .find(|&s| s > inner_off);
                 match inner_break {
                     Some(ib) => {
-                        let inner_ls = LoopScope { continue_off: inner_off, break_off: ib };
+                        let inner_ls = LoopScope {
+                            continue_off: inner_off,
+                            break_off: ib,
+                        };
                         // the inner loop's exit must stay inside our body or be our own exit.
-                        let ib_in_body = self.idx_of.get(&ib).copied().is_some_and(|x| x >= lo && x <= hi);
+                        let ib_in_body = self
+                            .idx_of
+                            .get(&ib)
+                            .copied()
+                            .is_some_and(|x| x >= lo && x <= hi);
                         if !self.loop_edge_ok(ib, lo, hi, ls) && !ib_in_body {
                             return false;
                         }
@@ -4592,7 +5932,11 @@ impl Structurer<'_> {
                     }
                 }
                 "JMPP" => return false, // a nested JMPP not recognized as a switch — cannot map
-                j if matches!(j, "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ") => {
+                j if matches!(
+                    j,
+                    "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ"
+                ) =>
+                {
                     if succs.len() != 2 {
                         return false;
                     }
@@ -4609,7 +5953,11 @@ impl Structurer<'_> {
                     }
                     // taken: an in-body forward diamond, an exit keyword, or an in-body return
                     let taken_ok = self.loop_edge_ok(taken, lo, hi, ls)
-                        || self.idx_of.get(&taken).copied().is_some_and(|ti| ti > bi && ti <= hi);
+                        || self
+                            .idx_of
+                            .get(&taken)
+                            .copied()
+                            .is_some_and(|ti| ti > bi && ti <= hi);
                     if !taken_ok {
                         return false;
                     }
@@ -4635,7 +5983,10 @@ impl Structurer<'_> {
         if s == ls.break_off || s == ls.continue_off || self.is_bare_ret_off(s) {
             return true;
         }
-        self.idx_of.get(&s).copied().is_some_and(|si| si >= lo && si <= hi)
+        self.idx_of
+            .get(&s)
+            .copied()
+            .is_some_and(|si| si >= lo && si <= hi)
     }
 
     /// batch-36 — non-emitting probe: if a recognized compiler `switch` idiom starts at block
@@ -4685,11 +6036,21 @@ impl Structurer<'_> {
                 | "SaveReturnValue" | "ResolveObjectPtr" => continue,
                 "CALLSYS" | "Thiscall1" => {
                     let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
-                    return self.ctx.refs.func_ret_by_ptr(ptr).map(|d| d.is_reference).unwrap_or(false);
+                    return self
+                        .ctx
+                        .refs
+                        .func_ret_by_ptr(ptr)
+                        .map(|d| d.is_reference)
+                        .unwrap_or(false);
                 }
                 "CALL" | "CALLINTF" | "CALLBND" => {
                     let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                    return self.ctx.refs.func_ret_by_id(id).map(|d| d.is_reference).unwrap_or(false);
+                    return self
+                        .ctx
+                        .refs
+                        .func_ret_by_id(id)
+                        .map(|d| d.is_reference)
+                        .unwrap_or(false);
                 }
                 _ => return false,
             }
@@ -4743,7 +6104,13 @@ impl Structurer<'_> {
     /// Returns the next block index after the construct, or None on ANY deviation from the
     /// idiom — the caller then falls through to the existing arms and the `// JMPP` marker
     /// keeps the function safely stubbed (never wrong control flow).
-    fn try_emit_switch(&mut self, i: usize, stop: usize, depth: usize, out: &mut String) -> Option<usize> {
+    fn try_emit_switch(
+        &mut self,
+        i: usize,
+        stop: usize,
+        depth: usize,
+        out: &mut String,
+    ) -> Option<usize> {
         let ctx = self.ctx;
         let g = self.g;
         let blocks = &g.blocks;
@@ -4769,7 +6136,10 @@ impl Structurer<'_> {
         let b0 = &blocks[i];
         let b1 = &blocks[i + 1];
         let b2 = &blocks[i + 2];
-        if b0.instr_hi - b0.instr_lo < 2 || b1.instr_hi - b1.instr_lo != 2 || b2.instr_hi - b2.instr_lo != 2 {
+        if b0.instr_hi - b0.instr_lo < 2
+            || b1.instr_hi - b1.instr_lo != 2
+            || b2.instr_hi - b2.instr_lo != 2
+        {
             return None;
         }
         let g_hi = &ctx.instrs[b0.instr_hi - 2];
@@ -4832,7 +6202,11 @@ impl Structurer<'_> {
         bounds.push(def_off);
         bounds.sort_unstable();
         bounds.dedup();
-        let first_body = if inline_last { b2.succs[n - 1] } else { b2.succs[n - 1] + 2 };
+        let first_body = if inline_last {
+            b2.succs[n - 1]
+        } else {
+            b2.succs[n - 1] + 2
+        };
         if bounds[0] != first_body {
             return None;
         }
@@ -4872,18 +6246,29 @@ impl Structurer<'_> {
         let mut join_cands: Vec<usize> = Vec::new();
         let mut ret_rows: Vec<usize> = Vec::new();
         let mut fall_pend: Vec<usize> = Vec::new();
-        // batch-36 (Stage B): an edge to the loop break/continue offset is a valid switch exit.
-        let is_loop_exit = |x: usize| -> bool {
-            lscope.is_some_and(|ls| x == ls.continue_off || x == ls.break_off)
+        // A backward edge to the exact enclosing-loop continue target is a proven early exit.
+        // It is never a JOIN candidate. A forward continue point can retain the older, ordinary
+        // `switch break -> loop increment/test` JOIN interpretation. `break_off` is deliberately
+        // excluded: a source `break;` inside the switch cannot exit the enclosing loop.
+        let early_continue = lscope
+            .filter(|ls| ls.continue_off < b0.start_dw)
+            .map(|ls| ls.continue_off);
+        let is_forward_loop_join = |x: usize| -> bool {
+            lscope.is_some_and(|ls| x == ls.continue_off && ls.continue_off >= b0.start_dw)
         };
+        let is_loop_break = |x: usize| -> bool { lscope.is_some_and(|ls| x == ls.break_off) };
         for w in bounds.windows(2) {
             let last_bi = self.idx_of.get(&w[1]).copied()? - 1;
             let lb = &blocks[last_bi];
             match ctx.instrs[lb.instr_hi - 1].op.name {
                 "JMP" => {
                     let x = lb.succs.first().copied()?;
-                    if is_loop_exit(x) {
-                        // `break;`/`continue;` out of the switch to the enclosing loop
+                    if is_loop_break(x) {
+                        return None;
+                    } else if Some(x) == early_continue {
+                        // Exact backward loop-continue trampoline: a case early-exit, not JOIN.
+                    } else if is_forward_loop_join(x) {
+                        // Ordinary switch break immediately before the loop increment/test.
                         join_cands.push(x);
                     } else if self.is_bare_ret_off(x) {
                         // batch-43 (Fix 2): a struct-RVO switch's per-case exit ALSO jumps to a
@@ -4918,14 +6303,17 @@ impl Structurer<'_> {
         // falls into the increment as a `break;`. Only when NO explicit forward join exists.
         let loop_join = lscope.and_then(|ls| {
             let cont_idx = self.idx_of.get(&ls.continue_off).copied();
-            if cont_idx == Some(stop) && join_cands.iter().all(|&j| is_loop_exit(j)) {
+            if ls.continue_off >= b0.start_dw
+                && cont_idx == Some(stop)
+                && join_cands.iter().all(|&j| is_forward_loop_join(j))
+            {
                 Some(ls.continue_off)
             } else {
                 None
             }
         });
         let join_off = match (join_cands.as_slice(), ret_rows.as_slice()) {
-            _ if loop_join.is_some() && join_cands.iter().all(|&j| is_loop_exit(j)) => {
+            _ if loop_join.is_some() && join_cands.iter().all(|&j| is_forward_loop_join(j)) => {
                 loop_join.unwrap()
             }
             ([j], _) => *j,
@@ -4968,6 +6356,7 @@ impl Structurer<'_> {
             append_break: bool,
         }
         let mut regions: Vec<Region> = Vec::new();
+        let mut has_mixed_rvo_ret_rows = false;
         for (k, &b) in bounds.iter().enumerate() {
             if b == join_off {
                 continue; // DEF == JOIN: no default clause, nothing to emit
@@ -4987,15 +6376,37 @@ impl Structurer<'_> {
                 let bb = &blocks[bi2];
                 let tname = ctx.instrs[bb.instr_hi - 1].op.name;
                 for k2 in bb.instr_lo..bb.instr_hi {
-                    if !matches!(ctx.instrs[k2].op.name, "ThrowException" | "SUSPEND" | "JitEntry") {
+                    if !matches!(
+                        ctx.instrs[k2].op.name,
+                        "ThrowException" | "SUSPEND" | "JitEntry"
+                    ) {
                         trap_ops = false;
                     }
                 }
                 let last_of_region = bi2 + 1 == end;
                 let uncond = tname == "JMP";
+                // A normal-JOIN switch in an RVO-returning function may still return early from
+                // individual case paths. Prove each such `JMP -> bare RET` from the terminating
+                // block's own clean out-slot store; an unproved edge falls through to the
+                // existing escape rejection below and atomically keeps the function stubbed.
+                let mixed_rvo_ret_exit = uncond
+                    && rvo_return_mode
+                    && !rvo_ret_switch
+                    && bb.succs.first().copied().is_some_and(|s| {
+                        self.is_bare_ret_off(s) && self.proves_mixed_rvo_exit(bi2, s)
+                    });
+                if mixed_rvo_ret_exit {
+                    has_mixed_rvo_ret_rows = true;
+                }
                 for &s in &bb.succs {
                     if s >= b && s < end_off {
                         continue; // in-region (incl. internal loops' back edges)
+                    }
+                    if is_loop_break(s) {
+                        return None;
+                    }
+                    if uncond && Some(s) == early_continue {
+                        continue; // exact proven enclosing-loop `continue;`
                     }
                     if s == join_off {
                         if uncond || (last_of_region && end == join_idx) {
@@ -5015,7 +6426,10 @@ impl Structurer<'_> {
                             continue;
                         }
                     }
-                    if uncond && (register_based || rvo_ret_switch) && self.is_bare_ret_off(s) {
+                    if uncond
+                        && (register_based || rvo_ret_switch || mixed_rvo_ret_exit)
+                        && self.is_bare_ret_off(s)
+                    {
                         continue; // per-case `return` exit (register value or RVO out-slot)
                     }
                     return None; // escapes the region (incl. cond jumps to an exit)
@@ -5028,9 +6442,13 @@ impl Structurer<'_> {
                 if uncond && non_void && !rvo_ret_switch {
                     if let Some(&s) = bb.succs.first() {
                         let ret_exit = (s == join_off && join_is_ret)
-                            || (s != join_off && !(s >= b && s < end_off) && self.is_bare_ret_off(s));
+                            || (s != join_off
+                                && !(s >= b && s < end_off)
+                                && self.is_bare_ret_off(s));
                         if ret_exit
-                            && scan_back_retval_floor(ctx, bb.instr_hi - 1, blocks[start].instr_lo).is_none()
+                            && !mixed_rvo_ret_exit
+                            && scan_back_retval_floor(ctx, bb.instr_hi - 1, blocks[start].instr_lo)
+                                .is_none()
                         {
                             return None;
                         }
@@ -5045,8 +6463,18 @@ impl Structurer<'_> {
             let append_break;
             if lt == "JMP" {
                 let x = lb.succs.first().copied()?;
-                let exits = x == join_off
-                    || (register_based && !(x >= b && x < end_off) && self.is_bare_ret_off(x));
+                if is_loop_break(x) {
+                    return None;
+                }
+                let mixed_rvo_ret_exit = rvo_return_mode
+                    && !rvo_ret_switch
+                    && self.is_bare_ret_off(x)
+                    && self.proves_mixed_rvo_exit(end - 1, x);
+                let exits = Some(x) == early_continue
+                    || x == join_off
+                    || ((register_based || mixed_rvo_ret_exit)
+                        && !(x >= b && x < end_off)
+                        && self.is_bare_ret_off(x));
                 if !exits {
                     return None;
                 }
@@ -5067,7 +6495,14 @@ impl Structurer<'_> {
             if trap && (!is_def || targets.contains(&b)) {
                 return None; // a case entry can never be the compiler trap
             }
-            regions.push(Region { off: b, start, end, is_def, trap, append_break });
+            regions.push(Region {
+                off: b,
+                start,
+                end,
+                is_def,
+                trap,
+                append_break,
+            });
         }
         // no OUTSIDE block may enter the construct anywhere but its head
         let span_lo = b0.start_dw;
@@ -5091,7 +6526,14 @@ impl Structurer<'_> {
         // the LAST bail point; the real emission below is byte-for-byte identical, so the proof
         // and the emit agree. Runs only for the bare-RET-join RVO shape (`rvo_ret_switch`).
         if rvo_ret_switch {
-            let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor);
+            let saved = (
+                self.exit_join,
+                self.exit_join_is_ret,
+                self.exit_ret_rows_ok,
+                self.exit_rvo_return,
+                self.exit_mixed_rvo_ret_rows_ok,
+                self.exit_scan_floor,
+            );
             let mut all_ok = true;
             ctx.rvo_switch_region.set(true); // scope the `$beh0(__return,src)` statement-emit
             for r in &regions {
@@ -5103,9 +6545,17 @@ impl Structurer<'_> {
                 self.exit_join_is_ret = join_is_ret;
                 self.exit_ret_rows_ok = register_based;
                 self.exit_rvo_return = true;
+                self.exit_mixed_rvo_ret_rows_ok = false;
                 self.exit_scan_floor = blocks[r.start].instr_lo;
                 self.emit_range(r.start, r.end, depth + 1, &mut scratch);
-                (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor) = saved;
+                (
+                    self.exit_join,
+                    self.exit_join_is_ret,
+                    self.exit_ret_rows_ok,
+                    self.exit_rvo_return,
+                    self.exit_mixed_rvo_ret_rows_ok,
+                    self.exit_scan_floor,
+                ) = saved;
                 // a region that FALLS THROUGH into the join (the default, whose destructor +
                 // shared RET follow) still writes `__return` inside its body but ends without the
                 // synthetic `return __return;` — accept it iff its body carries a resolved
@@ -5115,13 +6565,21 @@ impl Structurer<'_> {
                     fold_rvo_return(&scratch).is_some()
                 } else {
                     // fallthrough region (last, into the epilogue): require a resolved out-slot store
-                    scratch.lines().rev().find_map(|l| {
-                        let t = l.trim();
-                        t.strip_prefix("__return = ").and_then(|s| s.strip_suffix(';'))
-                    }).is_some_and(|val| {
-                        !val.is_empty() && !val.contains('\u{1}') && !val.contains('\u{2}')
-                            && val != UNRESOLVED && !val.contains(RVODEF)
-                    })
+                    scratch
+                        .lines()
+                        .rev()
+                        .find_map(|l| {
+                            let t = l.trim();
+                            t.strip_prefix("__return = ")
+                                .and_then(|s| s.strip_suffix(';'))
+                        })
+                        .is_some_and(|val| {
+                            !val.is_empty()
+                                && !val.contains('\u{1}')
+                                && !val.contains('\u{2}')
+                                && val != UNRESOLVED
+                                && !val.contains(RVODEF)
+                        })
                 };
                 if !ok {
                     all_ok = false;
@@ -5142,14 +6600,26 @@ impl Structurer<'_> {
         let sel_raw = ctx.slot_name(wv);
         // an enum selector needs the explicit int() (mirrors the CMPIi arm: AS has no
         // implicit enum<->int, and the case labels are int literals)
-        let sel = if ctx.slot_type(wv).as_deref().map(is_enum_name).unwrap_or(false) {
+        let sel = if ctx
+            .slot_type(wv)
+            .as_deref()
+            .map(is_enum_name)
+            .unwrap_or(false)
+        {
             format!("int({sel_raw})")
         } else {
             sel_raw
         };
         let _ = writeln!(out, "{ind}switch ({sel})");
         let _ = writeln!(out, "{ind}{{");
-        let saved = (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor);
+        let saved = (
+            self.exit_join,
+            self.exit_join_is_ret,
+            self.exit_ret_rows_ok,
+            self.exit_rvo_return,
+            self.exit_mixed_rvo_ret_rows_ok,
+            self.exit_scan_floor,
+        );
         for r in &regions {
             if r.trap {
                 continue; // trap DEF = source had NO default; recompiling regenerates it
@@ -5175,6 +6645,7 @@ impl Structurer<'_> {
             self.exit_join_is_ret = join_is_ret;
             self.exit_ret_rows_ok = register_based;
             self.exit_rvo_return = rvo_ret_switch;
+            self.exit_mixed_rvo_ret_rows_ok = has_mixed_rvo_ret_rows;
             self.exit_scan_floor = blocks[r.start].instr_lo;
             if rvo_ret_switch {
                 // batch-43 (Fix 2): emit to scratch, then fold the region's trailing
@@ -5193,7 +6664,14 @@ impl Structurer<'_> {
             } else {
                 self.emit_range(r.start, r.end, depth + 1, out);
             }
-            (self.exit_join, self.exit_join_is_ret, self.exit_ret_rows_ok, self.exit_rvo_return, self.exit_scan_floor) = saved;
+            (
+                self.exit_join,
+                self.exit_join_is_ret,
+                self.exit_ret_rows_ok,
+                self.exit_rvo_return,
+                self.exit_mixed_rvo_ret_rows_ok,
+                self.exit_scan_floor,
+            ) = saved;
             if r.append_break {
                 let _ = writeln!(out, "{ind}    break;");
             }
@@ -5219,9 +6697,10 @@ impl Structurer<'_> {
                     )
             });
             let has_real_default = regions.iter().any(|r| r.is_def && !r.trap);
-            let externally_referenced = blocks.iter().enumerate().any(|(bi2, bb)| {
-                (bi2 < i || bi2 >= switch_end) && bb.succs.contains(&join_off)
-            });
+            let externally_referenced = blocks
+                .iter()
+                .enumerate()
+                .any(|(bi2, bb)| (bi2 < i || bi2 >= switch_end) && bb.succs.contains(&join_off));
             if every_region_returns && has_real_default && !externally_referenced {
                 return Some(join_idx + 1);
             }
@@ -5253,7 +6732,13 @@ impl Structurer<'_> {
     /// independent of the carried entries; the join's first call is a CALLSYS/Thiscall1 with
     /// TRUSTED arity (split path, never take-all). Stage 2 (own harness batch) relaxes the
     /// consumer gate to CALL/CALLINTF script consumers.
-    fn diamond_join(&self, i: usize, next: Option<usize>, l: &[Arg], cmp: &Option<Cmp>) -> Option<usize> {
+    fn diamond_join(
+        &self,
+        i: usize,
+        next: Option<usize>,
+        l: &[Arg],
+        cmp: &Option<Cmp>,
+    ) -> Option<usize> {
         let ctx = self.ctx;
         let blocks = &self.g.blocks;
         let b = &blocks[i];
@@ -5387,7 +6872,10 @@ impl Structurer<'_> {
             let int_const = |a: &Arg| {
                 a.cbits.is_some()
                     || (!a.s.is_empty()
-                        && a.s.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()))
+                        && a.s
+                            .trim_start_matches('-')
+                            .bytes()
+                            .all(|b| b.is_ascii_digit()))
             };
             for a in l {
                 if a.reeval || !(bare_ident(&a.s) || int_const(a)) {
@@ -5402,11 +6890,10 @@ impl Structurer<'_> {
                     match ins.op.name {
                         // non-writing ops: pushes, member-address/deref, register loads,
                         // calls (their arg consumption is proven balanced by D10).
-                        "SUSPEND" | "JitEntry" | "JMP" | "PSF" | "PshVPtr" | "PshV4"
-                        | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr"
-                        | "ADDSi" | "RDSPtr" | "TYPEID" | "CALL" | "CALLINTF" | "CALLBND"
-                        | "CALLSYS" | "Thiscall1" | "LoadThisR" | "LoadVObjR"
-                        | "LoadRObjR" => {}
+                        "SUSPEND" | "JitEntry" | "JMP" | "PSF" | "PshVPtr" | "PshV4" | "PshV8"
+                        | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "ADDSi"
+                        | "RDSPtr" | "TYPEID" | "CALL" | "CALLINTF" | "CALLBND" | "CALLSYS"
+                        | "Thiscall1" | "LoadThisR" | "LoadVObjR" | "LoadRObjR" => {}
                         // slot-writing ops: legal unless the destination is carried.
                         "STOREOBJ" | "FreeNullV8" | "ClrVPtr" | "FREE" | "RDR1" | "RDR2"
                         | "RDR4" | "RDR8" | "CpyRtoV4" | "CpyRtoV8" | "SetV1" | "SetV4"
@@ -5471,7 +6958,10 @@ impl Structurer<'_> {
                     let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                     let f = ctx.refs.func_by_ptr(ptr).unwrap_or("");
                     let na = ctx.refs.native_arity_by_ptr(ptr, f);
-                    if na.or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len())).is_none() {
+                    if na
+                        .or_else(|| ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()))
+                        .is_none()
+                    {
                         return None;
                     }
                     consumer = true;
@@ -5513,6 +7003,555 @@ impl Structurer<'_> {
             return None;
         }
         Some(j)
+    }
+
+    fn header_slot_value(&self, state: &HeaderState, slot: i32) -> HeaderValue {
+        state.slots.get(&slot).cloned().unwrap_or_else(|| {
+            let ty = self.ctx.slot_type(slot);
+            let boolish = ty.as_deref() == Some("bool");
+            HeaderValue {
+                expr: HeaderExpr::Atom(self.ctx.slot_name(slot)),
+                boolish,
+                full_bool: false,
+                ty,
+            }
+        })
+    }
+
+    fn header_truth(&self, value: HeaderValue) -> Option<HeaderExpr> {
+        header_truth_expr(value)
+    }
+
+    fn header_relation(&self, state: &HeaderState, rel: HeaderRel) -> Option<HeaderExpr> {
+        let (a, b) = state.cmp.clone()?;
+        Some(HeaderExpr::Cmp(Box::new(a), rel, Box::new(b)))
+    }
+
+    fn header_taken_condition(&self, state: &HeaderState, jump: &str) -> Option<HeaderExpr> {
+        if matches!(jump, "JLowZ" | "JLowNZ") {
+            return header_bool_jump_taken(state.value_reg.clone()?, jump);
+        }
+        let rel = match jump {
+            "JZ" => HeaderRel::Eq,
+            "JNZ" => HeaderRel::Ne,
+            "JS" => HeaderRel::Lt,
+            "JNS" => HeaderRel::Ge,
+            "JP" => HeaderRel::Gt,
+            "JNP" => HeaderRel::Le,
+            _ => return None,
+        };
+        self.header_relation(state, rel)
+            .or_else(|| header_bool_jump_taken(state.value_reg.clone()?, jump))
+    }
+
+    /// Symbolically execute one compiler-materialized predicate block. The whitelist contains
+    /// only local/register copies, constants, numeric casts and comparisons. Any call, member
+    /// access, write, allocation, suspension or unmodelled opcode rejects the entire loop proof.
+    fn exec_header_block(&self, bi: usize, state: &mut HeaderState) -> Option<()> {
+        let b = &self.g.blocks[bi];
+        for k in b.instr_lo..b.instr_hi {
+            let ins = &self.ctx.instrs[k];
+            let n = ins.op.name;
+            if k + 1 == b.instr_hi && (n == "JMP" || is_cond_op(n)) {
+                continue;
+            }
+            match n {
+                "SetV1" | "SetV2" | "SetV4" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let ty = header_set_slot_type(
+                        self.ctx.slot_type(slot),
+                        self.ctx.float_slots.contains(&slot),
+                        n,
+                    );
+                    let value = header_set_value(n, *ins.dwords.first()? as u64, ty)?;
+                    state.slots.insert(slot, value);
+                }
+                "SetV8" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let ty = header_set_slot_type(
+                        self.ctx.slot_type(slot),
+                        self.ctx.float_slots.contains(&slot),
+                        n,
+                    );
+                    let value = header_set_value(n, *ins.qwords.first()?, ty)?;
+                    state.slots.insert(slot, value);
+                }
+                "CpyVtoV4" | "CpyVtoV8" => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let src = ins.words.get(1).copied().map(s16)?;
+                    let value = header_copy_value(
+                        self.header_slot_value(state, src),
+                        self.ctx.slot_type(dst),
+                        if n == "CpyVtoV4" { 32 } else { 64 },
+                    )?;
+                    state.slots.insert(dst, value);
+                }
+                "CpyRtoV4" | "CpyRtoV8" => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let value = header_copy_value(
+                        state.value_reg.clone()?,
+                        self.ctx.slot_type(dst),
+                        if n == "CpyRtoV4" { 32 } else { 64 },
+                    )?;
+                    state.slots.insert(dst, value);
+                }
+                "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8" => {
+                    let src = ins.words.first().copied().map(s16)?;
+                    let mut value = self.header_slot_value(state, src);
+                    if n == "CpyVtoR1" {
+                        value.full_bool = false;
+                    }
+                    state.value_reg = Some(value);
+                    state.cmp = None;
+                }
+                "CMPIi" | "CMPIu" => {
+                    let src = ins.words.first().copied().map(s16)?;
+                    let value = self.header_slot_value(state, src);
+                    if !header_is_integral_type(value.ty.as_deref()) {
+                        return None;
+                    }
+                    let (target, rhs) = if n == "CMPIu" {
+                        (
+                            "uint",
+                            HeaderExpr::Cast(
+                                "uint",
+                                Box::new(HeaderExpr::UInt(*ins.dwords.first()? as u64)),
+                            ),
+                        )
+                    } else {
+                        ("int", HeaderExpr::Int(*ins.dwords.first()? as i32 as i64))
+                    };
+                    let lhs = if value.ty.as_deref() == Some(target) {
+                        value.expr
+                    } else {
+                        HeaderExpr::Cast(target, Box::new(value.expr))
+                    };
+                    state.cmp = Some((lhs, rhs));
+                    state.value_reg = None;
+                }
+                "CMPi" | "CMPu" | "CMPi64" | "CMPu64" => {
+                    let a = ins.words.first().copied().map(s16)?;
+                    let b = ins.words.get(1).copied().map(s16)?;
+                    let a = self.header_slot_value(state, a);
+                    let b = self.header_slot_value(state, b);
+                    if !header_is_integral_type(a.ty.as_deref())
+                        || !header_is_integral_type(b.ty.as_deref())
+                    {
+                        return None;
+                    }
+                    let target = match n {
+                        "CMPi" => "int",
+                        "CMPu" => "uint",
+                        "CMPi64" => "int64",
+                        _ => "uint64",
+                    };
+                    let coerce = |v: HeaderValue| {
+                        if v.ty.as_deref() == Some(target) {
+                            v.expr
+                        } else {
+                            HeaderExpr::Cast(target, Box::new(v.expr))
+                        }
+                    };
+                    state.cmp = Some((coerce(a), coerce(b)));
+                    state.value_reg = None;
+                }
+                "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP" => {
+                    let rel = match n {
+                        "TZ" => HeaderRel::Eq,
+                        "TNZ" => HeaderRel::Ne,
+                        "TS" => HeaderRel::Lt,
+                        "TNS" => HeaderRel::Ge,
+                        "TP" => HeaderRel::Gt,
+                        _ => HeaderRel::Le,
+                    };
+                    state.value_reg = Some(HeaderValue {
+                        expr: self.header_relation(state, rel)?,
+                        boolish: true,
+                        full_bool: true,
+                        ty: Some("bool".into()),
+                    });
+                    state.cmp = None;
+                }
+                "NOT" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let value = self.header_truth(self.header_slot_value(state, slot))?;
+                    state.slots.insert(
+                        slot,
+                        HeaderValue {
+                            expr: header_not(value),
+                            boolish: true,
+                            full_bool: false,
+                            ty: Some("bool".into()),
+                        },
+                    );
+                }
+                n if is_numeric_cast(n) => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let src = ins.words.get(1).copied().map(s16)?;
+                    let source = self.header_slot_value(state, src);
+                    let source = header_numeric_cast_operand(n, source)?;
+                    let dst_ty = self.ctx.slot_type(dst);
+                    let cast = header_numeric_cast_target(n, dst_ty.as_deref())?;
+                    state.slots.insert(
+                        dst,
+                        HeaderValue {
+                            expr: HeaderExpr::Cast(cast, Box::new(source)),
+                            boolish: false,
+                            full_bool: false,
+                            ty: Some(cast.into()),
+                        },
+                    );
+                }
+                // An unconditional terminator was skipped above. No other instruction is safe
+                // merely because it happens not to emit source text.
+                _ => return None,
+            }
+        }
+        Some(())
+    }
+
+    fn compound_header_written_slots(
+        &self,
+        head: usize,
+        body: usize,
+    ) -> Option<std::collections::BTreeSet<i32>> {
+        let mut written = std::collections::BTreeSet::new();
+        for bi in head..body {
+            let b = &self.g.blocks[bi];
+            for ins in &self.ctx.instrs[b.instr_lo..b.instr_hi] {
+                for &word in &ins.words {
+                    let slot = s16(word);
+                    if explicit_slot_access(ins, slot).1 {
+                        if slot <= 0 {
+                            return None;
+                        }
+                        written.insert(slot);
+                    }
+                }
+            }
+        }
+        Some(written)
+    }
+
+    /// Every header-written temporary that is read in the header must be defined earlier on that
+    /// exact path. This prevents an elided assignment on one iteration/path from becoming a
+    /// carried value consumed on the next iteration after the latch returns to `head`.
+    fn compound_header_writes_are_path_local(
+        &self,
+        head: usize,
+        body: usize,
+        written: &std::collections::BTreeSet<i32>,
+    ) -> bool {
+        let mut work = vec![(head, std::collections::BTreeSet::new())];
+        let mut paths = 0usize;
+        while let Some((bi, mut assigned)) = work.pop() {
+            paths += 1;
+            if paths > COMPOUND_HEADER_MAX_PATHS * COMPOUND_HEADER_MAX_BLOCKS {
+                return false;
+            }
+            let block = &self.g.blocks[bi];
+            for ins in &self.ctx.instrs[block.instr_lo..block.instr_hi] {
+                for &slot in written {
+                    let (reads, writes) = explicit_slot_access(ins, slot);
+                    if reads && !assigned.contains(&slot) {
+                        return false;
+                    }
+                    if writes {
+                        assigned.insert(slot);
+                    }
+                }
+            }
+            for &succ in &block.succs {
+                let Some(next) = self.idx_of.get(&succ).copied() else {
+                    return false;
+                };
+                if next >= head && next < body {
+                    if next <= bi {
+                        return false;
+                    }
+                    work.push((next, assigned.clone()));
+                }
+            }
+        }
+        true
+    }
+
+    /// Prove that every primitive temporary written by the elided header DAG is dead once control
+    /// reaches either the loop body or loop exit. A path is safe only when the slot is overwritten
+    /// before its first explicit read/escape, reaches a return without a read, or returns to the
+    /// proven header (whose own read-before-write safety is checked separately).
+    fn compound_header_writes_are_dead(
+        &self,
+        head: usize,
+        body: usize,
+        exit: usize,
+        written: &std::collections::BTreeSet<i32>,
+    ) -> bool {
+        for &slot in written {
+            let mut work = vec![body, exit];
+            let mut seen = std::collections::HashSet::new();
+            while let Some(bi) = work.pop() {
+                if bi == head || !seen.insert(bi) {
+                    continue;
+                }
+                let Some(block) = self.g.blocks.get(bi) else {
+                    return false;
+                };
+                let mut killed = false;
+                for ins in &self.ctx.instrs[block.instr_lo..block.instr_hi] {
+                    let (reads, writes) = explicit_slot_access(ins, slot);
+                    if reads {
+                        return false;
+                    }
+                    if writes {
+                        killed = true;
+                        break;
+                    }
+                }
+                if killed {
+                    continue;
+                }
+                let term = self.ctx.instrs[block.instr_hi - 1].op.name;
+                if block.succs.is_empty() {
+                    if !matches!(term, "RET" | "ThrowException") {
+                        return false;
+                    }
+                    continue;
+                }
+                for &succ in &block.succs {
+                    let Some(next) = self.idx_of.get(&succ).copied() else {
+                        return false;
+                    };
+                    work.push(next);
+                }
+            }
+        }
+        true
+    }
+
+    /// Recover the condition of a bounded, acyclic materialized header `[head, body)`. Every
+    /// path must terminate at exactly `body_off` or `exit_off`; path-local values are retained so
+    /// a compiler temporary assigned on both arms can feed the final low-register test.
+    fn symbolic_header_condition(
+        &self,
+        head: usize,
+        body: usize,
+        body_off: usize,
+        exit_off: usize,
+    ) -> Option<String> {
+        let mut work = vec![(head, HeaderState::default(), HeaderExpr::Bool(true))];
+        let mut body_paths = Vec::new();
+        let mut exit_paths = Vec::new();
+        let mut path_count = 0usize;
+        while let Some((bi, mut state, path)) = work.pop() {
+            if bi < head || bi >= body {
+                return None;
+            }
+            self.exec_header_block(bi, &mut state)?;
+            let b = &self.g.blocks[bi];
+            let term = self.jump_op(bi);
+            let mut push_edge =
+                |target: usize, state: HeaderState, condition: HeaderExpr| -> Option<()> {
+                    path_count += 1;
+                    if path_count > COMPOUND_HEADER_MAX_PATHS
+                        || condition.nodes() > COMPOUND_HEADER_MAX_EXPR_NODES
+                    {
+                        return None;
+                    }
+                    if target == body_off {
+                        body_paths.push(condition);
+                    } else if target == exit_off {
+                        exit_paths.push(condition);
+                    } else {
+                        let target_idx = self.idx_of.get(&target).copied()?;
+                        if target_idx <= bi || target_idx < head || target_idx >= body {
+                            return None;
+                        }
+                        work.push((target_idx, state, condition));
+                    }
+                    Some(())
+                };
+            if is_cond_op(term) {
+                if b.succs.len() != 2 {
+                    return None;
+                }
+                let taken = self.header_taken_condition(&state, term)?;
+                let fall = header_not(taken.clone());
+                push_edge(
+                    b.succs[0],
+                    state.clone(),
+                    header_and(vec![path.clone(), taken]),
+                )?;
+                push_edge(b.succs[1], state, header_and(vec![path, fall]))?;
+            } else {
+                if b.succs.len() != 1 {
+                    return None;
+                }
+                push_edge(b.succs[0], state, path)?;
+            }
+        }
+        if body_paths.is_empty() || exit_paths.is_empty() {
+            return None;
+        }
+        let condition = header_or(body_paths);
+        if matches!(condition, HeaderExpr::Bool(_))
+            || condition.nodes() > COMPOUND_HEADER_MAX_EXPR_NODES
+        {
+            return None;
+        }
+        let rendered = condition.render();
+        (rendered.len() <= 1024).then_some(rendered)
+    }
+
+    /// Detect a compound, side-effect-free top-test header whose only back-edge is an exact
+    /// unconditional jump to the header. Unlike a conventional latch-at-the-end loop, the
+    /// back-edge may live inside a switch case and code for another case/default may be laid out
+    /// after it; consequently the source loop body is `[body, exit)`, not `[body, latch)`.
+    fn compound_latch_loop(
+        &self,
+        i: usize,
+        stop: usize,
+    ) -> Option<(usize, usize, String, usize, usize)> {
+        if i >= stop || self.loop_latch(i, stop).is_some() || self.top_test_while(i, stop).is_some()
+        {
+            return None;
+        }
+        let header_off = self.g.blocks[i].start_dw;
+        let mut latch = None;
+        for bi in (i + 1)..stop {
+            if self.is_backward_jump(bi)
+                && self.g.blocks[bi].succs.first().copied() == Some(header_off)
+                && latch.replace(bi).is_some()
+            {
+                return None;
+            }
+        }
+        let latch = latch?;
+
+        for body in (i + 2)..=(i + COMPOUND_HEADER_MAX_BLOCKS).min(latch) {
+            let terminal = &self.g.blocks[body - 1];
+            if !self.is_cond(body - 1) || terminal.succs.len() != 2 {
+                continue;
+            }
+            let body_off = self.g.blocks[body].start_dw;
+            let exit_off = if terminal.succs[0] == body_off {
+                terminal.succs[1]
+            } else if terminal.succs[1] == body_off {
+                terminal.succs[0]
+            } else {
+                continue;
+            };
+            let Some(exit_idx) = self.idx_of.get(&exit_off).copied() else {
+                continue;
+            };
+            if exit_idx <= latch || exit_idx > stop {
+                continue;
+            }
+
+            // The header is a forward-only DAG with one terminal body edge and one terminal
+            // exit edge. No earlier header block may escape or enter the body directly.
+            let mut header_ok = true;
+            for bi in i..body {
+                for &s in &self.g.blocks[bi].succs {
+                    let internal = self
+                        .idx_of
+                        .get(&s)
+                        .copied()
+                        .is_some_and(|si| si > bi && si >= i && si < body);
+                    let terminal_edge = bi + 1 == body && (s == body_off || s == exit_off);
+                    if !internal && !terminal_edge {
+                        header_ok = false;
+                    }
+                }
+            }
+            if !header_ok {
+                continue;
+            }
+
+            // Single-entry/dominance: nothing outside `[i, exit)` may enter its interior; the
+            // only external entry is permitted at the header itself. Within the span, the sole
+            // non-forward edge is the proven latch -> header back-edge.
+            let mut shape_ok = true;
+            for (src, block) in self.g.blocks.iter().enumerate() {
+                for &s in &block.succs {
+                    let Some(target) = self.idx_of.get(&s).copied() else {
+                        continue;
+                    };
+                    if target >= i
+                        && target < exit_idx
+                        && !(src >= i && src < exit_idx)
+                        && (target != i || src >= i)
+                    {
+                        shape_ok = false;
+                    }
+                    if src >= i
+                        && src < exit_idx
+                        && target >= i
+                        && target < exit_idx
+                        && target <= src
+                        && (src != latch || target != i || self.jump_op(src) != "JMP")
+                    {
+                        shape_ok = false;
+                    }
+                }
+            }
+            if !shape_ok {
+                continue;
+            }
+
+            // Every physical block owned by the loop must be reachable from the one header
+            // entry. This is the explicit dominance/reducibility proof, including switch rows,
+            // default code laid out after the back-edge, and the latch itself.
+            let mut seen = std::collections::HashSet::new();
+            let mut work = vec![i];
+            while let Some(bi) = work.pop() {
+                if !seen.insert(bi) {
+                    continue;
+                }
+                for &s in &self.g.blocks[bi].succs {
+                    if let Some(ti) = self.idx_of.get(&s).copied() {
+                        if ti >= i && ti < exit_idx && !(bi == latch && ti == i) {
+                            work.push(ti);
+                        }
+                    }
+                }
+            }
+            if !(i..exit_idx).all(|bi| seen.contains(&bi)) {
+                continue;
+            }
+            let Some(written) = self.compound_header_written_slots(i, body) else {
+                continue;
+            };
+            if !self.compound_header_writes_are_path_local(i, body, &written)
+                || !self.compound_header_writes_are_dead(i, body, exit_idx, &written)
+            {
+                continue;
+            }
+
+            let cond = self.symbolic_header_condition(i, body, body_off, exit_off)?;
+            return Some((body, exit_idx, cond, header_off, exit_off));
+        }
+        None
+    }
+
+    fn compound_latch_loop_recoverable(
+        &mut self,
+        i: usize,
+        stop: usize,
+    ) -> Option<(usize, usize, String, usize, usize)> {
+        let (body, exit, cond, continue_off, break_off) = self.compound_latch_loop(i, stop)?;
+        let ls = LoopScope {
+            continue_off,
+            break_off,
+        };
+        if !self.body_has_inner_branch(body, exit, ls) {
+            return None;
+        }
+        let saved = self.loop_scope;
+        self.loop_scope = Some(ls);
+        let ok = self.loop_body_recoverable(body, exit, ls);
+        self.loop_scope = saved;
+        ok.then_some((body, exit, cond, continue_off, break_off))
     }
 
     /// If block `i` begins a bottom-test loop within [.., stop), return the latch block
@@ -5578,7 +7617,9 @@ impl Structurer<'_> {
         for j in b.instr_lo..b.instr_hi {
             let ins = &self.ctx.instrs[j];
             if ins.op.name == "LoadVObjR" {
-                let obj = self.ctx.slot_name(ins.words.first().copied().map(s16).unwrap_or(0));
+                let obj = self
+                    .ctx
+                    .slot_name(ins.words.first().copied().map(s16).unwrap_or(0));
                 let off = ins.words.get(1).copied().unwrap_or(0) as i32;
                 let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                 if let Some(field) = self.ctx.refs.member(tid, off) {
@@ -5632,7 +7673,11 @@ impl Structurer<'_> {
     ///   4. the body `[e+1, T)` is Gate-2 recoverable under `loop_scope = {continue: T, break:
     ///      T's forward exit}`.
     /// Returns `(test_idx, cond, body_head, break_off)`.
-    fn test_first_foreach(&mut self, e: usize, stop: usize) -> Option<(usize, String, usize, usize)> {
+    fn test_first_foreach(
+        &mut self,
+        e: usize,
+        stop: usize,
+    ) -> Option<(usize, String, usize, usize)> {
         // 1. entry block `e` must be a bare single-successor JMP.
         if self.jump_op(e) != "JMP" {
             return None;
@@ -5660,7 +7705,10 @@ impl Structurer<'_> {
         let break_off = *tb.succs.iter().find(|&&s| s > test_off)?;
         // 4. Gate 2 — the body must fully structure under the loop scope. (No Gate 1: a foreach
         //    body is legitimately straight-line; Gate 2 alone proves every edge is recoverable.)
-        let ls = LoopScope { continue_off: test_off, break_off };
+        let ls = LoopScope {
+            continue_off: test_off,
+            break_off,
+        };
         let saved = self.loop_scope;
         self.loop_scope = Some(ls);
         let ok = self.loop_body_recoverable(body_head, test_idx, ls);
@@ -5769,7 +7817,10 @@ impl Structurer<'_> {
         stop: usize,
     ) -> Option<(usize, String, usize, usize)> {
         let (latch, cond, cont_off, brk_off) = self.uncond_latch_loop(i, stop)?;
-        let ls = LoopScope { continue_off: cont_off, break_off: brk_off };
+        let ls = LoopScope {
+            continue_off: cont_off,
+            break_off: brk_off,
+        };
         if !self.body_has_inner_branch(i + 1, latch, ls) {
             return None;
         }
@@ -5824,4 +7875,704 @@ fn operand_str(ins: &Instr) -> String {
         p.push(format!("0x{q:x}"));
     }
     p.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestInsn {
+        label: Option<&'static str>,
+        name: &'static str,
+        words: Vec<u16>,
+        dwords: Vec<u32>,
+        target: Option<&'static str>,
+    }
+
+    #[derive(Clone)]
+    struct CompoundFixture {
+        instrs: Vec<Instr>,
+        labels: HashMap<&'static str, usize>,
+    }
+
+    #[derive(Default)]
+    struct TestAssembler {
+        next_label: Option<&'static str>,
+        ops: Vec<TestInsn>,
+    }
+
+    impl TestAssembler {
+        fn label(&mut self, label: &'static str) {
+            assert!(self.next_label.replace(label).is_none());
+        }
+
+        fn op(&mut self, name: &'static str, words: &[u16], dwords: &[u32]) {
+            self.ops.push(TestInsn {
+                label: self.next_label.take(),
+                name,
+                words: words.to_vec(),
+                dwords: dwords.to_vec(),
+                target: None,
+            });
+        }
+
+        fn jump(&mut self, name: &'static str, target: &'static str) {
+            self.ops.push(TestInsn {
+                label: self.next_label.take(),
+                name,
+                words: Vec::new(),
+                dwords: vec![0],
+                target: Some(target),
+            });
+        }
+
+        fn finish(self) -> CompoundFixture {
+            let op_info = |name: &str| {
+                crate::cache::isa::OPCODES
+                    .iter()
+                    .find(|op| op.name == name)
+                    .unwrap_or_else(|| panic!("test opcode {name}"))
+            };
+            let mut labels = HashMap::new();
+            let mut offset = 0usize;
+            for op in &self.ops {
+                if let Some(label) = op.label {
+                    assert!(labels.insert(label, offset).is_none());
+                }
+                offset += op_info(op.name).size_dwords as usize;
+            }
+            assert!(self.next_label.is_none());
+
+            let mut instrs = Vec::new();
+            offset = 0;
+            for mut spec in self.ops {
+                if let Some(target) = spec.target {
+                    let rel = labels[&target] as i64 - offset as i64 - 2;
+                    spec.dwords[0] = rel as i32 as u32;
+                }
+                let op = op_info(spec.name);
+                instrs.push(Instr {
+                    offset_dw: offset,
+                    op,
+                    words: spec.words,
+                    dwords: spec.dwords,
+                    qwords: Vec::new(),
+                });
+                offset += op.size_dwords as usize;
+            }
+            CompoundFixture { instrs, labels }
+        }
+    }
+
+    fn compound_switch_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        a.label("preheader");
+        a.op("SetV4", &[4], &[0]);
+
+        // Materialized `(local_4 == 0 || local_4 == 1)` header.
+        a.label("head");
+        a.op("iTOf", &[11, 4], &[]);
+        a.op("fTOi", &[12, 11], &[]);
+        a.op("CMPIi", &[12], &[0]);
+        a.jump("JNZ", "head_else");
+        a.label("head_true");
+        a.op("SetV1", &[7], &[1]);
+        a.jump("JMP", "head_test");
+        a.label("head_else");
+        a.op("iTOf", &[11, 4], &[]);
+        a.op("fTOi", &[12, 11], &[]);
+        a.op("CMPIi", &[12], &[1]);
+        a.label("head_tz");
+        a.op("TZ", &[], &[]);
+        a.label("head_else_store");
+        a.op("CpyRtoV4", &[7], &[]);
+        a.label("head_test");
+        a.op("CpyVtoR1", &[7], &[]);
+        a.label("head_branch");
+        a.jump("JLowZ", "loop_exit");
+
+        // Standard guarded JMPP dispatch: cases 0/1 share a body; case 2 is inline.
+        a.label("switch");
+        a.op("CMPIi", &[4], &[2]);
+        a.jump("JP", "default");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JS", "default");
+        a.op("SUBIi", &[6, 4], &[0]);
+        a.op("JMPP", &[6], &[2]);
+        a.jump("JMP", "shared_case");
+        a.jump("JMP", "shared_case");
+        a.label("case_two");
+        a.op("SetV1", &[5], &[2]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("case_two_return");
+        a.jump("JMP", "shared_ret");
+
+        a.label("shared_case");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JNZ", "continue_trampoline");
+        a.label("case_return");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("case_return_jump");
+        a.jump("JMP", "shared_ret");
+        a.label("continue_trampoline");
+        a.jump("JMP", "head");
+
+        // Physical default code follows the backward trampoline but still belongs to switch.
+        a.label("default");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.jump("JMP", "shared_ret");
+
+        a.label("loop_exit");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+
+        // Reachable only as independent post-RET blocks. They provide mutation targets for the
+        // outside-entry and ambiguous-join negative regressions without shifting the fixture.
+        a.label("outside_jump");
+        a.jump("JMP", "shared_ret");
+        a.label("alt_ret");
+        a.op("RET", &[0], &[]);
+        a.finish()
+    }
+
+    fn retarget(fixture: &mut CompoundFixture, source: &'static str, target: &'static str) {
+        let source = fixture.labels[&source];
+        let target = fixture.labels[&target];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == source)
+            .expect("source instruction");
+        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ"));
+        ins.dwords[0] = (target as i64 - source as i64 - 2) as i32 as u32;
+    }
+
+    fn replace_same_width(
+        fixture: &mut CompoundFixture,
+        label: &'static str,
+        name: &'static str,
+        words: &[u16],
+        dwords: &[u32],
+    ) {
+        let offset = fixture.labels[&label];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == offset)
+            .expect("instruction to replace");
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == name)
+            .expect("replacement opcode");
+        assert_eq!(op.size_dwords, ins.op.size_dwords);
+        ins.op = op;
+        ins.words = words.to_vec();
+        ins.dwords = dwords.to_vec();
+        ins.qwords.clear();
+    }
+
+    fn replace_jump_opcode_same_target(
+        fixture: &mut CompoundFixture,
+        label: &'static str,
+        name: &'static str,
+    ) {
+        let offset = fixture.labels[&label];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == offset)
+            .expect("jump instruction to replace");
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == name)
+            .expect("replacement jump opcode");
+        assert!(is_cond_op(ins.op.name) && is_cond_op(op.name));
+        assert_eq!(op.size_dwords, ins.op.size_dwords);
+        ins.op = op;
+    }
+
+    fn render_fixture_range(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+    ) -> String {
+        let f = FuncCode {
+            func: "Synthetic::CompoundLoopSwitch".into(),
+            is_method: false,
+            param_names: Vec::new(),
+            param_types: Vec::new(),
+            ret: DataType {
+                token: 0x44,
+                ..Default::default()
+            },
+            bytecode: Vec::new(),
+        };
+        let refs = RefResolver::default();
+        let local_types =
+            HashMap::from([(4, "EHeaderStatus".to_string()), (7, "bool".to_string())]);
+        let g = cfg::build(&fixture.instrs);
+        let idx_of: HashMap<usize, usize> = g
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.start_dw, i))
+            .collect();
+        let ctx = Ctx {
+            f: &f,
+            refs: &refs,
+            instrs: &fixture.instrs,
+            super_ctor: None,
+            ret_ty: Some(&f.ret),
+            fields: None,
+            param_types: None,
+            class_name: None,
+            local_types: Some(&local_types),
+            float_slots: std::collections::HashSet::new(),
+            param_off_map: HashMap::new(),
+            rvo_off: None,
+            keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let mut st = Structurer {
+            ctx: &ctx,
+            g: &g,
+            idx_of: &idx_of,
+            exit_join: None,
+            exit_join_is_ret: false,
+            exit_ret_rows_ok: false,
+            exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false,
+            exit_scan_floor: 0,
+            carry: None,
+            loop_scope: None,
+        };
+        let (start, stop) = if let Some((start, stop, scope)) = range {
+            st.loop_scope = Some(scope);
+            (
+                idx_of[&fixture.labels[start]],
+                idx_of[&fixture.labels[stop]],
+            )
+        } else {
+            (0, g.blocks.len())
+        };
+        let mut out = String::new();
+        st.emit_range(start, stop, 0, &mut out);
+        out
+    }
+
+    fn assert_jmpp_rejected(fixture: &CompoundFixture, why: &str) {
+        let src = render_fixture_range(fixture, None);
+        assert!(
+            src.contains("// JMPP"),
+            "unsafe compound loop accepted ({why}):\n{src}"
+        );
+    }
+
+    #[test]
+    fn compound_header_switch_continue_recovers_synthetically() {
+        let fixture = compound_switch_fixture();
+        let src = render_fixture_range(&fixture, None);
+        assert!(src.contains("while ("), "loop missing:\n{src}");
+        assert!(
+            src.contains("int(float32(int(local_4))) == 0"),
+            "enum cast / numeric-cast chain was lost:\n{src}"
+        );
+        assert!(
+            src.contains("int(float32(int(local_4))) == 1"),
+            "second OR term missing:\n{src}"
+        );
+        assert!(
+            src.contains("switch (int(local_4))"),
+            "enum switch cast missing:\n{src}"
+        );
+        assert!(src.contains("continue;"), "continue missing:\n{src}");
+        assert!(!src.contains("// JMPP"), "JMPP marker remains:\n{src}");
+    }
+
+    #[test]
+    fn compound_header_rejects_second_or_wrong_backedge() {
+        let mut second = compound_switch_fixture();
+        retarget(&mut second, "case_return_jump", "head");
+        assert_jmpp_rejected(&second, "second backedge");
+
+        let mut wrong = compound_switch_fixture();
+        retarget(&mut wrong, "continue_trampoline", "head_else");
+        assert_jmpp_rejected(&wrong, "wrong backward target");
+    }
+
+    #[test]
+    fn compound_header_rejects_side_effect_or_nonboolean_materialization() {
+        let mut side_effect = compound_switch_fixture();
+        replace_same_width(&mut side_effect, "head_tz", "INCi", &[], &[]);
+        assert_jmpp_rejected(&side_effect, "side-effecting header");
+
+        let mut non_bool = compound_switch_fixture();
+        replace_same_width(&mut non_bool, "head_tz", "CpyVtoR4", &[4], &[]);
+        assert_jmpp_rejected(&non_bool, "non-boolean materialized value");
+    }
+
+    #[test]
+    fn compound_header_rejects_a_live_elided_temporary() {
+        let mut live = compound_switch_fixture();
+        replace_same_width(&mut live, "loop_exit", "CMPIi", &[7], &[0]);
+        assert_jmpp_rejected(&live, "header temporary read on loop exit");
+    }
+
+    #[test]
+    fn compound_header_rejects_cross_iteration_partial_materialization() {
+        let mut partial = compound_switch_fixture();
+        replace_same_width(&mut partial, "head_else_store", "CpyRtoV4", &[10], &[]);
+        assert_jmpp_rejected(&partial, "header temp carried from a prior iteration");
+    }
+
+    #[test]
+    fn compound_header_rejects_non_low_jump_after_narrow_bool_copy() {
+        let mut jnp = compound_switch_fixture();
+        replace_jump_opcode_same_target(&mut jnp, "head_branch", "JNP");
+        assert_jmpp_rejected(&jnp, "JNP after CpyVtoR1 has unproved upper bytes");
+
+        let mut jns = compound_switch_fixture();
+        replace_jump_opcode_same_target(&mut jns, "head_branch", "JNS");
+        assert_jmpp_rejected(&jns, "JNS after CpyVtoR1 has unproved upper bytes");
+    }
+
+    #[test]
+    fn canonical_full_bool_models_all_non_low_jump_senses() {
+        let canonical = HeaderValue {
+            expr: HeaderExpr::Atom("b".into()),
+            boolish: true,
+            full_bool: true,
+            ty: Some("bool".into()),
+        };
+        assert_eq!(
+            header_bool_jump_taken(canonical.clone(), "JNP")
+                .unwrap()
+                .render(),
+            "!(b)"
+        );
+        assert!(matches!(
+            header_bool_jump_taken(canonical.clone(), "JNS"),
+            Some(HeaderExpr::Bool(true))
+        ));
+        let narrow = HeaderValue {
+            full_bool: false,
+            ..canonical
+        };
+        assert!(header_bool_jump_taken(narrow, "JNP").is_none());
+    }
+
+    #[test]
+    fn not_is_an_explicit_header_slot_read_and_write() {
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == "NOT")
+            .unwrap();
+        let ins = Instr {
+            offset_dw: 0,
+            op,
+            words: vec![7],
+            dwords: Vec::new(),
+            qwords: Vec::new(),
+        };
+        assert_eq!(explicit_slot_access(&ins, 7), (true, true));
+    }
+
+    #[test]
+    fn ambiguous_numeric_cast_targets_require_exact_slot_signedness() {
+        assert_eq!(
+            header_numeric_cast_target("iTOb", Some("uint8")),
+            Some("uint8")
+        );
+        assert_eq!(
+            header_numeric_cast_target("iTOb", Some("int8")),
+            Some("int8")
+        );
+        assert_eq!(
+            header_numeric_cast_target("uTOi64", Some("uint64")),
+            Some("uint64")
+        );
+        assert_eq!(
+            header_numeric_cast_target("iTOi64", Some("int64")),
+            Some("int64")
+        );
+        assert_eq!(header_numeric_cast_target("iTOb", None), None);
+        assert_eq!(header_numeric_cast_target("uTOi64", Some("int")), None);
+        assert_eq!(header_numeric_cast_source("iTOf"), Some("int"));
+        assert_eq!(header_numeric_cast_source("ubTOi"), Some("uint8"));
+
+        let enum_value = || HeaderValue {
+            expr: HeaderExpr::Atom("status".into()),
+            boolish: false,
+            full_bool: false,
+            ty: Some("EStatus".into()),
+        };
+        assert_eq!(
+            HeaderExpr::Cast(
+                "int",
+                Box::new(header_numeric_cast_operand("sbTOi", enum_value()).unwrap())
+            )
+            .render(),
+            "int(status)"
+        );
+        assert_eq!(
+            HeaderExpr::Cast(
+                "float32",
+                Box::new(header_numeric_cast_operand("iTOf", enum_value()).unwrap())
+            )
+            .render(),
+            "float32(int(status))"
+        );
+    }
+
+    #[test]
+    fn header_copy_uses_destination_signedness_before_following_casts() {
+        let unsigned = HeaderValue {
+            expr: HeaderExpr::UInt(u32::MAX as u64),
+            boolish: false,
+            full_bool: false,
+            ty: Some("uint".into()),
+        };
+        let signed = header_copy_value(unsigned, Some("int".into()), 32)
+            .expect("same-width uint-to-int copy");
+        assert_eq!(signed.ty.as_deref(), Some("int"));
+        assert_eq!(signed.expr.render(), "int(4294967295)");
+
+        // Model iTOf -> fTOi after the copy. The first cast must consume signed -1, not the
+        // original uint 4294967295; retaining the source slot type would change the condition.
+        let as_float = HeaderExpr::Cast("float32", Box::new(signed.expr));
+        let back_to_int = HeaderExpr::Cast("int", Box::new(as_float));
+        let compare = HeaderExpr::Cmp(
+            Box::new(back_to_int),
+            HeaderRel::Eq,
+            Box::new(HeaderExpr::Int(-1)),
+        );
+        assert_eq!(compare.render(), "int(float32(int(4294967295))) == -1");
+
+        let float_bits = HeaderValue {
+            expr: HeaderExpr::Real("1.0f".into()),
+            boolish: false,
+            full_bool: false,
+            ty: Some("float32".into()),
+        };
+        assert!(header_copy_value(float_bits.clone(), Some("uint".into()), 32).is_none());
+        assert!(header_copy_value(float_bits.clone(), None, 32).is_none());
+        assert!(header_copy_value(float_bits, Some("float32".into()), 64).is_none());
+    }
+
+    #[test]
+    fn header_constants_preserve_ieee_bits_and_unsigned_high_bits() {
+        let value = |op, raw, ty: &str| {
+            header_set_value(op, raw, Some(ty.into()))
+                .expect("supported typed SetV constant")
+                .expr
+                .render()
+        };
+        assert_eq!(value("SetV4", 1.0f32.to_bits() as u64, "float32"), "1.0f");
+        assert_eq!(value("SetV8", 1.0f64.to_bits(), "float"), "1.0");
+        assert_eq!(value("SetV4", u32::MAX as u64, "uint"), "4294967295");
+        assert_eq!(value("SetV8", u64::MAX, "uint64"), "18446744073709551615");
+        assert!(header_set_value("SetV4", 0, Some("float".into())).is_none());
+        assert!(header_set_value("SetV8", 0, Some("float32".into())).is_none());
+        assert!(header_set_value("SetV1", 0xff, Some("EByteEnum".into())).is_none());
+        assert!(
+            header_set_value("SetV4", f32::NAN.to_bits() as u64, Some("float32".into())).is_none()
+        );
+        assert!(header_set_value("SetV8", f64::INFINITY.to_bits(), Some("float".into())).is_none());
+
+        let inferred = header_set_slot_type(None, true, "SetV4");
+        assert_eq!(inferred.as_deref(), Some("float32"));
+        assert_eq!(
+            header_set_value("SetV4", 1.0f32.to_bits() as u64, inferred)
+                .unwrap()
+                .expr
+                .render(),
+            "1.0f"
+        );
+
+        // CMPIu uses the same unsigned expression form, then makes its 32-bit VM domain explicit.
+        let cmpiu_rhs = HeaderExpr::Cast("uint", Box::new(HeaderExpr::UInt(u32::MAX as u64)));
+        assert_eq!(cmpiu_rhs.render(), "uint(4294967295)");
+    }
+
+    #[test]
+    fn integer_header_comparisons_reject_known_non_integer_sources() {
+        for ty in [
+            "bool",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int",
+            "uint",
+            "int64",
+            "uint64",
+            "EHeaderStatus",
+        ] {
+            assert!(header_is_integral_type(Some(ty)), "rejected {ty}");
+        }
+        assert!(header_is_integral_type(None));
+        for ty in ["float32", "float", "UObject", "FVector"] {
+            assert!(!header_is_integral_type(Some(ty)), "accepted {ty}");
+        }
+    }
+
+    #[test]
+    fn compound_loop_rejects_outside_entry_into_header_or_switch_tail() {
+        let mut header_entry = compound_switch_fixture();
+        retarget(&mut header_entry, "outside_jump", "head_test");
+        assert_jmpp_rejected(&header_entry, "outside header entry");
+
+        let mut default_entry = compound_switch_fixture();
+        retarget(&mut default_entry, "outside_jump", "default");
+        assert_jmpp_rejected(&default_entry, "outside default/tail entry");
+    }
+
+    #[test]
+    fn switch_rejects_loop_break_and_ambiguous_return_join() {
+        let mut break_target = compound_switch_fixture();
+        retarget(&mut break_target, "continue_trampoline", "loop_exit");
+        let scope = LoopScope {
+            continue_off: break_target.labels["head"],
+            break_off: break_target.labels["loop_exit"],
+        };
+        let body = render_fixture_range(&break_target, Some(("switch", "loop_exit", scope)));
+        assert!(
+            body.contains("// JMPP"),
+            "loop break was misrendered as switch break:\n{body}"
+        );
+
+        let mut ambiguous = compound_switch_fixture();
+        retarget(&mut ambiguous, "case_two_return", "outside_jump");
+        retarget(&mut ambiguous, "continue_trampoline", "loop_exit");
+        let scope = LoopScope {
+            continue_off: ambiguous.labels["head"],
+            break_off: ambiguous.labels["alt_ret"],
+        };
+        let body = render_fixture_range(&ambiguous, Some(("switch", "loop_exit", scope)));
+        assert!(
+            body.contains("// JMPP"),
+            "switch with ambiguous forward joins was accepted:\n{body}"
+        );
+    }
+
+    #[test]
+    fn member_ref_push_uses_native_enum_only_as_a_precise_value_fallback() {
+        assert_eq!(
+            member_ref_push_type(
+                Some("ERelationship"),
+                Some("EOtherEnum"),
+                Some("FContainingStruct")
+            ),
+            Some("ERelationship".into())
+        );
+        assert_eq!(
+            member_ref_push_type(None, Some("ERelationship"), Some("FContainingStruct")),
+            Some("ERelationship".into())
+        );
+    }
+
+    #[test]
+    fn member_ref_push_keeps_owner_fallback_without_a_value_type_witness() {
+        assert_eq!(
+            member_ref_push_type(None, None, Some("FContainingStruct")),
+            Some("FContainingStruct".into())
+        );
+        assert_eq!(member_ref_push_type(None, None, None), None);
+    }
+
+    #[test]
+    fn same_type_psf_copy_requires_all_type_witnesses() {
+        let dst = Arg::psf("local_28".into(), Some("FTransform".into()));
+        let src = Arg::psf("local_52".into(), Some("FTransform".into()));
+        assert!(is_proven_same_type_psf_copy(
+            &dst,
+            std::slice::from_ref(&src),
+            Some("FTransform"),
+            Some(1)
+        ));
+
+        let wrong_src = Arg::psf("local_52".into(), Some("FVector".into()));
+        assert!(!is_proven_same_type_psf_copy(
+            &dst,
+            &[wrong_src],
+            Some("FTransform"),
+            Some(1)
+        ));
+        assert!(!is_proven_same_type_psf_copy(&dst, &[src], None, Some(1)));
+    }
+
+    #[test]
+    fn thiscall1_physical_frame_preserves_deferred_outer_args() {
+        // Synthetic form of:
+        //   n"CanToast", this, 0, this.Transitions, Thiscall1 Last,
+        //   <Last result>.Condition, CALLSYS BindUFunction
+        // `Last()` renders with zero args, but Thiscall1 physically consumes the pushed zero.
+        let opcode = crate::cache::isa::op_info(200).expect("Thiscall1 opcode");
+        assert_eq!(opcode.name, "Thiscall1");
+        assert_eq!(opcode.stack_inc, -3); // one dword argument + two-dword receiver
+        assert_eq!(call_frame_arity("Thiscall1", Some(0)), Some(1));
+        assert_eq!(call_frame_arity("CALLSYS", Some(0)), Some(0));
+
+        let mut stack = vec![
+            Arg::typed(r#"n"CanToast""#.into(), Some("FName".into())).carry(),
+            Arg::typed("this".into(), Some("UObject".into())).carry(),
+            Arg::iconst("0".into(), ConstBits::W4(0)).carry(),
+            Arg::typed("this.Transitions".into(), Some("TArray".into())).carry(),
+        ];
+
+        let inner_need = call_frame_arity("Thiscall1", Some(0)).unwrap() + 1; // receiver
+        let inner = take_call_frame(&mut stack, Some(inner_need));
+        assert_eq!(
+            inner.iter().map(|a| a.s.as_str()).collect::<Vec<_>>(),
+            ["0", "this.Transitions"]
+        );
+        assert_eq!(
+            stack.iter().map(|a| a.s.as_str()).collect::<Vec<_>>(),
+            [r#"n"CanToast""#, "this"]
+        );
+
+        stack.push(Arg::typed(
+            "this.Transitions.Last().Condition".into(),
+            Some("FInteractionAnimTransitionCondition".into()),
+        ));
+        let outer = take_call_frame(&mut stack, Some(3));
+        assert!(stack.is_empty());
+        assert_eq!(
+            outer.iter().map(|a| a.s.as_str()).collect::<Vec<_>>(),
+            [
+                r#"n"CanToast""#,
+                "this",
+                "this.Transitions.Last().Condition"
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_rvo_exit_proof_accepts_one_clean_store_before_cleanup() {
+        let stmts = vec![
+            "local_16 = MakeResult();".to_string(),
+            "__return = local_16;".to_string(),
+            "local_24.Destruct();".to_string(),
+        ];
+        assert_eq!(single_clean_rvo_store(&stmts), Some("local_16"));
+    }
+
+    #[test]
+    fn mixed_rvo_exit_proof_rejects_missing_unresolved_or_ambiguous_store() {
+        let missing = vec!["local_24.Destruct();".to_string()];
+        assert_eq!(single_clean_rvo_store(&missing), None);
+
+        let unresolved = vec![format!("__return = {UNRESOLVED};")];
+        assert_eq!(single_clean_rvo_store(&unresolved), None);
+
+        let duplicate = vec![
+            "__return = local_16;".to_string(),
+            "__return = local_32;".to_string(),
+        ];
+        assert_eq!(single_clean_rvo_store(&duplicate), None);
+    }
 }

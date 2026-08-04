@@ -91,8 +91,9 @@ class _FieldEditorState extends State<FieldEditor> {
       if (controller == null || _errors[field.name] != null) continue;
       final pending = widget.pendingOverrides[field.name];
       if (_controllerRepresents(field, controller.text, pending)) continue;
-      controller.text =
-          pending != null ? _pendingText(field, pending) : _defaultText(field);
+      controller.text = pending != null
+          ? _pendingText(field, pending)
+          : _defaultText(field);
     }
   }
 
@@ -152,9 +153,9 @@ class _FieldEditorState extends State<FieldEditor> {
       return d.toString();
     }
     return switch (field.type) {
-      FieldType.bool_  => 'false',
-      FieldType.enum_  => field.enumValues.firstOrNull ?? '',
-      _                => '0',
+      FieldType.bool_ => 'false',
+      FieldType.enum_ => field.enumValues.firstOrNull ?? '',
+      _ => '0',
     };
   }
 
@@ -190,12 +191,14 @@ class _FieldEditorState extends State<FieldEditor> {
     // (the true default of m_Value may be 4, not 0) — so treating "value ==
     // placeholder" as a revert both mis-fires and makes it impossible to set a
     // field to 0. Override removal is done from the OverridesPanel.
-    widget.onOverrideChanged(OverrideEntry(
-      classId:  widget.item.id,
-      field:    field.name,
-      oldValue: parsedValue(field, _defaultText(field)),
-      newValue: parsedValue(field, raw),
-    ));
+    widget.onOverrideChanged(
+      OverrideEntry(
+        classId: widget.item.id,
+        field: field.name,
+        oldValue: parsedValue(field, _defaultText(field)),
+        newValue: parsedValue(field, raw),
+      ),
+    );
   }
 
   @override
@@ -256,15 +259,15 @@ class _FieldEditorState extends State<FieldEditor> {
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: _FieldRow(
-              schema:     field,
+              schema: field,
               controller: _controllers[field.name]!,
-              error:      switch (_errors[field.name]) {
+              error: switch (_errors[field.name]) {
                 final err? => fieldErrorText(l10n, err),
                 _ => null,
               },
               hasPending: widget.pendingOverrides.containsKey(field.name),
-              onChanged:  (raw) => _onChanged(field, raw),
-              onRemove:   () {
+              onChanged: (raw) => _onChanged(field, raw),
+              onRemove: () {
                 final pending = widget.pendingOverrides[field.name];
                 if (pending != null) widget.onOverrideRemoved?.call(pending);
               },
@@ -355,9 +358,7 @@ class _FieldRow extends StatelessWidget {
         },
       );
       if (removeButton != null) {
-        input = Row(
-          children: [input, const SizedBox(width: 8), removeButton],
-        );
+        input = Row(children: [input, const SizedBox(width: 8), removeButton]);
       }
     } else {
       input = TextField(
@@ -369,8 +370,11 @@ class _FieldRow extends StatelessWidget {
           suffixIcon: removeButton,
         ),
         keyboardType: schema.type == FieldType.int_
-            ? TextInputType.number
-            : const TextInputType.numberWithOptions(decimal: true),
+            ? const TextInputType.numberWithOptions(signed: true)
+            : const TextInputType.numberWithOptions(
+                signed: true,
+                decimal: true,
+              ),
         onChanged: onChanged,
       );
     }

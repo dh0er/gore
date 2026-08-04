@@ -9,6 +9,16 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String get recoveryAction => 'Recover';
+
+  @override
+  String get recoveryRequiredConfirm =>
+      'Recover the interrupted deployment and remove any partially deployed files?';
+
+  @override
+  String get statusRecoveryRequired => 'Recovery required';
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

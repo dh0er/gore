@@ -4,10 +4,32 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "AngelScript precompiled-cache decoder + tooling for Gothic 1 Remake (gore)."
+exclude = [
+    "native/diagnostics-hook/*.o",
+    "native/diagnostics-hook/*.dll",
+]
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
+gore-asset = { path = "../gore-asset" }
+gore-generation = { path = "../gore-generation" }
 thiserror = "2"
 anyhow = "1"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

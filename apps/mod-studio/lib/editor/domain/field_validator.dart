@@ -51,6 +51,10 @@ FieldError? validateField(FieldSchema schema, String raw) {
     case FieldType.int_:
       final n = int.tryParse(trimmed);
       if (n == null) return const NotWholeNumberError();
+      if (schema.numericDomain == FieldNumericDomain.signedInteger32) {
+        if (n < -0x80000000) return const BelowMinimumError(-0x80000000);
+        if (n > 0x7fffffff) return const AboveMaximumError(0x7fffffff);
+      }
       if (schema.minValue != null && n < schema.minValue!) {
         return BelowMinimumError(schema.minValue!);
       }
@@ -67,6 +71,14 @@ FieldError? validateField(FieldSchema schema, String raw) {
       // everything) and then crash jsonEncode when the override is sent to the
       // native FFI, so reject them up front.
       if (!f.isFinite) return const NotFiniteError();
+      if (schema.numericDomain == FieldNumericDomain.finiteFloat32) {
+        if (f < -3.4028234663852886e38) {
+          return const BelowMinimumError(-3.4028234663852886e38);
+        }
+        if (f > 3.4028234663852886e38) {
+          return const AboveMaximumError(3.4028234663852886e38);
+        }
+      }
       if (schema.minValue != null && f < schema.minValue!) {
         return BelowMinimumError(schema.minValue!);
       }
@@ -104,11 +116,11 @@ FieldError? validateField(FieldSchema schema, String raw) {
 Object parsedValue(FieldSchema schema, String raw) {
   final trimmed = raw.trim();
   return switch (schema.type) {
-    FieldType.int_    => int.parse(trimmed),
-    FieldType.float_  => double.parse(trimmed),
-    FieldType.bool_   => trimmed == 'true',
+    FieldType.int_ => int.parse(trimmed),
+    FieldType.float_ => double.parse(trimmed),
+    FieldType.bool_ => trimmed == 'true',
     FieldType.string_ => trimmed,
-    FieldType.enum_   => _enumBackingValue(schema, trimmed),
+    FieldType.enum_ => _enumBackingValue(schema, trimmed),
   };
 }
 

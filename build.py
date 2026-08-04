@@ -25,21 +25,34 @@ Release steps (additive; pass at least one, or --all):
     --all         = --bump --changelog --tag --push (CI builds remotely)
     --dry-run     print every action, change nothing
 
-Tags are per-project prefixed: gore-save-vX.Y.Z, gore-mod-vX.Y.Z,
-gore-manager-vX.Y.Z, gore-cli-vX.Y.Z (the gore CLI keeps the gore-cli- tag
-prefix). The Release workflow matches the prefix and builds only that project.
+Project names are the whole naming scheme. A project is its tag prefix and its
+artifact name: gore-cli, gore-save-editor, gore-mod-studio, gore-mod-manager
+produce tags <project>-vX.Y.Z, zips <project>-X.Y.Z-windows-x64.zip and
+installers <project>-X.Y.Z-setup.exe. The Release workflow matches the tag
+prefix and builds only that project.
 
 Examples:
     python build.py all test
-    python build.py gore-save dist
-    python build.py gore release 0.2.0 --all
-    python build.py gore-mod release 0.1.0 --bump --build --installer  # local only
+    python build.py gore-save-editor dist
+    python build.py gore-cli release 0.2.0 --all
+    python build.py gore-mod-studio release 0.1.0 --bump --build --installer
+
+Code signing (Azure Trusted / Artifact Signing):
+    Off by default -- local dist/installer builds ship unsigned. Signing is
+    opt-in via GORE_SIGN=1 (CI sets it), which also requires these env vars:
+        TRUSTED_SIGNING_ENDPOINT  TRUSTED_SIGNING_ACCOUNT  TRUSTED_SIGNING_PROFILE
+        AZURE_TENANT_ID  AZURE_CLIENT_ID  AZURE_CLIENT_SECRET   (service principal)
+    With GORE_SIGN=1 a missing var hard-fails rather than silently shipping
+    unsigned. GORE_SIGN_NO_PROXY=1 makes the signtool call alone bypass the
+    system proxy, for machines whose PAC routes AAD login through a tunnel that
+    may be down (the rest of the build keeps the system proxy).
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -84,71 +97,89 @@ ISCC = _resolve_tool(
 # entry. A project may carry releasable=False so `all` skips it for
 # release/dist and `release <project>` rejects it.
 PROJECTS: dict[str, dict] = {
-    "gore-save": {  # save editor (Flutter, WinSparkle)
+    "gore-save-editor": {  # save editor (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/save-editor",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-save",
+        "tag_prefix": "gore-save-editor",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoresaveSetup",  # keep: shipped update feed expects this filename
         "exe": "goresave.exe",  # keep: CMake BINARY_NAME (Inno AppId-tied upgrade)
         "core_crate": "gore-save",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_save",  # was goresave_core; dll now gore_save.dll (cargo underscores it)
-        "dist_zip": "goresave-{version}-windows-x64",
         "releasable": True,
     },
-    "gore-mod": {  # mod studio (Flutter, WinSparkle)
+    "gore-mod-studio": {  # mod studio (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/mod-studio",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-mod",
+        "tag_prefix": "gore-mod-studio",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoreModSetup",
         "exe": "gore_mod.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # cargo -p selector (cargo wants the hyphenated package id)
         "core_dll": "gore_ffi",  # was gore_core; dll now gore_ffi.dll (cargo underscores it)
-        "dist_zip": "gore-mod-{version}-windows-x64",
         # Bundle the standalone `gore` CLI (gore.exe + its lua/shared SDK) beside
         # the app, so GUI users get the power tools Studio does not expose (gore
         # as disasm/decompile, catalog/dump/stubs, mgr) without a second download.
         # Staged into the Flutter Release dir, so both the installer
         # (SourceDir=Release) and the portable zip (copied from Release) ship it.
-        "companions": ["gore"],
+        "companions": ["gore-cli"],
         "releasable": True,
     },
-    "gore-manager": {  # mod manager (Flutter, WinSparkle)
+    "gore-mod-manager": {  # mod manager (Flutter, WinSparkle)
         "kind": "flutter",
         "dir": "apps/mod-manager",
         "pubspec": "pubspec.yaml",
-        "tag_prefix": "gore-manager",
+        "tag_prefix": "gore-mod-manager",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
-        "installer_name": "GoreManagerSetup",
         "exe": "gore_manager.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
         "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
-        "dist_zip": "gore-manager-{version}-windows-x64",
         "releasable": True,
     },
-    "gore": {  # the unified CLI (was gore-cli)
+    "gore-cli": {  # the unified CLI
         "kind": "rust-bin",
         "dir": "crates/gore",
         "manifest": "Cargo.toml",
         "crate": "gore",
         "bin": "gore",  # produces gore.exe
-        "tag_prefix": "gore-cli",  # KEEP this tag prefix (release.yml trigger + habit)
+        "tag_prefix": "gore-cli",
         "changelog": "CHANGELOG.md",
-        "dist_zip": "gore-{version}-windows-x64",
         "releasable": True,
         # extra dirs staged beside the exe in the release zip: (src relative to ROOT, dest name).
         # `gore deploy-shared` resolves the SDK from `shared/` next to the binary.
         "bundle_dirs": [("lua/shared", "shared")],
+        # Markdown docs staged beside the exe. Links that point out of the guide
+        # tree are rewritten to absolute GitHub URLs (see stage_docs).
+        "doc_dirs": [("docs/guide", "docs")],
+        # The same guide, rendered by the freshly built binary into one browsable,
+        # self-contained HTML file. The Markdown copies are what `grep` wants (the
+        # MCP server has its own, compiled into the exe); this is what a human
+        # double-clicks, because Windows has no handler for .md and the guide is
+        # far too table-heavy for Notepad.
+        "guide_html": "docs/guide.html",
     },
 }
 
-RELEASE_ORDER = ["gore", "gore-save", "gore-mod", "gore-manager"]  # for `all`
+RELEASE_ORDER = [  # for `all`
+    "gore-cli",
+    "gore-save-editor",
+    "gore-mod-studio",
+    "gore-mod-manager",
+]
+
+
+# Every shipped artifact is named after its project, which is also its tag
+# prefix: `<project>-vX.Y.Z` tags produce `<project>-X.Y.Z-windows-x64.zip` and
+# `<project>-X.Y.Z-setup.exe`. Keep these three in lockstep.
+def zip_basename(project: str, version: str) -> str:
+    return f"{PROJECTS[project]['tag_prefix']}-{version}-windows-x64"
+
+
+def installer_basename(project: str, version: str) -> str:
+    return f"{PROJECTS[project]['tag_prefix']}-{version}-setup"
 
 
 def env() -> dict[str, str]:
@@ -159,19 +190,279 @@ def env() -> dict[str, str]:
     return out
 
 
-def run(label: str, cmd: list[object], cwd: Path = ROOT, dry: bool = False) -> None:
+def run(
+    label: str,
+    cmd: list[object],
+    cwd: Path = ROOT,
+    dry: bool = False,
+    extra_env: dict[str, str] | None = None,
+) -> None:
     printable = " ".join(str(part) for part in cmd)
     print(f"\n{'=' * 72}\n{label}\n-> {printable}  (cwd={cwd})\n{'=' * 72}")
     if dry:
         print("[dry-run] skipped")
         return
-    completed = subprocess.run([str(part) for part in cmd], cwd=cwd, env=env())
+    child_env = env()
+    if extra_env:
+        child_env.update(extra_env)
+    completed = subprocess.run([str(part) for part in cmd], cwd=cwd, env=child_env)
     if completed.returncode != 0:
         raise SystemExit(f"{label} failed (exit {completed.returncode})")
 
 
+# --------------------------------------------------------------------------- #
+# Code signing (Azure Trusted / Artifact Signing)                             #
+# --------------------------------------------------------------------------- #
+# Ship Authenticode-signed PE files so AV ML engines (SecureAge et al.) stop
+# false-flagging the unsigned Flutter runner — the flag NexusMods quarantines
+# our portable zip on.
+#
+# Signing is OPT-IN: off by default (local builds ship unsigned), on only when
+# GORE_SIGN=1 — CI sets it. When opted in, these env vars must all be present
+# (a missing one hard-fails rather than silently shipping unsigned):
+#
+#   TRUSTED_SIGNING_ENDPOINT   Account URI, e.g. https://weu.codesigning.azure.net/
+#   TRUSTED_SIGNING_ACCOUNT    Artifact Signing account name
+#   TRUSTED_SIGNING_PROFILE    certificate profile name
+#   AZURE_TENANT_ID            \
+#   AZURE_CLIENT_ID             > service-principal credential (the dlib reads
+#   AZURE_CLIENT_SECRET        /  these via Azure.Identity EnvironmentCredential)
+#
+# Nothing secret lives in the repo; CI injects the above from repo secrets.
+TS_DLIB_VERSION = "1.0.95"
+TS_DLIB_DIR = ROOT / "tools" / "trusted-signing"
+TS_TIMESTAMP = "http://timestamp.acs.microsoft.com"
+_TS_ENV_KEYS = (
+    "TRUSTED_SIGNING_ENDPOINT",
+    "TRUSTED_SIGNING_ACCOUNT",
+    "TRUSTED_SIGNING_PROFILE",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+)
+
+
+def _signing_config() -> dict[str, str] | None:
+    # Opt-in: signing is off unless GORE_SIGN=1 (CI sets it). When opted in every
+    # credential must be present — a missing one hard-fails rather than silently
+    # shipping an unsigned build.
+    if os.environ.get("GORE_SIGN") != "1":
+        return None
+    vals = {k: os.environ.get(k, "") for k in _TS_ENV_KEYS}
+    missing = [k for k, v in vals.items() if not v]
+    if missing:
+        raise SystemExit(f"GORE_SIGN=1 but missing signing env: {', '.join(missing)}")
+    return vals
+
+
+# Opt-in proxy bypass for the signing call only (GORE_SIGN_NO_PROXY=1).
+#
+# A corporate PAC may route login.microsoftonline.com through a local tunnel; when
+# that tunnel is down, token acquisition dies with "No connection could be made
+# because the target machine actively refused it (localhost:9000)" and signing
+# fails even though the network is fine. These overrides are handed to the signtool
+# child process alone, so the rest of the build (Flutter, cargo, pub) keeps using
+# the system proxy untouched.
+#
+# .NET only builds its proxy from the environment when a proxy is actually set
+# there, and only then honours NO_PROXY -- hence the deliberately dead dummy
+# proxy paired with a bypass list covering every host signing talks to (AAD
+# login, the codesigning endpoint, and the RFC3161 timestamp server). Bypass
+# entries need the leading-dot form to match subdomains.
+_SIGN_NO_PROXY = (
+    ".microsoftonline.com,login.microsoftonline.com,.microsoft.com,"
+    ".azure.net,.windows.net"
+)
+
+
+def _sign_proxy_overrides() -> dict[str, str]:
+    if os.environ.get("GORE_SIGN_NO_PROXY") != "1":
+        return {}
+    print("signing: bypassing the system proxy for signtool (GORE_SIGN_NO_PROXY=1)")
+    return {
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": _SIGN_NO_PROXY,
+    }
+
+
+def _find_signtool() -> Path:
+    override = os.environ.get("SIGNTOOL")
+    if override:
+        return Path(override)
+    found = shutil.which("signtool") or shutil.which("signtool.exe")
+    if found:
+        return Path(found)
+    base = Path(r"C:\Program Files (x86)\Windows Kits\10\bin")
+    cands = sorted(base.glob("*/x64/signtool.exe"), reverse=True)
+    if cands:
+        return cands[0]
+    raise SystemExit("signtool.exe not found (install the Windows 10/11 SDK)")
+
+
+def _ensure_dlib() -> Path:
+    """Return the Trusted Signing dlib, fetching the official Microsoft NuGet
+    package on first use so neither local checkouts nor CI need a separate
+    install step (the payload is gitignored under tools/)."""
+    dlib = TS_DLIB_DIR / "Azure.CodeSigning.Dlib.dll"
+    if dlib.exists():
+        return dlib
+    import io
+    import urllib.request
+    import zipfile
+
+    ver = TS_DLIB_VERSION
+    url = (
+        "https://api.nuget.org/v3-flatcontainer/microsoft.trusted.signing.client/"
+        f"{ver}/microsoft.trusted.signing.client.{ver}.nupkg"
+    )
+    print(f"fetching Trusted Signing dlib {ver} from nuget.org ...")
+    TS_DLIB_DIR.mkdir(parents=True, exist_ok=True)
+    data = urllib.request.urlopen(url).read()  # official MS package, official registry
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        for e in z.infolist():
+            if e.filename.startswith("bin/x64/") and not e.is_dir():
+                with z.open(e) as src, open(TS_DLIB_DIR / Path(e.filename).name, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+    if not dlib.exists():
+        raise SystemExit("Trusted Signing dlib fetch failed")
+    return dlib
+
+
+def _write_metadata(cfg: dict[str, str]) -> Path:
+    import json
+    import tempfile
+
+    meta = {
+        "Endpoint": cfg["TRUSTED_SIGNING_ENDPOINT"],
+        "CodeSigningAccountName": cfg["TRUSTED_SIGNING_ACCOUNT"],
+        "CertificateProfileName": cfg["TRUSTED_SIGNING_PROFILE"],
+    }
+    fd, path = tempfile.mkstemp(prefix="ts-meta-", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    return Path(path)
+
+
+def sign_paths(paths: list[Path], dry: bool) -> None:
+    """Authenticode-sign the given PE files (exe/dll) via Trusted Signing. No-op
+    when signing env is unset (see _signing_config) or no PE files are given."""
+    pe = [p for p in paths if p.suffix.lower() in (".exe", ".dll") and p.exists()]
+    cfg = _signing_config()
+    if cfg is None:
+        if pe:
+            print(f"signing: off (default) for {len(pe)} file(s) — set GORE_SIGN=1 to enable")
+        return
+    if not pe:
+        return
+    if dry:
+        print(f"[dry-run] would code-sign {len(pe)} file(s)")
+        return
+    dlib = _ensure_dlib()
+    signtool = _find_signtool()
+    meta = _write_metadata(cfg)
+    try:
+        run(
+            f"code-sign {len(pe)} file(s)",
+            [
+                signtool, "sign", "/v", "/fd", "SHA256",
+                "/tr", TS_TIMESTAMP, "/td", "SHA256",
+                "/dlib", dlib, "/dmdf", meta,
+                *pe,
+            ],
+            extra_env=_sign_proxy_overrides(),
+        )
+    finally:
+        meta.unlink(missing_ok=True)
+
+
+def sign_dir(directory: Path, dry: bool) -> None:
+    """Sign every PE file directly under `directory` (recursively)."""
+    sign_paths(sorted(directory.rglob("*")), dry)
+
+
 def pdir(project: str) -> Path:
     return ROOT / PROJECTS[project]["dir"]
+
+
+# --------------------------------------------------------------------------- #
+# Docs staging                                                                #
+# --------------------------------------------------------------------------- #
+# Base for links the shipped guide inherits from the repo. A guide page links to
+# component READMEs and crates with `../…`; inside a release zip those targets do
+# not exist, so they are rewritten to absolute GitHub URLs.
+# GitHub serves files under /blob/ and directories under /tree/ — it redirects
+# between the two, but emit the right one so the packaged links resolve in one
+# hop and do not depend on that redirect.
+REPO_WEB_BASE = "https://github.com/dh0er/gore"
+
+
+def repo_ref() -> str:
+    """The commit the docs are staged from, for pinning outbound links.
+
+    A branch name would rot: a link is only valid for the tree the guide was
+    built from, and a release zip outlives whatever `main` looks like later.
+    Falls back to `main` outside a git checkout.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "main"
+    return out.stdout.strip() or "main"
+
+# Any Markdown link whose target starts with `../` — one or more levels up.
+_OUTBOUND_LINK_RE = re.compile(r"\]\((\.\./[^)#]*?)(#[^)]*)?\)")
+
+
+def rewrite_outbound_links(
+    text: str, page_dir: str, ref: str, base: str = REPO_WEB_BASE
+) -> str:
+    """Point Markdown links that escape the doc tree at GitHub.
+
+    `page_dir` is the containing directory of the page, relative to the repo
+    root (e.g. `docs/guide`), and is what the `../` hops are resolved against.
+    Links inside the tree (`items.md`, `items.md#flags`) are left untouched —
+    they still resolve next to the shipped file.
+    """
+
+    def repoint(m: re.Match) -> str:
+        target = posixpath.normpath(posixpath.join(page_dir, m.group(1)))
+        route = "tree" if (ROOT / target).is_dir() else "blob"
+        return f"]({base}/{route}/{ref}/{target}{m.group(2) or ''})"
+
+    return _OUTBOUND_LINK_RE.sub(repoint, text)
+
+
+def stage_docs(src_dir: Path, dest_dir: Path) -> int:
+    """Copy the Markdown docs in `src_dir` to `dest_dir`, rewriting links.
+
+    Returns the number of files written. Only `.md` files are shipped; anything
+    else in the doc tree stays in the repo.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ref = repo_ref()
+    src_from_root = Path(os.path.relpath(src_dir.resolve(), ROOT)).as_posix()
+    count = 0
+    for md in sorted(src_dir.rglob("*.md")):
+        rel = md.relative_to(src_dir)
+        target = dest_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        page_dir = posixpath.normpath(
+            posixpath.join(src_from_root, rel.parent.as_posix())
+        )
+        target.write_text(
+            rewrite_outbound_links(md.read_text(encoding="utf-8"), page_dir, ref),
+            encoding="utf-8",
+            newline="\n",
+        )
+        count += 1
+    return count
 
 
 # --------------------------------------------------------------------------- #
@@ -404,7 +695,7 @@ def dist_project(project: str, dry: bool) -> Path | None:
     dist = dist_dir(project)
     if not dry:
         dist.mkdir(parents=True, exist_ok=True)
-    base = dist / cfg["dist_zip"].format(version=version)
+    base = dist / zip_basename(project, version)
 
     if cfg["kind"] == "flutter":
         rel = flutter_release_dir(project)
@@ -434,6 +725,9 @@ def dist_project(project: str, dry: bool) -> Path | None:
             if dll.exists():
                 dll.unlink()
                 print(f"dropped {dll_name} from portable zip")
+        # Sign the staged PE files before zipping so the portable archive ships
+        # signed binaries (this is the build NexusMods scans on upload).
+        sign_dir(staging, dry=dry)
         if base.with_suffix(".zip").exists():
             base.with_suffix(".zip").unlink()
         archive = shutil.make_archive(str(base), "zip", root_dir=staging)
@@ -463,6 +757,28 @@ def dist_project(project: str, dry: bool) -> Path | None:
         if not src_dir.is_dir():
             raise SystemExit(f"missing bundle dir: {src_dir}")
         shutil.copytree(src_dir, staging / dest_name)
+    # stage the Markdown guide beside the exe, with out-of-tree links absolutized
+    for src_rel, dest_name in cfg.get("doc_dirs", []):
+        src_dir = ROOT / src_rel
+        if not src_dir.is_dir():
+            raise SystemExit(f"missing doc dir: {src_dir}")
+        written = stage_docs(src_dir, staging / dest_name)
+        if not written:
+            raise SystemExit(f"no docs found in {src_dir}")
+        print(f"staged {written} doc file(s) from {src_rel} -> {dest_name}/")
+    # Render the browsable guide with the binary we just built, so it can never disagree
+    # with the pages compiled into it. Pinned to the same commit as the Markdown copies.
+    guide_html = cfg.get("guide_html")
+    if guide_html:
+        rendered = staging / guide_html
+        rendered.parent.mkdir(parents=True, exist_ok=True)
+        run(
+            "render browsable guide",
+            [staging / exe.name, "guide", "html", "-o", rendered, "--repo-ref", repo_ref()],
+        )
+        if not rendered.is_file():
+            raise SystemExit(f"guide render produced nothing at {rendered}")
+    sign_dir(staging, dry=dry)
     if base.with_suffix(".zip").exists():
         base.with_suffix(".zip").unlink()
     archive = shutil.make_archive(str(base), "zip", root_dir=staging)
@@ -480,6 +796,9 @@ def installer_project(project: str, dry: bool) -> Path | None:
     rel = flutter_release_dir(project)
     dist = dist_dir(project)
     iss = pdir(project) / cfg["installer"]
+    # dist_project signed the staging copy for the zip; the installer packages
+    # from the Release dir, so sign those PE files too before Inno bundles them.
+    sign_dir(rel, dry=dry)
     run(
         f"installer {project}",
         [
@@ -488,11 +807,17 @@ def installer_project(project: str, dry: bool) -> Path | None:
             f"/DAppVersion={version}",
             f"/DSourceDir={rel}",
             f"/DOutputDir={dist}",
+            # Passed in rather than hardcoded per .iss, so the produced file name
+            # and the path this function returns cannot drift apart.
+            f"/DOutputBaseName={installer_basename(project, version)}",
             iss,
         ],
         dry=dry,
     )
-    out = dist / f"{cfg['installer_name']}-{version}.exe"
+    out = dist / f"{installer_basename(project, version)}.exe"
+    # Sign the installer itself. Must happen before the CI appcast step computes
+    # its DSA signature over the final shipped bytes.
+    sign_paths([out], dry=dry)
     print(f"installer: {out}")
     return out
 

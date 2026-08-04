@@ -169,13 +169,11 @@ fn gui_fields_for(model: &ReflectionModel, class_name: &str) -> Vec<GuiField> {
 pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<()> {
     let model_json = fs::read_to_string(&model_path)
         .with_context(|| format!("reading model '{}'", model_path.display()))?;
-    let model: ReflectionModel = serde_json::from_str(&model_json)
-        .context("parsing model.json")?;
+    let model: ReflectionModel = serde_json::from_str(&model_json).context("parsing model.json")?;
 
     let catalog_json = fs::read_to_string(&catalog_path)
         .with_context(|| format!("reading catalog '{}'", catalog_path.display()))?;
-    let catalog_entries = parse_catalog(&catalog_json)
-        .context("parsing item_catalog.json")?;
+    let catalog_entries = parse_catalog(&catalog_json).context("parsing item_catalog.json")?;
 
     let mut gui = GuiModel::default();
 
@@ -186,8 +184,12 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
         let Some(class_name) = resolve_class_name(&model, &entry.id) else {
             continue;
         };
-        gui.classes
-            .insert(entry.id.clone(), GuiClass { fields: gui_fields_for(&model, &class_name) });
+        gui.classes.insert(
+            entry.id.clone(),
+            GuiClass {
+                fields: gui_fields_for(&model, &class_name),
+            },
+        );
     }
 
     if let Some(parent) = out.parent() {
@@ -196,10 +198,13 @@ pub fn run(model_path: PathBuf, catalog_path: PathBuf, out: PathBuf) -> Result<(
         }
     }
     let json = serde_json::to_string_pretty(&gui)?;
-    fs::write(&out, format!("{json}\n"))
-        .with_context(|| format!("writing '{}'", out.display()))?;
+    fs::write(&out, format!("{json}\n")).with_context(|| format!("writing '{}'", out.display()))?;
 
-    println!("Wrote GUI model for {} classes -> {}", gui.classes.len(), out.display());
+    println!(
+        "Wrote GUI model for {} classes -> {}",
+        gui.classes.len(),
+        out.display()
+    );
     Ok(())
 }
 
@@ -299,8 +304,11 @@ mod tests {
         // String field is excluded
         assert!(!names.contains(&"m_Name"));
         // Types
-        let by_name: std::collections::HashMap<&str, &str> =
-            cls.fields.iter().map(|f| (f.name.as_str(), f.field_type.as_str())).collect();
+        let by_name: std::collections::HashMap<&str, &str> = cls
+            .fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.field_type.as_str()))
+            .collect();
         assert_eq!(by_name["m_Value"], "int");
         assert_eq!(by_name["m_Weight"], "float");
         assert_eq!(by_name["m_Amount"], "int");
@@ -328,9 +336,10 @@ mod tests {
             }],
             enums: vec![],
         };
-        let catalog =
-            parse_catalog(r#"[{"category":"food","id":"ItFo_Apple","path":"/Script/Angelscript.ItFo_Apple"}]"#)
-                .unwrap();
+        let catalog = parse_catalog(
+            r#"[{"category":"food","id":"ItFo_Apple","path":"/Script/Angelscript.ItFo_Apple"}]"#,
+        )
+        .unwrap();
 
         let props = collect_inherited_properties(&model, "ItFo_Apple");
         let mut fields = Vec::new();
@@ -383,8 +392,16 @@ mod tests {
                     name: "UBase".to_string(),
                     parent: None,
                     properties: vec![
-                        Property { name: "m_X".to_string(), prop_type: PropType::Int, offset: None },
-                        Property { name: "m_Y".to_string(), prop_type: PropType::Bool, offset: None },
+                        Property {
+                            name: "m_X".to_string(),
+                            prop_type: PropType::Int,
+                            offset: None,
+                        },
+                        Property {
+                            name: "m_Y".to_string(),
+                            prop_type: PropType::Bool,
+                            offset: None,
+                        },
                     ],
                 },
                 Class {
@@ -403,7 +420,10 @@ mod tests {
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, ["m_X", "m_Y"], "no duplicate m_X; base order kept");
         let m_x = fields.iter().find(|f| f.name == "m_X").unwrap();
-        assert_eq!(m_x.field_type, "float", "derived Float must override base Int");
+        assert_eq!(
+            m_x.field_type, "float",
+            "derived Float must override base Int"
+        );
     }
 
     #[test]
@@ -416,8 +436,16 @@ mod tests {
                     name: "UBase".to_string(),
                     parent: None,
                     properties: vec![
-                        Property { name: "m_X".to_string(), prop_type: PropType::Int, offset: None },
-                        Property { name: "m_Y".to_string(), prop_type: PropType::Bool, offset: None },
+                        Property {
+                            name: "m_X".to_string(),
+                            prop_type: PropType::Int,
+                            offset: None,
+                        },
+                        Property {
+                            name: "m_Y".to_string(),
+                            prop_type: PropType::Bool,
+                            offset: None,
+                        },
                     ],
                 },
                 Class {
@@ -434,7 +462,11 @@ mod tests {
         };
         let fields = gui_fields_for(&model, "UDerived");
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
-        assert_eq!(names, ["m_Y"], "shadowed-by-String m_X must be dropped: {names:?}");
+        assert_eq!(
+            names,
+            ["m_Y"],
+            "shadowed-by-String m_X must be dropped: {names:?}"
+        );
     }
 
     #[test]
@@ -486,7 +518,10 @@ mod tests {
             enum_value_ints: vec![],
             default: None,
         };
-        assert_eq!(serde_json::to_string(&f).unwrap(), r#"{"name":"m_Value","type":"int"}"#);
+        assert_eq!(
+            serde_json::to_string(&f).unwrap(),
+            r#"{"name":"m_Value","type":"int"}"#
+        );
         let e = GuiField {
             name: "m_Quality".into(),
             field_type: "enum".into(),

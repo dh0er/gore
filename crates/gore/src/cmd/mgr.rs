@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use gore_mod::mgr::{
     self,
-    analyze::analyze,
+    analyze::{analyze, Conflict, Severity},
     apply::{apply_loadout, undeploy_all},
     import,
     loadout::{self, Loadout, LoadoutEntry},
@@ -126,7 +126,11 @@ fn loadout_of(arg: Option<PathBuf>) -> PathBuf {
 
 pub fn run(action: MgrAction) -> Result<()> {
     match action {
-        MgrAction::Import { path, library, loadout } => {
+        MgrAction::Import {
+            path,
+            library,
+            loadout,
+        } => {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
@@ -139,7 +143,10 @@ pub fn run(action: MgrAction) -> Result<()> {
             // / update): keep its current enabled state and position.
             let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             if !ld.entries.iter().any(|e| e.id == entry.id) {
-                ld.entries.push(LoadoutEntry { id: entry.id.clone(), enabled: false });
+                ld.entries.push(LoadoutEntry {
+                    id: entry.id.clone(),
+                    enabled: false,
+                });
                 loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
 
@@ -156,7 +163,10 @@ pub fn run(action: MgrAction) -> Result<()> {
 
             // One row per loadout entry (in loadout order), joined to its metadata
             // by id; library mods not in the loadout are appended after.
-            println!("{:<3} {:<28} {:<26} {:<14} {}", "on", "id", "name", "kind", "comps");
+            println!(
+                "{:<3} {:<28} {:<26} {:<14} comps",
+                "on", "id", "name", "kind"
+            );
             let mut shown: Vec<&str> = Vec::new();
             for e in &ld.entries {
                 let meta = mods.iter().find(|m| m.id == e.id);
@@ -189,7 +199,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Remove { id, library, loadout } => {
+        MgrAction::Remove {
+            id,
+            library,
+            loadout,
+        } => {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
@@ -210,7 +224,9 @@ pub fn run(action: MgrAction) -> Result<()> {
         MgrAction::Enable { id, loadout, .. } => set_enabled(&id, true, loadout),
         MgrAction::Disable { id, loadout, .. } => set_enabled(&id, false, loadout),
 
-        MgrAction::Order { id, pos, loadout, .. } => {
+        MgrAction::Order {
+            id, pos, loadout, ..
+        } => {
             let ld_path = loadout_of(loadout);
             let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -243,18 +259,17 @@ pub fn run(action: MgrAction) -> Result<()> {
                 println!("no conflicts");
             } else {
                 for c in &conflicts {
-                    let chain = c.mods.join(" -> ");
-                    let winner = c.mods.last().map(String::as_str).unwrap_or("");
-                    println!(
-                        "{:?} {:?} {}: {} (winner: {})",
-                        c.severity, c.kind, c.target, chain, winner
-                    );
+                    println!("{}", format_conflict(c));
                 }
             }
             Ok(())
         }
 
-        MgrAction::Apply { game, library, loadout } => {
+        MgrAction::Apply {
+            game,
+            library,
+            loadout,
+        } => {
             let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
@@ -292,7 +307,11 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
 
-        MgrAction::Status { game, library, loadout } => {
+        MgrAction::Status {
+            game,
+            library,
+            loadout,
+        } => {
             let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
@@ -312,6 +331,22 @@ pub fn run(action: MgrAction) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+fn format_conflict(conflict: &Conflict) -> String {
+    let chain = conflict.mods.join(" -> ");
+    if conflict.severity == Severity::Info {
+        format!(
+            "{:?} {:?} {}: {} (advisory; no winner)",
+            conflict.severity, conflict.kind, conflict.target, chain
+        )
+    } else {
+        let winner = conflict.mods.last().map(String::as_str).unwrap_or("");
+        format!(
+            "{:?} {:?} {}: {} (winner: {})",
+            conflict.severity, conflict.kind, conflict.target, chain, winner
+        )
     }
 }
 
@@ -335,6 +370,9 @@ fn set_enabled(id: &str, enabled: bool, loadout: Option<PathBuf>) -> Result<()> 
 fn describe_status(st: &ManagerStatus) -> String {
     match st {
         ManagerStatus::NothingDeployed => "nothing deployed".to_string(),
+        ManagerStatus::RecoveryRequired => {
+            "recovery required: previous apply was interrupted (run undeploy first)".to_string()
+        }
         ManagerStatus::StudioDeployActive { mod_name } => {
             format!("studio deploy active: {mod_name} (manager won't touch it)")
         }
@@ -354,5 +392,44 @@ fn describe_status(st: &ManagerStatus) -> String {
                 drifted.len()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gore_mod::mgr::analyze::ConflictKind;
+
+    fn conflict(severity: Severity) -> Conflict {
+        Conflict {
+            kind: if severity == Severity::Info {
+                ConflictKind::Ue4ssUnknown
+            } else {
+                ConflictKind::Cdo
+            },
+            target: if severity == Severity::Info {
+                "<unknown>".into()
+            } else {
+                "A.Value".into()
+            },
+            mods: vec!["first".into(), "last".into()],
+            severity,
+        }
+    }
+
+    #[test]
+    fn info_advisory_has_no_false_winner() {
+        assert_eq!(
+            format_conflict(&conflict(Severity::Info)),
+            "Info Ue4ssUnknown <unknown>: first -> last (advisory; no winner)"
+        );
+    }
+
+    #[test]
+    fn proven_conflict_keeps_later_wins_output() {
+        assert_eq!(
+            format_conflict(&conflict(Severity::Soft)),
+            "Soft Cdo A.Value: first -> last (winner: last)"
+        );
     }
 }

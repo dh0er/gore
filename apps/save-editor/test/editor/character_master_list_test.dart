@@ -37,6 +37,7 @@ Widget _pump({
   void Function(Actor)? onSelect,
   Object reloadKey = 'k',
   Map<String, Map<String, String>> locCatalog = const {},
+  bool showObjectIds = true,
 }) {
   return wrapWithL10n(
     Scaffold(
@@ -50,6 +51,7 @@ Widget _pump({
           reloadKey: reloadKey,
           locCatalog: locCatalog,
           lang: kGameLangs.first,
+          showObjectIds: showObjectIds,
         ),
       ),
     ),
@@ -139,41 +141,48 @@ void main() {
   // player's avatar). The pinned Player row represents it, so the NPC section
   // must exclude it — otherwise the player would be listed twice.
   // ---------------------------------------------------------------------------
-  testWidgets('the save\'s own Hero actor row is excluded from the NPC section',
-      (tester) async {
-    final page = CharacterIndexPage(
-      characters: [
-        // The real hero row as emitted by `private.characters.list`.
-        _actor('Hero', uniqueName: 'Hero', hasKnowledge: true, hasEvents: true),
-        _actor('Lizard-WP_A'),
-        const CharacterRow(
-          globalId: null,
-          uniqueName: 'ST_VLK_Mud_Sleeper',
-          isDead: false,
-          hasInventory: false,
-          hasKnowledge: true,
-          hasEvents: false,
-        ),
-      ],
-      total: 3,
-    );
-    await tester.pumpWidget(_pump(load: () async => page));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'the save\'s own Hero actor row is excluded from the NPC section',
+    (tester) async {
+      final page = CharacterIndexPage(
+        characters: [
+          // The real hero row as emitted by `private.characters.list`.
+          _actor(
+            'Hero',
+            uniqueName: 'Hero',
+            hasKnowledge: true,
+            hasEvents: true,
+          ),
+          _actor('Lizard-WP_A'),
+          const CharacterRow(
+            globalId: null,
+            uniqueName: 'ST_VLK_Mud_Sleeper',
+            isDead: false,
+            hasInventory: false,
+            hasKnowledge: true,
+            hasEvents: false,
+          ),
+        ],
+        total: 3,
+      );
+      await tester.pumpWidget(_pump(load: () async => page));
+      await tester.pumpAndSettle();
 
-    // Pinned Player + the normal NPC + the orphan are all present.
-    expect(find.text('Player'), findsOneWidget);
-    expect(find.text('Lizard'), findsOneWidget);
-    expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
-    // English-locale harness → the orphan group header is the localized
-    // 'Other' (the German suite above pins 'Weitere' for the same header).
-    expect(find.text('Other'), findsOneWidget);
-    // No 'Hero' NPC row: neither its resolved title nor its id subtitle
-    // render (both would be the text 'Hero').
-    expect(find.text('Hero'), findsNothing);
-    // The hero row is excluded from the actor COUNT too (not merely hidden):
-    // pagination shows one actor, the Lizard.
-    expect(find.text('1–1 of 1'), findsOneWidget);
-  });
+      // Pinned Player + the normal NPC + the orphan are all present.
+      expect(find.text('Player'), findsOneWidget);
+      expect(find.text('Lizard'), findsOneWidget);
+      expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
+      // English-locale harness → the orphan group header is the localized
+      // 'Other' (the German suite above pins 'Weitere' for the same header).
+      expect(find.text('Other'), findsOneWidget);
+      // No 'Hero' NPC row: neither its resolved title nor its id subtitle
+      // render (both would be the text 'Hero').
+      expect(find.text('Hero'), findsNothing);
+      // The hero row is excluded from the actor COUNT too (not merely hidden):
+      // pagination shows one actor, the Lizard.
+      expect(find.text('1–1 of 1'), findsOneWidget);
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Retargeted from the retired ActorSelector's suite: the master list inherits
@@ -205,16 +214,51 @@ void main() {
     expect(find.text('Herek-WP_B'), findsOneWidget);
   });
 
+  testWidgets('hides actor and orphan ids while keeping readable names', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _pump(
+        showObjectIds: false,
+        load: () async => const CharacterIndexPage(
+          characters: [
+            CharacterRow(
+              globalId: 'Creature_Meatbug-WP_A',
+              uniqueName: 'Creature_Meatbug',
+              isDead: false,
+              hasInventory: false,
+              hasKnowledge: false,
+              hasEvents: false,
+            ),
+            CharacterRow(
+              globalId: null,
+              uniqueName: 'ST_VLK_Mud_Sleeper',
+              isDead: false,
+              hasInventory: false,
+              hasKnowledge: true,
+              hasEvents: false,
+            ),
+          ],
+          total: 2,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Meatbug'), findsOneWidget);
+    expect(find.text('St Vlk Mud Sleeper'), findsOneWidget);
+    expect(find.text('Creature_Meatbug-WP_A'), findsNothing);
+    expect(find.text('ST_VLK_Mud_Sleeper'), findsNothing);
+  });
+
   testWidgets('tapping an NPC selects it; tapping Player selects player', (
     tester,
   ) async {
     final selections = <Actor>[];
     await tester.pumpWidget(
       _pump(
-        load: () async => CharacterIndexPage(
-          characters: [_actor('Lizard-WP_A')],
-          total: 1,
-        ),
+        load: () async =>
+            CharacterIndexPage(characters: [_actor('Lizard-WP_A')], total: 1),
         onSelect: selections.add,
       ),
     );
@@ -261,21 +305,24 @@ void main() {
     const shortId = 'Diego-1';
     await tester.pumpWidget(
       _pump(
-        load: () async => CharacterIndexPage(
-          characters: [_actor(shortId)],
-          total: 1,
-        ),
+        load: () async =>
+            CharacterIndexPage(characters: [_actor(shortId)], total: 1),
       ),
     );
     await tester.pumpAndSettle();
 
     final subtitle = tester.widget<Text>(find.text(shortId));
     expect(subtitle.data, shortId);
-    final paragraph = find
-        .descendant(of: find.text(shortId), matching: find.byType(RichText))
-        .evaluate()
-        .single
-        .renderObject! as RenderParagraph;
+    final paragraph =
+        find
+                .descendant(
+                  of: find.text(shortId),
+                  matching: find.byType(RichText),
+                )
+                .evaluate()
+                .single
+                .renderObject!
+            as RenderParagraph;
     expect(paragraph.didExceedMaxLines, isFalse);
   });
 
@@ -287,10 +334,8 @@ void main() {
     const longId = 'Herek-WP_OM_TUNNEL_ME_01';
     await tester.pumpWidget(
       _pump(
-        load: () async => CharacterIndexPage(
-          characters: [_actor(longId)],
-          total: 1,
-        ),
+        load: () async =>
+            CharacterIndexPage(characters: [_actor(longId)], total: 1),
       ),
     );
     await tester.pumpAndSettle();
@@ -308,10 +353,8 @@ void main() {
   testWidgets('Player tile renders above the NPC search field', (tester) async {
     await tester.pumpWidget(
       _pump(
-        load: () async => CharacterIndexPage(
-          characters: [_actor('Lizard-WP_A')],
-          total: 1,
-        ),
+        load: () async =>
+            CharacterIndexPage(characters: [_actor('Lizard-WP_A')], total: 1),
       ),
     );
     await tester.pumpAndSettle();

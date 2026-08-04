@@ -19,7 +19,12 @@ fn package_creates_zip() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["package", mod_dir.to_str().unwrap(), "-o", out_zip.to_str().unwrap()])
+        .args([
+            "package",
+            mod_dir.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -34,7 +39,12 @@ fn package_zip_contains_required_files() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["package", mod_dir.to_str().unwrap(), "-o", out_zip.to_str().unwrap()])
+        .args([
+            "package",
+            mod_dir.to_str().unwrap(),
+            "-o",
+            out_zip.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -61,7 +71,12 @@ fn package_fails_if_enabled_txt_missing() {
     // No enabled.txt, no main.lua — validation must reject
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["package", mod_dir.to_str().unwrap(), "-o", tmp.path().join("bad.zip").to_str().unwrap()])
+        .args([
+            "package",
+            mod_dir.to_str().unwrap(),
+            "-o",
+            tmp.path().join("bad.zip").to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(predicates::str::contains("enabled.txt"));
@@ -76,7 +91,12 @@ fn package_fails_if_main_lua_missing() {
     // Scripts/main.lua is missing
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["package", mod_dir.to_str().unwrap(), "-o", tmp.path().join("nolua.zip").to_str().unwrap()])
+        .args([
+            "package",
+            mod_dir.to_str().unwrap(),
+            "-o",
+            tmp.path().join("nolua.zip").to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(predicates::str::contains("main.lua"));

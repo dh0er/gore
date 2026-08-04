@@ -21,49 +21,54 @@ void main() {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(ProviderScope(
-      overrides: [
-        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-      ],
-      child: MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+        ],
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
   }
 
-  testWidgets('switching speaker groups clears a selection from the other group',
-      (tester) async {
+  testWidgets(
+    'switching speaker groups clears a selection from the other group',
+    (tester) async {
+      await pumpHarness(tester);
+
+      // Group A (Aaron) is auto-selected; pick its line.
+      await tester.tap(find.text('info_aaron_001'));
+      await tester.pumpAndSettle();
+      expect(find.text(_kPlaceholder), findsNothing);
+      // Selected id shows in both the line list and the editor header.
+      expect(find.text('info_aaron_001'), findsNWidgets(2));
+
+      // Tap group B in the sidebar: the editor must not keep showing a line
+      // from group A.
+      await tester.tap(find.text('Bob (1)'));
+      await tester.pumpAndSettle();
+      expect(find.text(_kPlaceholder), findsOneWidget);
+      expect(find.text('info_bob_001'), findsOneWidget);
+      expect(find.text('info_aaron_001'), findsNothing);
+
+      // Back to group A: the cleared selection must not reappear.
+      await tester.tap(find.text('Aaron (1)'));
+      await tester.pumpAndSettle();
+      expect(find.text(_kPlaceholder), findsOneWidget);
+      expect(find.text('info_aaron_001'), findsOneWidget);
+    },
+  );
+
+  testWidgets('re-tapping the selected line\'s own group keeps the selection', (
+    tester,
+  ) async {
     await pumpHarness(tester);
 
-    // Group A (Aaron) is auto-selected; pick its line.
-    await tester.tap(find.text('info_aaron_001'));
-    await tester.pumpAndSettle();
-    expect(find.text(_kPlaceholder), findsNothing);
-    // Selected id shows in both the line list and the editor header.
-    expect(find.text('info_aaron_001'), findsNWidgets(2));
-
-    // Tap group B in the sidebar: the editor must not keep showing a line
-    // from group A.
-    await tester.tap(find.text('Bob (1)'));
-    await tester.pumpAndSettle();
-    expect(find.text(_kPlaceholder), findsOneWidget);
-    expect(find.text('info_bob_001'), findsOneWidget);
-    expect(find.text('info_aaron_001'), findsNothing);
-
-    // Back to group A: the cleared selection must not reappear.
-    await tester.tap(find.text('Aaron (1)'));
-    await tester.pumpAndSettle();
-    expect(find.text(_kPlaceholder), findsOneWidget);
-    expect(find.text('info_aaron_001'), findsOneWidget);
-  });
-
-  testWidgets('re-tapping the selected line\'s own group keeps the selection',
-      (tester) async {
-    await pumpHarness(tester);
-
     await tester.tap(find.text('info_aaron_001'));
     await tester.pumpAndSettle();
     expect(find.text('info_aaron_001'), findsNWidgets(2));
@@ -74,8 +79,9 @@ void main() {
     expect(find.text('info_aaron_001'), findsNWidgets(2));
   });
 
-  testWidgets('onlyIds restricts sidebar groups and lines to the given ids',
-      (tester) async {
+  testWidgets('onlyIds restricts sidebar groups and lines to the given ids', (
+    tester,
+  ) async {
     await pumpHarness(tester, onlyIds: {'info_bob_001'});
 
     // Only Bob's group survives the filter; Aaron is gone entirely.
@@ -85,8 +91,9 @@ void main() {
     expect(find.text('info_aaron_001'), findsNothing);
   });
 
-  testWidgets('search inside a filtered view only searches filtered lines',
-      (tester) async {
+  testWidgets('search inside a filtered view only searches filtered lines', (
+    tester,
+  ) async {
     await pumpHarness(tester, onlyIds: {'info_bob_001'});
 
     // 'aaron' matches a catalog line, but that line is filtered out.
@@ -110,33 +117,35 @@ void main() {
     expect(find.text('info_bob_001'), findsNothing);
   });
 
-  testWidgets(
-      'filtered editor ignores an out-of-filter shared selection '
+  testWidgets('filtered editor ignores an out-of-filter shared selection '
       'without clearing it', (tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final container = ProviderContainer(overrides: [
-      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
     addTearDown(container.dispose);
 
     Future<void> pumpFiltered(Set<String> onlyIds) async {
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
     }
 
     // Selection made outside the filter (e.g. on the main Dialoge tab).
-    container.read(selectedDialogIdProvider.notifier).state =
-        'info_aaron_001';
+    container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
     await pumpFiltered({'info_bob_001'});
 
     // The filtered editor shows the placeholder, not Aaron's line...
@@ -161,59 +170,69 @@ void main() {
   });
 
   testWidgets(
-      'filtered sidebar tap does not clear an out-of-filter shared selection',
-      (tester) async {
+    'filtered sidebar tap does not clear an out-of-filter shared selection',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final container = ProviderContainer(
+        overrides: [
+          locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // Shared selection made outside the filter (e.g. on the main Dialoge tab).
+      container.read(selectedDialogIdProvider.notifier).state =
+          'info_aaron_001';
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: const Scaffold(body: DialogeTab(onlyIds: {'info_bob_001'})),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Tapping the (only) speaker group in the filtered embed must NOT wipe the
+      // main tab's out-of-filter selection.
+      await tester.tap(find.text('Bob (1)'));
+      await tester.pumpAndSettle();
+      expect(container.read(selectedDialogIdProvider), 'info_aaron_001');
+    },
+  );
+
+  testWidgets('main-tab sidebar tap clears a selection from another group', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final container = ProviderContainer(overrides: [
-      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-    ]);
-    addTearDown(container.dispose);
-
-    // Shared selection made outside the filter (e.g. on the main Dialoge tab).
-    container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: const Scaffold(body: DialogeTab(onlyIds: {'info_bob_001'})),
-      ),
-    ));
-    await tester.pumpAndSettle();
-
-    // Tapping the (only) speaker group in the filtered embed must NOT wipe the
-    // main tab's out-of-filter selection.
-    await tester.tap(find.text('Bob (1)'));
-    await tester.pumpAndSettle();
-    expect(container.read(selectedDialogIdProvider), 'info_aaron_001');
-  });
-
-  testWidgets(
-      'main-tab sidebar tap clears a selection from another group',
-      (tester) async {
-    tester.view.physicalSize = const Size(1400, 900);
-    tester.view.devicePixelRatio = 1.0;
-    addTearDown(tester.view.reset);
-
-    final container = ProviderContainer(overrides: [
-      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
     addTearDown(container.dispose);
 
     // Unfiltered main tab owns the shared provider: tapping a different group
     // must clear a selection that belongs to another group.
     container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: const Scaffold(body: DialogeTab()),
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: DialogeTab()),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Bob (1)'));
@@ -221,16 +240,17 @@ void main() {
     expect(container.read(selectedDialogIdProvider), isNull);
   });
 
-  testWidgets(
-      'filtered editor shows only edited language fields; '
+  testWidgets('filtered editor shows only edited language fields; '
       'the main tab shows all languages', (tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final container = ProviderContainer(overrides: [
-      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
     addTearDown(container.dispose);
     // A staged German edit for Bob's line ('german_new' is the primary set
     // the editor resolves for 'de' against this catalog).
@@ -240,14 +260,16 @@ void main() {
     container.read(selectedDialogIdProvider.notifier).state = 'info_bob_001';
 
     Future<void> pump({Set<String>? onlyIds}) async {
-      await tester.pumpWidget(UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: Scaffold(body: DialogeTab(onlyIds: onlyIds)),
+          ),
         ),
-      ));
+      );
       await tester.pumpAndSettle();
     }
 
@@ -267,31 +289,125 @@ void main() {
     expect(find.widgetWithText(TextField, 'English'), findsOneWidget);
   });
 
-  testWidgets('unfiltered editor still follows the shared selection',
-      (tester) async {
+  testWidgets('unfiltered editor still follows the shared selection', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
-    final container = ProviderContainer(overrides: [
-      locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
-    ]);
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
     addTearDown(container.dispose);
-    container.read(selectedDialogIdProvider.notifier).state =
-        'info_aaron_001';
+    container.read(selectedDialogIdProvider.notifier).state = 'info_aaron_001';
 
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp(
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: const Scaffold(body: DialogeTab()),
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: DialogeTab()),
+        ),
       ),
-    ));
+    );
     await tester.pumpAndSettle();
 
     // No filter: the editor renders the shared selection (list + header).
     expect(find.text(_kPlaceholder), findsNothing);
     expect(find.text('info_aaron_001'), findsNWidgets(2));
+  });
+
+  testWidgets('main tab can stage and browse a brand-new localization id', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: DialogeTab()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Add localized dialog line'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Localization ID'),
+      'INFO_VIPER_GORE_01',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Text in the current game language'),
+      'Show me your wares.',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    const id = 'info_viper_gore_01';
+    final staged = container.read(locEditsProvider).edits[id];
+    expect(staged, isNotNull);
+    expect(staged!.values, ['Show me your wares.']);
+    expect(container.read(selectedDialogIdProvider), id);
+    expect(find.text('Viper (1)'), findsOneWidget);
+    expect(find.text(id), findsNWidgets(2));
+  });
+
+  testWidgets('new-line dialog rejects case-insensitive ID collisions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer(
+      overrides: [
+        locCatalogProvider.overrideWith((ref) => Future.value(catalog)),
+      ],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const Scaffold(body: DialogeTab()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Add localized dialog line'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Localization ID'),
+      'INFO_AARON_001',
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Text in the current game language'),
+      'Duplicate',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This localization ID already exists.'), findsOneWidget);
+    expect(find.text('Add localized dialog line'), findsOneWidget);
+    expect(container.read(locEditsProvider).edits, isEmpty);
   });
 }

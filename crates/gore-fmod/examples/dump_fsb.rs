@@ -17,7 +17,10 @@ fn main() {
     let f = parse_fsb5(&blk).unwrap();
     println!("codec={:?} samples={}", f.codec, f.samples.len());
     for s in f.samples.iter().take(3) {
-        println!("  \"{}\" {}Hz {}ch frames={} size={} dataoff={}", s.name, s.freq, s.channels, s.num_samples, s.size, s.data_offset);
+        println!(
+            "  \"{}\" {}Hz {}ch frames={} size={} dataoff={}",
+            s.name, s.freq, s.channels, s.num_samples, s.size, s.data_offset
+        );
     }
     std::fs::write(outp, &blk).unwrap();
     println!("wrote {} ({} bytes)", outp, blk.len());

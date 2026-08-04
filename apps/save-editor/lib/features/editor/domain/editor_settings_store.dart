@@ -5,19 +5,48 @@ import 'package:goresave/utils/gore_tools_paths.dart';
 import 'package:path/path.dart' as p;
 
 class EditorSettings {
-  const EditorSettings({this.saveDir});
+  const EditorSettings({
+    this.saveDir,
+    this.externalSavePaths = const [],
+    this.hiddenOtherSavePaths = const [],
+  });
 
   factory EditorSettings.fromJson(Map<String, Object?> json) {
-    return EditorSettings(saveDir: _stringOrNull(json['saveDir']));
+    return EditorSettings(
+      saveDir: _stringOrNull(json['saveDir']),
+      externalSavePaths: _stringList(json['externalSavePaths']),
+      hiddenOtherSavePaths: _stringList(json['hiddenOtherSavePaths']),
+    );
   }
 
   final String? saveDir;
 
-  Map<String, Object?> toJson() => {if (saveDir != null) 'saveDir': saveDir};
+  /// Arbitrary files opened outside the configured game save folder.
+  final List<String> externalSavePaths;
+
+  /// Profileless saves from the configured folder that the user explicitly
+  /// removed from the Other saves list. They stay on disk and remain hidden.
+  final List<String> hiddenOtherSavePaths;
+
+  Map<String, Object?> toJson() => {
+    if (saveDir != null) 'saveDir': saveDir,
+    'externalSavePaths': externalSavePaths,
+    'hiddenOtherSavePaths': hiddenOtherSavePaths,
+  };
 
   static String? _stringOrNull(Object? value) {
     if (value is! String || value.trim().isEmpty) return null;
     return value;
+  }
+
+  static List<String> _stringList(Object? value) {
+    if (value is! List) return const [];
+    final result = <String>[];
+    for (final candidate in value.whereType<String>()) {
+      final path = candidate.trim();
+      if (path.isNotEmpty && !result.contains(path)) result.add(path);
+    }
+    return List.unmodifiable(result);
   }
 }
 
@@ -44,9 +73,7 @@ class JsonFileEditorSettingsStore implements EditorSettingsStore {
   }) {
     final env = environment ?? Platform.environment;
     const fileName = 'settings.json';
-    final file = File(
-      p.join(goreSaveSettingsDir(environment: env), fileName),
-    );
+    final file = File(p.join(goreSaveSettingsDir(environment: env), fileName));
     migrateLegacySettingsFile(_legacyFile(env, fileName), file);
     return JsonFileEditorSettingsStore(file);
   }

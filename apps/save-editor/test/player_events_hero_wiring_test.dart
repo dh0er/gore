@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
+import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 /// The player's memory events live under the save's own "Hero" ACTOR GlobalId.
@@ -31,6 +33,55 @@ void main() {
     );
     await tester.pumpAndSettle();
   }
+
+  testWidgets('actor header is persistent above the character sub-tab bar', (
+    tester,
+  ) async {
+    final core = _HeroEventsCoreService();
+    await pumpApp(tester, core);
+
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Lizard'));
+    await tester.pumpAndSettle();
+
+    final characters = find.byType(CharactersTab);
+    final header = find.descendant(
+      of: characters,
+      matching: find.byType(ActorDetailHeader),
+    );
+    final subTabBar = find.descendant(
+      of: characters,
+      matching: find.byType(TabBar),
+    );
+    final headerTabGap = find.descendant(
+      of: characters,
+      matching: find.byKey(const ValueKey('actor-header-tab-gap')),
+    );
+    expect(header, findsOneWidget);
+    expect(subTabBar, findsOneWidget);
+    expect(headerTabGap, findsOneWidget);
+    expect(tester.getSize(headerTabGap).height, 12);
+    expect(find.widgetWithText(SelectableText, 'Lizard-WP_A'), findsOneWidget);
+    expect(
+      tester.getTopLeft(subTabBar).dy - tester.getBottomLeft(header).dy,
+      greaterThanOrEqualTo(12),
+    );
+
+    for (final tab in ['Inventory', 'Dialog Knowledge', 'Events']) {
+      await tester.tap(find.widgetWithText(Tab, tab));
+      await tester.pumpAndSettle();
+      expect(header, findsOneWidget);
+      expect(
+        find.widgetWithText(SelectableText, 'Lizard-WP_A'),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(subTabBar).dy - tester.getBottomLeft(header).dy,
+        greaterThanOrEqualTo(12),
+      );
+    }
+  });
 
   testWidgets(
     'selecting the Player and opening Events queries the Hero actor GlobalId',
@@ -67,11 +118,11 @@ void main() {
       );
       expect(eventCalls, isNotEmpty);
 
-      // And the canned Hero event actually renders (its tag row) — the old
+      // And the canned Hero event actually renders as a semantic card — the old
       // empty state ("select a character") is gone for the player. (The
       // "Events — <name>" info label was removed; the ActorDetailHeader
-      // identifies the selection, so the canned tag proves data rendered.)
-      expect(find.text('MEMORY_HERO_EVENT'), findsOneWidget);
+      // identifies the selection, so the event-card key proves data rendered.)
+      expect(find.byKey(const ValueKey('memory-event-0')), findsOneWidget);
       expect(find.text('Select a character to see events'), findsNothing);
     },
   );
@@ -127,9 +178,9 @@ void main() {
         ),
         isNotEmpty,
       );
-      // The canned Hero event content renders — proof the (re-keyed) Hero
+      // The canned Hero event card renders — proof the (re-keyed) Hero
       // events query returned and populated the list.
-      expect(find.text('MEMORY_HERO_EVENT'), findsOneWidget);
+      expect(find.byKey(const ValueKey('memory-event-0')), findsOneWidget);
     },
   );
 

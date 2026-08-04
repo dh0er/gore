@@ -1,0 +1,26 @@
+{
+  "generation_id": "g1r-steam-24169431",
+  "label": "Steam 1.0.3 Hotfix 2 (build 24169431)",
+  "native_ancestry_profile_id": "sha256:b7e13f7f3756e97a07194bdbd6ba6a1f2cb99179888d0d8e581f505be969b645",
+  "gameplay_tag_float32_map_proof_id": "sha256:b56365eff74dc11610c0e2f08dcb41923773bbb6efc954403c6ea09c48239b8a",
+  "scalar_default_operand_count": 26339,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6572,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26339,
+  "witnesses": {
+    "native_ancestry_profile_id": "crates/gore-as/tests/default_patch_test.rs::configured_hotfix_24169431_profile_and_item_field_matrix_are_exact (GORE_AS_HOTFIX_24169431_GAME)",
+    "gameplay_tag_float32_map_proof_id": "crates/gore-as/tests/default_patch_test.rs::configured_hotfix_24169431_profile_and_item_field_matrix_are_exact",
+    "scalar_default_operand_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "gameplay_tag_float32_operand_count": "crates/gore-as/tests/default_patch_test.rs::configured_hotfix_24169431_profile_and_item_field_matrix_are_exact",
+    "class_count": "crates/gore-as/tests/default_patch_test.rs::configured_hotfix_24169431_profile_and_item_field_matrix_are_exact",
+    "gameplay_tag_float32_map_field_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "unresolved_fields_with_ancestry": "crates/gore-as/tests/default_patch_test.rs::configured_hotfix_24169431_profile_and_item_field_matrix_are_exact",
+    "direct_windows": "crates/gore-as/tests/default_patch_test.rs::configured_real_cache_exposes_known_direct_default_sites"
+  },
+  "notes": [
+    "This build reused the previous Binds.Cache and USMAP byte for byte, so its Binds and USMAP parser-output digests are inherited from g1r-steam-1.0.3 rather than independently re-earned.",
+    "The item-field matrix behind audited_item_generation is asserted in the same test: 918 qualified target classes and the per-field counts m_Value 906, m_MaxStack 641, m_Weight 109, m_Mass 2."
+  ]
+}

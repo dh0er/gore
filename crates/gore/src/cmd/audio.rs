@@ -51,64 +51,223 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn list(bank: PathBuf, key: Option<String>) -> Result<()> {
+/// List a bank's samples under a bound. Decoding reads and decrypts the whole bank either way --
+/// `SFX.bank` is 260 MB on disk -- so the narrowing here is a presentation decision only. A listing
+/// that stopped silently would let a caller read the first `max` samples as the whole bank and
+/// conclude a sound does not exist, so both output modes label the cut.
+pub fn list(
+    bank: PathBuf,
+    filter: Option<String>,
+    max: usize,
+    json: bool,
+    key: Option<String>,
+) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let f0 = gore_fmod::bank_fsb0(&bytes, &key_bytes(key))
+    // `read_bank`, not `bank_fsb0`: a replacement appends a sub-bank and repoints the waveform at
+    // it rather than overwriting sub-bank 0, so a listing built from sub-bank 0 describes the audio
+    // a replacement replaced and calls it the bank's current contents.
+    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
-    println!("{} samples, codec {:?}", f0.samples.len(), f0.codec);
-    for (i, s) in f0.samples.iter().enumerate() {
-        let secs = if s.freq > 0 { s.num_samples as f64 / s.freq as f64 } else { 0.0 };
-        println!("#{i:<5} {:6}Hz {}ch {:6.2}s  {}", s.freq, s.channels, secs, s.name);
+    let sample_count = view.samples.len();
+    // Filter first, cap second: `matched_count` is only meaningful if the cap never hides a
+    // candidate the filter would have kept.
+    let needle = filter.as_deref().map(str::to_lowercase);
+    let matched = view
+        .samples
+        .iter()
+        .enumerate()
+        .filter(|(_, sample)| {
+            needle
+                .as_deref()
+                .is_none_or(|needle| super::contains_case_insensitive(&sample.name, needle))
+        })
+        .collect::<Vec<_>>();
+    let listed = &matched[..matched.len().min(max)];
+    let notice =
+        (listed.len() < matched.len()).then(|| list_truncation_notice(matched.len(), listed.len()));
+
+    if json {
+        let samples = listed
+            .iter()
+            .map(|(index, sample)| {
+                // The same spelling `gore-ffi`'s `audio_list` gives the mod studio, so the CLI and
+                // the GUI describe one sample the same way.
+                // `replaced` is the answer to the only question a deploy leaves open, and nothing
+                // else in the document can stand in for it: a replacement keeps the sample's name
+                // and index, so a caller comparing two listings sees a rate and a duration change
+                // and cannot tell that from having read the wrong bank.
+                serde_json::json!({
+                    "index": index,
+                    "name": sample.name,
+                    "freq": sample.freq,
+                    "channels": sample.channels,
+                    "seconds": sample_seconds(sample),
+                    "replaced": sample.replaced,
+                })
+            })
+            .collect::<Vec<_>>();
+        // Two booleans because there are two questions and one answer cannot serve both.
+        // `truncated` says whether `--max` stopped the listing, and it is what `truncation_notice`
+        // belongs to. "Is this array the whole bank" is a different question -- a filter narrows
+        // without truncating -- and `complete` answers it, so neither has to be inferred by
+        // comparing counts.
+        let mut document = serde_json::json!({
+            "bank": bank.display().to_string(),
+            "codec": format!("{:?}", view.codec()),
+            "sample_count": sample_count,
+            "matched_count": matched.len(),
+            "listed_count": samples.len(),
+            "truncated": notice.is_some(),
+            "complete": samples.len() == sample_count,
+            "samples": samples,
+        });
+        if let Some(notice) = &notice {
+            document["truncation_notice"] = serde_json::json!(notice);
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
+    // Without this clause a filter that matched nothing prints a header and no rows, and a bank
+    // with no rows is a documented failure of its own (`Master.bank` and the placeholders), so the
+    // reader cannot tell "nothing matched" from "wrong bank".
+    let narrowed = match filter {
+        Some(_) => format!(", {} matched --filter", matched.len()),
+        None => String::new(),
+    };
+    println!("{sample_count} samples, codec {:?}{narrowed}", view.codec());
+    for (i, s) in listed {
+        // The marker carries the replacement's own codec because that is the fact `extract` turns
+        // on, and because a row that differs from the shipped bank in nothing but two numbers is
+        // otherwise indistinguishable from a mistyped `--bank`.
+        let replaced = match s.replaced {
+            true => format!("  [replaced, {:?}]", s.codec),
+            false => String::new(),
+        };
+        println!(
+            "#{i:<5} {:6}Hz {}ch {:6.2}s  {}{replaced}",
+            s.freq,
+            s.channels,
+            sample_seconds(s),
+            s.name
+        );
+    }
+    if let Some(notice) = &notice {
+        // The same marker the MCP server appends to a clipped result, so a reader who has learned
+        // to look for one line has learned to look for both.
+        println!("… [truncated: {notice}]");
     }
     Ok(())
 }
 
-pub fn extract(bank: PathBuf, out: PathBuf, sample: Option<String>, key: Option<String>) -> Result<()> {
+/// Playing time of one sample. A bank can carry a zero frequency for a placeholder entry, and
+/// dividing by it would print `NaN`/`inf` into a JSON document that then fails to parse.
+fn sample_seconds(sample: &gore_fmod::BankSample) -> f64 {
+    if sample.freq > 0 {
+        sample.num_samples as f64 / sample.freq as f64
+    } else {
+        0.0
+    }
+}
+
+/// One sentence that must answer "how much am I not seeing" and "what do I type instead". It
+/// deliberately does not hand back the `--max` that would list everything: followed on the 7,218
+/// samples of `SFX.bank` that is a 458,589-byte table against a 256 KiB result budget
+/// (`gore_mcp::DEFAULT_MAX_STDOUT_BYTES`), and the cut lands mid-line inside sample #4122 -- so the
+/// 3,095 samples past it are not merely unshown, they are absent, and a caller who filters what
+/// arrived is told a sound does not exist. Sending a caller there is the failure this bound
+/// prevents.
+fn list_truncation_notice(matched: usize, listed: usize) -> String {
+    format!(
+        "{matched} samples matched and only the first {listed} are shown. Narrow the query with \
+         --filter, and raise --max only as far as you need: asking for all {matched} at once \
+         produces a document large enough to be cut off in transit, and a cut-off JSON array no \
+         longer parses."
+    )
+}
+
+pub fn extract(
+    bank: PathBuf,
+    out: PathBuf,
+    sample: Option<String>,
+    key: Option<String>,
+) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    let (block, fsb) = gore_fmod::decrypt_fsb0(&bytes, &key_bytes(key))
+    // Through the view, so a replaced sample is read out of the sub-bank it was repointed at.
+    // Reading sub-bank 0 wrote the audio the replacement replaced into a file named after the
+    // replacement — the one failure mode a caller cannot detect, because the file is there and
+    // plays.
+    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
     std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
     // indices to extract
     let indices: Vec<usize> = match &sample {
-        Some(name) if name != "all" => vec![fsb
+        Some(name) if name != "all" => vec![view
             .samples
             .iter()
             .position(|s| &s.name == name)
             .with_context(|| format!("sample not found: {name}"))?],
-        _ => (0..fsb.samples.len()).collect(),
+        _ => (0..view.samples.len()).collect(),
     };
 
+    // One line per distinct reason, not per sample. `extract_wav` decodes Vorbis, so a bank whose
+    // codec is anything else rejects every sample for the same cause: on the 7,218 samples of
+    // `SFX.bank` that was 7,218 identical stderr lines (~400 KB) describing one fact. The first
+    // sample to hit a reason is named, which is what a single-sample run needs, and the count says
+    // how far it went.
     let (mut ok, mut skipped) = (0usize, 0usize);
+    let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for i in indices {
-        match gore_fmod::extract_wav(&block, &fsb, i) {
+        match view.extract_wav(i) {
             Ok(wav) => {
                 // Prefix with the sample index so two names that sanitize to the same basename
                 // (e.g. differing only by punctuation) don't collide and silently overwrite.
-                let path = out.join(format!("{i}_{}.wav", sanitize(&fsb.samples[i].name)));
+                let path = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
                 std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;
             }
             Err(e) => {
                 skipped += 1;
-                eprintln!("skip #{i} {}: {e}", fsb.samples[i].name);
+                let seen = skips.entry(e).or_insert((0, i));
+                seen.0 += 1;
             }
         }
     }
-    println!("extracted {ok} wav file(s) to {} ({skipped} skipped)", out.display());
+    for (reason, (count, first)) in &skips {
+        eprintln!(
+            "skipped {count} sample(s), first #{first} {}: {reason}",
+            view.samples[*first].name
+        );
+    }
+    println!(
+        "extracted {ok} wav file(s) to {} ({skipped} skipped)",
+        out.display()
+    );
     Ok(())
 }
 
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
-pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+pub fn replace(
+    map: PathBuf,
+    bank: PathBuf,
+    out: Option<PathBuf>,
+    key: Option<String>,
+) -> Result<()> {
     let key = key_bytes(key);
     let bytes = read_pristine_bank(&bank)?;
 
@@ -121,17 +280,25 @@ pub fn replace(map: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<St
     }
 
     // resolve WAV paths relative to the map file's directory
-    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let base = map
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     let mut replacements = Vec::with_capacity(entries.len());
     for (name, wav_rel) in &entries {
         let wav_path = resolve(&base, wav_rel);
         let wav = std::fs::read(&wav_path)
             .with_context(|| format!("reading wav '{}'", wav_path.display()))?;
-        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
-            .map_err(|e| anyhow::anyhow!("{wav_rel}: {e}"))?;
+        let (rate, channels, pcm) =
+            gore_fmod::read_wav_pcm16(&wav).map_err(|e| anyhow::anyhow!("{wav_rel}: {e}"))?;
         replacements.push((
             name.clone(),
-            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+            gore_fmod::Pcm16Sample {
+                name: name.clone(),
+                freq: rate,
+                channels,
+                pcm,
+            },
         ));
     }
     let count = entries.len();
@@ -157,7 +324,8 @@ fn write_result(bank: &Path, new_bank: &[u8], out: Option<PathBuf>, count: usize
             // the live bank while a stale pre-update *.gore-bak lingered — without this, that stale
             // backup would survive and a later `restore` would write it over the updated bank. When
             // the live bank is already injected, an existing backup is the true pristine: keep it.
-            let live = std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
+            let live =
+                std::fs::read(bank).with_context(|| format!("reading '{}'", bank.display()))?;
             if gore_fmod::is_pristine_bank(&live) {
                 std::fs::write(&bak, &live)
                     .with_context(|| format!("backing up to '{}'", bak.display()))?;
@@ -183,9 +351,13 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
     if entries.is_empty() {
         bail!("map is empty");
     }
-    let base = map.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let base = map
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
 
-    let file = std::fs::File::create(&out).with_context(|| format!("creating '{}'", out.display()))?;
+    let file =
+        std::fs::File::create(&out).with_context(|| format!("creating '{}'", out.display()))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts: zip::write::FileOptions<()> =
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -201,23 +373,36 @@ pub fn export_patch(map: PathBuf, out: PathBuf) -> Result<()> {
         zip.write_all(&wav).context("zip write")?;
         manifest.insert(name.clone(), entry);
     }
-    zip.start_file("manifest.json", opts).context("zip manifest")?;
+    zip.start_file("manifest.json", opts)
+        .context("zip manifest")?;
     zip.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
     zip.finish().context("finishing zip")?;
-    println!("wrote patch {} ({} sample(s))", out.display(), entries.len());
+    println!(
+        "wrote patch {} ({} sample(s))",
+        out.display(),
+        entries.len()
+    );
     Ok(())
 }
 
 /// Apply a patch zip (from `export-patch`) to a bank.
-pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Option<String>) -> Result<()> {
+pub fn apply_patch(
+    patch: PathBuf,
+    bank: PathBuf,
+    out: Option<PathBuf>,
+    key: Option<String>,
+) -> Result<()> {
     let key = key_bytes(key);
     let bytes = read_pristine_bank(&bank)?;
 
-    let file = std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
+    let file =
+        std::fs::File::open(&patch).with_context(|| format!("opening '{}'", patch.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("reading patch zip")?;
 
     let manifest: BTreeMap<String, String> = {
-        let mut f = zip.by_name("manifest.json").context("patch missing manifest.json")?;
+        let mut f = zip
+            .by_name("manifest.json")
+            .context("patch missing manifest.json")?;
         let mut s = String::new();
         f.read_to_string(&mut s)?;
         serde_json::from_str(&s).context("parsing manifest.json")?
@@ -236,11 +421,16 @@ pub fn apply_patch(patch: PathBuf, bank: PathBuf, out: Option<PathBuf>, key: Opt
             f.read_to_end(&mut buf)?;
             buf
         };
-        let (rate, channels, pcm) = gore_fmod::read_wav_pcm16(&wav)
-            .map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
+        let (rate, channels, pcm) =
+            gore_fmod::read_wav_pcm16(&wav).map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
         replacements.push((
             name.clone(),
-            gore_fmod::Pcm16Sample { name: name.clone(), freq: rate, channels, pcm },
+            gore_fmod::Pcm16Sample {
+                name: name.clone(),
+                freq: rate,
+                channels,
+                pcm,
+            },
         ));
     }
     let count = replacements.len();

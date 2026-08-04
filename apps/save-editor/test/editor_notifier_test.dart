@@ -1,14 +1,61 @@
 import 'dart:async';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/glossary_models.dart';
+import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/features/editor/domain/story_state_models.dart';
+import 'package:goresave/l10n/app_localizations_de.dart';
+import 'package:goresave/l10n/app_localizations_en.dart';
+import 'package:goresave/providers/data_providers.dart';
+
+bool _sameTestPath(String a, String b) =>
+    a.replaceAll('/', '\\').toLowerCase() ==
+    b.replaceAll('/', '\\').toLowerCase();
 
 void main() {
+  test(
+    'direct notifier construction defaults domain messages to English',
+    () async {
+      final notifier = EditorNotifier(_RecordingCoreService());
+
+      await pumpEventQueue();
+
+      final result = await notifier.loadSkills();
+      expect(result.error, AppLocalizationsEn().editorNoSaveSelected);
+    },
+  );
+
+  test(
+    'provider notifier reads a changed locale without being recreated',
+    () async {
+      final container = ProviderContainer(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_RecordingCoreService()),
+          uiSettingsStoreProvider.overrideWithValue(
+            const NoopUiSettingsStore(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(editorProvider.notifier);
+
+      await pumpEventQueue();
+      container.read(localeProvider.notifier).setLocale('de');
+
+      expect(container.read(editorProvider.notifier), same(notifier));
+      final result = await notifier.loadSkills();
+      expect(result.error, AppLocalizationsDe().editorNoSaveSelected);
+    },
+  );
+
   test('uses persisted save dir before defaults', () {
     final core = _RecordingCoreService();
     final store = _MemoryEditorSettingsStore(
@@ -79,7 +126,12 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
 
       await pumpEventQueue();
 
@@ -163,7 +215,9 @@ void main() {
       expect(hard.activeResourcesLevel(), 'Hard');
 
       // Gothic preset ('_Standard') → 'Gothic'.
-      final gothic = await build({'difficultyPreset': 'DifficultyPreset_Standard'});
+      final gothic = await build({
+        'difficultyPreset': 'DifficultyPreset_Standard',
+      });
       expect(gothic.activeResourcesLevel(), 'Gothic');
 
       // Custom preset with an explicit Resources sub-level → the explicit level
@@ -185,32 +239,29 @@ void main() {
     },
   );
 
-  test(
-    'inspect sends no codec config and decodes all chunks',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      );
+  test('inspect sends no codec config and decodes all chunks', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+    );
 
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      final inspect = core.requests.lastWhere(
-        (request) => request.command == 'inspect_save',
-      );
-      expect(inspect.payload.containsKey('privateChunkLimit'), isFalse);
-      expect(inspect.payload.containsKey('binaryHost'), isFalse);
-      expect(notifier.state.backups.single.fileName, 'G1R-001.sav.bak.200');
-      expect(notifier.state.backups.single.playerSaveName, 'Before edit');
-      expect(
-        notifier.state.companionBackups.single.fileName,
-        'PersistentDataList.sav.bak.250',
-      );
-      // Companion (PersistentDataList.sav) backups are restorable directly.
-      expect(notifier.state.companionBackups.single.canRestore, isTrue);
-    },
-  );
+    final inspect = core.requests.lastWhere(
+      (request) => request.command == 'inspect_save',
+    );
+    expect(inspect.payload.containsKey('privateChunkLimit'), isFalse);
+    expect(inspect.payload.containsKey('binaryHost'), isFalse);
+    expect(notifier.state.backups.single.fileName, 'G1R-001.sav.bak.200');
+    expect(notifier.state.backups.single.playerSaveName, 'Before edit');
+    expect(
+      notifier.state.companionBackups.single.fileName,
+      'PersistentDataList.sav.bak.250',
+    );
+    // Companion (PersistentDataList.sav) backups are restorable directly.
+    expect(notifier.state.companionBackups.single.canRestore, isTrue);
+  });
 
   test('restoreBackup sends backup path and refreshes selected save', () async {
     final core = _RecordingCoreService();
@@ -317,14 +368,24 @@ void main() {
     expect(notifier.state.hasInvalidNpcEdit, isFalse);
   });
 
+  test('legacy invalidNpcEditKey remains a compatible state channel', () {
+    final state = EditorState(
+      saveDir: r'C:\tmp\saves',
+      invalidNpcEditKey: 'legacy-npc-draft',
+    );
+
+    expect(state.invalidNpcEditKey, 'legacy-npc-draft');
+    expect(state.invalidEditKeys, {'legacy-npc-draft'});
+    final cleared = state.copyWith(invalidNpcEditKey: null);
+    expect(cleared.invalidNpcEditKey, isNull);
+    expect(cleared.invalidEditKeys, isEmpty);
+  });
+
   test(
     'saveAllPending issues ONE write_save with mixed edits in stable key order',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       // Register two pending edits with keys that sort: 'attr:Health' < 'transform'
@@ -506,7 +567,11 @@ void main() {
           edits: [
             {
               'path': 'private.inventory.setItemCount',
-              'value': {'id': 'ItMi_Orenugget', 'count': 5, 'actorId': 'Char_1'},
+              'value': {
+                'id': 'ItMi_Orenugget',
+                'count': 5,
+                'actorId': 'Char_1',
+              },
             },
           ],
         ),
@@ -596,7 +661,9 @@ void main() {
             {
               'path': savePath,
               'persistentProfileId': null, // not attached to any profile
-              'difficulty': {'preset': 'DifficultyPreset_Hard'}, // save's own = Hard
+              'difficulty': {
+                'preset': 'DifficultyPreset_Hard',
+              }, // save's own = Hard
             },
           ],
           // The folder HAS a profile and it is the scan-active one — but it is a
@@ -680,9 +747,24 @@ void main() {
   });
 
   test('saveAllPending keeps pending edits on failure', () async {
-    final core = _FailingWriteCoreService();
+    final core = _FailingWriteCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
     notifier.setPendingEdit(
       'publicName',
       const PendingSaveEdit(
@@ -691,10 +773,17 @@ void main() {
         ],
       ),
     );
+    final scansBefore = core.commandCount('scan_save_dir');
+    final inspectionsBefore = core.commandCount('inspect_save');
+    final backupsBefore = core.commandCount('list_backups');
 
     final ok = await notifier.saveAllPending();
 
     expect(ok, isFalse);
+    expect(notifier.state.error, contains('write failed'));
+    expect(core.commandCount('scan_save_dir'), scansBefore + 1);
+    expect(core.commandCount('inspect_save'), inspectionsBefore + 1);
+    expect(core.commandCount('list_backups'), backupsBefore + 1);
     // Pending edits must be preserved so the user can retry.
     expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
   });
@@ -760,6 +849,61 @@ void main() {
       // scan_save_dir, so exactly one ADDITIONAL scan proves the partial-commit
       // refresh ran (vs. the old early-return that left the UI stale).
       expect(core.refreshScans, scansBefore + 1);
+    },
+  );
+
+  test(
+    'partial commit refreshes and preserves unwritten edits when second write throws',
+    () async {
+      final core = _ThrowSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      notifier.setPendingEdit(
+        'npc.revive:A',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'A'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.revive:B',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'B'},
+            },
+          ],
+        ),
+      );
+
+      final scansBefore = core.refreshScans;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('native worker died'));
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isTrue);
+      expect(core.refreshScans, scansBefore + 1);
+      expect(notifier.state.saveProgress, isNull);
     },
   );
 
@@ -990,6 +1134,240 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses a typed edit to a glossary quest CurrentState path',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      const questStatePath = [
+        'QuestDataByClass',
+        '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+        'CurrentState',
+      ];
+      notifier.setPendingGlossarySegment(
+        const GlossarySegmentEdit(
+          documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+          segmentClass:
+              '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+          unlocked: true,
+          questStatePath: questStatePath,
+        ),
+      );
+      notifier.setPendingEdit(
+        'typed:wolf-current-state',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': questStatePath,
+                'value': 'EQuestState::Succeeded',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('same quest CurrentState'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+    },
+  );
+
+  test('saveAllPending refuses a typed value edit inside Hero MemorizedEvents '
+      'alongside a glossary segment change', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+        unlocked: false,
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:hero-memory-time',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'LongTermMemoryByGlobalId',
+                '{Hero}',
+                'MemorizedEvents',
+                '[17]',
+                'Time',
+                'TotalSeconds',
+              ],
+              'value': 42.0,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('Hero MemorizedEvents'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed array edit on Hero MemorizedEvents '
+      'alongside a glossary segment change', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Entry2',
+        unlocked: true,
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:hero-memory-remove',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'],
+              'index': 17,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('Hero MemorizedEvents'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed relationship value edit for the same '
+      'NPC as a structured override', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.friend);
+    notifier.setPendingEdit(
+      'typed:asghan-relationship',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'm_GenericData',
+                '{Relationship}',
+                'RelationshipByGlobalId',
+                '{Asghan-1}',
+                'ActivePersonalRelationshipModifiers',
+                '[0]',
+                'Relationship',
+              ],
+              'value': 'ERelationship::Enemy',
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same NPC relationship entry'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed modifier removal for the same NPC as '
+      'a structured relationship override', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.neutral);
+    notifier.setPendingEdit(
+      'typed:asghan-modifier-remove',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': [
+                'RelationshipByGlobalId',
+                '{ASGHAN-1}',
+                'ActivePersonalRelationshipModifiers',
+              ],
+              'index': 0,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same NPC relationship entry'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+  });
+
+  test('saveAllPending permits an All-data relationship edit for a different '
+      'NPC', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.enemy);
+    notifier.setPendingEdit(
+      'typed:buster-relationship',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'RelationshipByGlobalId',
+                '{Buster-1}',
+                'ActivePersonalRelationshipModifiers',
+                '[0]',
+                'Relationship',
+              ],
+              'value': 'ERelationship::Friend',
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isTrue);
+    final writes = core.requests
+        .where((request) => request.command == 'write_save')
+        .toList();
+    expect(writes, hasLength(2));
+  });
+
+  test(
     'saveAllPending splits a splicing edit and a typed edit into separate writes',
     () async {
       final core = _RecordingCoreService();
@@ -1056,94 +1434,82 @@ void main() {
     },
   );
 
-  test(
-    'saveAllPending splits a mixed batch: revive alone, addItem alone, '
-    'setValue batched — with backup only on the first write',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test('saveAllPending splits a mixed batch: revive alone, addItem alone, '
+      'setValue batched — with backup only on the first write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      notifier.setPendingEdit(
-        'npc.revive:Lizard-1',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.npc.revive',
-              'value': {'id': 'Lizard-1'},
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'inventory',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.inventory.addItem',
-              'value': {
-                'path': '/Script/Angelscript.ItMi_Orenugget',
-                'count': 1,
-              },
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'attr:Health',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.player.setAttribute',
-              'value': {
-                'id': 'Health',
-                'baseValue': 77.0,
-                'currentValue': 66.0,
-              },
-            },
-          ],
-        ),
-      );
+    notifier.setPendingEdit(
+      'npc.revive:Lizard-1',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.revive',
+            'value': {'id': 'Lizard-1'},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'inventory',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.inventory.addItem',
+            'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 1},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'attr:Health',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.player.setAttribute',
+            'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
+          },
+        ],
+      ),
+    );
 
-      final ok = await notifier.saveAllPending();
+    final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      // revive alone + addItem alone + the fixed setValue batch = three writes.
-      expect(writes, hasLength(3));
+    expect(ok, isTrue);
+    expect(notifier.state.error, isNull);
+    final writes = core.requests
+        .where((r) => r.command == 'write_save')
+        .toList();
+    // revive alone + addItem alone + the fixed setValue batch = three writes.
+    expect(writes, hasLength(3));
 
-      bool writeHas(_RecordedRequest w, String path) =>
-          (w.payload['edits'] as List).any(
-            (e) => (e as Map)['path'] == path,
-          );
+    bool writeHas(_RecordedRequest w, String path) =>
+        (w.payload['edits'] as List).any((e) => (e as Map)['path'] == path);
 
-      final reviveWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.npc.revive'),
-      );
-      expect(reviveWrite.payload['edits'], hasLength(1));
-      final addItemWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.inventory.addItem'),
-      );
-      expect(addItemWrite.payload['edits'], hasLength(1));
-      final fixedWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.player.setAttribute'),
-      );
-      expect(fixedWrite.payload['edits'], hasLength(1));
+    final reviveWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.npc.revive'),
+    );
+    expect(reviveWrite.payload['edits'], hasLength(1));
+    final addItemWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.inventory.addItem'),
+    );
+    expect(addItemWrite.payload['edits'], hasLength(1));
+    final fixedWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.player.setAttribute'),
+    );
+    expect(fixedWrite.payload['edits'], hasLength(1));
 
-      // Backup-once: exactly one write carries backup:true (the first), the
-      // rest backup:false — one pristine snapshot per Save.
-      final backupTrue = writes.where((w) => w.payload['backup'] == true);
-      expect(backupTrue, hasLength(1));
-      expect(writes.first.payload['backup'], isTrue);
-      for (final w in writes.skip(1)) {
-        expect(w.payload['backup'], isFalse);
-      }
-      expect(notifier.state.pendingEdits, isEmpty);
-    },
-  );
+    // Backup-once: exactly one write carries backup:true (the first), the
+    // rest backup:false — one pristine snapshot per Save.
+    final backupTrue = writes.where((w) => w.payload['backup'] == true);
+    expect(backupTrue, hasLength(1));
+    expect(writes.first.payload['backup'], isTrue);
+    for (final w in writes.skip(1)) {
+      expect(w.payload['backup'], isFalse);
+    }
+    expect(notifier.state.pendingEdits, isEmpty);
+  });
 
   test(
     'saveAllPending issues two writes for two distinct splicing edits',
@@ -1189,6 +1555,84 @@ void main() {
       // Backup on the first write only.
       expect(writes.first.payload['backup'], isTrue);
       expect(writes.last.payload['backup'], isFalse);
+    },
+  );
+
+  test(
+    'saveAllPending orders glossary adds before removals without reordering other splices',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      const document = '/Script/Angelscript.Document_Glossary_Wolf';
+      notifier.setPendingEdit(
+        'a-glossary-remove',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.glossary.setSegment',
+              'value': {
+                'documentClass': document,
+                'segmentClass':
+                    '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Intro',
+                'unlocked': false,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'b-inventory-add',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingNpcRevive('Lizard-1');
+      notifier.setPendingEdit(
+        'z-glossary-add',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.glossary.setSegment',
+              'value': {
+                'documentClass': document,
+                'segmentClass':
+                    '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Dead',
+                'unlocked': true,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(4));
+      final edits = [
+        for (final write in writes)
+          (write.payload['edits'] as List).single as Map,
+      ];
+      expect(edits.map((edit) => edit['path']), [
+        'private.glossary.setSegment',
+        'private.inventory.addItem',
+        'private.npc.revive',
+        'private.glossary.setSegment',
+      ]);
+      expect((edits.first['value'] as Map)['unlocked'], isTrue);
+      expect((edits.last['value'] as Map)['unlocked'], isFalse);
     },
   );
 
@@ -1292,10 +1736,7 @@ void main() {
       final ok = await notifier.saveAllPending();
       // Refused: no write at all, and an explanatory error is surfaced.
       expect(ok, isFalse);
-      expect(
-        core.requests.where((r) => r.command == 'write_save'),
-        isEmpty,
-      );
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(notifier.state.error, contains('EffectSpec'));
     },
   );
@@ -1401,10 +1842,7 @@ void main() {
       final ok = await notifier.saveAllPending();
       // Still a same-actor (Hero) collision → refused.
       expect(ok, isFalse);
-      expect(
-        core.requests.where((r) => r.command == 'write_save'),
-        isEmpty,
-      );
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
     },
   );
 
@@ -1452,23 +1890,26 @@ void main() {
   // Bug #1: a fresh inspection must reset the selected actor to the player so a
   // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.
   // ---------------------------------------------------------------------------
-  test('inspecting a new save resets the selected actor to the player', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test(
+    'inspecting a new save resets the selected actor to the player',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    // Select an NPC against the first save.
-    notifier.selectActor(
-      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
-    );
-    expect(notifier.state.selectedActor.isPlayer, isFalse);
+      // Select an NPC against the first save.
+      notifier.selectActor(
+        const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+      );
+      expect(notifier.state.selectedActor.isPlayer, isFalse);
 
-    // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
-    // selection must fall back to the always-valid player.
-    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
+      // selection must fall back to the always-valid player.
+      await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
 
-    expect(notifier.state.selectedActor.isPlayer, isTrue);
-  });
+      expect(notifier.state.selectedActor.isPlayer, isTrue);
+    },
+  );
 
   // Codex follow-up: a SAME-save refresh (after a save/reset) must NOT reset the
   // selection — the NPC id is still valid, so NPC editing shouldn't jump to Player.
@@ -1626,30 +2067,33 @@ void main() {
 
   // Cursor (High): loadAllNpcActors must PIN the save path for the whole
   // multi-page fetch so a mid-fetch save switch can't merge pages from two files.
-  test('loadAllNpcActors pins the save path across a mid-fetch save switch', () async {
-    final core = _MidFetchSwitchNpcCoreService(total: 1484, pageSize: 1000);
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-    // After the first page returns, switch to a different save mid-fetch.
-    // Fire-and-forget: the switch is queued behind the in-flight fetch; pinning
-    // must keep page 2 on the save the fetch started against regardless.
-    core.onFirstListPage = () {
-      // ignore: unawaited_futures
-      notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
-    };
+  test(
+    'loadAllNpcActors pins the save path across a mid-fetch save switch',
+    () async {
+      final core = _MidFetchSwitchNpcCoreService(total: 1484, pageSize: 1000);
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      // After the first page returns, switch to a different save mid-fetch.
+      // Fire-and-forget: the switch is queued behind the in-flight fetch; pinning
+      // must keep page 2 on the save the fetch started against regardless.
+      core.onFirstListPage = () {
+        // ignore: unawaited_futures
+        notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      };
 
-    final page = await notifier.loadAllNpcActors();
+      final page = await notifier.loadAllNpcActors();
 
-    expect(page.error, isNull);
-    expect(page.npcs, hasLength(1484));
-    final listCalls = core.requests
-        .where((r) => r.command == 'private.npc.list')
-        .toList();
-    expect(listCalls, hasLength(2));
-    // BOTH pages target the save the fetch STARTED against — never the new one.
-    expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
-    expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
-  });
+      expect(page.error, isNull);
+      expect(page.npcs, hasLength(1484));
+      final listCalls = core.requests
+          .where((r) => r.command == 'private.npc.list')
+          .toList();
+      expect(listCalls, hasLength(2));
+      // BOTH pages target the save the fetch STARTED against — never the new one.
+      expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+      expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Charaktere master list index (Task 10: Player/Hero de-duplication). The
@@ -1937,24 +2381,26 @@ void main() {
     expect(notifier.state.codecCompressReady, isTrue);
   });
 
-  test('validateCodecRoundtrip sends no codec config and reports success',
-      () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'validateCodecRoundtrip sends no codec config and reports success',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await Future<void>.delayed(Duration.zero);
 
-    await notifier.validateCodecRoundtrip();
+      await notifier.validateCodecRoundtrip();
 
-    final roundtrip = core.requests.lastWhere(
-      (request) => request.command == 'validate_codec_roundtrip',
-    );
-    expect(roundtrip.payload, {'path': r'C:\tmp\saves\G1R-001.sav'});
-    expect(notifier.state.lastWriteMessage, contains('roundtrip'));
-  });
+      final roundtrip = core.requests.lastWhere(
+        (request) => request.command == 'validate_codec_roundtrip',
+      );
+      expect(roundtrip.payload, {'path': r'C:\tmp\saves\G1R-001.sav'});
+      expect(notifier.state.lastWriteMessage, contains('roundtrip'));
+    },
+  );
 
   test('validateCodecRoundtrip surfaces failure as an error', () async {
     final core = _FailingVerifyCoreService();
@@ -1968,6 +2414,46 @@ void main() {
     await notifier.validateCodecRoundtrip();
 
     expect(notifier.state.error, contains('roundtrip'));
+  });
+
+  test('exhaustive typed search forwards source and node filters', () async {
+    final core = _RecordingCoreService(
+      typedSearchData: {
+        'source': 'all',
+        'offset': 0,
+        'limit': 100,
+        'total': 0,
+        'count': 0,
+        'results': <Object?>[],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    await notifier.searchTypedProperties(
+      'Vector',
+      limit: 100,
+      includeNodes: true,
+      source: 'all',
+      kind: 'struct',
+      type: 'StructProperty',
+      editable: true,
+    );
+
+    final request = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(request.payload, {
+      'path': r'C:\tmp\saves\G1R-001.sav',
+      'query': 'Vector',
+      'offset': 0,
+      'limit': 100,
+      'includeNodes': true,
+      'source': 'all',
+      'kind': 'struct',
+      'type': 'StructProperty',
+      'editable': true,
+    });
   });
 
   test('loadHeroAttributes searches the hero attribute subtree', () async {
@@ -2077,10 +2563,7 @@ void main() {
           },
         ],
       );
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       final result = await notifier.loadHeroAttributes();
@@ -2130,10 +2613,7 @@ void main() {
         ],
       },
     );
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     final page = await notifier.loadProgressionQuests(query: 'x');
@@ -2163,10 +2643,7 @@ void main() {
           'quests': <Object?>[],
         },
       );
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       await notifier.loadProgressionQuests(
@@ -2191,16 +2668,91 @@ void main() {
     },
   );
 
+  test(
+    'loadProgressionTutorials queries the dedicated tutorials section',
+    () async {
+      final core = _RecordingCoreService(
+        progressionData: {
+          'section': 'tutorials',
+          'total': 1,
+          'offset': 0,
+          'limit': 100,
+          'count': 1,
+          'quests': [
+            {
+              'questClass':
+                  '/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics',
+              'id': 'Quest_Tutorials_Tut_CombatBasics',
+              'group': 'Tutorials',
+              'name': 'Tut_CombatBasics',
+              'currentState': 'EQuestState::Running',
+              'statePath': [
+                'QuestDataByClass',
+                '{/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics}',
+                'CurrentState',
+              ],
+              'writable': true,
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      final page = await notifier.loadProgressionTutorials();
+
+      expect(page.error, isNull);
+      expect(page.quests.single.name, 'Tut_CombatBasics');
+      final call = core.requests.lastWhere(
+        (request) => request.command == 'query_progression',
+      );
+      expect(call.payload['section'], 'tutorials');
+      expect(call.payload['offset'], 0);
+      expect(call.payload['limit'], 100);
+      expect(call.payload.containsKey('query'), isFalse);
+      expect(call.payload.containsKey('group'), isFalse);
+    },
+  );
+
+  test('loadStoryState honors a pinned save path', () async {
+    final core = _RecordingCoreService(
+      progressionData: {
+        'section': 'story',
+        'total': 0,
+        'offset': 0,
+        'limit': 1000,
+        'count': 0,
+        'catalogTotal': 470,
+        'storedTotal': 0,
+        'unsetTotal': 470,
+        'unknownStoredTotal': 0,
+        'entries': <Object?>[],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    final page = await notifier.loadStoryState(
+      includeUnset: true,
+      path: r'C:\tmp\saves\G1R-001.sav',
+    );
+
+    expect(page.error, isNull);
+    final call = core.requests.lastWhere(
+      (request) => request.command == 'query_progression',
+    );
+    expect(call.payload['section'], 'story');
+    expect(call.payload['includeUnset'], isTrue);
+    expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.
     // All progression loaders share _queryProgression; loadKnowledgeEntries is
     // the exercised representative.
     final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     final page = await notifier.loadKnowledgeEntries('OC_STT_Diego');
@@ -2208,156 +2760,293 @@ void main() {
     expect(page.error, isNotNull);
   });
 
+  test('memory-event edit stays pending until global Save', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final writesBefore = core.requests
+        .where((request) => request.command == 'write_save')
+        .length;
+    final edit = MemoryEventEdit.remove(
+      arrayPath: const [
+        'LongTermMemoryByGlobalId',
+        '{Hero}',
+        'MemorizedEvents',
+      ],
+      index: 4,
+    );
+
+    notifier.setPendingMemoryEventEdit('Hero', edit);
+
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      hasLength(writesBefore),
+    );
+    expect(notifier.state.pendingEdits, hasLength(1));
+    expect(notifier.pendingMemoryEventEdit('Hero')?.index, 4);
+
+    expect(await notifier.saveAllPending(), isTrue);
+    final write = core.requests.lastWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect((write.payload['edits'] as List).single, edit.toEditJson());
+  });
+
   test(
-    'applyMemoryEventEdit is blocked and sets error when isLoading is true',
+    'memory-event removals stack uniquely and save index-descending as singleton writes',
     () async {
-      // Use a slow write to hold the notifier in isLoading state, then verify
-      // that a concurrent applyMemoryEventEdit sets a user-visible error.
-      final gate = Completer<void>();
-      final core = _SlowWriteCoreService(gate.future);
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-      notifier.setPendingEdit(
-        'x',
-        const PendingSaveEdit(
-          edits: [
-            {'path': 'public.m_PlayerSaveName', 'value': 'Slow'},
-          ],
-        ),
-      );
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
 
-      // Start a write that will stall — notifier is now isLoading.
-      final writeFuture = notifier.saveAllPending();
-      expect(notifier.state.isLoading, isTrue);
-
-      // applyMemoryEventEdit must refuse and set an error while loading.
-      final result = await notifier.applyMemoryEventEdit(
-        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
-      );
-
-      expect(result, isFalse);
-      expect(notifier.state.error, isNotNull);
       expect(
-        notifier.state.error,
-        contains('Another operation is in progress'),
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 4),
+        ),
+        isTrue,
+      );
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 9),
+        ),
+        isTrue,
+      );
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 6),
+        ),
+        isTrue,
+      );
+      // Re-queuing the same removal is idempotent, not a second splice.
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 6),
+        ),
+        isTrue,
       );
 
-      // Unblock the write so the test can cleanly complete.
-      gate.complete();
-      await writeFuture;
+      expect(
+        notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index),
+        [9, 6, 4],
+      );
+      expect(notifier.pendingEditCount, 3);
+
+      expect(await notifier.saveAllPending(), isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(3));
+      expect(
+        writes.map(
+          (write) =>
+              ((((write.payload['edits'] as List).single as Map)['value']
+                          as Map)['index']
+                      as num)
+                  .toInt(),
+        ),
+        [9, 6, 4],
+      );
+      expect(writes.map((write) => write.payload['backup']), [
+        true,
+        false,
+        false,
+      ]);
+      expect(
+        writes.every((write) => (write.payload['edits'] as List).length == 1),
+        isTrue,
+      );
     },
   );
 
   test(
-    'applyMemoryEventEdit is blocked and sets error when pendingEdits is non-empty',
+    'one pending memory-event removal can be undone without clearing peers',
     () async {
-      final core = _RecordingCoreService();
       final notifier = EditorNotifier(
-        core,
+        _RecordingCoreService(),
         saveDir: r'C:\tmp\saves',
       );
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      for (final index in [2, 8, 5]) {
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          MemoryEventEdit.remove(arrayPath: path, index: index),
+        );
+      }
 
-      // Seed a pending edit (e.g. an unsaved quest-state change).
+      notifier.clearPendingMemoryEventEdit('Hero', index: 5);
+
+      expect(
+        notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index),
+        [8, 2],
+      );
+      expect(notifier.pendingEditCount, 2);
+      notifier.clearPendingMemoryEventEdit('Hero');
+      expect(notifier.pendingMemoryEventEdits('Hero'), isEmpty);
+    },
+  );
+
+  test('memory-event duplicate is exclusive with pending removals', () async {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+    expect(
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 3),
+      ),
+      isTrue,
+    );
+
+    expect(
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.duplicate(arrayPath: path, index: 7),
+      ),
+      isFalse,
+    );
+    expect(notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index), [
+      3,
+    ]);
+  });
+
+  test(
+    'saveAllPending rejects remove plus duplicate for the same array',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
       notifier.setPendingEdit(
-        'x',
+        'raw-memory-structural-edits',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.arrayRemove',
+              'value': {'path': path, 'index': 2},
+            },
+            {
+              'path': 'private.typed.arrayDuplicate',
+              'value': {'path': path, 'index': 7},
+            },
+          ],
+        ),
+      );
+
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('same array'));
+    },
+  );
+
+  test(
+    'saveAllPending rejects a typed descendant of a removed event array',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 7),
+      );
+      notifier.setPendingEdit(
+        'all-data-memory-time',
         const PendingSaveEdit(
           edits: [
             {
               'path': 'private.typed.setValue',
               'value': {
-                'path': ['CurrentState'],
-                'value': 'EQuestState::None',
+                'path': [...path, '[2]', 'Time', 'TotalSeconds'],
+                'value': 12.0,
               },
             },
           ],
         ),
       );
 
-      final writesBefore = core.requests
-          .where((r) => r.command == 'write_save')
-          .length;
-
-      final result = await notifier.applyMemoryEventEdit(
-        MemoryEventEdit.remove(arrayPath: const ['MemorizedEvents'], index: 0),
-      );
-
-      expect(result, isFalse);
-      expect(notifier.state.error, isNotNull);
-      // No write_save must have been issued.
-      final writesAfter = core.requests
-          .where((r) => r.command == 'write_save')
-          .length;
-      expect(writesAfter, writesBefore);
-      // Pending edit must still be intact.
-      expect(notifier.state.pendingEdits.containsKey('x'), isTrue);
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('structural event change'));
     },
   );
 
   test(
-    'applyAddKnowledgeCharacter issues one write_save with the addCharacter edit',
+    'saveAllPending rejects memory-event removal alongside NPC revive',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 7),
+      );
+      notifier.setPendingNpcRevive('Asghan-1');
 
-      // Whitespace is trimmed before it reaches the core.
-      final result = await notifier.applyAddKnowledgeCharacter('  NewNpc  ');
-
-      expect(result, isTrue);
-
-      final write = core.requests.lastWhere((r) => r.command == 'write_save');
-      expect(write.payload['backup'], isTrue);
-      final edits = write.payload['edits'] as List;
-      expect(edits, hasLength(1));
-      final edit = edits.single as Map;
-      expect(edit['path'], 'private.knowledge.addCharacter');
-      expect(edit['value'], {'value': 'NewNpc'});
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('same array'));
     },
   );
 
-  test(
-    'applyAddKnowledgeCharacter is blocked when pendingEdits is non-empty',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test('clearing a pending memory event performs no write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final writesBefore = core.requests
+        .where((request) => request.command == 'write_save')
+        .length;
 
-      notifier.setPendingEdit(
-        'x',
-        const PendingSaveEdit(
-          edits: [
-            {'path': 'public.m_PlayerSaveName', 'value': 'Draft'},
-          ],
-        ),
-      );
+    notifier.setPendingMemoryEventEdit(
+      'Hero',
+      MemoryEventEdit.duplicate(arrayPath: const ['MemorizedEvents'], index: 0),
+    );
+    notifier.clearPendingMemoryEventEdit('Hero');
 
-      final writesBefore = core.requests
-          .where((r) => r.command == 'write_save')
-          .length;
+    expect(notifier.pendingMemoryEventEdit('Hero'), isNull);
+    expect(notifier.state.pendingEdits, isEmpty);
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      hasLength(writesBefore),
+    );
+  });
 
-      final result = await notifier.applyAddKnowledgeCharacter('NewNpc');
+  test('first knowledge entry stays pending until global Save', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    final writesBefore = core.requests
+        .where((request) => request.command == 'write_save')
+        .length;
+    final edit = KnowledgeEntryEdit.add(
+      character: 'NewNpc',
+      entry: 'Info_Whatslife',
+    ).toEditJson();
 
-      expect(result, isFalse);
-      expect(notifier.state.error, isNotNull);
-      // No write_save must have been issued.
-      final writesAfter = core.requests
-          .where((r) => r.command == 'write_save')
-          .length;
-      expect(writesAfter, writesBefore);
-      // Pending edit must still be intact.
-      expect(notifier.state.pendingEdits.containsKey('x'), isTrue);
-    },
-  );
+    notifier.setPendingEdit(
+      'progression.knowledge',
+      PendingSaveEdit(edits: [edit]),
+    );
+
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      hasLength(writesBefore),
+    );
+    expect(await notifier.saveAllPending(), isTrue);
+    final write = core.requests.lastWhere(
+      (request) => request.command == 'write_save',
+    );
+    expect((write.payload['edits'] as List).single, edit);
+  });
 
   // ---------------------------------------------------------------------------
   // Profile switcher (selectProfile)
@@ -2439,6 +3128,63 @@ void main() {
       );
       // Selection moved to profile 1's save.
       expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+    },
+  );
+
+  test(
+    'selectProfile selects a real save after a missing-only profile',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(notifier.state.selectedPath, isNull);
+
+      await notifier.selectProfile(1);
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.inspection, isNotNull);
     },
   );
 
@@ -2569,6 +3315,875 @@ void main() {
 
       // selectedProfileId must be preserved.
       expect(notifier.state.selectedProfileId, 1);
+    },
+  );
+
+  test(
+    'external saves accumulate, persist, and survive refresh without a profile',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Folder save',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+              'difficultyPreset': 'DifficultyPreset_Standard',
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (_) => true,
+      );
+      await pumpEventQueue();
+
+      const externalPath = r'D:\archive\My-Gothic-Save.sav';
+      await notifier.loadExternalSave(externalPath);
+
+      expect(notifier.state.selectedPath, externalPath);
+      expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(notifier.state.selectedSave?.persistentProfileId, isNull);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(notifier.state.otherSaves.map((save) => save.path), [
+        externalPath,
+      ]);
+      expect(notifier.state.visibleSaves.map((save) => save.path), [
+        externalPath,
+      ]);
+      expect(store.settings.externalSavePaths, [externalPath]);
+      expect(
+        notifier.state.activeProfile,
+        isNull,
+        reason: 'detached saves must not borrow the folder profile difficulty',
+      );
+
+      // Reopening that same detached file through a differently-cased,
+      // normalizable Windows path must retain the SaveSlot's canonical path.
+      // Otherwise exact state accessors can no longer find the selected offer.
+      await notifier.loadExternalSave(r'd:/ARCHIVE/./my-gothic-save.SAV');
+      expect(notifier.state.selectedPath, externalPath);
+      expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal),
+        hasLength(1),
+      );
+
+      const secondExternalPath = r'E:\archive\Second.sav';
+      await notifier.loadExternalSave(secondExternalPath);
+      expect(
+        notifier.state.otherSaves.map((save) => save.path),
+        containsAll([externalPath, secondExternalPath]),
+      );
+      expect(store.settings.externalSavePaths, [
+        externalPath,
+        secondExternalPath,
+      ]);
+
+      await notifier.refresh();
+      expect(notifier.state.selectedPath, secondExternalPath);
+      expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'refresh restores persisted external saves and prunes missing files',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _RecordingCoreService(),
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal).single.path,
+        existingPath,
+      );
+
+      await notifier.selectOtherSaves();
+      expect(notifier.state.selectedPath, existingPath);
+      expect(notifier.state.visibleSaves.single.path, existingPath);
+
+      expect(await notifier.removeOtherSave(existingPath), isTrue);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [existingPath]);
+    },
+  );
+
+  test(
+    'failed folder scan still restores external saves and prunes missing paths',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _FailingScanCoreService(),
+        saveDir: r'C:\missing\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(notifier.state.otherSaves.single.path, existingPath);
+      expect(notifier.state.selectedSave?.path, existingPath);
+      expect(notifier.state.error, isNotNull);
+    },
+  );
+
+  test(
+    'thrown folder scan still restores external saves and prunes missing paths',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _ThrowingScanCoreService(),
+        saveDir: r'C:\missing\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(notifier.state.otherSaves.single.path, existingPath);
+      expect(notifier.state.selectedSave?.path, existingPath);
+      expect(notifier.state.error, contains('native scan failed'));
+    },
+  );
+
+  test('refresh canonicalizes a retained Windows save selection', () async {
+    const openedPath = r'c:\archive\loose.sav';
+    const scannedPath = r'C:\ARCHIVE\Loose.sav';
+    final core = _RecordingCoreService();
+    final store = _MemoryEditorSettingsStore();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+      fileExists: (_) => true,
+    );
+    await pumpEventQueue();
+
+    await notifier.loadExternalSave(openedPath);
+    expect(notifier.state.selectedPath, openedPath);
+
+    core.scanData
+      ..['saves'] = [
+        {
+          'path': scannedPath,
+          'slot': 'Loose',
+          'format': 'GSAV',
+          'fileSize': 100,
+          'sha1': 'canonical',
+          'status': 'ok',
+        },
+      ]
+      ..['profiles'] = <Object?>[];
+    await notifier.refresh();
+
+    expect(notifier.state.selectedPath, scannedPath);
+    expect(notifier.state.selectedSave?.path, scannedPath);
+    expect(notifier.state.selectedSave?.isExternal, isFalse);
+    expect(notifier.state.externalSavePaths, isEmpty);
+    expect(store.settings.externalSavePaths, isEmpty);
+  });
+
+  test(
+    'removed external save stays hidden when a later scan discovers it',
+    () async {
+      const path = r'D:\archive\Loose.sav';
+      final core = _RecordingCoreService();
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (_) => true,
+      );
+      await pumpEventQueue();
+
+      await notifier.loadExternalSave(path);
+      expect(await notifier.removeOtherSave(path), isTrue);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      core.scanData['saves'] = [
+        {
+          'path': path,
+          'slot': 'Loose',
+          'format': 'GSAV',
+          'fileSize': 100,
+          'sha1': 'now-scanned',
+          'status': 'ok',
+        },
+      ];
+      await notifier.refresh();
+
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      // Explicitly opening it again is the user's opt-in to re-add it.
+      await notifier.loadExternalSave(path);
+      expect(notifier.state.otherSaves.single.path, path);
+      expect(store.settings.hiddenOtherSavePaths, isEmpty);
+    },
+  );
+
+  test(
+    'external save with a local slot basename remains profileless',
+    () async {
+      const externalPath = r'D:\archive\G1R-001.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [externalPath]),
+      );
+      final notifier = EditorNotifier(
+        _RecordingCoreService(
+          scanData: {
+            'saves': [
+              {
+                'path': r'C:\tmp\saves\G1R-001.sav',
+                'slot': 'G1R-001',
+                'format': 'GSAV',
+                'fileSize': 100,
+                'sha1': 'local',
+                'status': 'ok',
+                'persistentProfileId': 0,
+              },
+            ],
+            'profiles': [
+              {
+                'profileId': 0,
+                'profileName': '0',
+                'savedSlots': ['G1R-001'],
+              },
+            ],
+            'activeProfileId': 0,
+          },
+        ),
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, externalPath),
+      );
+      await pumpEventQueue();
+
+      final external = notifier.state.saves.singleWhere(
+        (save) => save.isExternal,
+      );
+      expect(notifier.state.profileIdForSave(external), isNull);
+      expect(notifier.state.otherSaves, contains(external));
+    },
+  );
+
+  test(
+    'removing a scanned Other save persists a tombstone across refresh',
+    () async {
+      const path = r'C:\tmp\saves\G1R-007.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': path,
+              'slot': 'G1R-007',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'other',
+              'status': 'ok',
+              'playerSaveName': 'Loose save',
+            },
+          ],
+          'profiles': <Object?>[],
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      await notifier.selectOtherSaves();
+      expect(notifier.state.visibleSaves.single.path, path);
+
+      expect(await notifier.removeOtherSave(path), isTrue);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      await notifier.refresh();
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      final restarted = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      expect(restarted.state.otherSaves, isEmpty);
+
+      // Choosing the still-existing file through Open file explicitly re-adds
+      // it and clears the persisted tombstone.
+      await restarted.loadExternalSave(path);
+      expect(restarted.state.otherSaves.single.path, path);
+      expect(store.settings.hiddenOtherSavePaths, isEmpty);
+    },
+  );
+
+  test(
+    'opening a scanned path normalizes Windows casing and selects its profile',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      await notifier.loadExternalSave(r'c:/TMP/saves/./g1r-002.SAV');
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedProfileId, 1);
+      expect(notifier.state.activeProfile?.profileId, 1);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-002']),
+      );
+      expect(notifier.state.saves.where((save) => save.isExternal), isEmpty);
+    },
+  );
+
+  test(
+    'failed external open restores the previous save and inspection',
+    () async {
+      final core = _RejectExternalInspectCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      final previousInspection = notifier.state.inspection;
+      final previousBackups = notifier.state.backups;
+
+      await notifier.loadExternalSave(r'D:\archive\invalid.sav');
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-001.sav');
+      expect(notifier.state.inspection, same(previousInspection));
+      expect(notifier.state.backups, same(previousBackups));
+      expect(notifier.state.activeProfile?.profileId, 0);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(notifier.state.otherSavesSelected, isFalse);
+      expect(notifier.state.saves.where((save) => save.isExternal), isEmpty);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(notifier.state.error, contains('invalid external file'));
+    },
+  );
+
+  test(
+    'assignSelectedSaveToProfile calls atomic profile command and rescans',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-006.sav',
+              'slot': 'G1R-006',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'Move me',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-006'],
+            },
+            {'profileId': 1, 'profileName': '1', 'savedSlots': <String>[]},
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      final ok = await notifier.assignSelectedSaveToProfile(1);
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'assign_save_profile',
+      );
+      expect(request.payload['path'], r'C:\tmp\saves\G1R-006.sav');
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['profileId'], 1);
+      expect(request.payload['backup'], isTrue);
+      expect(notifier.state.selectedProfileId, 1);
+      expect(notifier.state.selectedSave?.persistentProfileId, 1);
+    },
+  );
+
+  test(
+    'missing profile reference stays visible but is never inspected or selected',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-009.sav',
+              'slot': 'G1R-009',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentPlayerSaveName': 'Lost save',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(notifier.state.visibleSaves.single.isMissing, isTrue);
+      expect(notifier.state.selectedPath, isNull);
+      expect(notifier.state.inspection, isNull);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      await notifier.inspect(r'C:\tmp\saves\G1R-009.sav');
+      expect(notifier.state.selectedPath, isNull);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'removeSaveFromProfile cleans a missing reference and sends no inspect',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-009.sav',
+              'slot': 'G1R-009',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': ['G1R-009'],
+              'autoSaveSlots': ['G1R-009'],
+              'savedSlots': ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      final ok = await notifier.removeSaveFromProfile(
+        slot: 'G1R-009',
+        profileId: 0,
+      );
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'remove_save_from_profile',
+      );
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['slot'], 'G1R-009');
+      expect(request.payload['profileId'], 0);
+      expect(request.payload['backup'], isTrue);
+      expect(notifier.state.saves, isEmpty);
+      expect(notifier.state.profiles.single.savedSlots, isEmpty);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test('removeSaveFromProfile keeps an existing save as unassigned', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'playerSaveName': 'Keep me',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    final ok = await notifier.removeSaveFromProfile(
+      slot: 'G1R-006',
+      profileId: 0,
+    );
+
+    expect(ok, isTrue);
+    expect(notifier.state.saves, hasLength(1));
+    expect(notifier.state.selectedSave, isNull);
+    expect(notifier.state.otherSaves.map((save) => save.slot), ['G1R-006']);
+    expect(notifier.state.visibleSaves, isEmpty);
+    expect(notifier.state.profiles.single.savedSlots, isEmpty);
+  });
+
+  test(
+    'all unassigned saves stay out of profiles and collect in Other saves',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'First detached',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Second detached',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-003.sav',
+              'slot': 'G1R-003',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'c',
+              'status': 'ok',
+              'playerSaveName': 'Other profile',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001', 'G1R-002'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'savedSlots': ['G1R-003'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(
+        await notifier.removeSaveFromProfile(slot: 'G1R-001', profileId: 0),
+        isTrue,
+      );
+      expect(notifier.state.otherSaves.map((save) => save.slot), ['G1R-001']);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-002']),
+      );
+
+      await notifier.selectProfile(1);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-003']),
+      );
+      expect(
+        notifier.state.visibleSaves.any(
+          (save) => save.persistentProfileId == null,
+        ),
+        isFalse,
+      );
+
+      await notifier.selectProfile(0);
+      expect(
+        await notifier.removeSaveFromProfile(slot: 'G1R-002', profileId: 0),
+        isTrue,
+      );
+      expect(
+        notifier.state.otherSaves.map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+      expect(
+        notifier.state.saves
+            .where((save) => save.persistentProfileId == null)
+            .map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+
+      await notifier.selectOtherSaves();
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+      expect(notifier.state.selectedSave?.slot, anyOf('G1R-001', 'G1R-002'));
+      expect(notifier.state.activeProfile, isNull);
+    },
+  );
+
+  test(
+    'assignSelectedSaveToProfile imports detached file into first free slot',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'folder',
+              'status': 'ok',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {'profileId': 0, 'profileName': '0', 'savedSlots': <String>[]},
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      await notifier.loadExternalSave(r'D:\archive\Detached.sav');
+
+      final ok = await notifier.assignSelectedSaveToProfile(0);
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'assign_save_profile',
+      );
+      expect(request.payload['path'], r'D:\archive\Detached.sav');
+      expect(request.payload['destinationPath'], r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedSave?.isExternal, isFalse);
+      expect(notifier.state.selectedSave?.persistentProfileId, 0);
+      expect(notifier.state.otherSavesSelected, isFalse);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(
+        notifier.state.saves.any(
+          (save) => save.path == r'D:\archive\Detached.sav',
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'assignSelectedSaveToProfile preserves a free conventional source slot',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {'profileId': 0, 'profileName': '0', 'savedSlots': <String>[]},
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+      await notifier.loadExternalSave(r'D:\archive\G1R-042.sav');
+
+      final ok = await notifier.assignSelectedSaveToProfile(0);
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'assign_save_profile',
+      );
+      expect(request.payload['destinationPath'], r'C:\tmp\saves\G1R-042.sav');
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-042.sav');
+    },
+  );
+
+  test(
+    'failed detached import restores external entry and selection',
+    () async {
+      final core = _FailingAssignProfileCoreService(
+        scanData: {
+          'saves': <Object?>[],
+          'profiles': [
+            {'profileId': 0, 'profileName': '0', 'savedSlots': <String>[]},
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      const externalPath = r'D:\archive\Detached.sav';
+      await notifier.loadExternalSave(externalPath);
+
+      final ok = await notifier.assignSelectedSaveToProfile(0);
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('import failed'));
+      expect(notifier.state.selectedPath, externalPath);
+      expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(store.settings.externalSavePaths, [externalPath]);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal),
+        hasLength(1),
+      );
     },
   );
 
@@ -2788,6 +4403,200 @@ void main() {
       expect(notifier.state.pendingEdits, isEmpty);
     },
   );
+
+  test('glossary segment target rehydrates from the pending registry', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    const document = '/Script/Angelscript.Document_Glossary_Meatbug';
+    const segment =
+        '/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2';
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: document,
+        segmentClass: segment,
+        unlocked: true,
+      ),
+    );
+
+    expect(notifier.pendingGlossarySegment(document, segment), isTrue);
+    notifier.clearPendingGlossarySegment(document, segment);
+    expect(notifier.pendingGlossarySegment(document, segment), isNull);
+  });
+
+  test('story changes aggregate case-insensitively and remove on revert', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    const stone = StoryStateEdit(
+      id: 'Stone_OreArmor',
+      present: true,
+      rawValue: 123,
+      expectedStored: true,
+      expectedRawValue: 100,
+    );
+    const chapter = StoryStateEdit(
+      id: 'Chapter',
+      present: true,
+      rawValue: 3,
+      expectedStored: false,
+      expectedRawValue: null,
+    );
+
+    notifier.setStoryStateEdit(stone);
+    notifier.setStoryStateEdit(chapter);
+
+    expect(notifier.pendingEditCount, 2);
+    expect(notifier.state.pendingEdits.keys, [storyStatePendingKey]);
+    expect(notifier.allStoryStateEdits().map((edit) => edit.id), [
+      'Chapter',
+      'Stone_OreArmor',
+    ]);
+    expect(notifier.storyStateEditFor(' stone_orearmor '), stone);
+    final wire = notifier.pendingEditFor(storyStatePendingKey)!.edits.single;
+    expect(wire['path'], storyStateApplyPath);
+    expect(((wire['value'] as Map)['changes'] as List), hasLength(2));
+
+    // Same normalized ID, restored to its original snapshot: remove only Stone.
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'stone_orearmor',
+        present: true,
+        rawValue: 100,
+        expectedStored: true,
+        expectedRawValue: 100,
+      ),
+    );
+    expect(notifier.storyStateEditFor('Stone_OreArmor'), isNull);
+    expect(notifier.pendingEditCount, 1);
+
+    notifier.clearStoryStateEdit('CHAPTER');
+    expect(notifier.pendingEditFor(storyStatePendingKey), isNull);
+  });
+
+  test('story apply gets an exclusive structural sub-write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'After story edit'},
+        ],
+      ),
+    );
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'Chapter',
+        present: true,
+        rawValue: 3,
+        expectedStored: true,
+        expectedRawValue: 2,
+      ),
+    );
+
+    expect(await notifier.saveAllPending(), isTrue);
+    final writes = core.requests
+        .where((request) => request.command == 'write_save')
+        .toList();
+    expect(writes, hasLength(2));
+    expect(
+      (writes[0].payload['edits'] as List).single['path'],
+      'public.m_PlayerSaveName',
+    );
+    expect(
+      (writes[1].payload['edits'] as List).single['path'],
+      storyStateApplyPath,
+    );
+    expect(writes[0].payload['backup'], isTrue);
+    expect(writes[1].payload['backup'], isFalse);
+  });
+
+  test(
+    'story CAS failure refreshes disk and preserves the pending target',
+    () async {
+      final core = _StoryCasFailureCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await pumpEventQueue();
+
+      final initialPage = await notifier.loadStoryState(includeUnset: true);
+      final initialRow = initialPage.values.single;
+      expect(initialRow.value, 100);
+      notifier.setStoryStateEdit(
+        StoryStateEdit.fromValue(initialRow, present: true, rawValue: 123),
+      );
+      final scansBefore = core.commandCount('scan_save_dir');
+      final inspectionsBefore = core.commandCount('inspect_save');
+      final backupsBefore = core.commandCount('list_backups');
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('story CAS mismatch'));
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-001.sav');
+      expect(core.commandCount('scan_save_dir'), scansBefore + 1);
+      expect(core.commandCount('inspect_save'), inspectionsBefore + 1);
+      expect(core.commandCount('list_backups'), backupsBefore + 1);
+      final writeIndex = core.requests.lastIndexWhere(
+        (request) => request.command == 'write_save',
+      );
+      expect(
+        core.requests
+            .skip(writeIndex + 1)
+            .take(3)
+            .map((request) => request.command),
+        ['scan_save_dir', 'inspect_save', 'list_backups'],
+      );
+
+      final preserved = notifier.storyStateEditFor('Stone_OreArmor');
+      expect(preserved, isNotNull);
+      expect(preserved!.rawValue, 123);
+      expect(preserved.expectedRawValue, 100);
+
+      // The failed CAS fake changes the disk value before returning its error.
+      // Re-loading and re-queuing against that row must advance the expected
+      // snapshot while retaining the user's desired target.
+      final freshPage = await notifier.loadStoryState(includeUnset: true);
+      final freshRow = freshPage.values.single;
+      expect(freshRow.value, 200);
+      notifier.setStoryStateEdit(
+        StoryStateEdit.fromValue(freshRow, present: true, rawValue: 123),
+      );
+      final requeued = notifier.storyStateEditFor('stone_orearmor');
+      expect(requeued, isNotNull);
+      expect(requeued!.rawValue, 123);
+      expect(requeued.expectedRawValue, 200);
+    },
+  );
+
+  test('generic invalid edits block save and survive NPC actor switching', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    notifier.setStoryStateEditInvalid(true);
+
+    expect(notifier.state.hasInvalidEdits, isTrue);
+    expect(notifier.state.hasUnsavedEdits, isTrue);
+    expect(notifier.pendingEditCount, 1);
+    expect(notifier.state.hasInvalidNpcEdit, isTrue);
+
+    notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-2', name: 'L2', uniqueName: 'Lizard'),
+    );
+    expect(notifier.state.invalidEditKeys, {storyStatePendingKey});
+
+    notifier.clearAllPendingEdits();
+    expect(notifier.state.hasInvalidEdits, isFalse);
+    expect(notifier.state.hasUnsavedEdits, isFalse);
+  });
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
@@ -2841,6 +4650,9 @@ class _RecordingCoreService implements GoresaveCoreService {
   final Map<String, Object?>? factionsData;
 
   final requests = <_RecordedRequest>[];
+
+  int commandCount(String command) =>
+      requests.where((request) => request.command == command).length;
 
   @override
   String get description => 'recording-core';
@@ -2965,6 +4777,74 @@ class _RecordingCoreService implements GoresaveCoreService {
             'paths': targets['saves'],
           },
         };
+      case 'assign_save_profile':
+        final profileId = (payload['profileId'] as num).toInt();
+        final saves = (scanData['saves'] as List?) ?? <Object?>[];
+        final destinationPath = payload['destinationPath'] as String?;
+        if (destinationPath != null) {
+          final fileName = destinationPath.split(RegExp(r'[\\/]')).last;
+          final slot = fileName.toLowerCase().endsWith('.sav')
+              ? fileName.substring(0, fileName.length - 4)
+              : fileName;
+          saves.add({
+            'path': destinationPath,
+            'slot': slot,
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'imported',
+            'status': 'ok',
+            'playerSaveName': 'Imported save',
+            'persistentProfileId': profileId,
+          });
+        }
+        for (final raw in saves.whereType<Map>()) {
+          if (raw['path'] == (destinationPath ?? payload['path'])) {
+            raw['persistentProfileId'] = profileId;
+          }
+        }
+        return {
+          'ok': true,
+          'data': {
+            'path': destinationPath ?? payload['path'],
+            if (destinationPath != null) 'sourcePath': payload['path'],
+            'persistentPath': payload['persistentPath'],
+            'profileId': profileId,
+            'bytesChanged': true,
+            'backupPath': r'C:\tmp\saves\G1R-006.sav.bak.1',
+            'persistentBackupPath':
+                r'C:\tmp\saves\PersistentDataList.sav.bak.1',
+          },
+        };
+      case 'remove_save_from_profile':
+        final profileId = (payload['profileId'] as num).toInt();
+        final slot = payload['slot'] as String;
+        final saves = (scanData['saves'] as List?) ?? <Object?>[];
+        saves.removeWhere(
+          (raw) =>
+              raw is Map && raw['slot'] == slot && raw['status'] == 'missing',
+        );
+        for (final raw in saves.whereType<Map>()) {
+          if (raw['slot'] == slot) raw.remove('persistentProfileId');
+        }
+        for (final raw
+            in ((scanData['profiles'] as List?) ?? <Object?>[])
+                .whereType<Map>()) {
+          for (final key in ['savedSlots', 'quickSaveSlots', 'autoSaveSlots']) {
+            (raw[key] as List?)?.removeWhere((value) => value == slot);
+          }
+        }
+        return {
+          'ok': true,
+          'data': {
+            'slot': slot,
+            'persistentPath': payload['persistentPath'],
+            'profileId': profileId,
+            'bytesChanged': true,
+            'backupPath': null,
+            'persistentBackupPath':
+                r'C:\tmp\saves\PersistentDataList.sav.bak.2',
+          },
+        };
       case 'search_typed_properties':
         final pages = typedSearchPages;
         if (pages != null && pages.isNotEmpty) {
@@ -3032,8 +4912,53 @@ class _RecordingCoreService implements GoresaveCoreService {
   }
 }
 
+class _RejectExternalInspectCoreService extends _RecordingCoreService {
+  _RejectExternalInspectCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'inspect_save' &&
+        (payload['path'] as String?)?.startsWith(r'D:\archive') == true) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'invalid external file'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _FailingAssignProfileCoreService extends _RecordingCoreService {
+  _FailingAssignProfileCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'assign_save_profile') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'external import failed'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
 /// write_save always fails.
 class _FailingWriteCoreService extends _RecordingCoreService {
+  _FailingWriteCoreService({super.scanData});
+
   @override
   Future<Map<String, Object?>> execute(
     String command, {
@@ -3046,6 +4971,82 @@ class _FailingWriteCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'write failed'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Mimics an optimistic-concurrency failure where another writer changes the
+/// sole story value before the core rejects our stale expectedRawValue.
+class _StoryCasFailureCoreService extends _RecordingCoreService {
+  _StoryCasFailureCoreService()
+    : super(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+
+  var storyRawValue = 100;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'query_progression' && payload['section'] == 'story') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'section': 'story',
+          'total': 1,
+          'storedTotal': 1,
+          'catalogTotal': 470,
+          'unsetTotal': 469,
+          'unknownStoredTotal': 0,
+          'offset': payload['offset'] ?? 0,
+          'limit': payload['limit'] ?? 1000,
+          'count': 1,
+          'entries': [
+            {
+              'id': 'Stone_OreArmor',
+              'rawValue': storyRawValue,
+              'stored': true,
+              'catalogKnown': true,
+              'path': ['StoryPropertyValues', '{Stone_OreArmor}'],
+              'semanticType': 'timeMarker',
+              'declaredType': 'FInGameTime',
+            },
+          ],
+          'currentGameTimeSeconds': 300.0,
+          'writable': true,
+        },
+      };
+    }
+    if (command == 'write_save') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      storyRawValue = 200;
+      return {
+        'ok': false,
+        'error': {
+          'code': 'story_value_conflict',
+          'message': 'story CAS mismatch: Stone_OreArmor changed on disk',
+        },
       };
     }
     return super.execute(command, payload: payload);
@@ -3079,6 +5080,66 @@ class _FailSecondWriteCoreService extends _RecordingCoreService {
           'error': {'message': 'second write failed'},
         };
       }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Succeeds the first write_save, then throws like a failed worker/native FFI
+/// call. This must enter the same partial-commit convergence path as an
+/// `ok: false` response because the first write has already changed disk.
+class _ThrowSecondWriteCoreService extends _RecordingCoreService {
+  _ThrowSecondWriteCoreService({super.scanData});
+
+  var _writes = 0;
+  var refreshScans = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') refreshScans++;
+    if (command == 'write_save') {
+      _writes++;
+      if (_writes >= 2) {
+        requests.add(
+          _RecordedRequest(command, Map<String, Object?>.from(payload)),
+        );
+        throw Exception('native worker died');
+      }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _FailingScanCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'save folder is unavailable'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _ThrowingScanCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      throw Exception('native scan failed');
     }
     return super.execute(command, payload: payload);
   }
@@ -3258,8 +5319,7 @@ class _PagedNpcCoreService extends _RecordingCoreService {
       final start = offset.clamp(0, total);
       final end = (start + limit).clamp(0, total);
       final npcs = [
-        for (var i = start; i < end; i++)
-          {'id': 'Npc-$i', 'isDead': false},
+        for (var i = start; i < end; i++) {'id': 'Npc-$i', 'isDead': false},
       ];
       return {
         'ok': true,
@@ -3345,7 +5405,10 @@ class _CharactersListCoreService extends _RecordingCoreService {
 /// `private.npc.list` page is built (and recorded), letting a test switch saves
 /// mid-fetch to prove the paging loop pins its starting path.
 class _MidFetchSwitchNpcCoreService extends _PagedNpcCoreService {
-  _MidFetchSwitchNpcCoreService({required super.total, required super.pageSize});
+  _MidFetchSwitchNpcCoreService({
+    required super.total,
+    required super.pageSize,
+  });
 
   void Function()? onFirstListPage;
   bool _fired = false;

@@ -104,7 +104,11 @@ pub fn parse_hpp_reader<R: BufRead>(reader: R) -> Result<ReflectionModel, ParseE
                 } else {
                     (rest.trim().to_string(), None)
                 };
-                in_class = Some(ClassBuilder { name, parent, properties: vec![] });
+                in_class = Some(ClassBuilder {
+                    name,
+                    parent,
+                    properties: vec![],
+                });
                 // UE4SS headers list members directly after `{` with no
                 // `public:` label, so fields are parsed for the whole body.
                 in_public = true;
@@ -246,7 +250,10 @@ fn parse_enum_value(rhs: &str) -> Option<i64> {
         Some(rest) => (true, rest),
         None => (false, s),
     };
-    let magnitude = if let Some(hex) = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")) {
+    let magnitude = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
         i64::from_str_radix(hex, 16).ok()?
     } else {
         digits.parse::<i64>().ok()?
@@ -266,7 +273,13 @@ struct EnumBuilder {
 
 impl EnumBuilder {
     fn new(name: String) -> Self {
-        Self { name, members: vec![], values: vec![], next: 0, reliable: true }
+        Self {
+            name,
+            members: vec![],
+            values: vec![],
+            next: 0,
+            reliable: true,
+        }
     }
 
     fn push(&mut self, member: String, explicit: Option<i64>) {
@@ -446,11 +459,21 @@ class UThing : public UObject
 ";
         let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
         let c = &model.classes[0];
-        let by: std::collections::HashMap<&str, &PropType> =
-            c.properties.iter().map(|p| (p.name.as_str(), &p.prop_type)).collect();
-        assert_eq!(by.get("bAutoTarget"), Some(&&PropType::Bool), "bitfield name/type: {:?}",
-            c.properties.iter().map(|p| &p.name).collect::<Vec<_>>());
-        assert!(!c.properties.iter().any(|p| p.name == "1"), "no bogus '1' field");
+        let by: std::collections::HashMap<&str, &PropType> = c
+            .properties
+            .iter()
+            .map(|p| (p.name.as_str(), &p.prop_type))
+            .collect();
+        assert_eq!(
+            by.get("bAutoTarget"),
+            Some(&&PropType::Bool),
+            "bitfield name/type: {:?}",
+            c.properties.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+        assert!(
+            !c.properties.iter().any(|p| p.name == "1"),
+            "no bogus '1' field"
+        );
         assert_eq!(by.get("m_Value"), Some(&&PropType::Int));
     }
 
@@ -467,7 +490,11 @@ class UThing : public UObject
         let model = parse_hpp_reader(snippet.as_bytes()).unwrap();
         let c = &model.classes[0];
         let names: Vec<&str> = c.properties.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, ["m_Value"], "array/padding declarators must be skipped");
+        assert_eq!(
+            names,
+            ["m_Value"],
+            "array/padding declarators must be skipped"
+        );
     }
 
     #[test]
@@ -475,15 +502,22 @@ class UThing : public UObject
         let model = parse_hpp_reader(SNIPPET.as_bytes()).unwrap();
         // Exactly one real class — the `class UFoo* member;` line must NOT
         // become its own class.
-        assert_eq!(model.classes.len(), 1, "classes: {:?}",
-            model.classes.iter().map(|c| &c.name).collect::<Vec<_>>());
+        assert_eq!(
+            model.classes.len(),
+            1,
+            "classes: {:?}",
+            model.classes.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
         let c = &model.classes[0];
         assert_eq!(c.name, "UItemDefinition");
         assert_eq!(c.parent.as_deref(), Some("UGothicObjectDefinition"));
         // Scalars parsed without a `public:` label, UE typedefs mapped,
         // the method skipped.
-        let by: std::collections::HashMap<&str, &PropType> =
-            c.properties.iter().map(|p| (p.name.as_str(), &p.prop_type)).collect();
+        let by: std::collections::HashMap<&str, &PropType> = c
+            .properties
+            .iter()
+            .map(|p| (p.name.as_str(), &p.prop_type))
+            .collect();
         assert_eq!(by.get("m_Value"), Some(&&PropType::Int));
         assert_eq!(by.get("m_Weight"), Some(&&PropType::Float));
         assert_eq!(by.get("m_AutoTarget"), Some(&&PropType::Bool));
@@ -527,7 +561,10 @@ class UItMi_Orenugget : public UItemDefinition
         assert_eq!(model.classes.len(), 1);
         let c = &model.classes[0];
 
-        let quality_prop = c.properties.iter().find(|p| p.name == "m_Quality")
+        let quality_prop = c
+            .properties
+            .iter()
+            .find(|p| p.name == "m_Quality")
             .expect("m_Quality property must exist");
 
         // After post-pass, must be Enum(...) not Opaque(...)
@@ -539,7 +576,10 @@ class UItMi_Orenugget : public UItemDefinition
         );
 
         // Scalar field must remain Int
-        let value_prop = c.properties.iter().find(|p| p.name == "m_Value")
+        let value_prop = c
+            .properties
+            .iter()
+            .find(|p| p.name == "m_Value")
             .expect("m_Value property must exist");
         assert_eq!(value_prop.prop_type, PropType::Int);
     }
@@ -566,11 +606,9 @@ class UFoo : public UBar
 fn map_cpp_type(cpp: &str) -> PropType {
     match cpp {
         // C++ std typedefs and UE typedefs (the dump uses UE names: int32, uint8…)
-        "int32_t" | "int64_t" | "int16_t" | "int8_t"
-        | "uint32_t" | "uint64_t" | "uint16_t" | "uint8_t"
-        | "int32" | "int64" | "int16" | "int8"
-        | "uint32" | "uint64" | "uint16" | "uint8"
-        | "int" | "long" | "short" | "char" | "byte" => PropType::Int,
+        "int32_t" | "int64_t" | "int16_t" | "int8_t" | "uint32_t" | "uint64_t" | "uint16_t"
+        | "uint8_t" | "int32" | "int64" | "int16" | "int8" | "uint32" | "uint64" | "uint16"
+        | "uint8" | "int" | "long" | "short" | "char" | "byte" => PropType::Int,
         "float" | "double" => PropType::Float,
         "bool" => PropType::Bool,
         "FString" | "FName" | "FText" => PropType::String,

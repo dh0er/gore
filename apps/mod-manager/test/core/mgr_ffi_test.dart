@@ -104,6 +104,31 @@ Map<String, Object?> _libraryListResponse() => {
     };
 
 void main() {
+  group('canonical native response decoding', () {
+    test('retains one compact exact object', () {
+      expect(decodeCanonicalGoreCoreResponse('{"ok":true,"value":"x"}'), {
+        'ok': true,
+        'value': 'x',
+      });
+    });
+
+    test('rejects duplicates and normalized JSON spellings', () {
+      for (final response in [
+        '{"ok":true,"ok":false}',
+        ' {"ok":true}',
+        '{"ok" : true}',
+        '{"ok":true,"value":"\\u0078"}',
+        '[]',
+        '{',
+      ]) {
+        expect(
+          () => decodeCanonicalGoreCoreResponse(response),
+          throwsFormatException,
+        );
+      }
+    });
+  });
+
   group('MgrFfi.libraryList', () {
     test('parses mods, every component type, and the loadout', () async {
       final fake = FakeGoreCoreFfiService(
@@ -203,6 +228,12 @@ void main() {
       });
       expect(s, isA<ManagerStatusStudioDeployActive>());
       expect((s as ManagerStatusStudioDeployActive).modName, 'MyStudioMod');
+    });
+
+    test('parses recovery_required as a known recovery state', () async {
+      final s = await parse({'state': 'recovery_required'});
+      expect(s, isA<ManagerStatusRecoveryRequired>());
+      expect(s.state, 'recovery_required');
     });
 
     test('parses in_sync with loadout (wire shape: entry ARRAY)', () async {

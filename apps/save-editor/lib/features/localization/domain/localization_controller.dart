@@ -1,6 +1,10 @@
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+AppLocalizations _defaultEnglishLocalizations() => AppLocalizationsEn();
 
 /// Lifecycle of a localization extraction request.
 enum LocalizationPhase { idle, running, done, error }
@@ -75,9 +79,16 @@ class LocalizationExtractResult {
 /// shared user-local dir; this controller only triggers extraction and reports
 /// status.
 class LocalizationController extends StateNotifier<LocalizationState> {
-  LocalizationController(this._core) : super(const LocalizationState());
+  LocalizationController(
+    this._core, {
+    AppLocalizations Function()? localizations,
+  }) : _localizations = localizations ?? _defaultEnglishLocalizations,
+       super(const LocalizationState());
 
   final GoresaveCoreService _core;
+  final AppLocalizations Function() _localizations;
+
+  AppLocalizations get _l10n => _localizations();
 
   /// Refresh status from the core. Returns the latest `present` value, or null
   /// when the status query itself failed (e.g. the native core is unavailable) —
@@ -88,7 +99,9 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       if (response['ok'] != true) {
         // Leave `present` untouched: a catalog may still exist from an earlier
         // extraction. The first-run prompt keys off the null return, not this.
-        state = state.copyWith(message: _errorMessage(response));
+        state = state.copyWith(
+          message: _l10n.localizationStatusFailed(_errorDetails(response)),
+        );
         return null;
       }
       final data = (response['data'] as Map?)?.cast<String, Object?>();
@@ -98,13 +111,15 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       // the catalog is absent: a present catalog can legitimately have no
       // loc_meta.json (e.g. after a meta write failure), and copyWith(meta:null)
       // would otherwise keep stale id/language counts from a different catalog.
-      state = state.copyWith(present: present, meta: meta, clearMeta: meta == null);
+      state = state.copyWith(
+        present: present,
+        meta: meta,
+        clearMeta: meta == null,
+      );
       return present;
     } catch (error) {
       // Leave `present` untouched (a catalog may still exist on disk).
-      state = state.copyWith(
-        message: 'Localization status failed: $error',
-      );
+      state = state.copyWith(message: _l10n.localizationStatusFailed('$error'));
       return null;
     }
   }
@@ -114,7 +129,10 @@ class LocalizationController extends StateNotifier<LocalizationState> {
   /// override. On a not-found auto-detect failure the result carries
   /// `notFound: true` so the caller can prompt for a file.
   Future<LocalizationExtractResult> extract({String? lcacheHint}) async {
-    state = state.copyWith(phase: LocalizationPhase.running, clearMessage: true);
+    state = state.copyWith(
+      phase: LocalizationPhase.running,
+      clearMessage: true,
+    );
     try {
       final response = await _core.execute(
         'loc_extract',
@@ -123,7 +141,9 @@ class LocalizationController extends StateNotifier<LocalizationState> {
       if (response['ok'] != true) {
         final error = (response['error'] as Map?)?.cast<String, Object?>();
         final code = error?['code'] as String?;
-        final message = error?['message'] as String? ?? 'Unknown core error';
+        final message = _l10n.localizationExtractionFailed(
+          _errorDetails(response),
+        );
         // INVALID_REQUEST is raised when the .lcache wasn't found — whether we
         // were auto-detecting (no hint) or resolving from a hint that pointed at
         // no cache. Signal it regardless of the hint so the caller can tell a
@@ -168,19 +188,22 @@ class LocalizationController extends StateNotifier<LocalizationState> {
         languageCount: languageCount,
       );
     } catch (error) {
-      final message = 'Extraction failed: $error';
+      final message = _l10n.localizationExtractionFailed('$error');
       state = state.copyWith(phase: LocalizationPhase.error, message: message);
       return LocalizationExtractResult(success: false, message: message);
     }
   }
 
-  String _errorMessage(Map<String, Object?> response) {
+  String _errorDetails(Map<String, Object?> response) {
     final error = (response['error'] as Map?)?.cast<String, Object?>();
-    return error?['message'] as String? ?? 'Unknown core error';
+    return error?['message'] as String? ?? _l10n.coreUnknownError;
   }
 }
 
 final localizationControllerProvider =
     StateNotifierProvider<LocalizationController, LocalizationState>((ref) {
-      return LocalizationController(ref.watch(coreServiceProvider));
+      return LocalizationController(
+        ref.watch(coreServiceProvider),
+        localizations: () => ref.read(appLocalizationsProvider),
+      );
     });

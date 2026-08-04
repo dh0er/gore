@@ -4,8 +4,13 @@
 *.rs   text eol=lf
 *.py   text eol=lf
 
+# Canonical wire fixture consumed byte-for-byte by Rust tests.
+crates/gore-ffi/tests/fixtures/story_catalog_v1.json text eol=lf
+
 # Flutter regenerates these with LF on every build; pin eol=lf so autocrlf
-# doesn't reintroduce a CRLF/LF-only diff each time.
-apps/goresave/windows/flutter/generated_plugin_registrant.cc text eol=lf
-apps/goresave/windows/flutter/generated_plugin_registrant.h  text eol=lf
-apps/goresave/windows/flutter/generated_plugins.cmake        text eol=lf
+# doesn't reintroduce a CRLF/LF-only diff each time. Match every app: the paths
+# used to name `apps/goresave` and silently stopped applying when it became
+# `apps/save-editor`, which is why these kept showing up as modified.
+apps/*/windows/flutter/generated_plugin_registrant.cc text eol=lf
+apps/*/windows/flutter/generated_plugin_registrant.h  text eol=lf
+apps/*/windows/flutter/generated_plugins.cmake        text eol=lf

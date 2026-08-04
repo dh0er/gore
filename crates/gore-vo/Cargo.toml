@@ -1,0 +1,18 @@
+[package]
+name = "gore-vo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lewton = "0.10"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

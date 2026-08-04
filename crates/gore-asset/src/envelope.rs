@@ -1,0 +1,2625 @@
+//! Version-gated export boundaries for retoc's split legacy package form.
+//!
+//! This layer parses only the `.uasset` header and validates the export ranges
+//! it points at in `.uexp`. It never invents a property offset. For an
+//! unversioned UObject export, a property codec is invoked at byte zero of the
+//! exact export envelope; the byte count returned by that codec is then used to
+//! retain any class-native suffix opaquely.
+
+use std::any::Any;
+use std::fmt::Write as _;
+use std::io::Cursor;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use retoc::legacy_asset::{
+    EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FMinimalName, FPackageNameMap,
+};
+use retoc::version::EngineVersion;
+use retoc::zen::FPackageIndex;
+use thiserror::Error;
+
+use crate::{
+    legacy_preflight::preflight_g1r_ue5_4, LegacyHeaderLimits, LegacyHeaderPreflightError,
+    PackageCarrier, PackageComponent, PrimitiveError, PrimitivePropertyBlock, PropertySlot,
+    SchemaDb, SchemaError, SchemaId,
+};
+
+const PACKAGE_FOOTER_BYTES: usize = 4;
+const MAX_CLASS_OUTER_DEPTH: usize = 128;
+
+struct DerivedMetadataBudget {
+    remaining_bytes: usize,
+    remaining_work: usize,
+    max_class_path_bytes: usize,
+}
+
+impl DerivedMetadataBudget {
+    fn new(limits: LegacyHeaderLimits) -> Self {
+        Self {
+            remaining_bytes: limits.max_derived_metadata_bytes,
+            remaining_work: limits.max_derived_work,
+            max_class_path_bytes: limits.max_class_path_bytes,
+        }
+    }
+
+    fn allocation(&mut self, amount: usize) -> Result<(), EnvelopeError> {
+        if amount > self.remaining_bytes {
+            return Err(EnvelopeError::DerivedMetadataLimit {
+                resource: "derived metadata bytes",
+            });
+        }
+        self.remaining_bytes -= amount;
+        Ok(())
+    }
+
+    fn work(&mut self, amount: usize) -> Result<(), EnvelopeError> {
+        if amount > self.remaining_work {
+            return Err(EnvelopeError::DerivedMetadataLimit {
+                resource: "derived metadata work",
+            });
+        }
+        self.remaining_work -= amount;
+        Ok(())
+    }
+}
+
+/// One export range resolved from the cooked legacy header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportBoundary {
+    export_index: usize,
+    object_name: String,
+    class_path: String,
+    local_generated_class: bool,
+    component: PackageComponent,
+    offset: usize,
+    length: usize,
+}
+
+impl ExportBoundary {
+    pub fn export_index(&self) -> usize {
+        self.export_index
+    }
+
+    pub fn object_name(&self) -> &str {
+        &self.object_name
+    }
+
+    /// Exact class path obtained from this export's package-map class index.
+    pub fn class_path(&self) -> &str {
+        &self.class_path
+    }
+
+    /// Bind the exact export class to a class schema.
+    ///
+    /// A locally exported generated class is never replaced by one of its
+    /// native parents. If its `_C` schema is absent, callers receive the typed
+    /// `LocalGeneratedClassSchemaMissing` error instead.
+    pub fn resolve_class_schema(&self, schemas: &SchemaDb) -> Result<SchemaId, ExportSchemaError> {
+        match schemas.resolve_class(&self.class_path) {
+            Ok(schema_id) => Ok(schema_id),
+            Err(SchemaError::SchemaNotFound { .. }) if self.local_generated_class => {
+                Err(ExportSchemaError::LocalGeneratedClassSchemaMissing {
+                    export_index: self.export_index,
+                    class_path: self.class_path.clone(),
+                })
+            }
+            Err(source) => Err(ExportSchemaError::Schema {
+                export_index: self.export_index,
+                class_path: self.class_path.clone(),
+                source,
+            }),
+        }
+    }
+
+    pub fn component(&self) -> PackageComponent {
+        self.component
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    pub fn length(&self) -> usize {
+        self.length
+    }
+
+    pub fn end(&self) -> usize {
+        self.offset
+            .checked_add(self.length)
+            .expect("export boundary was validated when constructed")
+    }
+}
+
+/// Parsed UE5.4 G1R package header plus its validated `.uexp` export ranges.
+///
+/// The profile is intentionally fixed: G1R's packages are unversioned, so
+/// retoc needs an explicit UE5.4 fallback to interpret the legacy header.
+#[derive(Debug)]
+pub struct LegacyPackageEnvelope<'a> {
+    carrier: &'a PackageCarrier,
+    cooked_header_size: usize,
+    uexp_data_length: usize,
+    exports: Vec<ExportBoundary>,
+}
+
+impl<'a> LegacyPackageEnvelope<'a> {
+    /// Parse the retoc Zen-to-Legacy representation used by the current G1R build.
+    ///
+    /// This rejects versioned packages, headers whose cooked size differs from
+    /// `.uasset`, missing/wrong `.uexp` footer magic, invalid ranges, and
+    /// overlapping exports. Gaps are retained: non-export package data may
+    /// legally exist before the footer.
+    pub fn parse_g1r_ue5_4(carrier: &'a PackageCarrier) -> Result<Self, EnvelopeError> {
+        Self::parse_g1r_ue5_4_with_limits(carrier, LegacyHeaderLimits::default())
+    }
+
+    /// Parse after an allocation-free proof that all `retoc` allocation drivers
+    /// fit the supplied application limits.
+    pub fn parse_g1r_ue5_4_with_limits(
+        carrier: &'a PackageCarrier,
+        limits: LegacyHeaderLimits,
+    ) -> Result<Self, EnvelopeError> {
+        Self::parse_g1r_ue5_4_with_limits_using(carrier, limits, |uasset| {
+            let fallback = EngineVersion::UE5_4.package_file_version();
+            FLegacyPackageHeader::deserialize(&mut Cursor::new(uasset), Some(fallback))
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn parse_g1r_ue5_4_with_limits_using<F>(
+        carrier: &'a PackageCarrier,
+        limits: LegacyHeaderLimits,
+        parser: F,
+    ) -> Result<Self, EnvelopeError>
+    where
+        F: FnOnce(&[u8]) -> Result<FLegacyPackageHeader, String>,
+    {
+        let uasset = carrier.bytes(PackageComponent::Uasset);
+        let uexp = carrier.bytes(PackageComponent::Uexp);
+        preflight_g1r_ue5_4(uasset, limits)?;
+        let parsed = catch_unwind(AssertUnwindSafe(|| parser(uasset)))
+            .map_err(|panic| EnvelopeError::ParserPanic(panic_message(panic)))?
+            .map_err(EnvelopeError::HeaderParse)?;
+
+        if !parsed.summary.versioning_info.is_unversioned
+            || !parsed.summary.uses_unversioned_property_serialization()
+        {
+            return Err(EnvelopeError::NotUnversioned);
+        }
+        if !parsed.summary.has_package_flags(EPackageFlags::Cooked) {
+            return Err(EnvelopeError::NotCooked);
+        }
+
+        let cooked_header_size = usize::try_from(parsed.summary.versioning_info.total_header_size)
+            .map_err(|_| EnvelopeError::InvalidCookedHeaderSize {
+                value: parsed.summary.versioning_info.total_header_size,
+            })?;
+        if cooked_header_size != uasset.len() {
+            return Err(EnvelopeError::HeaderLengthMismatch {
+                advertised: cooked_header_size,
+                actual: uasset.len(),
+            });
+        }
+
+        let advertised_exports = usize::try_from(parsed.summary.exports.count).map_err(|_| {
+            EnvelopeError::InvalidExportCount {
+                value: parsed.summary.exports.count,
+            }
+        })?;
+        if advertised_exports != parsed.exports.len() {
+            return Err(EnvelopeError::ExportCountMismatch {
+                advertised: advertised_exports,
+                parsed: parsed.exports.len(),
+            });
+        }
+
+        if uexp.len() < PACKAGE_FOOTER_BYTES {
+            return Err(EnvelopeError::MissingPackageFooter { length: uexp.len() });
+        }
+        let uexp_data_length = uexp.len() - PACKAGE_FOOTER_BYTES;
+        let expected_footer = FLegacyPackageFileSummary::PACKAGE_FILE_TAG.to_le_bytes();
+        let actual_footer: [u8; PACKAGE_FOOTER_BYTES] = uexp[uexp_data_length..]
+            .try_into()
+            .expect("four-byte suffix checked above");
+        if actual_footer != expected_footer {
+            return Err(EnvelopeError::PackageFooterMismatch {
+                expected: expected_footer,
+                actual: actual_footer,
+            });
+        }
+
+        let mut derived = DerivedMetadataBudget::new(limits);
+        let cooked_header_i64 =
+            i64::try_from(cooked_header_size).map_err(|_| EnvelopeError::RangeArithmetic)?;
+        derived.allocation(
+            parsed
+                .exports
+                .len()
+                .checked_mul(std::mem::size_of::<ExportBoundary>())
+                .ok_or(EnvelopeError::DerivedMetadataLimit {
+                    resource: "derived metadata bytes",
+                })?,
+        )?;
+        let mut exports = Vec::new();
+        exports
+            .try_reserve_exact(parsed.exports.len())
+            .map_err(|_| EnvelopeError::DerivedAllocation)?;
+        for (export_index, export) in parsed.exports.iter().enumerate() {
+            derived.work(1)?;
+            let relative = export
+                .serial_offset
+                .checked_sub(cooked_header_i64)
+                .ok_or(EnvelopeError::RangeArithmetic)?;
+            let offset =
+                usize::try_from(relative).map_err(|_| EnvelopeError::InvalidExportRange {
+                    export_index,
+                    serial_offset: export.serial_offset,
+                    serial_size: export.serial_size,
+                    cooked_header_size,
+                })?;
+            let length = usize::try_from(export.serial_size).map_err(|_| {
+                EnvelopeError::InvalidExportRange {
+                    export_index,
+                    serial_offset: export.serial_offset,
+                    serial_size: export.serial_size,
+                    cooked_header_size,
+                }
+            })?;
+            let end = offset
+                .checked_add(length)
+                .ok_or(EnvelopeError::RangeArithmetic)?;
+            if end > uexp_data_length {
+                return Err(EnvelopeError::ExportOutOfBounds {
+                    export_index,
+                    offset,
+                    end,
+                    uexp_data_length,
+                });
+            }
+            let object_name = resolve_minimal_name_bounded(
+                &parsed.name_map,
+                export.object_name,
+                export_index,
+                "export",
+                &mut derived,
+            )?;
+            let resolved_class = resolve_export_class(&parsed, export_index, &mut derived)?;
+            exports.push(ExportBoundary {
+                export_index,
+                object_name,
+                class_path: resolved_class.path,
+                local_generated_class: resolved_class.local_generated,
+                component: PackageComponent::Uexp,
+                offset,
+                length,
+            });
+        }
+
+        derived.work(exports.len())?;
+        derived.allocation(
+            exports
+                .len()
+                .checked_mul(std::mem::size_of::<(usize, usize, usize)>())
+                .ok_or(EnvelopeError::DerivedMetadataLimit {
+                    resource: "derived metadata bytes",
+                })?,
+        )?;
+        let mut ordered = Vec::new();
+        ordered
+            .try_reserve_exact(exports.len())
+            .map_err(|_| EnvelopeError::DerivedAllocation)?;
+        ordered.extend(
+            exports
+                .iter()
+                .map(|boundary| (boundary.offset, boundary.end(), boundary.export_index)),
+        );
+        ordered.sort_unstable();
+        for pair in ordered.windows(2) {
+            if pair[0].1 > pair[1].0 {
+                return Err(EnvelopeError::OverlappingExports {
+                    first: pair[0].2,
+                    second: pair[1].2,
+                });
+            }
+        }
+
+        Ok(Self {
+            carrier,
+            cooked_header_size,
+            uexp_data_length,
+            exports,
+        })
+    }
+
+    pub fn cooked_header_size(&self) -> usize {
+        self.cooked_header_size
+    }
+
+    /// Number of `.uexp` bytes before the four-byte package footer.
+    pub fn uexp_data_length(&self) -> usize {
+        self.uexp_data_length
+    }
+
+    pub fn exports(&self) -> &[ExportBoundary] {
+        &self.exports
+    }
+
+    pub fn export(&self, export_index: usize) -> Result<ExportEnvelope<'_>, EnvelopeError> {
+        let boundary =
+            self.exports
+                .get(export_index)
+                .ok_or(EnvelopeError::ExportIndexOutOfRange {
+                    export_index,
+                    export_count: self.exports.len(),
+                })?;
+        let bytes = self
+            .carrier
+            .slice(boundary.component, boundary.offset, boundary.length)
+            .map_err(|error| EnvelopeError::Carrier(error.to_string()))?;
+        Ok(ExportEnvelope { boundary, bytes })
+    }
+}
+
+/// Borrowed bytes for exactly one header-proven export.
+#[derive(Debug, Clone, Copy)]
+pub struct ExportEnvelope<'a> {
+    boundary: &'a ExportBoundary,
+    bytes: &'a [u8],
+}
+
+impl<'a> ExportEnvelope<'a> {
+    pub fn boundary(&self) -> &ExportBoundary {
+        self.boundary
+    }
+
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// Split a property prefix only after a schema-aware decoder has returned
+    /// its exact consumed byte count. The remainder is retained as opaque
+    /// class-native data; this method never assumes a fixed suffix size.
+    pub fn split_decoded_prefix(
+        &self,
+        consumed: usize,
+    ) -> Result<ExportSegments<'a>, EnvelopeError> {
+        if consumed > self.bytes.len() {
+            return Err(EnvelopeError::DecodedPrefixOutOfBounds {
+                consumed,
+                export_length: self.bytes.len(),
+            });
+        }
+        Ok(ExportSegments {
+            decoded_prefix: &self.bytes[..consumed],
+            native_suffix: &self.bytes[consumed..],
+        })
+    }
+
+    /// Decode a primitive-only unversioned property block at the exact export
+    /// start and retain the class-native suffix byte-for-byte.
+    ///
+    /// Callers must select a UObject export whose serialization starts with its
+    /// script-property stream. Complex non-zero properties remain a hard error;
+    /// no payload length is guessed.
+    pub fn decode_primitive_properties(
+        &self,
+        slots: &[PropertySlot],
+    ) -> Result<PrimitiveExportEnvelope<'a>, EnvelopeError> {
+        let (properties, consumed) = PrimitivePropertyBlock::decode(self.bytes, slots)?;
+        let segments = self.split_decoded_prefix(consumed)?;
+        Ok(PrimitiveExportEnvelope {
+            properties,
+            encoded_properties: segments.decoded_prefix,
+            native_suffix: segments.native_suffix,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExportSegments<'a> {
+    pub decoded_prefix: &'a [u8],
+    pub native_suffix: &'a [u8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimitiveExportEnvelope<'a> {
+    pub properties: PrimitivePropertyBlock,
+    pub encoded_properties: &'a [u8],
+    pub native_suffix: &'a [u8],
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ExportSchemaError {
+    #[error(
+        "export {export_index} uses local generated class {class_path:?}, but that exact class schema is missing; refusing a parent-class fallback"
+    )]
+    LocalGeneratedClassSchemaMissing {
+        export_index: usize,
+        class_path: String,
+    },
+    #[error("export {export_index} class {class_path:?} cannot be bound to USMAP: {source}")]
+    Schema {
+        export_index: usize,
+        class_path: String,
+        #[source]
+        source: SchemaError,
+    },
+}
+
+#[derive(Debug)]
+struct ResolvedExportClass {
+    path: String,
+    local_generated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PackageObjectRef {
+    Import(usize),
+    Export(usize),
+}
+
+impl PackageObjectRef {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Import(_) => "import",
+            Self::Export(_) => "export",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Import(index) | Self::Export(index) => index,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResolvedObjectNode {
+    object_ref: PackageObjectRef,
+    name: String,
+}
+
+fn resolve_minimal_name_bounded(
+    names: &FPackageNameMap,
+    name: FMinimalName,
+    export_index: usize,
+    referenced_kind: &'static str,
+    budget: &mut DerivedMetadataBudget,
+) -> Result<String, EnvelopeError> {
+    budget.work(1)?;
+    let index = usize::try_from(name.index).map_err(|_| EnvelopeError::InvalidMinimalName {
+        export_index,
+        referenced_kind,
+        index: name.index,
+        number: name.number,
+    })?;
+    if index >= names.num_names() || name.number < 0 {
+        return Err(EnvelopeError::InvalidMinimalName {
+            export_index,
+            referenced_kind,
+            index: name.index,
+            number: name.number,
+        });
+    }
+    // Ask retoc only for the bare, already index-checked name. Its numbered
+    // path performs unchecked `number - 1`; construct that suffix ourselves.
+    let bare = names
+        .get(FMinimalName {
+            index: name.index,
+            number: 0,
+        })
+        .map_err(|_| EnvelopeError::InvalidMinimalName {
+            export_index,
+            referenced_kind,
+            index: name.index,
+            number: name.number,
+        })?;
+    let suffix = (name.number != 0).then(|| name.number - 1);
+    let suffix_len = suffix.map_or(0, |value| 1usize.saturating_add(decimal_digits(value)));
+    let length = bare
+        .len()
+        .checked_add(suffix_len)
+        .ok_or(EnvelopeError::DerivedMetadataLimit {
+            resource: "derived metadata bytes",
+        })?;
+    budget.allocation(length)?;
+    let mut out = String::new();
+    out.try_reserve_exact(length)
+        .map_err(|_| EnvelopeError::DerivedAllocation)?;
+    out.push_str(&bare);
+    if let Some(value) = suffix {
+        write!(&mut out, "_{value}").map_err(|_| EnvelopeError::DerivedAllocation)?;
+    }
+    Ok(out)
+}
+
+fn decimal_digits(mut value: i32) -> usize {
+    debug_assert!(value >= 0);
+    let mut digits = 1usize;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+fn resolve_export_class(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+    budget: &mut DerivedMetadataBudget,
+) -> Result<ResolvedExportClass, EnvelopeError> {
+    let export = package
+        .exports
+        .get(export_index)
+        .ok_or(EnvelopeError::ExportIndexOutOfRange {
+            export_index,
+            export_count: package.exports.len(),
+        })?;
+    let Some(mut current) = checked_package_object_ref(package, export_index, export.class_index)?
+    else {
+        return Err(EnvelopeError::NullExportClass { export_index });
+    };
+    let class_is_local_export = matches!(current, PackageObjectRef::Export(_));
+    // First prove the complete chain in fixed stack storage. The second pass
+    // can then reserve its exact retained-node count once, avoiding geometric
+    // Vec growth and realloc peaks on attacker-controlled outer chains.
+    let mut chain = [PackageObjectRef::Import(0); MAX_CLASS_OUTER_DEPTH];
+    let mut chain_len = 0usize;
+    loop {
+        if chain_len >= MAX_CLASS_OUTER_DEPTH {
+            return Err(EnvelopeError::ClassOuterDepthExceeded {
+                export_index,
+                limit: MAX_CLASS_OUTER_DEPTH,
+            });
+        }
+        budget.work(chain_len.saturating_add(1))?;
+        if chain[..chain_len].contains(&current) {
+            return Err(EnvelopeError::ClassOuterCycle {
+                export_index,
+                referenced_kind: current.kind(),
+                referenced_index: current.index(),
+            });
+        }
+        chain[chain_len] = current;
+        chain_len += 1;
+        let outer_index = match current {
+            PackageObjectRef::Import(index) => {
+                let object = &package.imports[index];
+                object.outer_index
+            }
+            PackageObjectRef::Export(index) => {
+                let object = &package.exports[index];
+                object.outer_index
+            }
+        };
+        let Some(outer) = checked_package_object_ref(package, export_index, outer_index)? else {
+            break;
+        };
+        current = outer;
+    }
+
+    let mut leaf_to_root = Vec::new();
+    reserve_outer_nodes_exact(&mut leaf_to_root, chain_len, budget)?;
+    for current in chain[..chain_len].iter().copied() {
+        let name_index = match current {
+            PackageObjectRef::Import(index) => package.imports[index].object_name,
+            PackageObjectRef::Export(index) => package.exports[index].object_name,
+        };
+        let name = resolve_minimal_name_bounded(
+            &package.name_map,
+            name_index,
+            export_index,
+            current.kind(),
+            budget,
+        )?;
+        if name.is_empty() {
+            return Err(EnvelopeError::InvalidClassPath {
+                export_index,
+                reason: format!(
+                    "{} {} has an empty object name",
+                    current.kind(),
+                    current.index()
+                ),
+            });
+        }
+        leaf_to_root.push(ResolvedObjectNode {
+            object_ref: current,
+            name,
+        });
+    }
+    let path = build_class_path(package, export_index, &leaf_to_root, budget)?;
+    let local_generated = class_is_local_export
+        && leaf_to_root
+            .first()
+            .is_some_and(|node| node.name.ends_with("_C"));
+    Ok(ResolvedExportClass {
+        path,
+        local_generated,
+    })
+}
+
+fn reserve_outer_nodes_exact(
+    nodes: &mut Vec<ResolvedObjectNode>,
+    count: usize,
+    budget: &mut DerivedMetadataBudget,
+) -> Result<(), EnvelopeError> {
+    budget.allocation(
+        count
+            .checked_mul(std::mem::size_of::<ResolvedObjectNode>())
+            .and_then(|bytes| bytes.checked_add(64))
+            .ok_or(EnvelopeError::DerivedMetadataLimit {
+                resource: "derived metadata bytes",
+            })?,
+    )?;
+    nodes
+        .try_reserve_exact(count)
+        .map_err(|_| EnvelopeError::DerivedAllocation)
+}
+
+fn checked_package_object_ref(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+    package_index: FPackageIndex,
+) -> Result<Option<PackageObjectRef>, EnvelopeError> {
+    let raw = i64::from(package_index.index);
+    let (kind, index, count) = if raw > 0 {
+        (
+            "export",
+            usize::try_from(raw - 1).map_err(|_| EnvelopeError::RangeArithmetic)?,
+            package.exports.len(),
+        )
+    } else if raw < 0 {
+        // Work in i64 so even an attacker-controlled i32::MIN is ordinary
+        // bounded input. retoc's `to_import_index` asserts and negates i32.
+        (
+            "import",
+            usize::try_from(-raw - 1).map_err(|_| EnvelopeError::RangeArithmetic)?,
+            package.imports.len(),
+        )
+    } else {
+        return Ok(None);
+    };
+
+    if index >= count {
+        return Err(EnvelopeError::ClassObjectOutOfBounds {
+            export_index,
+            referenced_kind: kind,
+            referenced_index: index,
+            object_count: count,
+        });
+    }
+    Ok(Some(if raw > 0 {
+        PackageObjectRef::Export(index)
+    } else {
+        PackageObjectRef::Import(index)
+    }))
+}
+
+fn build_class_path(
+    package: &FLegacyPackageHeader,
+    export_index: usize,
+    leaf_to_root: &[ResolvedObjectNode],
+    budget: &mut DerivedMetadataBudget,
+) -> Result<String, EnvelopeError> {
+    let root = leaf_to_root
+        .last()
+        .ok_or_else(|| EnvelopeError::InvalidClassPath {
+            export_index,
+            reason: "empty outer chain".to_owned(),
+        })?;
+    budget.work(leaf_to_root.len())?;
+    let (module, skip_root) = match root.object_ref {
+        PackageObjectRef::Import(_) => {
+            if leaf_to_root.len() < 2 || !root.name.starts_with('/') {
+                return Err(EnvelopeError::InvalidClassPath {
+                    export_index,
+                    reason: "import outer root does not identify a package plus class".to_owned(),
+                });
+            }
+            (root.name.as_str(), true)
+        }
+        PackageObjectRef::Export(_) => {
+            if package.summary.package_name.is_empty() {
+                return Err(EnvelopeError::InvalidClassPath {
+                    export_index,
+                    reason: "local class has an empty package name".to_owned(),
+                });
+            }
+            (package.summary.package_name.as_str(), false)
+        }
+    };
+    let object_count = leaf_to_root.len() - usize::from(skip_root);
+    if object_count == 0 {
+        return Err(EnvelopeError::InvalidClassPath {
+            export_index,
+            reason: "class path has no object name".to_owned(),
+        });
+    }
+    let object_bytes = leaf_to_root
+        .iter()
+        .rev()
+        .skip(usize::from(skip_root))
+        .try_fold(0usize, |total, node| total.checked_add(node.name.len()))
+        .ok_or(EnvelopeError::DerivedMetadataLimit {
+            resource: "class path bytes",
+        })?;
+    let length = module
+        .len()
+        .checked_add(1)
+        .and_then(|value| value.checked_add(object_bytes))
+        .and_then(|value| value.checked_add(object_count.saturating_sub(1)))
+        .ok_or(EnvelopeError::DerivedMetadataLimit {
+            resource: "class path bytes",
+        })?;
+    if length > budget.max_class_path_bytes {
+        return Err(EnvelopeError::DerivedMetadataLimit {
+            resource: "class path bytes",
+        });
+    }
+    budget.allocation(length)?;
+    let mut path = String::new();
+    path.try_reserve_exact(length)
+        .map_err(|_| EnvelopeError::DerivedAllocation)?;
+    path.push_str(module);
+    path.push('.');
+    for (position, node) in leaf_to_root
+        .iter()
+        .rev()
+        .skip(usize::from(skip_root))
+        .enumerate()
+    {
+        if position != 0 {
+            path.push('.');
+        }
+        path.push_str(&node.name);
+    }
+    Ok(path)
+}
+
+#[derive(Debug, Error)]
+pub enum EnvelopeError {
+    #[error(transparent)]
+    HeaderPreflight(#[from] LegacyHeaderPreflightError),
+    #[error("retoc panicked while parsing the legacy package header: {0}")]
+    ParserPanic(String),
+    #[error("could not parse the UE5.4 legacy package header: {0}")]
+    HeaderParse(String),
+    #[error("package is not an unversioned cooked-property package")]
+    NotUnversioned,
+    #[error("package does not carry the cooked-package flag")]
+    NotCooked,
+    #[error("invalid negative cooked header size {value}")]
+    InvalidCookedHeaderSize { value: i32 },
+    #[error("cooked header advertises {advertised} bytes, but .uasset has {actual} bytes")]
+    HeaderLengthMismatch { advertised: usize, actual: usize },
+    #[error("invalid negative export count {value}")]
+    InvalidExportCount { value: i32 },
+    #[error("header advertises {advertised} exports, but retoc parsed {parsed}")]
+    ExportCountMismatch { advertised: usize, parsed: usize },
+    #[error(".uexp has only {length} bytes and cannot contain the package footer")]
+    MissingPackageFooter { length: usize },
+    #[error(".uexp package footer mismatch: expected {expected:02x?}, got {actual:02x?}")]
+    PackageFooterMismatch { expected: [u8; 4], actual: [u8; 4] },
+    #[error(
+        "export {export_index} has invalid serial range offset={serial_offset}, size={serial_size}, cooked_header={cooked_header_size}"
+    )]
+    InvalidExportRange {
+        export_index: usize,
+        serial_offset: i64,
+        serial_size: i64,
+        cooked_header_size: usize,
+    },
+    #[error(
+        "export {export_index} range {offset}..{end} exceeds the {uexp_data_length}-byte .uexp data region"
+    )]
+    ExportOutOfBounds {
+        export_index: usize,
+        offset: usize,
+        end: usize,
+        uexp_data_length: usize,
+    },
+    #[error("exports {first} and {second} overlap")]
+    OverlappingExports { first: usize, second: usize },
+    #[error("package export metadata exhausted {resource}")]
+    DerivedMetadataLimit { resource: &'static str },
+    #[error("package export metadata could not reserve proven storage")]
+    DerivedAllocation,
+    #[error(
+        "export {export_index} {referenced_kind} name has invalid index={index}, number={number}"
+    )]
+    InvalidMinimalName {
+        export_index: usize,
+        referenced_kind: &'static str,
+        index: i32,
+        number: i32,
+    },
+    #[error("export {export_index} has an invalid object name: {message}")]
+    ObjectName {
+        export_index: usize,
+        message: String,
+    },
+    #[error("export index {export_index} is outside the {export_count}-export package")]
+    ExportIndexOutOfRange {
+        export_index: usize,
+        export_count: usize,
+    },
+    #[error("export {export_index} has a null class reference")]
+    NullExportClass { export_index: usize },
+    #[error(
+        "export {export_index} class outer chain references {referenced_kind} {referenced_index}, but that map has only {object_count} entries"
+    )]
+    ClassObjectOutOfBounds {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+        object_count: usize,
+    },
+    #[error(
+        "export {export_index} class outer chain cycles at {referenced_kind} {referenced_index}"
+    )]
+    ClassOuterCycle {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+    },
+    #[error("export {export_index} class outer chain exceeds the {limit}-object safety limit")]
+    ClassOuterDepthExceeded { export_index: usize, limit: usize },
+    #[error(
+        "export {export_index} class outer chain {referenced_kind} {referenced_index} has an invalid object name: {message}"
+    )]
+    ClassObjectName {
+        export_index: usize,
+        referenced_kind: &'static str,
+        referenced_index: usize,
+        message: String,
+    },
+    #[error("export {export_index} class path is invalid: {reason}")]
+    InvalidClassPath { export_index: usize, reason: String },
+    #[error("decoded prefix length {consumed} exceeds export length {export_length}")]
+    DecodedPrefixOutOfBounds {
+        consumed: usize,
+        export_length: usize,
+    },
+    #[error("package range arithmetic overflowed")]
+    RangeArithmetic,
+    #[error("package carrier rejected a validated export range: {0}")]
+    Carrier(String),
+    #[error(transparent)]
+    Primitive(#[from] PrimitiveError),
+}
+
+fn panic_message(panic: Box<dyn Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::{
+        describe_fixed_leaves, FixedLeafInspectionError, FixedLeafInspectionLimits,
+        FixedLeafInspectionSession, FixedLeafPatch, FixedLeafPatchError, FixedLeafRole,
+        FixedLeafSelector, FixedLeafSelectorError, FixedLeafWorkBudget, FixedLeafWorkLimits,
+        FixedWireKind, PropertySpanWalker, ValueSpan, FIXED_LEAF_SELECTOR_PROFILE,
+    };
+    use retoc::legacy_asset::{FMinimalName, FObjectExport, FObjectImport};
+    use retoc::logging::Log;
+
+    fn bool_slot(schema_index: usize, name: &str) -> PropertySlot {
+        PropertySlot {
+            schema_index,
+            property_name: name.to_owned(),
+            array_index: 0,
+            array_dimension: 1,
+            inner: usmap::PropertyInner::Bool,
+            declaring_schema_id: 0,
+            declaring_schema_name: "Fixture".to_owned(),
+            declaring_module_path: Some("/Script/Test".to_owned()),
+        }
+    }
+
+    fn package_with_exports(exports: &[(&str, &[u8], i64)]) -> PackageCarrier {
+        package_with_exports_and_flags(
+            exports,
+            EPackageFlags::Cooked as u32
+                | EPackageFlags::FilterEditorOnly as u32
+                | EPackageFlags::UsesUnversionedProperties as u32,
+        )
+    }
+
+    fn package_with_exports_and_flags(
+        exports: &[(&str, &[u8], i64)],
+        package_flags: u32,
+    ) -> PackageCarrier {
+        package_with_exports_configured(exports, package_flags, |_| {})
+    }
+
+    fn package_with_exports_configured(
+        exports: &[(&str, &[u8], i64)],
+        package_flags: u32,
+        configure: impl FnOnce(&mut FLegacyPackageHeader),
+    ) -> PackageCarrier {
+        let mut package = FLegacyPackageHeader::default();
+        package.summary.versioning_info.package_file_version =
+            EngineVersion::UE5_4.package_file_version();
+        package.summary.versioning_info.is_unversioned = true;
+        package.summary.package_name = "/Game/EnvelopeFixture".to_owned();
+        package.summary.package_flags = package_flags;
+
+        let class_index = add_imported_class(&mut package, "/Script/Test", "Fixture");
+
+        let mut uexp_data = Vec::new();
+        for (name, bytes, relative_offset) in exports {
+            let object_name = package.name_map.store(name);
+            package.exports.push(FObjectExport {
+                class_index,
+                object_name,
+                serial_offset: *relative_offset,
+                serial_size: bytes.len() as i64,
+                ..FObjectExport::default()
+            });
+            let offset = usize::try_from(*relative_offset).unwrap();
+            if uexp_data.len() < offset + bytes.len() {
+                uexp_data.resize(offset + bytes.len(), 0);
+            }
+            uexp_data[offset..offset + bytes.len()].copy_from_slice(bytes);
+        }
+        configure(&mut package);
+
+        let mut uasset = Cursor::new(Vec::new());
+        package
+            .serialize(&mut uasset, None, &Log::no_log())
+            .unwrap();
+        uexp_data.extend_from_slice(&FLegacyPackageFileSummary::PACKAGE_FILE_TAG.to_le_bytes());
+        PackageCarrier::from_bytes(
+            uasset.into_inner(),
+            uexp_data,
+            crate::PackageLimits::default(),
+        )
+        .unwrap()
+    }
+
+    fn add_imported_class(
+        package: &mut FLegacyPackageHeader,
+        module: &str,
+        class: &str,
+    ) -> FPackageIndex {
+        let core_uobject = package.name_map.store("/Script/CoreUObject");
+        let package_class = package.name_map.store("Package");
+        let class_class = package.name_map.store("Class");
+        let module_name = package.name_map.store(module);
+        let class_name = package.name_map.store(class);
+
+        let module_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: package_class,
+            object_name: module_name,
+            ..FObjectImport::default()
+        });
+        let class_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: class_class,
+            outer_index: FPackageIndex::create_import(module_index as u32),
+            object_name: class_name,
+            ..FObjectImport::default()
+        });
+        FPackageIndex::create_import(class_index as u32)
+    }
+
+    fn schema_db(entries: &[(&str, &str, usmap::FlagsType)]) -> SchemaDb {
+        let schemas = entries
+            .iter()
+            .map(|(name, _, _)| usmap::Struct {
+                name: (*name).to_owned(),
+                super_struct: None,
+                properties: Vec::new(),
+            })
+            .collect();
+        let modules = entries
+            .iter()
+            .map(|(_, module, _)| (*module).to_owned())
+            .collect();
+        let flags = entries
+            .iter()
+            .map(|(_, _, kind)| usmap::StructFlags {
+                type_: *kind,
+                value: 0,
+                prop_flags: Vec::new(),
+            })
+            .collect();
+        SchemaDb::from_parsed(usmap::Usmap {
+            enums: Vec::new(),
+            structs: schemas,
+            cext: None,
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: modules,
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: flags,
+            }),
+            envp: None,
+        })
+        .unwrap()
+    }
+
+    fn fixture_schema_db(properties: Vec<usmap::Property>) -> SchemaDb {
+        fixture_schema_db_with_structs(vec![(
+            usmap::Struct {
+                name: "Fixture".to_owned(),
+                super_struct: None,
+                properties,
+            },
+            usmap::FlagsType::Class,
+        )])
+    }
+
+    fn fixture_schema_db_with_structs(entries: Vec<(usmap::Struct, usmap::FlagsType)>) -> SchemaDb {
+        fixture_schema_db_with_tagged_structs(
+            entries
+                .into_iter()
+                .map(|(schema, kind)| (schema, kind, "/Script/Test".to_owned()))
+                .collect(),
+        )
+    }
+
+    fn fixture_schema_db_with_tagged_structs(
+        entries: Vec<(usmap::Struct, usmap::FlagsType, String)>,
+    ) -> SchemaDb {
+        let mut structs = Vec::with_capacity(entries.len());
+        let mut flags = Vec::with_capacity(entries.len());
+        let mut modules = Vec::with_capacity(entries.len());
+        for (schema, kind, module) in entries {
+            structs.push(schema);
+            flags.push(kind);
+            modules.push(module);
+        }
+        let map = usmap::Usmap {
+            enums: Vec::new(),
+            structs,
+            cext: None,
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: modules,
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: flags
+                    .into_iter()
+                    .map(|type_| usmap::StructFlags {
+                        type_,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    })
+                    .collect(),
+            }),
+            envp: None,
+        };
+        let mut bytes = Vec::new();
+        map.write(&mut bytes).unwrap();
+        SchemaDb::from_usmap(&bytes).unwrap()
+    }
+
+    fn fixture_property(name: &str, index: u16, inner: usmap::PropertyInner) -> usmap::Property {
+        usmap::Property {
+            name: name.to_owned(),
+            array_dim: 1,
+            index,
+            inner,
+        }
+    }
+
+    fn cooked_flags() -> u32 {
+        EPackageFlags::Cooked as u32
+            | EPackageFlags::FilterEditorOnly as u32
+            | EPackageFlags::UsesUnversionedProperties as u32
+    }
+
+    #[test]
+    fn parses_boundary_and_preserves_empty_fragments_and_native_suffix() {
+        // Two legal empty fragments, a final two-value fragment, two bool
+        // payload bytes, then class-native bytes outside the property block.
+        let export = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa, 0xbb];
+        let carrier = package_with_exports(&[("Asset", &export, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+
+        assert_eq!(
+            package.cooked_header_size(),
+            carrier.len(PackageComponent::Uasset)
+        );
+        assert_eq!(package.uexp_data_length(), export.len());
+        assert_eq!(
+            package.exports(),
+            [ExportBoundary {
+                export_index: 0,
+                object_name: "Asset".to_owned(),
+                class_path: "/Script/Test.Fixture".to_owned(),
+                local_generated_class: false,
+                component: PackageComponent::Uexp,
+                offset: 0,
+                length: export.len(),
+            }]
+        );
+
+        let envelope = package.export(0).unwrap();
+        assert_eq!(envelope.bytes(), export);
+        let decoded = envelope
+            .decode_primitive_properties(&[bool_slot(0, "A"), bool_slot(1, "B")])
+            .unwrap();
+        assert_eq!(decoded.encoded_properties, &export[..8]);
+        assert_eq!(decoded.native_suffix, &[0xaa, 0xbb]);
+        assert_eq!(
+            decoded
+                .properties
+                .encode(&[bool_slot(0, "A"), bool_slot(1, "B")])
+                .unwrap(),
+            export[..8]
+        );
+    }
+
+    #[test]
+    fn fixed_leaf_patch_revalidates_and_preserves_every_unknown_byte() {
+        // Two selected Bool slots followed by an opaque native suffix. The
+        // first payload byte is the only byte the patch may change.
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa, 0xbb];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+        let before_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let before_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            assert_eq!(block.consumed(), 8);
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("first property is not a fixed leaf");
+            };
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, leaf, &[1], &[0]).unwrap()
+        };
+
+        let receipt = patch.apply(&mut carrier, &schemas).unwrap();
+        assert_eq!(receipt.absolute_offset, 6);
+        assert_eq!(receipt.length, 1);
+        assert_eq!(receipt.kind, crate::FixedWireKind::Bool);
+        assert_ne!(receipt.before, receipt.after);
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), before_uasset);
+        let after_uexp = carrier.bytes(PackageComponent::Uexp);
+        assert_eq!(&after_uexp[..6], &before_uexp[..6]);
+        assert_eq!(after_uexp[6], 0);
+        assert_eq!(&after_uexp[7..], &before_uexp[7..]);
+
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+            panic!("patched property is not a fixed leaf");
+        };
+        assert_eq!(leaf.span().bytes(), &[0]);
+        assert_eq!(block.consumed(), 8);
+        let segments = export.split_decoded_prefix(block.consumed()).unwrap();
+        assert_eq!(segments.native_suffix, &[0xaa, 0xbb]);
+
+        assert!(matches!(
+            patch.apply(&mut carrier, &schemas),
+            Err(FixedLeafPatchError::PackageDrift { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_json_round_trips_resolves_and_feeds_safe_patch_plan() {
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+            assert_eq!(descriptors.len(), 2);
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.selector.expected_hex == "01")
+                .unwrap();
+            assert!(descriptor.editable);
+            assert_eq!(descriptor.selector.profile, FIXED_LEAF_SELECTOR_PROFILE);
+            assert_eq!(descriptor.selector.kind, FixedWireKind::Bool);
+            assert_eq!(descriptor.selector.role, FixedLeafRole::PropertyValue);
+
+            let json = serde_json::to_string(descriptor).unwrap();
+            assert!(json.contains("\"profile\":\"g1r_ue5_4\""));
+            assert!(json.contains("\"kind\":\"bool\""));
+            assert!(json.contains("\"uasset_sha256\":\""));
+            assert!(json.contains("\"uexp_sha256\":\""));
+            assert!(json.contains(&descriptor.selector.usmap_sha256));
+            assert!(!json.contains("offset"));
+            let round_trip: crate::FixedLeafDescriptor = serde_json::from_str(&json).unwrap();
+            assert_eq!(&round_trip, descriptor);
+
+            let selector: FixedLeafSelector = round_trip.selector;
+            let leaf = selector.resolve(&carrier, &export, &schemas).unwrap();
+            let expected = selector.expected_bytes().unwrap();
+            assert_eq!(expected, [1]);
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, &leaf, &expected, &[0])
+                .unwrap()
+        };
+
+        patch.apply(&mut carrier, &schemas).unwrap();
+        assert_eq!(carrier.bytes(PackageComponent::Uexp)[6], 0);
+    }
+
+    #[test]
+    fn bounded_descriptor_session_is_one_walk_byte_identical_and_hard_capped() {
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let legacy = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+
+        let session = FixedLeafInspectionSession::new(&carrier, &schemas).unwrap();
+        let mut budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits::default());
+        let inspection = session
+            .inspect_export_bounded(
+                &export,
+                FixedLeafInspectionLimits {
+                    max_descriptors_per_export: 2,
+                    ..FixedLeafInspectionLimits::default()
+                },
+                &mut budget,
+            )
+            .unwrap();
+        assert_eq!(inspection.property_bytes(), 8);
+        assert_eq!(inspection.native_suffix_bytes(), 1);
+        assert_eq!(
+            serde_json::to_value(inspection.descriptors()).unwrap(),
+            serde_json::to_value(&legacy).unwrap()
+        );
+        let repeated = session
+            .inspect_export_bounded(
+                &export,
+                FixedLeafInspectionLimits {
+                    max_descriptors_per_export: 2,
+                    ..FixedLeafInspectionLimits::default()
+                },
+                &mut budget,
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(repeated.descriptors()).unwrap(),
+            serde_json::to_value(&legacy).unwrap()
+        );
+        assert_eq!(
+            session.counters(),
+            crate::FixedLeafInspectionCounters {
+                package_seal_captures: 1,
+                usmap_sha256_captures: 1,
+                span_walks: 2,
+                schema_resolution_scans: 1,
+                schema_cache_hits: 1,
+            }
+        );
+
+        let capped = FixedLeafInspectionSession::new(&carrier, &schemas).unwrap();
+        let mut budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_leaves: 1,
+            ..FixedLeafWorkLimits::default()
+        });
+        assert!(capped
+            .inspect_export_bounded(&export, FixedLeafInspectionLimits::default(), &mut budget,)
+            .unwrap_err()
+            .is_resource_limit());
+    }
+
+    #[test]
+    fn bounded_descriptor_session_enforces_every_global_budget_before_growth() {
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+
+        for limits in [
+            FixedLeafWorkLimits {
+                max_work: 0,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_nodes: 1,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_leaves: 1,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_selector_steps: 1,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_selector_bytes: 64,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_schema_string_bytes: 0,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_allocation_bytes: 0,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_byte_work: 0,
+                ..FixedLeafWorkLimits::default()
+            },
+            FixedLeafWorkLimits {
+                max_hash_bytes: export_bytes.len() - 1,
+                ..FixedLeafWorkLimits::default()
+            },
+        ] {
+            let session = FixedLeafInspectionSession::new(&carrier, &schemas).unwrap();
+            let mut budget = FixedLeafWorkBudget::new(limits);
+            assert!(session
+                .inspect_export_bounded(&export, FixedLeafInspectionLimits::default(), &mut budget,)
+                .unwrap_err()
+                .is_resource_limit());
+        }
+
+        let session = FixedLeafInspectionSession::new(&carrier, &schemas).unwrap();
+        let mut budget = FixedLeafWorkBudget::default();
+        assert!(session
+            .inspect_export_bounded(
+                &export,
+                FixedLeafInspectionLimits {
+                    max_descriptors_per_export: 1,
+                    ..FixedLeafInspectionLimits::default()
+                },
+                &mut budget,
+            )
+            .unwrap_err()
+            .is_resource_limit());
+
+        let mut map_bytes = vec![0x00, 0x03];
+        map_bytes.extend_from_slice(&0i32.to_le_bytes());
+        map_bytes.extend_from_slice(&1i32.to_le_bytes());
+        map_bytes.extend_from_slice(&7i32.to_le_bytes());
+        map_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let map_carrier = package_with_exports(&[("Asset", &map_bytes, 0)]);
+        let map_schemas = fixture_schema_db(vec![fixture_property(
+            "Values",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Int),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+        let map_package = LegacyPackageEnvelope::parse_g1r_ue5_4(&map_carrier).unwrap();
+        let map_export = map_package.export(0).unwrap();
+        let session = FixedLeafInspectionSession::new(&map_carrier, &map_schemas).unwrap();
+        let mut budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_collection_elements: 0,
+            ..FixedLeafWorkLimits::default()
+        });
+        assert!(session
+            .inspect_export_bounded(
+                &map_export,
+                FixedLeafInspectionLimits::default(),
+                &mut budget,
+            )
+            .unwrap_err()
+            .is_resource_limit());
+
+        let mut exact_hash_budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_hash_bytes: map_bytes.len() + 4,
+            ..FixedLeafWorkLimits::default()
+        });
+        let exact_hash_session =
+            FixedLeafInspectionSession::new(&map_carrier, &map_schemas).unwrap();
+        assert!(exact_hash_session
+            .inspect_export_bounded(
+                &map_export,
+                FixedLeafInspectionLimits::default(),
+                &mut exact_hash_budget,
+            )
+            .is_ok());
+        let mut short_hash_budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_hash_bytes: map_bytes.len() + 3,
+            ..FixedLeafWorkLimits::default()
+        });
+        let short_hash_session =
+            FixedLeafInspectionSession::new(&map_carrier, &map_schemas).unwrap();
+        assert!(short_hash_session
+            .inspect_export_bounded(
+                &map_export,
+                FixedLeafInspectionLimits::default(),
+                &mut short_hash_budget,
+            )
+            .unwrap_err()
+            .is_resource_limit());
+
+        let mut nested_map_bytes = vec![0x00, 0x03];
+        nested_map_bytes.extend_from_slice(&0i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&1i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&0i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&1i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&7i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&8i32.to_le_bytes());
+        nested_map_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let nested_carrier = package_with_exports(&[("Asset", &nested_map_bytes, 0)]);
+        let nested_schemas = fixture_schema_db(vec![fixture_property(
+            "Nested",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Map {
+                    key: Box::new(usmap::PropertyInner::Int),
+                    value: Box::new(usmap::PropertyInner::Int),
+                }),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+        let nested_package = LegacyPackageEnvelope::parse_g1r_ue5_4(&nested_carrier).unwrap();
+        let nested_export = nested_package.export(0).unwrap();
+        // Export once, then the overlapping 16-byte outer key and its 4-byte
+        // nested key. One byte less must fail before the final hash.
+        let exact_nested_hash = nested_map_bytes.len() + 16 + 4;
+        for (limit, succeeds) in [(exact_nested_hash, true), (exact_nested_hash - 1, false)] {
+            let nested_session =
+                FixedLeafInspectionSession::new(&nested_carrier, &nested_schemas).unwrap();
+            let mut nested_budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+                max_hash_bytes: limit,
+                ..FixedLeafWorkLimits::default()
+            });
+            let result = nested_session.inspect_export_bounded(
+                &nested_export,
+                FixedLeafInspectionLimits::default(),
+                &mut nested_budget,
+            );
+            assert_eq!(result.is_ok(), succeeds);
+            if !succeeds {
+                assert!(result.unwrap_err().is_resource_limit());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_span_walks_debit_the_request_before_the_next_export() {
+        let export_bytes = [0x00, 0x03, 0x02];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let session = FixedLeafInspectionSession::new(&carrier, &schemas).unwrap();
+        let mut budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_work: 80,
+            ..FixedLeafWorkLimits::default()
+        });
+        assert!(matches!(
+            session.inspect_export_bounded(
+                &export,
+                FixedLeafInspectionLimits::default(),
+                &mut budget,
+            ),
+            Err(FixedLeafInspectionError::Selector(
+                FixedLeafSelectorError::Span(crate::SpanError::InvalidBool { .. })
+            ))
+        ));
+        let mut exhausted = false;
+        for _ in 0..100 {
+            let error = session
+                .inspect_export_bounded(&export, FixedLeafInspectionLimits::default(), &mut budget)
+                .unwrap_err();
+            if error.is_resource_limit() {
+                exhausted = true;
+                break;
+            }
+        }
+        assert!(
+            exhausted,
+            "failed walks must consume the shared work budget"
+        );
+        assert_eq!(session.counters().schema_resolution_scans, 1);
+        assert!(session.counters().schema_cache_hits > 0);
+    }
+
+    #[test]
+    fn package_preflight_hook_runs_before_the_upstream_parser() {
+        let carrier = package_with_exports(&[("Asset", &[0x00, 0x01], 0)]);
+        let parser_calls = Cell::new(0usize);
+        let error = LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits_using(
+            &carrier,
+            LegacyHeaderLimits {
+                max_exports: 0,
+                ..LegacyHeaderLimits::default()
+            },
+            |_| {
+                parser_calls.set(parser_calls.get() + 1);
+                panic!("upstream parser must not run after failed preflight")
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            EnvelopeError::HeaderPreflight(LegacyHeaderPreflightError::CountLimit {
+                field: "exports",
+                ..
+            })
+        ));
+        assert_eq!(parser_calls.get(), 0);
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_profile_package_usmap_kind_and_value_drift() {
+        let export_bytes = [0x00, 0x03, 0x01, 0xaa];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let selector = describe_fixed_leaves(&carrier, &export, &schemas)
+            .unwrap()
+            .remove(0)
+            .selector;
+
+        let mut changed = selector.clone();
+        changed.profile = "future_profile".to_owned();
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::UnsupportedProfile { .. })
+        ));
+        let other_schemas = fixture_schema_db(vec![fixture_property(
+            "Other",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &other_schemas),
+            Err(FixedLeafSelectorError::UsmapDrift { .. })
+        ));
+        let unsourced = schema_db(&[("Fixture", "/Script/Test", usmap::FlagsType::Class)]);
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &unsourced),
+            Err(FixedLeafSelectorError::MissingUsmapSource)
+        ));
+        assert!(matches!(
+            describe_fixed_leaves(&carrier, &export, &unsourced),
+            Err(FixedLeafSelectorError::MissingUsmapSource)
+        ));
+
+        changed = selector.clone();
+        changed.kind = FixedWireKind::Byte;
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::KindDrift { .. })
+        ));
+        changed = selector.clone();
+        changed.expected_hex = "00".to_owned();
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::ExpectedDrift { .. })
+        ));
+
+        let drifted_bytes = [0x00, 0x03, 0x01, 0xbb];
+        let drifted_carrier = package_with_exports(&[("Asset", &drifted_bytes, 0)]);
+        let drifted_package = LegacyPackageEnvelope::parse_g1r_ue5_4(&drifted_carrier).unwrap();
+        let drifted_export = drifted_package.export(0).unwrap();
+        assert!(matches!(
+            selector.resolve(&drifted_carrier, &drifted_export, &schemas),
+            Err(FixedLeafSelectorError::PackageDrift { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_duplicate_map_key_paths_as_ambiguous() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&2i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&9i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&10i32.to_le_bytes());
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Values",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Int),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+        assert!(descriptors.iter().all(|descriptor| !descriptor.editable));
+        let selector = descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.selector.role == FixedLeafRole::PropertyValue
+                    && descriptor.selector.expected_hex == "09000000"
+            })
+            .unwrap()
+            .selector
+            .clone();
+
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::Ambiguous { matches: 2 })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_unique_sparse_child_below_duplicate_map_key() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&2i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&[0x00, 0x03, 0x01]);
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&[0x01, 0x03, 0x00]);
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db_with_tagged_structs(vec![
+            (
+                usmap::Struct {
+                    name: "Fixture".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property(
+                        "Values",
+                        0,
+                        usmap::PropertyInner::Map {
+                            key: Box::new(usmap::PropertyInner::Int),
+                            value: Box::new(usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            }),
+                        },
+                    )],
+                },
+                usmap::FlagsType::Class,
+                "/Script/Test".to_owned(),
+            ),
+            (
+                usmap::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    super_struct: None,
+                    properties: vec![
+                        fixture_property("A", 0, usmap::PropertyInner::Bool),
+                        fixture_property("B", 1, usmap::PropertyInner::Bool),
+                    ],
+                },
+                usmap::FlagsType::Struct,
+                "/Script/G1R".to_owned(),
+            ),
+        ]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.selector.role == FixedLeafRole::PropertyValue
+                    && descriptor.selector.expected_hex == "01"
+            })
+            .unwrap();
+
+        assert!(!descriptor.editable);
+        assert!(matches!(
+            descriptor.selector.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::DuplicateMapKeyAncestry { occurrences: 2 })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_rejects_bad_expectations_bool_values_and_references() {
+        let bool_export = [0x00, 0x03, 0x01, 0xaa];
+        let carrier = package_with_exports(&[("Asset", &bool_export, 0)]);
+        let bool_schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let before_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let before_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+        {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export
+                .boundary()
+                .resolve_class_schema(&bool_schemas)
+                .unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&bool_schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("property is not fixed");
+            };
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[0], &[1]),
+                Err(FixedLeafPatchError::ExpectedMismatch { .. })
+            ));
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[1], &[2]),
+                Err(FixedLeafPatchError::InvalidBool { value: 2 })
+            ));
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[1], &[1]),
+                Err(FixedLeafPatchError::NoChange)
+            ));
+        }
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), before_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), before_uexp);
+
+        let name_export = [0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let name_carrier = package_with_exports(&[("Asset", &name_export, 0)]);
+        let name_schemas = fixture_schema_db(vec![fixture_property(
+            "Name",
+            0,
+            usmap::PropertyInner::Name,
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&name_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export
+            .boundary()
+            .resolve_class_schema(&name_schemas)
+            .unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&name_schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+            panic!("name property is not fixed");
+        };
+        let mut replacement = leaf.span().bytes().to_vec();
+        replacement[0] = 2;
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &name_carrier,
+                &export,
+                &name_schemas,
+                &block,
+                leaf,
+                leaf.span().bytes(),
+                &replacement
+            ),
+            Err(FixedLeafPatchError::ReferentialEditUnsupported {
+                kind: crate::FixedWireKind::FName
+            })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_seals_the_whole_pair_not_only_the_target_range() {
+        let export_bytes = [0x00, 0x03, 0x01];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("property is not fixed");
+            };
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, leaf, &[1], &[0]).unwrap()
+        };
+
+        let changed = carrier.bytes(PackageComponent::Uasset)[0] ^ 0x01;
+        carrier
+            .replace_range(PackageComponent::Uasset, 0, 1, &[changed])
+            .unwrap();
+        let drifted_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let drifted_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+        assert!(matches!(
+            patch.apply(&mut carrier, &schemas),
+            Err(FixedLeafPatchError::PackageDrift { .. })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), drifted_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), drifted_uexp);
+    }
+
+    #[test]
+    fn fixed_leaf_patch_allows_map_values_but_refuses_all_map_keys() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&1i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Values",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Int),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+
+        let value_patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+                panic!("property should be a map");
+            };
+            let ValueSpan::Fixed(key) = map.entries()[0].key() else {
+                panic!("map key should be fixed");
+            };
+            let key_replacement = 8i32.to_le_bytes();
+            assert!(matches!(
+                FixedLeafPatch::plan(
+                    &carrier,
+                    &export,
+                    &schemas,
+                    &block,
+                    key,
+                    key.span().bytes(),
+                    &key_replacement
+                ),
+                Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+            ));
+
+            let ValueSpan::Fixed(value) = map.entries()[0].value() else {
+                panic!("map value should be fixed");
+            };
+            FixedLeafPatch::plan(
+                &carrier,
+                &export,
+                &schemas,
+                &block,
+                value,
+                value.span().bytes(),
+                &10i32.to_le_bytes(),
+            )
+            .unwrap()
+        };
+
+        value_patch.apply(&mut carrier, &schemas).unwrap();
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should remain a map");
+        };
+        assert_eq!(map.entries()[0].key().span().bytes(), &7i32.to_le_bytes());
+        assert_eq!(
+            map.entries()[0].value().span().bytes(),
+            &10i32.to_le_bytes()
+        );
+
+        let mut removed_bytes = vec![0x00, 0x03];
+        removed_bytes.extend_from_slice(&1i32.to_le_bytes());
+        removed_bytes.extend_from_slice(&7i32.to_le_bytes());
+        removed_bytes.extend_from_slice(&0i32.to_le_bytes());
+        let removed_carrier = package_with_exports(&[("Asset", &removed_bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&removed_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should be a map");
+        };
+        let ValueSpan::Fixed(removed_key) = &map.removed_keys()[0] else {
+            panic!("removed map key should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &removed_carrier,
+                &export,
+                &schemas,
+                &block,
+                removed_key,
+                removed_key.span().bytes(),
+                &8i32.to_le_bytes(),
+            ),
+            Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+        ));
+
+        let complex_schemas = fixture_schema_db_with_tagged_structs(vec![
+            (
+                usmap::Struct {
+                    name: "Fixture".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property(
+                        "Values",
+                        0,
+                        usmap::PropertyInner::Map {
+                            key: Box::new(usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            }),
+                            value: Box::new(usmap::PropertyInner::Int),
+                        },
+                    )],
+                },
+                usmap::FlagsType::Class,
+                "/Script/Test".to_owned(),
+            ),
+            (
+                usmap::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property("InvertX", 0, usmap::PropertyInner::Bool)],
+                },
+                usmap::FlagsType::Struct,
+                "/Script/G1R".to_owned(),
+            ),
+        ]);
+        let mut complex_bytes = vec![0x00, 0x03];
+        complex_bytes.extend_from_slice(&0i32.to_le_bytes());
+        complex_bytes.extend_from_slice(&1i32.to_le_bytes());
+        complex_bytes.extend_from_slice(&[0x00, 0x03, 0x01]);
+        complex_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let complex_carrier = package_with_exports(&[("Asset", &complex_bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&complex_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export
+            .boundary()
+            .resolve_class_schema(&complex_schemas)
+            .unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&complex_schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should be a map");
+        };
+        let ValueSpan::Struct(key) = map.entries()[0].key() else {
+            panic!("map key should be a nested struct");
+        };
+        let ValueSpan::Fixed(key_leaf) = key.properties().properties()[0].value().unwrap() else {
+            panic!("map key field should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &complex_carrier,
+                &export,
+                &complex_schemas,
+                &block,
+                key_leaf,
+                key_leaf.span().bytes(),
+                &[0],
+            ),
+            Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+        ));
+        let ValueSpan::Fixed(value) = map.entries()[0].value() else {
+            panic!("map value should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &complex_carrier,
+                &export,
+                &complex_schemas,
+                &block,
+                value,
+                value.span().bytes(),
+                &10i32.to_le_bytes(),
+            ),
+            Err(FixedLeafPatchError::ComplexMapKeyUnsupported)
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_rejects_foreign_and_changed_semantic_schema_paths() {
+        let export_bytes = [0x00, 0x03, 0x01];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas_a =
+            fixture_schema_db(vec![fixture_property("A", 0, usmap::PropertyInner::Bool)]);
+        let schemas_b =
+            fixture_schema_db(vec![fixture_property("B", 0, usmap::PropertyInner::Bool)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_a = export.boundary().resolve_class_schema(&schemas_a).unwrap();
+        let block_a = PropertySpanWalker::g1r_ue5_4(&schemas_a)
+            .walk(export.bytes(), schema_a)
+            .unwrap();
+        let ValueSpan::Fixed(leaf_a) = block_a.properties()[0].value().unwrap() else {
+            panic!("property should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(&carrier, &export, &schemas_b, &block_a, leaf_a, &[1], &[0]),
+            Err(FixedLeafPatchError::SemanticPathMismatch)
+        ));
+
+        let nested_db = |field: &str| {
+            fixture_schema_db_with_tagged_structs(vec![
+                (
+                    usmap::Struct {
+                        name: "Fixture".to_owned(),
+                        super_struct: None,
+                        properties: vec![fixture_property(
+                            "Nested",
+                            0,
+                            usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            },
+                        )],
+                    },
+                    usmap::FlagsType::Class,
+                    "/Script/Test".to_owned(),
+                ),
+                (
+                    usmap::Struct {
+                        name: "BoneTrackedData".to_owned(),
+                        super_struct: None,
+                        properties: vec![fixture_property(field, 0, usmap::PropertyInner::Bool)],
+                    },
+                    usmap::FlagsType::Struct,
+                    "/Script/G1R".to_owned(),
+                ),
+            ])
+        };
+        let schemas_nested_a = nested_db("A");
+        let schemas_nested_b = nested_db("B");
+        let nested_export = [0x00, 0x03, 0x00, 0x03, 0x01];
+        let mut nested_carrier = package_with_exports(&[("Asset", &nested_export, 0)]);
+        let nested_patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&nested_carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export
+                .boundary()
+                .resolve_class_schema(&schemas_nested_a)
+                .unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas_nested_a)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Struct(nested) = block.properties()[0].value().unwrap() else {
+                panic!("property should be nested");
+            };
+            let ValueSpan::Fixed(leaf) = nested.properties().properties()[0].value().unwrap()
+            else {
+                panic!("nested property should be fixed");
+            };
+            FixedLeafPatch::plan(
+                &nested_carrier,
+                &export,
+                &schemas_nested_a,
+                &block,
+                leaf,
+                &[1],
+                &[0],
+            )
+            .unwrap()
+        };
+        let before = nested_carrier.bytes(PackageComponent::Uexp).to_vec();
+        assert!(matches!(
+            nested_patch.apply(&mut nested_carrier, &schemas_nested_b),
+            Err(FixedLeafPatchError::LayoutDrift { .. })
+                | Err(FixedLeafPatchError::SchemaLayoutDrift { .. })
+        ));
+        assert_eq!(nested_carrier.bytes(PackageComponent::Uexp), before);
+    }
+
+    #[test]
+    fn binds_native_export_class_to_its_exact_qualified_schema() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                package.exports[0].class_index =
+                    add_imported_class(package, "/Script/G1R", "PhysicMaterialsColor");
+            });
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(boundary.class_path(), "/Script/G1R.PhysicMaterialsColor");
+
+        // A same-named foreign class proves the package map supplied the
+        // module qualification instead of relying on ambiguous short names.
+        let schemas = schema_db(&[
+            (
+                "PhysicMaterialsColor",
+                "/Script/Other",
+                usmap::FlagsType::Class,
+            ),
+            (
+                "PhysicMaterialsColor",
+                "/Script/G1R",
+                usmap::FlagsType::Class,
+            ),
+        ]);
+        let schema_id = boundary.resolve_class_schema(&schemas).unwrap();
+        assert_eq!(
+            schemas.schema(schema_id).unwrap().qualified_name(),
+            "/Script/G1R.PhysicMaterialsColor"
+        );
+    }
+
+    #[test]
+    fn local_generated_class_requires_its_exact_c_schema_without_parent_fallback() {
+        let asset = [0x00, 0x01];
+        let generated_class = [0x00, 0x01];
+        let carrier = package_with_exports_configured(
+            &[("Asset", &asset, 0), ("BP_Fixture_C", &generated_class, 2)],
+            cooked_flags(),
+            |package| {
+                package.exports[0].class_index = FPackageIndex::create_export(1);
+            },
+        );
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(boundary.class_path(), "/Game/EnvelopeFixture.BP_Fixture_C");
+
+        let parent_only = schema_db(&[(
+            "PrimaryDataAsset",
+            "/Script/Engine",
+            usmap::FlagsType::Class,
+        )]);
+        assert_eq!(
+            boundary.resolve_class_schema(&parent_only),
+            Err(ExportSchemaError::LocalGeneratedClassSchemaMissing {
+                export_index: 0,
+                class_path: "/Game/EnvelopeFixture.BP_Fixture_C".to_owned(),
+            })
+        );
+
+        let exact = schema_db(&[(
+            "BP_Fixture_C",
+            "/Game/EnvelopeFixture",
+            usmap::FlagsType::Class,
+        )]);
+        assert_eq!(boundary.resolve_class_schema(&exact), Ok(0));
+    }
+
+    #[test]
+    fn reports_missing_ambiguous_and_non_class_usmap_bindings() {
+        let bytes = [0x00, 0x01];
+        let carrier = package_with_exports(&[("Asset", &bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+
+        let missing = schema_db(&[]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&missing),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaNotFound { .. },
+                ..
+            })
+        ));
+
+        let ambiguous = schema_db(&[
+            ("Fixture", "/Script/Test", usmap::FlagsType::Class),
+            ("Fixture", "/Script/Test", usmap::FlagsType::Class),
+        ]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&ambiguous),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaAmbiguous { .. },
+                ..
+            })
+        ));
+
+        let not_a_class = schema_db(&[("Fixture", "/Script/Test", usmap::FlagsType::Struct)]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&not_a_class),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::NotAClass(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn imported_generated_class_also_refuses_a_primary_dataasset_fallback() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                package.exports[0].class_index = add_imported_class(
+                    package,
+                    "/Game/Blueprints/BP_ImportedFixture",
+                    "BP_ImportedFixture_C",
+                );
+            });
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let boundary = &package.exports()[0];
+        assert_eq!(
+            boundary.class_path(),
+            "/Game/Blueprints/BP_ImportedFixture.BP_ImportedFixture_C"
+        );
+
+        let parent_only = schema_db(&[(
+            "PrimaryDataAsset",
+            "/Script/Engine",
+            usmap::FlagsType::Class,
+        )]);
+        assert!(matches!(
+            boundary.resolve_class_schema(&parent_only),
+            Err(ExportSchemaError::Schema {
+                source: SchemaError::SchemaNotFound { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn malformed_class_names_and_import_roots_are_typed_errors() {
+        let bytes = [0x00, 0x01];
+        let bad_name =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let class_import = package.exports[0].class_index;
+                let class_index = usize::try_from(-i64::from(class_import.index) - 1).unwrap();
+                package.imports[class_index].object_name = FMinimalName {
+                    index: i32::MAX,
+                    number: 0,
+                };
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&bad_name),
+            Err(EnvelopeError::InvalidMinimalName {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let bad_root =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let invalid_root = package.name_map.store("Not/A/PackagePath");
+                package.imports[0].object_name = invalid_root;
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&bad_root),
+            Err(EnvelopeError::InvalidClassPath {
+                export_index: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn minimal_name_extremes_are_rejected_without_retoc_number_arithmetic() {
+        let bytes = [0x00, 0x01];
+        for class_name in [false, true] {
+            let carrier = package_with_exports_configured(
+                &[("Asset", &bytes, 0)],
+                cooked_flags(),
+                |package| {
+                    if class_name {
+                        let class_import = package.exports[0].class_index;
+                        let class_index =
+                            usize::try_from(-i64::from(class_import.index) - 1).unwrap();
+                        package.imports[class_index].object_name.number = i32::MIN;
+                    } else {
+                        package.exports[0].object_name.number = i32::MIN;
+                    }
+                },
+            );
+            let result =
+                std::panic::catch_unwind(|| LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier));
+            assert!(result.is_ok(), "materialization must never panic");
+            assert!(matches!(
+                result.unwrap(),
+                Err(EnvelopeError::InvalidMinimalName {
+                    export_index: 0,
+                    number: i32::MIN,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn derived_metadata_and_class_path_limits_are_exact_and_aggregate() {
+        let bytes = [0x00, 0x01];
+        let carrier = package_with_exports(&[("Asset", &bytes, 0)]);
+        let class_path_len = "/Script/Test.Fixture".len();
+        assert!(LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+            &carrier,
+            LegacyHeaderLimits {
+                max_class_path_bytes: class_path_len,
+                ..LegacyHeaderLimits::default()
+            },
+        )
+        .is_ok());
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+                &carrier,
+                LegacyHeaderLimits {
+                    max_class_path_bytes: class_path_len - 1,
+                    ..LegacyHeaderLimits::default()
+                },
+            ),
+            Err(EnvelopeError::DerivedMetadataLimit {
+                resource: "class path bytes"
+            })
+        ));
+
+        let mut low = 0usize;
+        let mut high = 64 * 1024usize;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let succeeds = LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+                &carrier,
+                LegacyHeaderLimits {
+                    max_derived_metadata_bytes: middle,
+                    ..LegacyHeaderLimits::default()
+                },
+            )
+            .is_ok();
+            if succeeds {
+                high = middle;
+            } else {
+                low = middle + 1;
+            }
+        }
+        assert!(low > 0 && low < 64 * 1024);
+        assert!(LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+            &carrier,
+            LegacyHeaderLimits {
+                max_derived_metadata_bytes: low,
+                ..LegacyHeaderLimits::default()
+            },
+        )
+        .is_ok());
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+                &carrier,
+                LegacyHeaderLimits {
+                    max_derived_metadata_bytes: low - 1,
+                    ..LegacyHeaderLimits::default()
+                },
+            ),
+            Err(EnvelopeError::DerivedMetadataLimit { .. })
+        ));
+
+        let repeated: Vec<_> = (0..128)
+            .map(|index| ("Shared", bytes.as_slice(), i64::from(index * 2)))
+            .collect();
+        let repeated_carrier = package_with_exports(&repeated);
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+                &repeated_carrier,
+                LegacyHeaderLimits {
+                    max_derived_metadata_bytes: 8 * 1024,
+                    ..LegacyHeaderLimits::default()
+                },
+            ),
+            Err(EnvelopeError::DerivedMetadataLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn outer_chain_nodes_are_debited_before_one_exact_reserve() {
+        let count = 3usize;
+        let charge = count * std::mem::size_of::<ResolvedObjectNode>() + 64;
+        let limits = |max_derived_metadata_bytes| LegacyHeaderLimits {
+            max_derived_metadata_bytes,
+            ..LegacyHeaderLimits::default()
+        };
+        let mut nodes = Vec::new();
+        let mut short = DerivedMetadataBudget::new(limits(charge - 1));
+        assert!(matches!(
+            reserve_outer_nodes_exact(&mut nodes, count, &mut short),
+            Err(EnvelopeError::DerivedMetadataLimit {
+                resource: "derived metadata bytes"
+            })
+        ));
+        assert_eq!(nodes.capacity(), 0);
+
+        let mut exact = DerivedMetadataBudget::new(limits(charge));
+        reserve_outer_nodes_exact(&mut nodes, count, &mut exact).unwrap();
+        assert!(nodes.capacity() >= count);
+        assert_eq!(exact.remaining_bytes, 0);
+    }
+
+    #[test]
+    fn rejects_null_and_both_kinds_of_out_of_bounds_class_references() {
+        let bytes = [0x00, 0x01];
+        let null =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex::create_null()
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&null),
+            Err(EnvelopeError::NullExportClass { export_index: 0 })
+        ));
+
+        let import_oob =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex { index: i32::MIN }
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&import_oob),
+            Err(EnvelopeError::ClassObjectOutOfBounds {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let export_oob =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.exports[0].class_index = FPackageIndex { index: i32::MAX }
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&export_oob),
+            Err(EnvelopeError::ClassObjectOutOfBounds {
+                export_index: 0,
+                referenced_kind: "export",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_import_and_export_outer_cycles() {
+        let bytes = [0x00, 0x01];
+        let import_cycle =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                let first_name = package.name_map.store("First");
+                let second_name = package.name_map.store("Second");
+                package.imports = vec![
+                    FObjectImport {
+                        outer_index: FPackageIndex::create_import(1),
+                        object_name: first_name,
+                        ..FObjectImport::default()
+                    },
+                    FObjectImport {
+                        outer_index: FPackageIndex::create_import(0),
+                        object_name: second_name,
+                        ..FObjectImport::default()
+                    },
+                ];
+                package.exports[0].class_index = FPackageIndex::create_import(0);
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&import_cycle),
+            Err(EnvelopeError::ClassOuterCycle {
+                export_index: 0,
+                referenced_kind: "import",
+                ..
+            })
+        ));
+
+        let local_class = [0x00, 0x01];
+        let export_cycle = package_with_exports_configured(
+            &[("Asset", &bytes, 0), ("BP_Fixture_C", &local_class, 2)],
+            cooked_flags(),
+            |package| {
+                package.exports[0].class_index = FPackageIndex::create_export(1);
+                package.exports[1].outer_index = FPackageIndex::create_export(1);
+            },
+        );
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&export_cycle),
+            Err(EnvelopeError::ClassOuterCycle {
+                export_index: 0,
+                referenced_kind: "export",
+                referenced_index: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_class_outer_chains_beyond_the_fixed_depth_limit() {
+        let bytes = [0x00, 0x01];
+        let carrier =
+            package_with_exports_configured(&[("Asset", &bytes, 0)], cooked_flags(), |package| {
+                package.imports.clear();
+                for index in 0..=MAX_CLASS_OUTER_DEPTH {
+                    let object_name = package.name_map.store(&format!("Node{index}"));
+                    let outer_index = if index < MAX_CLASS_OUTER_DEPTH {
+                        FPackageIndex::create_import((index + 1) as u32)
+                    } else {
+                        FPackageIndex::create_null()
+                    };
+                    package.imports.push(FObjectImport {
+                        outer_index,
+                        object_name,
+                        ..FObjectImport::default()
+                    });
+                }
+                package.exports[0].class_index = FPackageIndex::create_import(0);
+            });
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier),
+            Err(EnvelopeError::ClassOuterDepthExceeded {
+                export_index: 0,
+                limit: MAX_CLASS_OUTER_DEPTH,
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_bad_footer_and_out_of_range_prefix_split() {
+        let export = [0x00, 0x01]; // valid final empty header
+        let carrier = package_with_exports(&[("Asset", &export, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        assert!(matches!(
+            package.export(0).unwrap().split_decoded_prefix(3),
+            Err(EnvelopeError::DecodedPrefixOutOfBounds { .. })
+        ));
+
+        let mut corrupt = PackageCarrier::from_bytes(
+            carrier.bytes(PackageComponent::Uasset).to_vec(),
+            carrier.bytes(PackageComponent::Uexp).to_vec(),
+            crate::PackageLimits::default(),
+        )
+        .unwrap();
+        let end = corrupt.len(PackageComponent::Uexp);
+        corrupt
+            .replace_range(PackageComponent::Uexp, end - 1, 1, &[0])
+            .unwrap();
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&corrupt),
+            Err(EnvelopeError::PackageFooterMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_overlapping_export_ranges() {
+        let first = [0x00, 0x01, 1, 2];
+        let second = [0x00, 0x01, 3, 4];
+        let carrier = package_with_exports(&[("First", &first, 0), ("Second", &second, 2)]);
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier),
+            Err(EnvelopeError::OverlappingExports {
+                first: 0,
+                second: 1
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_non_cooked_packages_even_with_unversioned_properties() {
+        let export = [0x00, 0x01];
+        let carrier = package_with_exports_and_flags(
+            &[("Asset", &export, 0)],
+            EPackageFlags::UsesUnversionedProperties as u32,
+        );
+        assert!(matches!(
+            LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier),
+            Err(EnvelopeError::NotCooked)
+        ));
+    }
+}

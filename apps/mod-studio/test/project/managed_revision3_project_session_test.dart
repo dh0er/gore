@@ -1,0 +1,13056 @@
+import 'dart:async';
+import 'dart:collection';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/core_service.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/project/managed_project_lock.dart';
+import 'package:gore_mod/project/managed_project_session.dart';
+import 'package:gore_mod/project/project_atomic_io.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
+import 'package:path/path.dart' as p;
+
+import '../dataasset/dataasset_test_fixtures.dart';
+import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_dialog_voice_slot_removal_fixture.dart';
+import '../support/revision3_npc_fixture.dart';
+import '../support/revision3_npc_profile_edit_fixture.dart';
+import '../support/revision3_quest_fixture.dart';
+import '../support/revision3_quest_outline_fixture.dart';
+import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_voice_preview_fixture.dart';
+import '../support/revision3_voice_selection_fixture.dart';
+
+const _dialogLocalizationEditId = '01010101010101010101010101010101';
+const _dialogLocalizationEditLocId = 'GORE_ASGHAN_WELCOME';
+
+void main() {
+  late Directory fixture;
+
+  setUp(() async {
+    fixture = await Directory.systemTemp.createTemp(
+      'gore_managed_revision3_session_',
+    );
+  });
+
+  tearDown(() async {
+    if (await fixture.exists()) await fixture.delete(recursive: true);
+  });
+
+  test(
+    'production adapter uses only the dedicated revision-3 commands',
+    () async {
+      final project = _projectJson(revision: 7, name: 'Adapter');
+      final fixtureStore = _FakeRevision3Store();
+      final head = fixtureStore.register(project);
+      final questRequest = AuthoringRevision3QuestDraftRequestV3(
+        expectedHead: head,
+        expectedProjectId: '00000000000000000000000000000003',
+        expectedRevision: 7,
+        questId: '00000000000000000000000000000071',
+        scriptModuleId: '00000000000000000000000000000072',
+        displayName: 'Managed Quest 1',
+        intent: _questIntent(1),
+      );
+      final projectMap = jsonDecode(project) as Map<String, Object?>;
+      final questInput = _questInput(
+        request: questRequest,
+        basisHead: head,
+        target: (projectMap['target'] as Map).cast<String, Object?>(),
+      );
+      final candidateMap = jsonDecode(project) as Map<String, Object?>
+        ..['revision'] = 8
+        ..['entities'] = <String, Object?>{
+          questRequest.questId: _questEntity(
+            projectId: questRequest.expectedProjectId,
+            request: questRequest,
+            input: questInput,
+          ),
+          questRequest.scriptModuleId: _questModuleEntity(
+            projectId: questRequest.expectedProjectId,
+            request: questRequest,
+            input: questInput,
+          ),
+        }
+        ..['asset_store'] = <String, Object?>{
+          'assets': <String, Object?>{
+            _questArtifactSha: <String, Object?>{
+              'byte_len': 123,
+              'media_type':
+                  'application/vnd.gore.quest-collision-capability+json;version=2',
+            },
+          },
+        };
+      final candidateProject = jsonEncode(candidateMap);
+      final candidateHead = fixtureStore.register(candidateProject);
+      final npcRequest = AuthoringRevision3NpcDraftRequestV1.forProject(
+        expectedHead: head,
+        currentProjectJson: project,
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      final npcFixture = Revision3NpcFixture.fromBasis(
+        basisHead: head,
+        basisProjectJson: project,
+        request: npcRequest,
+      );
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_open_revision3': _openedResponse(head, project),
+          'authoring_store_prepare_revision3_checkpoint': _preparedResponse(
+            head,
+          ),
+          'authoring_store_open_revision3_head_bytes': _openedResponse(
+            head,
+            project,
+          ),
+          'authoring_store_read_revision3_content_index_v1': _contentResponse(
+            head,
+            project,
+          ),
+          'authoring_store_read_revision3_dialog_localization_v1':
+              _dialogLocalizationReadResponse(
+                head: head,
+                projectId: '00000000000000000000000000000003',
+                projectRevision: 7,
+                localizationId: '00000000000000000000000000000021',
+                localizationRevision: 4,
+                locId: 'GORE_EXISTING_TEXT',
+              ),
+          'authoring_store_read_revision3_dataasset_package_index_v1':
+              _dataAssetPackageIndexResponse(head, project),
+          'authoring_store_prepare_revision3_quest_draft_v3':
+              _questPreparedResponse(
+                basisHead: head,
+                candidateHead: candidateHead,
+                candidateProjectJson: candidateProject,
+                revision: 8,
+                questId: questRequest.questId,
+                scriptModuleId: questRequest.scriptModuleId,
+              ),
+          'authoring_store_prepare_revision3_npc_draft_v1': npcFixture
+              .response(),
+        },
+      );
+      final adapter = ModFfiManagedRevision3AuthoringStore(ModFfi(core));
+
+      await adapter.open(
+        root: fixture.path,
+        verification: AuthoringAssetVerification.full,
+      );
+      await adapter.prepareCheckpoint(
+        root: fixture.path,
+        expectedHead: head,
+        projectJson: project,
+      );
+      await adapter.openHeadBytes(
+        root: fixture.path,
+        head: head,
+        verification: AuthoringAssetVerification.full,
+      );
+      await adapter.readContentIndex(root: fixture.path, expectedHead: head);
+      await adapter.readDialogLocalizationV1(
+        root: fixture.path,
+        expectedHead: head,
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      );
+      await adapter.readDataAssetPackageIndexV1(
+        root: fixture.path,
+        gameRoot: r'D:\Games\Gothic Remake',
+        expectedHead: head,
+      );
+      await adapter.prepareQuestDraftV3(
+        root: fixture.path,
+        gameRoot: r'D:\Games\Gothic Remake',
+        currentProjectJson: project,
+        questRequestJson: questRequest.canonicalJson,
+      );
+      await adapter.prepareNpcDraftV1(
+        root: fixture.path,
+        gameRoot: r'D:\Games\Gothic Remake',
+        currentProjectJson: project,
+        request: npcRequest,
+      );
+
+      expect(core.calls.map((call) => call.command), <String>[
+        'authoring_store_open_revision3',
+        'authoring_store_prepare_revision3_checkpoint',
+        'authoring_store_open_revision3_head_bytes',
+        'authoring_store_read_revision3_content_index_v1',
+        'authoring_store_read_revision3_dialog_localization_v1',
+        'authoring_store_read_revision3_dataasset_package_index_v1',
+        'authoring_store_prepare_revision3_quest_draft_v3',
+        'authoring_store_prepare_revision3_npc_draft_v1',
+      ]);
+      expect(core.calls[0].payload, <String, Object?>{
+        'root': fixture.path,
+        'verification': 'full',
+      });
+      expect(core.calls[1].payload, <String, Object?>{
+        'root': fixture.path,
+        'expected_head_json': head.canonicalJson,
+        'project_json': project,
+      });
+      expect(core.calls[2].payload, <String, Object?>{
+        'root': fixture.path,
+        'head_json': head.canonicalJson,
+        'verification': 'full',
+      });
+      expect(core.calls[3].payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'root': fixture.path,
+      });
+      expect(core.calls[4].payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'expected_localization_revision': 4,
+        'expected_loc_id': 'GORE_EXISTING_TEXT',
+        'localization_id': '00000000000000000000000000000021',
+        'root': fixture.path,
+      });
+      expect(core.calls[5].payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'game_root': r'D:\Games\Gothic Remake',
+        'root': fixture.path,
+      });
+      expect(core.calls[6].payload, <String, Object?>{
+        'current_project_json': project,
+        'game_root': r'D:\Games\Gothic Remake',
+        'quest_request_json': questRequest.canonicalJson,
+        'root': fixture.path,
+      });
+      expect(core.calls[7].payload, <String, Object?>{
+        'current_project_json': project,
+        'game_root': r'D:\Games\Gothic Remake',
+        'npc_request_json': npcRequest.canonicalJson,
+        'root': fixture.path,
+      });
+    },
+  );
+
+  test(
+    'production adapter forwards only the restorable V2 export wire',
+    () async {
+      final project = _projectJson(revision: 7, name: 'V2 Adapter');
+      final fixtureStore = _FakeRevision3Store();
+      final head = fixtureStore.register(project);
+      final projectMap = (jsonDecode(project) as Map).cast<String, Object?>();
+      final projectId = projectMap['project_id']! as String;
+      final output = p.join(fixture.path, 'adapter-restorable.goremod');
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_export_revision3_exact_snapshot_v2':
+              _restorableExportResponse(
+                head: head,
+                projectId: projectId,
+                projectRevision: 7,
+                output: output,
+              ),
+        },
+      );
+      final adapter = ModFfiManagedRevision3AuthoringStore(ModFfi(core));
+
+      final result = await adapter.exportExactSnapshotV2(
+        root: fixture.path,
+        expectedHead: head,
+        output: output,
+      );
+
+      expect(result.isRestorableProjectCopy, isTrue);
+      expect(result.projectId, projectId);
+      expect(result.projectRevision, 7);
+      expect(result.output, output);
+      expect(core.calls, hasLength(1));
+      expect(
+        core.calls.single.command,
+        'authoring_store_export_revision3_exact_snapshot_v2',
+      );
+      expect(core.calls.single.payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'output': output,
+        'root': fixture.path,
+      });
+    },
+  );
+
+  test(
+    'production adapter forwards the closed localization-edit wires',
+    () async {
+      final project = _dialogLocalizationEditProjectJson();
+      final heads = _FakeRevision3Store();
+      final basisHead = heads.register(project);
+      final texts = const <String, String>{
+        'de': 'Geänderter Adaptertext.',
+        'pl': 'Tekst adaptera.',
+      };
+      final request =
+          AuthoringRevision3DialogLocalizationEditRequestV1.forProject(
+            expectedHead: basisHead,
+            currentProjectJson: project,
+            localizationId: _dialogLocalizationEditId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: _dialogLocalizationEditLocId,
+            texts: texts,
+          );
+      final candidate = (jsonDecode(project) as Map).cast<String, Object?>();
+      candidate['revision'] = 8;
+      candidate['authoring_locales'] = <Object?>['de', 'en', 'pl'];
+      final entity =
+          ((candidate['entities']! as Map)[_dialogLocalizationEditId]! as Map)
+              .cast<String, Object?>();
+      entity['revision'] = 5;
+      final data = ((entity['payload']! as Map)['data']! as Map)
+          .cast<String, Object?>();
+      data['texts'] = texts;
+      final candidateProject = jsonEncode(candidate);
+      final candidateHead = heads.register(candidateProject);
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_read_revision3_dialog_localization_edit_seed_v1':
+              _dialogLocalizationEditSeedResponse(
+                head: basisHead,
+                projectJson: project,
+                localizationId: _dialogLocalizationEditId,
+              ),
+          'authoring_store_prepare_revision3_dialog_localization_edit_v1':
+              <String, Object?>{
+                'ok': true,
+                'outcome': 'prepared_unpublished',
+                'basis_head_json': basisHead.canonicalJson,
+                'head_json': candidateHead.canonicalJson,
+                'project_json': candidateProject,
+                'project_id': '00000000000000000000000000000003',
+                'revision': 8,
+                'localization_id': _dialogLocalizationEditId,
+                'localization_revision': 5,
+                'added_locales': <Object?>['pl'],
+                'removed_locales': <Object?>['en'],
+                'build_status': 'blocked',
+                'runtime_status': 'runtime_unqualified',
+                'topic_authority': 'not_granted',
+                'publication_status': 'not_supported',
+              },
+        },
+      );
+      final adapter = ModFfiManagedRevision3AuthoringStore(ModFfi(core));
+
+      final seed = await adapter.readDialogLocalizationEditSeedV1(
+        root: fixture.path,
+        expectedHead: basisHead,
+        localizationId: _dialogLocalizationEditId,
+        expectedLocalizationRevision: 4,
+        expectedLocId: _dialogLocalizationEditLocId,
+      );
+      final prepared = await adapter.prepareDialogLocalizationEditV1(
+        root: fixture.path,
+        currentProjectJson: project,
+        request: request,
+      );
+
+      expect(seed.locales.map((locale) => locale.locale), <String>['de', 'en']);
+      expect(prepared.addedLocales, <String>['pl']);
+      expect(prepared.removedLocales, <String>['en']);
+      expect(core.calls.map((call) => call.command), <String>[
+        'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
+        'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+      ]);
+      expect(core.calls[0].payload, <String, Object?>{
+        'expected_head_json': basisHead.canonicalJson,
+        'expected_localization_revision': 4,
+        'expected_loc_id': _dialogLocalizationEditLocId,
+        'localization_id': _dialogLocalizationEditId,
+        'root': fixture.path,
+      });
+      expect(core.calls[1].payload, <String, Object?>{
+        'current_project_json': project,
+        'localization_edit_request_json': request.canonicalJson,
+        'root': fixture.path,
+      });
+    },
+  );
+
+  test(
+    'create, save, derive, close, and open preserve exact R3 bytes',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final saved = _projectJson(revision: 1, name: 'Saved');
+      final derived = _projectJson(revision: 2, name: 'Derived');
+
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      expect(session.projectJson, original);
+      expect(session.projectId, '00000000000000000000000000000003');
+      expect(session.projectRevision, 0);
+      expect(store.expectedHeads, <String?>[null]);
+      expect(await session.headFile.readAsString(), session.head.canonicalJson);
+
+      final firstHead = session.head.canonicalJson;
+      await session.save(saved);
+      expect(session.projectJson, saved);
+      expect(session.projectRevision, 1);
+      expect(store.expectedHeads[1], firstHead);
+
+      final value = await session.deriveAndSave<String>((latest) {
+        expect(latest, saved);
+        return ManagedProjectDerivedCandidate<String>(
+          projectJson: derived,
+          value: 'published',
+        );
+      });
+      expect(value, 'published');
+      expect(session.projectJson, derived);
+      expect(session.projectRevision, 2);
+      final exactFinalHead = session.head.canonicalJson;
+      await session.close();
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.head.canonicalJson, exactFinalHead);
+      expect(reopened.projectJson, derived);
+      expect(reopened.projectRevision, 2);
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'queued Quest transactions bind latest R3 basis and publish fully reopened candidates',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'Quest project');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final originalHead = session.head.canonicalJson;
+      final genericPrepares = store.prepareCalls;
+
+      final first = session.prepareAndPublishQuestDraftV3(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+        scriptModuleId: '00000000000000000000000000000072',
+        displayName: 'Managed Quest 1',
+        intent: _questIntent(
+          1,
+          additionalObjectiveTitles: const <String>[
+            'Inspect the gate',
+            'Report to Asghan',
+          ],
+        ),
+      );
+      final second = session.prepareAndPublishQuestDraftV3(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000073',
+        scriptModuleId: '00000000000000000000000000000074',
+        displayName: 'Managed Quest 2',
+        intent: _questIntent(2),
+      );
+      final results = await Future.wait(
+        <Future<ManagedRevision3QuestDraftCheckpoint>>[first, second],
+      );
+
+      expect(store.prepareCalls, genericPrepares);
+      expect(store.questPrepareCalls, 2);
+      expect(store.questCurrentProjects[0], original);
+      expect(store.questRequests[0].expectedHead.canonicalJson, originalHead);
+      expect(store.questRequests[0].expectedRevision, 0);
+      expect(store.questRequests[0].intent.additionalObjectiveTitles, <String>[
+        'Inspect the gate',
+        'Report to Asghan',
+      ]);
+      expect(
+        results[0].projectJson,
+        contains(
+          '"additional_objective_titles":["Inspect the gate","Report to Asghan"]',
+        ),
+      );
+      expect(
+        store.questRequests[1].expectedHead.canonicalJson,
+        results[0].head.canonicalJson,
+      );
+      expect(store.questRequests[1].expectedRevision, 1);
+      expect(store.questGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(results[0].projectRevision, 1);
+      expect(results[0].questId, '00000000000000000000000000000071');
+      expect(results[1].projectRevision, 2);
+      expect(results[1].questId, '00000000000000000000000000000073');
+      expect(session.projectJson, results[1].projectJson);
+      expect(session.projectRevision, 2);
+      expect(session.head.canonicalJson, results[1].head.canonicalJson);
+      expect(
+        await session.headFile.readAsString(),
+        results[1].head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, results[1].projectJson);
+      expect(reopened.projectRevision, 2);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'queued NPC transactions bind latest R3 basis and publish fully reopened candidates',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_queue');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'NPC project');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final originalHead = session.head.canonicalJson;
+      final genericPrepares = store.prepareCalls;
+
+      final first = session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard 1',
+        intent: _npcIntent(1),
+      );
+      final second = session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000083',
+        scriptModuleId: '00000000000000000000000000000084',
+        displayName: 'Managed Guard 2',
+        intent: _npcIntent(2),
+      );
+      final results = await Future.wait(
+        <Future<ManagedRevision3NpcDraftCheckpoint>>[first, second],
+      );
+
+      expect(store.prepareCalls, genericPrepares);
+      expect(store.npcPrepareCalls, 2);
+      expect(store.npcCurrentProjects[0], original);
+      expect(store.npcRequests[0].expectedHead.canonicalJson, originalHead);
+      expect(store.npcRequests[0].expectedRevision, 0);
+      expect(
+        store.npcRequests[1].expectedHead.canonicalJson,
+        results[0].head.canonicalJson,
+      );
+      expect(store.npcRequests[1].expectedRevision, 1);
+      expect(store.npcGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(results[0].projectRevision, 1);
+      expect(results[0].npcId, '00000000000000000000000000000081');
+      expect(results[0].uniqueName, 'GoreManagedNpc1');
+      expect(results[1].projectRevision, 2);
+      expect(results[1].npcId, '00000000000000000000000000000083');
+      expect(results[1].parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+      expect(session.projectJson, results[1].projectJson);
+      expect(session.projectRevision, 2);
+      expect(session.head.canonicalJson, results[1].head.canonicalJson);
+      expect(
+        await session.headFile.readAsString(),
+        results[1].head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, results[1].projectJson);
+      expect(reopened.projectRevision, 2);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'DialogLine create publishes only after candidate and fixed-head full reopens without a game root',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dialog_line_publish');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 0, name: 'Dialog project');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final basisHead = session.head;
+      final plan = _dialogLinePlan();
+
+      final result = await session.prepareAndPublishDialogLineV1(plan: plan);
+
+      expect(store.dialogLinePrepareCalls, 1);
+      expect(store.dialogLineCurrentProjects, <String>[original]);
+      expect(
+        store.dialogLineRequests.single.expectedHead.canonicalJson,
+        basisHead.canonicalJson,
+      );
+      expect(store.dialogLineRequests.single.expectedRevision, 0);
+      expect(
+        store.dialogLineRequests.single.canonicalJson,
+        isNot(contains('game_root')),
+      );
+      expect(result.projectRevision, 1);
+      expect(result.projectId, '00000000000000000000000000000003');
+      expect(result.lineId, plan.lineId);
+      expect(result.localizationId, plan.localization.localizationId);
+      expect(
+        result.localizationAction,
+        AuthoringRevision3DialogLocalizationAction.created,
+      );
+      expect(result.voiceSlotId, plan.voiceSlot!.slotId);
+      expect(store.openedCheckpointHeads, contains(result.head.canonicalJson));
+      expect(store.openedPublishedHeads.last, result.head.canonicalJson);
+      expect(store.headVerifications.last, AuthoringAssetVerification.full);
+      expect(store.openVerifications.last, AuthoringAssetVerification.full);
+      expect(session.projectJson, result.projectJson);
+      expect(session.head.canonicalJson, result.head.canonicalJson);
+      expect(await session.headFile.readAsString(), result.head.canonicalJson);
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 1);
+      expect(reopened.projectJson, result.projectJson);
+      final project = jsonDecode(reopened.projectJson) as Map<String, Object?>;
+      final entities = (project['entities']! as Map).cast<String, Object?>();
+      expect(
+        entities.keys,
+        containsAll(<String>[
+          plan.lineId,
+          plan.localization.localizationId,
+          plan.voiceSlot!.slotId,
+        ]),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Voice transaction binds the exact lane and publishes only after two full reopens',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_publish');
+      final store = _FakeRevision3Store();
+      final original = revision3VoiceFixtureProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final basisHead = session.head.canonicalJson;
+      final genericPrepares = store.prepareCalls;
+
+      final result = await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: r'D:\Recordings\asghan.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan DE Take 1',
+        logicalName: 'GRD_263_ASGHAN_OPEN_INFO_06_02.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.recorded,
+      );
+
+      expect(store.prepareCalls, genericPrepares);
+      expect(store.voicePrepareCalls, 1);
+      expect(store.voiceGameRoots, <String>[r'D:\Games\Gothic Remake']);
+      expect(store.voiceSources, <String>[r'D:\Recordings\asghan.ogg']);
+      expect(store.voiceCurrentProjects, <String>[original]);
+      expect(store.voiceRequests.single.expectedHead.canonicalJson, basisHead);
+      expect(store.voiceRequests.single.expectedRevision, 7);
+      expect(result.projectRevision, 8);
+      expect(result.projectId, revision3VoiceFixtureProjectId);
+      expect(result.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(result.takeId, revision3VoiceFixtureTakeId);
+      expect(result.slotCreated, isTrue);
+      expect(result.selected, isFalse);
+      expect(result.asset.sha256, revision3VoiceFixtureAssetSha256);
+      expect(session.projectJson, result.projectJson);
+      expect(session.head.canonicalJson, result.head.canonicalJson);
+      expect(await session.headFile.readAsString(), result.head.canonicalJson);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, result.projectJson);
+      expect(reopened.projectRevision, 8);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'project build planning is an exact evidence-only read and leaves the checkpoint unchanged',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'project_build_plan');
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(revision: 4, name: 'Build preview');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      final result = await session.planProjectBuildV1();
+
+      expect(result.plan.isEmpty, isTrue);
+      expect(result.plan.productionContentCount, 0);
+      expect(result.plan.domains, hasLength(8));
+      expect(
+        result.plan.domains,
+        everyElement(
+          isA<AuthoringRevision3ProjectBuildDomainSummary>().having(
+            (domain) => domain.status,
+            'status',
+            AuthoringRevision3ProjectBuildDomainStatus.notPresent,
+          ),
+        ),
+      );
+      expect(
+        result.plan.buildAuthority,
+        AuthoringRevision3ProjectBuildAuthority.notGranted,
+      );
+      expect(store.projectBuildPlanCalls, 1);
+      expect(store.projectBuildPlanCurrentProjects, <String>[projectJson]);
+      expect(store.projectBuildPlanExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 4);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'project build-plan errors keep bounded author state retryable and poison integrity failures',
+    () async {
+      const retryableCodes = <String>{
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_INPUT_LIMIT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_PROJECT_INVALID',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STAGE_LIMIT',
+      };
+      for (final code in retryableCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_build_plan_retry_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 2, name: 'Retry preview'),
+        );
+        store.nextProjectBuildPlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_project_build_v1',
+          code: code,
+          message: 'injected bounded project build-plan failure',
+        );
+
+        await expectLater(
+          session.planProjectBuildV1(),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect((await session.planProjectBuildV1()).plan.isEmpty, isTrue);
+        expect(store.projectBuildPlanCalls, 2, reason: code);
+        await session.close();
+      }
+
+      for (final code in const <String>{
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_INVARIANT',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STORE_ROOT_CHANGED',
+        'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_STAGE_INVALID',
+      }) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_build_plan_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 2, name: 'Poison preview'),
+        );
+        store.nextProjectBuildPlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_project_build_v1',
+          code: code,
+          message: 'injected project build-plan integrity failure',
+        );
+
+        await expectLater(
+          session.planProjectBuildV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(store.projectBuildPlanCalls, 1, reason: code);
+        await session.close();
+      }
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'project_build_plan_head_conflict',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: _projectJson(revision: 2, name: 'Conflict preview'),
+          );
+      conflictStore.nextProjectBuildPlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_project_build_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_HEAD_CONFLICT',
+        message: 'injected project build-plan head conflict',
+      );
+      await expectLater(
+        conflictSession.planProjectBuildV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      await conflictSession.close();
+    },
+  );
+
+  test(
+    'project build plan uses readExact and rejects late head drift',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_build_plan_drift',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 5, name: 'Drift preview'),
+      );
+      store.afterProjectBuildPlan = (root, _) async {
+        final later = store.register(
+          _projectJson(revision: 6, name: 'Later preview'),
+        );
+        await File(
+          p.join(root, 'gore-project.json'),
+        ).writeAsString(later.canonicalJson, flush: true);
+      };
+
+      await expectLater(
+        session.planProjectBuildV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(store.projectBuildPlanCalls, 1);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice planning is an exact no-output read and leaves the checkpoint unchanged',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_plan');
+      final store = _FakeRevision3Store();
+      final projectJson = revision3VoiceFixtureProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      final result = await session.planVoiceV1();
+
+      expect(result.isReady, isFalse);
+      expect(result.totalSlots, 0);
+      expect(
+        result.blockers.single.reason,
+        AuthoringRevision3VoiceBuildBlockReason.noVoiceSlots,
+      );
+      expect(store.voicePlanCalls, 1);
+      expect(store.voicePlanCurrentProjects, <String>[projectJson]);
+      expect(store.voicePlanExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(store.voiceBuildCalls, 0);
+      expect(store.voiceBuildGameRoots, isEmpty);
+      expect(store.voiceBuildOutputs, isEmpty);
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 7);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice plan keeps bounded semantic failures retryable but poisons integrity failures',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'voice_plan_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final retryHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
+        message: 'fake Voice-only semantic rejection',
+      );
+
+      await expectLater(
+        retrySession.planVoiceV1(),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        await retrySession.headFile.readAsBytes(),
+        orderedEquals(retryHead),
+      );
+      expect((await retrySession.planVoiceV1()).isReady, isFalse);
+      expect(retryStore.voicePlanCalls, 2);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_plan_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      poisonStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_INVARIANT',
+        message: 'fake planner/native invariant disagreement',
+      );
+
+      await expectLater(
+        poisonSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await expectLater(
+        poisonSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.voicePlanCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'Voice plan error classifier covers every retryable code and fails closed otherwise',
+    () async {
+      const retryableCodes = <String>{
+        'AUTHORING_REVISION3_VOICE_PLAN_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
+        'AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT',
+      };
+      for (final code in retryableCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_plan_retry_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        store.nextVoicePlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_voice_v1',
+          code: code,
+          message: 'injected retryable Voice plan failure',
+        );
+
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect((await session.planVoiceV1()).isReady, isFalse, reason: code);
+        expect(store.voicePlanCalls, 2, reason: code);
+        await session.close();
+      }
+
+      const poisonedCodes = <String>{
+        'AUTHORING_REVISION3_VOICE_PLAN_INVARIANT',
+        'AUTHORING_REVISION3_VOICE_PLAN_STORE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PLAN_UNRECOGNIZED',
+      };
+      for (final code in poisonedCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_plan_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        store.nextVoicePlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_voice_v1',
+          code: code,
+          message: 'injected untrusted Voice plan failure',
+        );
+
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voicePlanCalls, 1, reason: code);
+        await session.close();
+      }
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_plan_head_conflict_classifier',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      conflictStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT',
+        message: 'injected Voice plan head conflict',
+      );
+
+      await expectLater(
+        conflictSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      expect(conflictStore.voicePlanCalls, 1);
+      await conflictSession.close();
+    },
+  );
+
+  test(
+    'Voice plan uses readExact and rejects a head change after native planning',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_plan_drift');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      store.afterVoicePlan = (root, _) async {
+        final laterHead = store.register(
+          revision3VoiceFixtureProjectJson(revision: 8),
+        );
+        await File(
+          p.join(root, 'gore-project.json'),
+        ).writeAsString(laterHead.canonicalJson, flush: true);
+      };
+
+      await expectLater(
+        session.planVoiceV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(store.voicePlanCalls, 1);
+      expect(store.voiceBuildCalls, 0);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice target publishes sealed archive evidence and build is an exact non-publishing read',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_target_build');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: r'D:\Recordings\asghan.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan approved take',
+        logicalName: 'GRD_263_ASGHAN_OPEN_INFO_06_02.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.approved,
+        selectTake: true,
+      );
+
+      final target = await session.prepareAndPublishVoiceTargetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      );
+      expect(target.projectRevision, 9);
+      expect(
+        target.resolution,
+        AuthoringRevision3VoiceTargetResolutionState.resolved,
+      );
+      expect(target.targets.single.archive, 'german_new.zip');
+      expect(target.archiveObservation!.sha256, 'c' * 64);
+      expect(store.voiceTargetPrepareCalls, 1);
+      expect(store.voiceTargetRequests.single.expectedRevision, 8);
+      expect(await session.headFile.readAsString(), target.head.canonicalJson);
+
+      final fixedHead = await session.headFile.readAsBytes();
+      final result = await session.buildVoiceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        output: p.join(fixture.path, 'voice-bundle'),
+      );
+      expect(result.isBuilt, isTrue);
+      expect(result.projectRevision, 9);
+      expect(store.voiceBuildCalls, 1);
+      expect(store.voiceBuildGameRoots, <String>[r'D:\Games\Gothic Remake']);
+      expect(session.projectRevision, 9);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice target and build classify retryable output/input failures separately from Store integrity',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_target_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final retryHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceTargetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_ARCHIVE_UNAVAILABLE',
+        message: 'fake archive unavailable',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishVoiceTargetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        await retrySession.headFile.readAsBytes(),
+        orderedEquals(retryHead),
+      );
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_BUILD_OUTPUT_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_BUILD_STORE_GAME_ALIAS',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_OUTPUT_ALIAS',
+        'AUTHORING_REVISION3_VOICE_BUILD_EXECUTABLE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_BUILD_EXECUTABLE_MISMATCH',
+        'AUTHORING_REVISION3_VOICE_BUILD_PROMOTION_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_CLEANUP_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_ROOT_CHANGED',
+        'AUTHORING_REVISION3_VOICE_BUILD_OUTPUT_ROOT_CHANGED',
+      ]) {
+        retryStore.nextVoiceBuildError = ModFfiException(
+          command: 'authoring_store_build_revision3_voice_v1',
+          code: code,
+          message: 'fake retryable Voice build failure',
+        );
+        await expectLater(
+          retrySession.buildVoiceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            output: p.join(fixture.path, 'exists'),
+          ),
+          throwsA(isA<ModFfiException>()),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+        expect(
+          await retrySession.headFile.readAsBytes(),
+          orderedEquals(retryHead),
+          reason: code,
+        );
+      }
+
+      retryStore.nextVoiceBuildError = const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_PUBLICATION_UNCONFIRMED',
+        message: 'fake ambiguous output publication',
+      );
+      await expectLater(
+        retrySession.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'ambiguous-output'),
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_BUILD_PUBLICATION_UNCONFIRMED',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_target_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      poisonStore.nextVoiceTargetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_STORE_SEAL_MISMATCH',
+        message: 'fake Store integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishVoiceTargetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+
+      final buildPoisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_build_store_root_poison',
+      );
+      final buildPoisonStore = _FakeRevision3Store();
+      final buildPoisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: buildPoisonRoot,
+            store: buildPoisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      buildPoisonStore.nextVoiceBuildError = const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_STORE_ROOT_CHANGED',
+        message: 'fake Store-root identity drift',
+      );
+      await expectLater(
+        buildPoisonSession.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'store-drift-output'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(buildPoisonSession.requiresReopen, isTrue);
+      await buildPoisonSession.close();
+    },
+  );
+
+  test(
+    'Voice target publication preserves an intact full 1024-candidate slot',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_target_full');
+      final store = _FakeRevision3Store();
+      final fullProject = revision3VoiceFixtureProjectWithExistingSlotJson(
+        candidateCount: 1024,
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: fullProject,
+      );
+
+      final target = await session.prepareAndPublishVoiceTargetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      );
+
+      expect(target.projectRevision, 9);
+      expect(
+        target.resolution,
+        AuthoringRevision3VoiceTargetResolutionState.resolved,
+      );
+      expect(store.voiceTargetPrepareCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice build returns its basis receipt and marks reopen after a later head drift',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_build_snapshot');
+      final store = _FakeRevision3Store();
+      final basisProject = revision3VoiceFixtureBuildReadyProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisProject,
+      );
+      final externalProject = (jsonDecode(basisProject) as Map)
+          .cast<String, Object?>();
+      externalProject['revision'] = (externalProject['revision']! as int) + 1;
+      final externalHead = store.register(jsonEncode(externalProject));
+      store.afterVoiceBuild = (storeRoot, _) async {
+        await File(
+          p.join(storeRoot, 'gore-project.json'),
+        ).writeAsString(externalHead.canonicalJson, flush: true);
+      };
+
+      final result = await session.buildVoiceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        output: p.join(fixture.path, 'snapshot-voice-bundle'),
+      );
+
+      expect(result.isBuilt, isTrue);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.output, p.join(fixture.path, 'snapshot-voice-bundle'));
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await expectLater(
+        session.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'another-voice-bundle'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      await session.close();
+    },
+  );
+
+  test(
+    'V2 project backup export is optional and unsupported stores stay narrow',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_unsupported');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'No export'),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      expect(session.supportsRestorableSnapshotExport, isFalse);
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'unsupported-v2.goremod'),
+        ),
+        throwsUnsupportedError,
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'exact snapshot export binds the head and preserves all terminal receipts',
+    () async {
+      for (final outcome in <String>[
+        'exported',
+        'exported_with_cleanup_warning',
+        'publication_uncertain',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'export_${outcome.replaceAll('_', '-')}',
+        );
+        final store = _FakeRevision3RestorableExportStore()
+          ..nextOutcome = outcome;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 7, name: 'Exact export'),
+        );
+        final fixedHead = await session.headFile.readAsBytes();
+        final output = p.join(fixture.path, '$outcome.goremod');
+
+        expect(session.supportsRestorableSnapshotExport, isTrue);
+        final result = await session.exportExactSnapshotV2(output: output);
+
+        expect(result.basisHead.canonicalJson, session.head.canonicalJson);
+        expect(result.projectId, session.projectId);
+        expect(result.projectRevision, session.projectRevision);
+        expect(result.output, output);
+        expect(result.hasCleanupWarning, outcome.contains('cleanup'));
+        expect(result.publicationIsUncertain, outcome.contains('uncertain'));
+        expect(store.exportCalls, 1);
+        expect(store.exportRoots, <String>[root.path]);
+        expect(store.exportExpectedHeads, <String>[session.head.canonicalJson]);
+        expect(store.exportOutputs, <String>[output]);
+        expect(session.projectRevision, 7);
+        expect(session.requiresReopen, isFalse);
+        expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'exact snapshot export rejects receipt mismatch and malformed native success',
+    () async {
+      final mismatchRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_mismatch',
+      );
+      final mismatchStore = _FakeRevision3RestorableExportStore()
+        ..nextProjectRevisionOverride = 8;
+      final mismatchSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: mismatchRoot,
+            store: mismatchStore,
+            projectJson: _projectJson(revision: 7, name: 'Mismatch export'),
+          );
+
+      await expectLater(
+        mismatchSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'mismatch.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(mismatchSession.requiresReopen, isTrue);
+      await mismatchSession.close();
+
+      final malformedRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_malformed',
+      );
+      final malformedStore = _FakeRevision3RestorableExportStore()
+        ..nextExportError = const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: ModFfiException.malformedNativeResponseCode,
+          message: 'fake malformed terminal response',
+        );
+      final malformedSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: malformedRoot,
+            store: malformedStore,
+            projectJson: _projectJson(revision: 7, name: 'Malformed export'),
+          );
+
+      await expectLater(
+        malformedSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'malformed.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(malformedSession.requiresReopen, isTrue);
+      await malformedSession.close();
+    },
+  );
+
+  test(
+    'exact snapshot export separates bounded output failures from Store uncertainty',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_retryable_failures',
+      );
+      final retryStore = _FakeRevision3RestorableExportStore();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 7, name: 'Retryable export'),
+      );
+      final fixedHead = await retrySession.headFile.readAsBytes();
+      for (final code in <String>[
+        'AUTHORING_REVISION3_EXPORT_CLOSURE_LIMIT',
+        'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+        'AUTHORING_REVISION3_EXPORT_VERIFY_FAILED',
+      ]) {
+        retryStore.nextExportError = ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: code,
+          message: 'fake bounded pre-publication export failure',
+        );
+        await expectLater(
+          retrySession.exportExactSnapshotV2(
+            output: p.join(fixture.path, '$code.goremod'),
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+        expect(
+          await retrySession.headFile.readAsBytes(),
+          orderedEquals(fixedHead),
+          reason: code,
+        );
+      }
+      expect(
+        (await retrySession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'after-bounded-failure.goremod'),
+        )).projectRevision,
+        7,
+      );
+      await retrySession.close();
+
+      for (final injected in <Object>[
+        const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: 'AUTHORING_REVISION3_EXPORT_ROOT_UNAVAILABLE',
+          message: 'fake managed Store root became unavailable',
+        ),
+        const FormatException('fake malformed post-call export receipt'),
+      ]) {
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'export_poison_${injected.runtimeType}',
+        );
+        final poisonStore = _FakeRevision3RestorableExportStore()
+          ..nextExportError = injected;
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(revision: 7, name: 'Poisoned export'),
+            );
+        final Matcher expectedFailure;
+        if (injected is ModFfiException) {
+          expectedFailure =
+              isA<ManagedRevision3ExactSnapshotExportPrepublicationException>()
+                  .having((error) => error.code, 'code', injected.code);
+        } else {
+          expectedFailure = isA<ManagedProjectVerificationException>().having(
+            (error) =>
+                error
+                    is ManagedRevision3ExactSnapshotExportPrepublicationException,
+            'is known pre-publication failure',
+            isFalse,
+          );
+        }
+
+        await expectLater(
+          poisonSession.exportExactSnapshotV2(
+            output: p.join(
+              fixture.path,
+              'poison-${injected.runtimeType}.goremod',
+            ),
+          ),
+          throwsA(expectedFailure),
+        );
+        expect(poisonSession.requiresReopen, isTrue);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'exact snapshot export detects pre-call drift without invoking native',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_pre_drift');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Export basis'),
+      );
+      final externalHead = store.register(
+        _projectJson(revision: 8, name: 'External winner'),
+      );
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'pre-drift.goremod'),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(store.exportCalls, 0);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'exact snapshot export preserves a valid receipt after post-call drift',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_post_drift');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Export basis'),
+      );
+      final basisHead = session.head;
+      final externalHead = store.register(
+        _projectJson(revision: 8, name: 'External winner'),
+      );
+      store.afterExport = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      final result = await session.exportExactSnapshotV2(
+        output: p.join(fixture.path, 'post-drift.goremod'),
+      );
+
+      expect(result.basisHead.canonicalJson, basisHead.canonicalJson);
+      expect(result.projectRevision, 7);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'after-drift.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      await session.close();
+    },
+  );
+
+  test(
+    'exact snapshot export shares the serialized close and reentrant lane',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_queue');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Queued export'),
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      store.afterExport = (_, _, _) async {
+        entered.complete();
+        await release.future;
+      };
+      final export = session.exportExactSnapshotV2(
+        output: p.join(fixture.path, 'queued.goremod'),
+      );
+      await entered.future;
+      final close = session.close();
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'too-late.goremod'),
+        ),
+        throwsA(isA<ManagedProjectSessionClosedException>()),
+      );
+      release.complete();
+      expect((await export).projectRevision, 7);
+      await close;
+      expect(session.isClosed, isTrue);
+
+      final reentrantRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_reentrant',
+      );
+      final reentrantStore = _FakeRevision3RestorableExportStore();
+      final reentrantSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: reentrantRoot,
+            store: reentrantStore,
+            projectJson: _projectJson(revision: 7, name: 'Reentrant export'),
+          );
+      await reentrantSession.deriveAndSave<void>((_) async {
+        await expectLater(
+          reentrantSession.exportExactSnapshotV2(
+            output: p.join(fixture.path, 'nested.goremod'),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        return const ManagedProjectDerivedRejection<void>(null);
+      });
+      expect(reentrantStore.exportCalls, 0);
+      await reentrantSession.close();
+    },
+  );
+
+  test('restorable V2 export preserves every sealed terminal', () async {
+    for (final outcome in <String>[
+      'exported',
+      'exported_with_cleanup_warning',
+      'publication_uncertain',
+    ]) {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_${outcome.replaceAll('_', '-')}',
+      );
+      final store = _FakeRevision3RestorableExportStore()
+        ..nextOutcome = outcome;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Restorable export'),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+      final output = p.join(fixture.path, 'v2-$outcome.goremod');
+
+      expect(session.supportsRestorableSnapshotExport, isTrue);
+      final result = await session.exportExactSnapshotV2(output: output);
+
+      expect(result.basisHead.canonicalJson, session.head.canonicalJson);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.output, output);
+      expect(result.isRestorableProjectCopy, isTrue);
+      expect(result.hasCleanupWarning, outcome.contains('cleanup'));
+      expect(result.publicationIsUncertain, outcome.contains('uncertain'));
+      expect(store.exportCalls, 1);
+      expect(store.exportRoots, <String>[root.path]);
+      expect(store.exportExpectedHeads, <String>[session.head.canonicalJson]);
+      expect(store.exportOutputs, <String>[output]);
+      expect(session.projectRevision, 7);
+      expect(session.requiresReopen, isFalse);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    }
+  });
+
+  test(
+    'restorable V2 export separates safe failures from mismatched or malformed receipts',
+    () async {
+      final safeRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_safe_failure',
+      );
+      final safeStore = _FakeRevision3RestorableExportStore()
+        ..nextExportError = const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: 'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+          message: 'fake output already exists',
+        );
+      final safeSession = await ManagedRevision3AuthoringProjectSession.create(
+        root: safeRoot,
+        store: safeStore,
+        projectJson: _projectJson(revision: 7, name: 'Safe V2 failure'),
+      );
+      final fixedHead = await safeSession.headFile.readAsBytes();
+
+      await expectLater(
+        safeSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'existing-v2.goremod'),
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+          ),
+        ),
+      );
+      expect(safeSession.requiresReopen, isFalse);
+      expect(
+        await safeSession.headFile.readAsBytes(),
+        orderedEquals(fixedHead),
+      );
+      expect(
+        (await safeSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'after-safe-v2.goremod'),
+        )).projectRevision,
+        7,
+      );
+      await safeSession.close();
+
+      final mismatchRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_mismatch',
+      );
+      final mismatchStore = _FakeRevision3RestorableExportStore()
+        ..nextProjectRevisionOverride = 8;
+      final mismatchSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: mismatchRoot,
+            store: mismatchStore,
+            projectJson: _projectJson(revision: 7, name: 'Mismatch V2 export'),
+          );
+
+      await expectLater(
+        mismatchSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'mismatch-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(mismatchSession.requiresReopen, isTrue);
+      await mismatchSession.close();
+
+      final malformedRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_malformed',
+      );
+      final malformedStore = _FakeRevision3RestorableExportStore()
+        ..nextExportError = const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v2',
+          code: ModFfiException.malformedNativeResponseCode,
+          message: 'fake malformed V2 terminal response',
+        );
+      final malformedSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: malformedRoot,
+            store: malformedStore,
+            projectJson: _projectJson(revision: 7, name: 'Malformed V2 export'),
+          );
+
+      await expectLater(
+        malformedSession.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'malformed-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(malformedSession.requiresReopen, isTrue);
+      await malformedSession.close();
+    },
+  );
+
+  test(
+    'restorable V2 export detects pre-call drift without invoking native',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_v2_pre_drift');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'V2 export basis'),
+      );
+      final externalHead = store.register(
+        _projectJson(revision: 8, name: 'External V2 winner'),
+      );
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'pre-drift-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(store.exportCalls, 0);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'restorable V2 export shares the serialized close and reentrant lane',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'export_v2_queue');
+      final store = _FakeRevision3RestorableExportStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Queued V2 export'),
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      store.afterExport = (_, _, _) async {
+        entered.complete();
+        await release.future;
+      };
+      final export = session.exportExactSnapshotV2(
+        output: p.join(fixture.path, 'queued-v2.goremod'),
+      );
+      await entered.future;
+      final close = session.close();
+      await expectLater(
+        session.exportExactSnapshotV2(
+          output: p.join(fixture.path, 'too-late-v2.goremod'),
+        ),
+        throwsA(isA<ManagedProjectSessionClosedException>()),
+      );
+      release.complete();
+      expect((await export).projectRevision, 7);
+      await close;
+      expect(session.isClosed, isTrue);
+
+      final reentrantRoot = await _projectRoot(
+        fixture,
+        suffix: 'export_v2_reentrant',
+      );
+      final reentrantStore = _FakeRevision3RestorableExportStore();
+      final reentrantSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: reentrantRoot,
+            store: reentrantStore,
+            projectJson: _projectJson(revision: 7, name: 'Reentrant V2 export'),
+          );
+      await reentrantSession.deriveAndSave<void>((_) async {
+        await expectLater(
+          reentrantSession.exportExactSnapshotV2(
+            output: p.join(fixture.path, 'nested-v2.goremod'),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        return const ManagedProjectDerivedRejection<void>(null);
+      });
+      expect(reentrantStore.exportCalls, 0);
+      await reentrantSession.close();
+    },
+  );
+
+  test(
+    'Voice media QA is pathless, exact, and read-only for the checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_media_qa');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice media QA'),
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactProject = session.projectJson;
+
+      final result = await session.inspectVoiceTakeMediaQaV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+
+      expect(session.supportsVoiceTakeMediaQa, isTrue);
+      expect(store.voiceMediaQaCalls, 1);
+      final request = store.voiceMediaQaRequests.single;
+      expect(request.expectedHead.canonicalJson, exactHead);
+      expect(request.lineId, revision3VoicePreviewLineId);
+      expect(request.locale, 'de');
+      expect(request.takeId, revision3VoicePreviewTakeId);
+      expect(result.duration.sampleFrames, 3840);
+      expect(result.duration.timebaseHz, 48000);
+      expect(
+        result.assurance,
+        AuthoringRevision3VoiceTakeMediaAssurance.vorbisFullPcmDecode,
+      );
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, exactProject);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice media QA leaf graph drift is stale and remains retryable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_media_qa_retryable',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice media QA retry'),
+      );
+      final exactHead = session.head.canonicalJson;
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_MEDIA_LINE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_LOCALIZATION_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_SLOT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_TAKE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_CONFLICT',
+      ];
+
+      for (final code in retryableCodes) {
+        store.nextVoiceMediaQaError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+          code: code,
+          message: 'fake closed Voice media QA graph rejection',
+        );
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+      }
+
+      await session.inspectVoiceTakeMediaQaV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice media QA Store and invariant uncertainty require reopen',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_MEDIA_INPUT_INVALID',
+        'AUTHORING_REVISION3_VOICE_MEDIA_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_SIGNED_WIRE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_ASSET_INVALID',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_UNSAFE',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_STORE_INVARIANT',
+        'AUTHORING_REVISION3_VOICE_MEDIA_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_MEDIA_FUTURE_UNKNOWN',
+      ];
+
+      for (var index = 0; index < poisonCodes.length; index++) {
+        final code = poisonCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_media_qa_poison_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 7,
+            name: 'Voice media QA poison $index',
+          ),
+        );
+        final exactHead = session.head.canonicalJson;
+        store.nextVoiceMediaQaError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+          code: code,
+          message: 'fake Voice media QA integrity failure',
+        );
+
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        final calls = store.voiceMediaQaCalls;
+        await expectLater(
+          session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voiceMediaQaCalls, calls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice media QA valid receipt drift poisons the exact session',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_media_qa_receipt_drift',
+      );
+      final store = _FakeRevision3Store()..nextVoiceMediaQaStatus = 'approved';
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 7,
+          name: 'Voice media QA receipt drift',
+        ),
+      );
+
+      await expectLater(
+        session.inspectVoiceTakeMediaQaV1(plan: revision3VoicePreviewPlan()),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview materializes one exact temp capability without changing the checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_preview');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview'),
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactProject = session.projectJson;
+
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+
+      expect(session.supportsVoiceTakePreview, isTrue);
+      expect(store.voicePreviewCalls, 1);
+      expect(
+        store.voicePreviewRequests.single.expectedHead.canonicalJson,
+        exactHead,
+      );
+      expect(
+        await File(capability.path).readAsBytes(),
+        revision3VoicePreviewBytes,
+      );
+      expect(capability.projectId, session.projectId);
+      expect(capability.projectRevision, 7);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, exactProject);
+      expect(session.requiresReopen, isFalse);
+
+      final previewRoot = Directory(p.dirname(capability.path));
+      await capability.close();
+      expect(await previewRoot.exists(), isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview semantic drift and temp capability failures remain local',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_retryable',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview retry'),
+      );
+      final exactHead = session.head.canonicalJson;
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_PREVIEW_LINE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_LOCALIZATION_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_SLOT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_TAKE_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_CLEANUP_TOKEN_UNKNOWN',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_CAPABILITY_CHANGED',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_OUTPUT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+      ];
+
+      for (final code in retryableCodes) {
+        store.nextVoicePreviewError = ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: code,
+          message: 'fake closed Voice preview rejection',
+        );
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        expect(
+          await Directory(store.voicePreviewRoots.last).exists(),
+          isFalse,
+          reason: code,
+        );
+      }
+
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      await capability.close();
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview cleanup-only and local materialization obligations stay retryable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_cleanup_obligation',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 7, name: 'Voice preview cleanup'),
+      );
+      final generic = Revision3VoiceTakePreviewCleanupException(
+        StateError('fake local cleanup lock'),
+      );
+      store.nextVoicePreviewError = generic;
+      await expectLater(
+        session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(same(generic)),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(await Directory(store.voicePreviewRoots.last).exists(), isFalse);
+
+      store.blockVoicePreviewCleanupOnError = true;
+      store.nextVoicePreviewError = const ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+        message: 'fake local materialization failure',
+      );
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      try {
+        await session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        );
+        fail('local materialization must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+      expect(
+        retained.materializationCause,
+        isA<ModFfiException>().having(
+          (error) => error.code,
+          'code',
+          'AUTHORING_REVISION3_VOICE_PREVIEW_PREVIEW_IO',
+        ),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(retained.isCleaned, isFalse);
+      expect(retained.diagnosticPreviewRoot, store.voicePreviewRoots.last);
+
+      await File(p.join(retained.diagnosticPreviewRoot, 'unexpected')).delete();
+      await retained.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+      final capability = await session.materializeVoiceTakePreviewV1(
+        plan: revision3VoicePreviewPlan(),
+      );
+      await capability.close();
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview integrity failure poisons while retaining failed cleanup ownership',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_preview_poison_cleanup_obligation',
+      );
+      final store = _FakeRevision3Store()
+        ..blockVoicePreviewCleanupOnError = true
+        ..nextVoicePreviewError = const ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: 'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_INVALID',
+          message: 'fake invalid immutable asset',
+        );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 7,
+          name: 'Voice preview poison cleanup',
+        ),
+      );
+      late Revision3VoiceTakePreviewMaterializationCleanupException retained;
+      try {
+        await session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        );
+        fail('integrity failure must retain failed cleanup');
+      } on Revision3VoiceTakePreviewMaterializationCleanupException catch (
+        error
+      ) {
+        retained = error;
+      }
+
+      expect(
+        retained.materializationCause,
+        isA<ManagedProjectVerificationException>(),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(retained.isCleaned, isFalse);
+      expect(retained.diagnosticPreviewRoot, store.voicePreviewRoots.single);
+      final calls = store.voicePreviewCalls;
+      await expectLater(
+        session.materializeVoiceTakePreviewV1(
+          plan: revision3VoicePreviewPlan(),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.voicePreviewCalls, calls);
+
+      await File(p.join(retained.diagnosticPreviewRoot, 'unexpected')).delete();
+      await retained.retryCleanup();
+      expect(retained.isCleaned, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice preview request, head, response, and Store uncertainty poison',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INPUT_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_SIGNED_WIRE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_ASSET_INVALID',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_STORE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_PREVIEW_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_PREVIEW_FUTURE_UNKNOWN',
+      ];
+
+      for (var index = 0; index < poisonCodes.length; index++) {
+        final code = poisonCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_preview_poison_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 7,
+            name: 'Voice preview poison $index',
+          ),
+        );
+        final exactHead = session.head.canonicalJson;
+        store.nextVoicePreviewError = ModFfiException(
+          command:
+              'authoring_store_materialize_revision3_voice_take_preview_v1',
+          code: code,
+          message: 'fake Voice preview integrity failure',
+        );
+
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+        expect(
+          await Directory(store.voicePreviewRoots.single).exists(),
+          isFalse,
+          reason: code,
+        );
+        final calls = store.voicePreviewCalls;
+        await expectLater(
+          session.materializeVoiceTakePreviewV1(
+            plan: revision3VoicePreviewPlan(),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voicePreviewCalls, calls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice local and source rejections retry without changing the exact head',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_errors');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      await expectLater(
+        session.prepareAndPublishVoiceTakeV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          source: 'take.ogg',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          takeId: revision3VoiceFixtureTakeId,
+          locale: 'de',
+          text: 'Du willst in die Mine?',
+          takeDisplayName: 'Asghan DE Take 1',
+          logicalName: 'asghan.ogg',
+          status: AuthoringRevision3VoiceTakeStatus.reviewed,
+          selectTake: true,
+        ),
+        throwsFormatException,
+      );
+      expect(store.voicePrepareCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS',
+        'AUTHORING_REVISION3_VOICE_INPUT_MISSING',
+        'AUTHORING_REVISION3_VOICE_INPUT_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_INPUT_UNSAFE',
+        'AUTHORING_REVISION3_VOICE_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_OGG_INVALID',
+        'AUTHORING_REVISION3_VOICE_INPUT_CHANGED',
+      ];
+      for (final code in retryableCodes) {
+        store.nextVoiceError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_v1',
+          code: code,
+          message: 'fake retryable Voice source rejection',
+        );
+        await expectLater(
+          session.prepareAndPublishVoiceTakeV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            source: 'take.ogg',
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            takeId: revision3VoiceFixtureTakeId,
+            locale: 'de',
+            takeDisplayName: 'Asghan DE Take 1',
+            logicalName: 'asghan.ogg',
+            status: AuthoringRevision3VoiceTakeStatus.recorded,
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(fixedHead),
+          reason: code,
+        );
+      }
+
+      final result = await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: 'take.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan DE Take 1',
+        logicalName: 'asghan.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.recorded,
+      );
+      expect(result.projectRevision, 8);
+      expect(store.voicePrepareCalls, retryableCodes.length + 1);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice collision, response, and Store invariants poison the session',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_COLLISION',
+        'AUTHORING_REVISION3_VOICE_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_STORE_SEAL_MISMATCH',
+      ];
+      for (final code in poisonCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        final fixedHead = await session.headFile.readAsBytes();
+        store.nextVoiceError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_v1',
+          code: code,
+          message: 'fake non-retryable Voice invariant',
+        );
+
+        await expectLater(
+          session.prepareAndPublishVoiceTakeV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            source: 'take.ogg',
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            takeId: revision3VoiceFixtureTakeId,
+            locale: 'de',
+            takeDisplayName: 'Asghan DE Take 1',
+            logicalName: 'asghan.ogg',
+            status: AuthoringRevision3VoiceTakeStatus.recorded,
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(fixedHead),
+          reason: code,
+        );
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice exhausted revision counter poisons the managed session',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_revision_limit');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+      store.nextVoiceError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_v1',
+        code: 'AUTHORING_REVISION3_VOICE_REVISION_LIMIT',
+        message: 'fake exhausted revision counter',
+      );
+
+      await expectLater(
+        session.prepareAndPublishVoiceTakeV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          source: 'take.ogg',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          takeId: revision3VoiceFixtureTakeId,
+          locale: 'de',
+          takeDisplayName: 'Asghan DE Take 1',
+          logicalName: 'asghan.ogg',
+          status: AuthoringRevision3VoiceTakeStatus.recorded,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.voicePrepareCalls, 1);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice selection and clear publish through exact full-reopen CAS without a game root',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final root = await _projectRoot(fixture, suffix: 'voice_selection');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: voice.projectJson,
+      );
+
+      final selected = await session.prepareAndPublishVoiceTakeSelectionV1(
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+        selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+      );
+
+      expect(store.voiceSelectionPrepareCalls, 1);
+      expect(store.voiceSelectionRequests.single.expectedRevision, 8);
+      expect(selected.projectRevision, 9);
+      expect(selected.slotRevision, voice.slotRevision + 1);
+      expect(selected.previousSelectedTakeId, revision3VoiceFixtureTakeId);
+      expect(selected.selectedTakeId, revision3VoiceSelectionAlternateTakeId);
+      expect(session.projectJson, selected.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        selected.head.canonicalJson,
+      );
+
+      final cleared = await session.prepareAndPublishVoiceTakeSelectionV1(
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: selected.slotRevision,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        expectedSelectedTakeId: revision3VoiceSelectionAlternateTakeId,
+        selectedTakeId: null,
+      );
+      expect(cleared.projectRevision, 10);
+      expect(cleared.slotRevision, selected.slotRevision + 1);
+      expect(cleared.selectedTakeId, isNull);
+      expect(store.voiceSelectionPrepareCalls, 2);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 10);
+      expect(reopened.projectJson, cleared.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Voice selection semantic failures retry while head and integrity failures poison',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_selection_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: voice.projectJson,
+      );
+      final fixedHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceSelectionError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+        code: 'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_NOT_APPROVED',
+        message: 'fake bounded selection rejection',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishVoiceTakeSelectionV1(
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          expectedSlotRevision: voice.slotRevision,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+          expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+          selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.headFile.readAsBytes(), fixedHead);
+      final published = await retrySession
+          .prepareAndPublishVoiceTakeSelectionV1(
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            expectedSlotRevision: voice.slotRevision,
+            locale: 'de',
+            expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+            expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+            selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+          );
+      expect(published.projectRevision, 9);
+      await retrySession.close();
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_SELECTION_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_SELECTION_STORE_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_selection_poison_${code.hashCode}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: voice.projectJson,
+        );
+        store.nextVoiceSelectionError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+          code: code,
+          message: 'fake Voice selection integrity failure',
+        );
+        await expectLater(
+          session.prepareAndPublishVoiceTakeSelectionV1(
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            expectedSlotRevision: voice.slotRevision,
+            locale: 'de',
+            expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+            expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+            selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+          ),
+          code.endsWith('HEAD_CONFLICT')
+              ? throwsA(isA<ManagedProjectHeadConflictException>())
+              : throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice take status publishes one exact take delta and serializes the full basis tuple',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final root = await _projectRoot(fixture, suffix: 'voice_take_status');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: voice.projectJson,
+      );
+      final basisHeadJson = session.head.canonicalJson;
+      final takeRevision = _voiceTakeRevision(
+        voice.projectJson,
+        revision3VoiceSelectionAlternateTakeId,
+      );
+
+      final published = await session.prepareAndPublishVoiceTakeStatusV1(
+        lineId: revision3VoiceFixtureLineId,
+        localizationId: revision3VoiceFixtureLocalizationId,
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        locale: 'de',
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        takeId: revision3VoiceSelectionAlternateTakeId,
+        expectedTakeRevision: takeRevision,
+        expectedStatus: AuthoringRevision3VoiceTakeStatus.approved,
+        desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
+      );
+
+      expect(store.voiceTakeStatusPrepareCalls, 1);
+      final request = store.voiceTakeStatusRequests.single;
+      expect(request.expectedHead.canonicalJson, basisHeadJson);
+      expect(request.expectedProjectId, revision3VoiceFixtureProjectId);
+      expect(request.expectedRevision, voice.projectRevision);
+      expect(request.lineId, revision3VoiceFixtureLineId);
+      expect(request.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(request.expectedLocId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+      expect(request.locale, 'de');
+      expect(request.slotId, revision3VoiceFixtureSlotId);
+      expect(request.expectedSlotRevision, voice.slotRevision);
+      expect(request.takeId, revision3VoiceSelectionAlternateTakeId);
+      expect(request.expectedTakeRevision, takeRevision);
+      expect(
+        request.expectedStatus,
+        AuthoringRevision3VoiceTakeStatus.approved,
+      );
+      expect(request.desiredStatus, AuthoringRevision3VoiceTakeStatus.reviewed);
+      final wire = (jsonDecode(request.canonicalJson) as Map)
+          .cast<String, Object?>();
+      expect(wire.keys, <String>[
+        'expected_head',
+        'expected_project_id',
+        'expected_revision',
+        'expected_target',
+        'line_id',
+        'localization_id',
+        'expected_loc_id',
+        'locale',
+        'slot_id',
+        'expected_slot_revision',
+        'take_id',
+        'expected_take_revision',
+        'expected_status',
+        'desired_status',
+      ]);
+      expect(request.canonicalJson, isNot(contains('game_root')));
+      expect(request.canonicalJson, isNot(contains('source')));
+
+      expect(published.projectId, revision3VoiceFixtureProjectId);
+      expect(published.projectRevision, voice.projectRevision + 1);
+      expect(published.lineId, revision3VoiceFixtureLineId);
+      expect(published.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(published.slotId, revision3VoiceFixtureSlotId);
+      expect(published.slotRevision, voice.slotRevision);
+      expect(published.locale, 'de');
+      expect(published.locId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+      expect(published.takeId, revision3VoiceSelectionAlternateTakeId);
+      expect(published.takeRevision, takeRevision + 1);
+      expect(
+        published.previousStatus,
+        AuthoringRevision3VoiceTakeStatus.approved,
+      );
+      expect(published.status, AuthoringRevision3VoiceTakeStatus.reviewed);
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice take status selected conflict retries while head malformed and invariant failures poison',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final takeRevision = _voiceTakeRevision(
+        voice.projectJson,
+        revision3VoiceSelectionAlternateTakeId,
+      );
+      Future<ManagedRevision3VoiceTakeStatusCheckpoint> publish(
+        ManagedRevision3AuthoringProjectSession session,
+      ) => session.prepareAndPublishVoiceTakeStatusV1(
+        lineId: revision3VoiceFixtureLineId,
+        localizationId: revision3VoiceFixtureLocalizationId,
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        locale: 'de',
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        takeId: revision3VoiceSelectionAlternateTakeId,
+        expectedTakeRevision: takeRevision,
+        expectedStatus: AuthoringRevision3VoiceTakeStatus.approved,
+        desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
+      );
+
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_take_status_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: voice.projectJson,
+      );
+      final fixedHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceTakeStatusError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_STATUS_SELECTED_CONFLICT',
+        message: 'fake selected take status rejection',
+      );
+      await expectLater(publish(retrySession), throwsA(isA<ModFfiException>()));
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.headFile.readAsBytes(), fixedHead);
+      expect((await publish(retrySession)).projectRevision, 9);
+      await retrySession.close();
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_TAKE_STATUS_HEAD_CONFLICT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_TAKE_STATUS_INVARIANT',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_take_status_poison_${code.hashCode}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: voice.projectJson,
+        );
+        store.nextVoiceTakeStatusError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+          code: code,
+          message: 'fake Voice take status integrity failure',
+        );
+        await expectLater(
+          publish(session),
+          code.endsWith('HEAD_CONFLICT')
+              ? throwsA(isA<ManagedProjectHeadConflictException>())
+              : throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'higher-layer publication uncertainty removes authority until verified recovery',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'publication_uncertainty_latch',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: Revision3VoiceSelectionFixture().projectJson,
+      );
+
+      session.markRequiresReopenAfterPublicationUncertainty();
+
+      expect(session.requiresReopen, isTrue);
+      await expectLater(
+        session.verifyCurrentHead(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'in-session recovery accepts one clean exact prior checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'recovery_clean');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 7, name: 'Recovery clean');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final previousHead = session.head;
+      await expectLater(
+        session.recoverAfterUncertainPublication(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      session.markRequiresReopenAfterPublicationUncertainty();
+
+      final recovered = await session.recoverAfterUncertainPublication();
+
+      expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+      expect(recovered.recoveredHead.canonicalJson, previousHead.canonicalJson);
+      expect(recovered.projectId, session.projectId);
+      expect(recovered.previousProjectRevision, 7);
+      expect(recovered.recoveredProjectRevision, 7);
+      expect(recovered.repairOutcome, AtomicRepairOutcome.clean);
+      expect(recovered.canonicalProjectJson, original);
+      expect(recovered.advanced, isFalse);
+      expect(session.requiresReopen, isFalse);
+      expect(session.projectJson, original);
+      await session.close();
+    },
+  );
+
+  for (final scenario
+      in <
+        ({
+          String name,
+          AtomicSwapPhase failurePhase,
+          AtomicRepairOutcome outcome,
+          String operationId,
+        })
+      >[
+        (
+          name: 'promotes a validated temporary next generation',
+          failurePhase: AtomicSwapPhase.tempValidated,
+          outcome: AtomicRepairOutcome.promotedTemp,
+          operationId: '76000000000000000000000000000001',
+        ),
+        (
+          name: 'keeps an already promoted next generation',
+          failurePhase: AtomicSwapPhase.tempPromoted,
+          outcome: AtomicRepairOutcome.keptTarget,
+          operationId: '76000000000000000000000000000002',
+        ),
+      ]) {
+    test('in-session recovery ${scenario.name}', () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'recovery_${scenario.outcome.name}',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      var armed = false;
+      var interrupted = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => scenario.operationId,
+        onPhase: (phase) {
+          if (armed && !interrupted && phase == scenario.failurePhase) {
+            interrupted = true;
+            throw const AtomicSwapException(
+              'injected recovery fixture failure',
+            );
+          }
+        },
+      );
+      final original = _projectJson(revision: 10, name: 'Recovery basis');
+      final candidate = _projectJson(revision: 11, name: 'Recovery candidate');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        replacement: replacement,
+      );
+      final previousHead = session.head;
+      armed = true;
+
+      await expectLater(
+        session.save(candidate),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(session.projectJson, original);
+
+      final recovered = await session.recoverAfterUncertainPublication();
+
+      expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+      expect(
+        recovered.recoveredHead.canonicalJson,
+        isNot(previousHead.canonicalJson),
+      );
+      expect(recovered.previousProjectRevision, 10);
+      expect(recovered.recoveredProjectRevision, 11);
+      expect(recovered.repairOutcome, scenario.outcome);
+      expect(recovered.canonicalProjectJson, candidate);
+      expect(recovered.advanced, isTrue);
+      expect(session.projectJson, candidate);
+      expect(session.projectRevision, 11);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    });
+  }
+
+  test('in-session recovery restores the exact prior backup', () async {
+    const operationId = '76000000000000000000000000000003';
+    final root = await _projectRoot(fixture, suffix: 'recovery_backup');
+    final store = _FakeRevision3Store(sealRegisteredHeads: true);
+    var armed = false;
+    var interrupted = false;
+    final replacement = AtomicByteReplacement(
+      operationIdFactory: () => operationId,
+      onPhase: (phase) {
+        if (armed && !interrupted && phase == AtomicSwapPhase.targetBackedUp) {
+          interrupted = true;
+          throw const AtomicSwapException('injected backup recovery failure');
+        }
+      },
+    );
+    final original = _projectJson(revision: 20, name: 'Backup basis');
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+      replacement: replacement,
+    );
+    final previousHead = session.head;
+    armed = true;
+    await expectLater(
+      session.save(_projectJson(revision: 21, name: 'Broken candidate')),
+      throwsA(isA<AtomicSwapException>()),
+    );
+    final temporary = File(
+      '${session.headFile.path}.gore-swap-$operationId.tmp',
+    );
+    expect(await temporary.exists(), isTrue);
+    await temporary.writeAsString('not a canonical head', flush: true);
+
+    final recovered = await session.recoverAfterUncertainPublication();
+
+    expect(recovered.repairOutcome, AtomicRepairOutcome.restoredBackup);
+    expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+    expect(recovered.recoveredHead.canonicalJson, previousHead.canonicalJson);
+    expect(recovered.previousProjectRevision, 20);
+    expect(recovered.recoveredProjectRevision, 20);
+    expect(recovered.advanced, isFalse);
+    expect(session.projectJson, original);
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test('in-session recovery stays ahead of a queued close', () async {
+    final root = await _projectRoot(fixture, suffix: 'recovery_close');
+    final store = _FakeRevision3Store(sealRegisteredHeads: true);
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 8, name: 'Recovery then close'),
+    );
+    session.markRequiresReopenAfterPublicationUncertainty();
+
+    final recovery = session.recoverAfterUncertainPublication();
+    final close = session.close();
+    await expectLater(
+      session.recoverAfterUncertainPublication(),
+      throwsA(isA<ManagedProjectSessionClosedException>()),
+    );
+    final checkpoint = await recovery;
+    await close;
+
+    expect(checkpoint.recoveredProjectRevision, 8);
+    expect(checkpoint.repairOutcome, AtomicRepairOutcome.clean);
+    expect(session.isClosed, isTrue);
+  });
+
+  test(
+    'broken recovery journal and failed full reopen retain the old poisoned checkpoint',
+    () async {
+      final brokenRoot = await _projectRoot(
+        fixture,
+        suffix: 'recovery_broken_journal',
+      );
+      final brokenStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 30, name: 'Broken journal');
+      final brokenSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: brokenRoot,
+            store: brokenStore,
+            projectJson: original,
+          );
+      final previousHead = brokenSession.head.canonicalJson;
+      brokenSession.markRequiresReopenAfterPublicationUncertainty();
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(brokenSession.headFile),
+      );
+      await journal.writeAsString('{broken', flush: true);
+
+      await expectLater(
+        brokenSession.recoverAfterUncertainPublication(),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+      expect(brokenSession.head.canonicalJson, previousHead);
+      expect(brokenSession.projectJson, original);
+      expect(brokenSession.requiresReopen, isTrue);
+      expect(await journal.exists(), isTrue);
+      await brokenSession.close();
+
+      final reopenRoot = await _projectRoot(
+        fixture,
+        suffix: 'recovery_reopen_retry',
+      );
+      final reopenStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: reopenRoot,
+        store: reopenStore,
+        projectJson: original,
+      );
+      retrySession.markRequiresReopenAfterPublicationUncertainty();
+      reopenStore.nextOpenProjectOverride = '{broken';
+
+      await expectLater(
+        retrySession.recoverAfterUncertainPublication(),
+        throwsA(isA<FormatException>()),
+      );
+      expect(retrySession.projectJson, original);
+      expect(retrySession.requiresReopen, isTrue);
+
+      final retry = await retrySession.recoverAfterUncertainPublication();
+      expect(retry.repairOutcome, AtomicRepairOutcome.clean);
+      expect(retry.advanced, isFalse);
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+    },
+  );
+
+  for (final mode in <String>[
+    'identity',
+    'target',
+    'schema',
+    'h-plus-two',
+    'same-head-next-revision',
+    'same-revision-fork',
+  ]) {
+    test(
+      'in-session recovery rejects $mode mismatch and stays poisoned',
+      () async {
+        final root = await _projectRoot(fixture, suffix: 'recovery_$mode');
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final original = _projectJson(revision: 40, name: 'Recovery invariant');
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final previousHead = session.head.canonicalJson;
+        session.markRequiresReopenAfterPublicationUncertainty();
+        final variant = (jsonDecode(original) as Map).cast<String, Object?>();
+        switch (mode) {
+          case 'identity':
+            variant['project_id'] = '00000000000000000000000000000004';
+            break;
+          case 'target':
+            variant['target'] = <String, Object?>{
+              'executable': <String, Object?>{
+                'byte_len': 1,
+                'sha256':
+                    '1111111111111111111111111111111111111111111111111111111111111111',
+              },
+            };
+            break;
+          case 'schema':
+            variant['schema_revision'] = 2;
+            break;
+          case 'h-plus-two':
+            variant['revision'] = 42;
+            break;
+          case 'same-head-next-revision':
+            variant['revision'] = 41;
+            break;
+          case 'same-revision-fork':
+            (variant['meta']! as Map)['name'] = 'Same revision fork';
+            break;
+        }
+        final variantJson = jsonEncode(variant);
+        if (mode == 'same-revision-fork') {
+          final forkHead = store.register(variantJson);
+          await session.headFile.writeAsString(
+            forkHead.canonicalJson,
+            flush: true,
+          );
+        } else {
+          store.nextOpenProjectOverride = variantJson;
+        }
+
+        await expectLater(
+          session.recoverAfterUncertainPublication(),
+          throwsA(
+            anyOf(
+              isA<ManagedProjectVerificationException>(),
+              isA<FormatException>(),
+            ),
+          ),
+        );
+        expect(session.head.canonicalJson, previousHead);
+        expect(session.projectJson, original);
+        expect(session.projectRevision, 40);
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      },
+    );
+  }
+
+  test(
+    'Quest transitions seed stays private and edit publishes through full reopen CAS',
+    () async {
+      final fixtureProject = Revision3QuestOutlineFixture();
+      final root = await _projectRoot(fixture, suffix: 'quest_transitions');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: fixtureProject.projectJson,
+      );
+
+      final seed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      expect(seed.projectRevision, fixtureProject.projectRevision);
+      expect(seed.objectives, hasLength(3));
+      expect(store.questTransitionsPrepareCalls, 0);
+
+      final editedPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: seed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: seed.transitionPlan.nextSlotOrdinal,
+        transitions: seed.transitionPlan.transitions,
+      );
+
+      final published = await session.prepareAndPublishQuestTransitionsEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+        expectedTransitionPlanSeal: seed.transitionPlanSeal,
+        transitionPlan: editedPlan,
+      );
+
+      expect(store.questTransitionsPrepareCalls, 1);
+      expect(store.questTransitionsRequests, hasLength(1));
+      expect(published.projectRevision, fixtureProject.projectRevision + 1);
+      expect(published.questRevision, fixtureProject.questRevision + 1);
+      expect(published.moduleRevision, fixtureProject.moduleRevision + 1);
+      expect(
+        published.transitionPlanSeal.sha256,
+        editedPlan.contentSeal.sha256,
+      );
+      expect(
+        published.buildStatus,
+        AuthoringRevision3QuestTransitionsBuildStatus.blocked,
+      );
+      expect(
+        published.runtimeStatus,
+        AuthoringRevision3QuestTransitionsRuntimeStatus.runtimeUnqualified,
+      );
+      expect(
+        published.publicationStatus,
+        AuthoringRevision3QuestTransitionsPublicationStatus.notSupported,
+      );
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      final updatedSeed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 1,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 1,
+      );
+      final originalTransitions = updatedSeed.transitionPlan.canonicalJson;
+      final outlined = await session.prepareAndPublishQuestOutlineEditV2(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 1,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 1,
+        expectedTransitionPlanSeal: updatedSeed.transitionPlanSeal,
+        displayName: 'Find Homer safely',
+        title: 'Secure the old gate',
+        objectiveSlots: const [3, 1, 2],
+        objectiveTitles: const [
+          'Report the secured gate',
+          'Ask Asghan about Homer',
+          'Inspect the old gate',
+        ],
+      );
+      expect(store.questOutlinePrepareCalls, 1);
+      expect(outlined.projectRevision, fixtureProject.projectRevision + 2);
+      expect(outlined.questRevision, fixtureProject.questRevision + 2);
+      expect(outlined.moduleRevision, fixtureProject.moduleRevision + 2);
+      final editedSeed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 2,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 2,
+      );
+      expect(editedSeed.objectives.map((objective) => objective.slot), [
+        3,
+        1,
+        2,
+      ]);
+      expect(editedSeed.objectives.map((objective) => objective.title), [
+        'Report the secured gate',
+        'Ask Asghan about Homer',
+        'Inspect the old gate',
+      ]);
+      final originalPlan = jsonDecode(originalTransitions) as Map;
+      final editedPlanJson =
+          jsonDecode(editedSeed.transitionPlan.canonicalJson) as Map;
+      expect(
+        editedPlanJson['objective_slots'],
+        originalPlan['objective_slots'],
+      );
+      expect(
+        editedPlanJson['next_slot_ordinal'],
+        originalPlan['next_slot_ordinal'],
+      );
+      expect(editedPlanJson['transitions'], originalPlan['transitions']);
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, outlined.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Quest transitions semantic rejection retries but integrity failure poisons',
+    () async {
+      final fixtureProject = Revision3QuestOutlineFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_transitions_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: fixtureProject.projectJson,
+      );
+      final retrySeed = await retrySession.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      final retryPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: retrySeed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: retrySeed.transitionPlan.nextSlotOrdinal,
+        transitions: retrySeed.transitionPlan.transitions,
+      );
+      retryStore.nextQuestTransitionsError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
+        message: 'fake plan CAS conflict',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
+          transitionPlan: retryPlan,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.prepareAndPublishQuestTransitionsEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+        expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
+        transitionPlan: retryPlan,
+      );
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_transitions_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: fixtureProject.projectJson,
+          );
+      final poisonSeed = await poisonSession.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      final poisonPlan = AuthoringRevision3QuestTransitionPlanV1(
+        objectiveSlots: poisonSeed.transitionPlan.objectiveSlots,
+        objectiveOrder: const <int>[3, 1, 2],
+        nextSlotOrdinal: poisonSeed.transitionPlan.nextSlotOrdinal,
+        transitions: poisonSeed.transitionPlan.transitions,
+      );
+      poisonStore.nextQuestTransitionsError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_STORE_INVARIANT',
+        message: 'fake transitions integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
+          transitionPlan: poisonPlan,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.questTransitionsPrepareCalls;
+      await expectLater(
+        poisonSession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
+          transitionPlan: poisonPlan,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.questTransitionsPrepareCalls, calls);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'Quest context seed stays private and edit publishes through full reopen CAS',
+    () async {
+      final context = Revision3QuestOutlineFixture();
+      final root = await _projectRoot(fixture, suffix: 'quest_context');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: context.projectJson,
+      );
+
+      final seed = await session.readQuestContextSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: context.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: context.moduleRevision,
+        expectedParentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
+        expectedGiverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+      );
+      expect(seed.projectRevision, context.projectRevision);
+      expect(seed.description, contains('missing worker'));
+      expect(store.questContextPrepareCalls, 0);
+
+      final published = await session.prepareAndPublishQuestContextEditV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: context.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: context.moduleRevision,
+        expectedStoryCatalogSeal: context.storyCatalogSeal,
+        description: 'Find Homer and report back safely.',
+        parentCatalogId: revision3QuestContextParentCatalogId,
+        giverCatalogId: revision3QuestContextGiverCatalogId,
+        expectedParentRuntimeClass: revision3QuestContextParentRuntimeClass,
+        expectedParentCatalogLayer: 'base-game.quest-parent.v1',
+        expectedParentAuthoringSelector: 'SwampCamp_SCChapter3',
+        expectedParentSourceSeal: _contextSourceSeal(11, '1'),
+        expectedGiverRuntimeUniqueName:
+            revision3QuestContextGiverRuntimeUniqueName,
+        expectedGiverCatalogLayer: 'base-game.npc.v1',
+        expectedGiverAuthoringSelector:
+            revision3QuestContextGiverRuntimeUniqueName,
+        expectedGiverSourceSeal: _contextSourceSeal(12, '2'),
+      );
+
+      expect(store.questContextPrepareCalls, 1);
+      expect(published.projectRevision, context.projectRevision + 1);
+      expect(published.questRevision, context.questRevision + 1);
+      expect(published.moduleRevision, context.moduleRevision + 1);
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, published.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Quest context external failures remain usable while head conflict poisons',
+    () async {
+      final context = Revision3QuestOutlineFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: context.projectJson,
+      );
+      for (final code in <String>[
+        'AUTHORING_REVISION3_QUEST_CONTEXT_CATALOG_CONFLICT',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_MISSING',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_UNSUPPORTED_GENERATION',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_COLLISION_LIMIT',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_STORE_GAME_ALIAS',
+      ]) {
+        retryStore.nextQuestContextError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+          code: code,
+          message: 'fake external context failure',
+        );
+        await expectLater(
+          _publishQuestContext(retrySession, context),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      await _publishQuestContext(retrySession, context);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: context.projectJson,
+          );
+      poisonStore.nextQuestContextError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_CONTEXT_HEAD_CONFLICT',
+        message: 'fake exact head conflict',
+      );
+      await expectLater(
+        _publishQuestContext(poisonSession, context),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.questContextPrepareCalls;
+      await expectLater(
+        _publishQuestContext(poisonSession, context),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.questContextPrepareCalls, calls);
+      await poisonSession.close();
+
+      final provenanceRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_provenance_poison',
+      );
+      final provenanceStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextQuestContextProvenanceMismatch = 'selector';
+      final provenanceSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: provenanceRoot,
+            store: provenanceStore,
+            projectJson: context.projectJson,
+          );
+      await expectLater(
+        _publishQuestContext(provenanceSession, context),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(provenanceSession.requiresReopen, isTrue);
+      expect(provenanceSession.projectRevision, context.projectRevision);
+      await provenanceSession.close();
+    },
+  );
+
+  test(
+    'NPC profile edit derives locally then publishes one fixed-head candidate',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final root = await _projectRoot(fixture, suffix: 'npc_profile_happy');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: profile.projectJson,
+      );
+
+      final seed = await session.readNpcProfileEditSeedV1(
+        npcId: profile.seed.npcId,
+        expectedNpcRevision: profile.seed.npcRevision,
+        expectedScriptModuleId: profile.seed.scriptModuleId,
+        expectedScriptModuleRevision: profile.seed.scriptModuleRevision,
+        expectedUniqueName: profile.seed.uniqueName,
+        expectedModuleNamespace: profile.seed.moduleNamespace,
+        expectedParentCharacterDefinition:
+            profile.seed.parentCharacterDefinition.runtimeClass,
+        expectedParentAiAgentConfig:
+            profile.seed.parentAiAgentConfig.runtimeClass,
+        expectedParentSpawnDefinition:
+            profile.seed.parentSpawnDefinition.runtimeClass,
+      );
+      expect(seed.head.canonicalJson, session.head.canonicalJson);
+      expect(store.npcProfilePrepareCalls, 0);
+
+      final published = await _publishNpcProfile(
+        session,
+        profile,
+        seed: seed,
+        displayName: 'Renamed Managed Guard',
+      );
+
+      expect(store.npcProfilePrepareCalls, 1);
+      expect(store.npcProfileRequests.single.expectsArchetypeChanged, isFalse);
+      expect(published.projectRevision, profile.seed.projectRevision + 1);
+      expect(published.npcRevision, profile.seed.npcRevision + 1);
+      expect(published.scriptModuleRevision, profile.seed.scriptModuleRevision);
+      expect(session.projectJson, published.projectJson);
+      expect(session.head.canonicalJson, published.head.canonicalJson);
+      expect(
+        store.openedCheckpointHeads,
+        contains(published.head.canonicalJson),
+      );
+      expect(store.openedPublishedHeads.last, published.head.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'NPC profile correctable rejection does not retry while unknown failure poisons',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextNpcProfileError = const ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+          code: 'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+          message: 'fake fresh catalog conflict',
+        );
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: profile.projectJson,
+      );
+      await expectLater(
+        _publishNpcProfile(retrySession, profile),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+          ),
+        ),
+      );
+      expect(retryStore.npcProfilePrepareCalls, 1);
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextNpcProfileError = const ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+          code: 'AUTHORING_REVISION3_NPC_PROFILE_FUTURE_UNKNOWN',
+          message: 'fake unknown integrity failure',
+        );
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: profile.projectJson,
+          );
+      await expectLater(
+        _publishNpcProfile(poisonSession, profile),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.npcProfilePrepareCalls;
+      await expectLater(
+        _publishNpcProfile(poisonSession, profile),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.npcProfilePrepareCalls, calls);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'NPC profile signed-max Module is name-only safe and structural edit is preflight-rejected',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create(
+        moduleRevision: 0x7fffffffffffffff,
+      );
+      final nameRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_signed_max_name',
+      );
+      final nameStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final nameSession = await ManagedRevision3AuthoringProjectSession.create(
+        root: nameRoot,
+        store: nameStore,
+        projectJson: profile.projectJson,
+      );
+      final renamed = await _publishNpcProfile(nameSession, profile);
+      expect(renamed.scriptModuleRevision, 0x7fffffffffffffff);
+      expect(nameStore.npcProfilePrepareCalls, 1);
+      await nameSession.close();
+
+      final structuralRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_signed_max_structural',
+      );
+      final structuralStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final structuralSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: structuralRoot,
+            store: structuralStore,
+            projectJson: profile.projectJson,
+          );
+      await expectLater(
+        _publishNpcProfile(
+          structuralSession,
+          profile,
+          displayName: profile.seed.displayName,
+          archetypeChanged: true,
+        ),
+        throwsFormatException,
+      );
+      expect(structuralStore.npcProfilePrepareCalls, 0);
+      expect(structuralSession.requiresReopen, isFalse);
+      await structuralSession.close();
+    },
+  );
+
+  test(
+    'NPC local input and semantic collisions retry while integrity uncertainty poisons',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'npc_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'NPC retry'),
+      );
+      final exactRetryHead = await retrySession.headFile.readAsBytes();
+      final beforeLocal = retryStore.npcPrepareCalls;
+      await expectLater(
+        retrySession.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000000',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Invalid local NPC',
+          intent: _npcIntent(1),
+        ),
+        throwsFormatException,
+      );
+      expect(retryStore.npcPrepareCalls, beforeLocal);
+      expect(retrySession.requiresReopen, isFalse);
+
+      for (final retryableCode in <String>[
+        'AUTHORING_REVISION3_NPC_COLLISION',
+        'AUTHORING_REVISION3_NPC_INPUT_LIMIT',
+        'AUTHORING_REVISION3_NPC_RECOVERY_REQUIRED',
+      ]) {
+        retryStore.nextNpcError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_draft_v1',
+          code: retryableCode,
+          message: 'fake retryable NPC rejection',
+        );
+        await expectLater(
+          retrySession.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000081',
+            scriptModuleId: '00000000000000000000000000000082',
+            displayName: 'Managed Guard',
+            intent: _npcIntent(1),
+          ),
+          throwsA(
+            isA<ModFfiException>().having(
+              (error) => error.code,
+              'code',
+              retryableCode,
+            ),
+          ),
+          reason: retryableCode,
+        );
+        expect(await retrySession.headFile.readAsBytes(), exactRetryHead);
+        expect(retrySession.requiresReopen, isFalse);
+      }
+      await retrySession.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      await retrySession.close();
+
+      for (final errorCode in <String>[
+        'AUTHORING_REVISION3_NPC_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_NPC_PROJECT_LIMIT',
+        'AUTHORING_REVISION3_NPC_REQUEST_LIMIT',
+        'AUTHORING_REVISION3_NPC_REVISION_LIMIT',
+        'AUTHORING_REVISION3_NPC_STORE_SEAL_MISMATCH',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_NPC_FUTURE_UNKNOWN',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: errorCode.toLowerCase(),
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 0, name: errorCode),
+        );
+        final exactHead = await session.headFile.readAsBytes();
+        store.nextNpcError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_draft_v1',
+          code: errorCode,
+          message: 'fake NPC integrity failure',
+        );
+        await expectLater(
+          session.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000081',
+            scriptModuleId: '00000000000000000000000000000082',
+            displayName: 'Managed Guard',
+            intent: _npcIntent(1),
+          ),
+          throwsA(
+            errorCode.endsWith('HEAD_CONFLICT')
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: errorCode,
+        );
+        expect(await session.headFile.readAsBytes(), exactHead);
+        expect(session.requiresReopen, isTrue);
+        final npcCalls = store.npcPrepareCalls;
+        await expectLater(
+          session.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000083',
+            scriptModuleId: '00000000000000000000000000000084',
+            displayName: 'Managed Guard 2',
+            intent: _npcIntent(2),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.npcPrepareCalls, npcCalls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'NPC candidate reopen mismatch stays unpublished and may be retried',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_reopen');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'NPC reopen');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final exactHead = await session.headFile.readAsBytes();
+      store.nextHeadOverride = store.register(
+        _projectJson(revision: 70, name: 'Wrong NPC candidate reopen'),
+      );
+
+      await expectLater(
+        session.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000081',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Managed Guard',
+          intent: _npcIntent(1),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(await session.headFile.readAsBytes(), exactHead);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isFalse);
+
+      final published = await session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      expect(session.head.canonicalJson, published.head.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'head drift during native NPC prepare never clobbers the winner',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_race');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'NPC race'),
+      );
+      final externalProject = _projectJson(
+        revision: 90,
+        name: 'External NPC winner',
+      );
+      final externalHead = store.register(externalProject);
+      store.afterNpcPrepare = (rootPath, _, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000081',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Managed Guard',
+          intent: _npcIntent(1),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, externalProject);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'concurrent saves run in invocation order with present-head CAS',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+      );
+      final firstEntered = Completer<void>();
+      final releaseFirst = Completer<void>();
+      store.afterPrepare = (_, _, projectJson) async {
+        expect(projectJson, _projectJson(revision: 1, name: 'First'));
+        firstEntered.complete();
+        await releaseFirst.future;
+      };
+
+      final first = session.save(_projectJson(revision: 1, name: 'First'));
+      await firstEntered.future;
+      final second = session.save(_projectJson(revision: 2, name: 'Second'));
+      await Future<void>.delayed(Duration.zero);
+      expect(store.prepareCalls, 2); // create plus the blocked first save
+      releaseFirst.complete();
+      await Future.wait(<Future<void>>[first, second]);
+
+      expect(session.projectJson, _projectJson(revision: 2, name: 'Second'));
+      expect(store.expectedHeads, hasLength(3));
+      expect(store.expectedHeads[0], isNull);
+      expect(store.expectedHeads[1], isNotNull);
+      expect(store.expectedHeads[2], isNotNull);
+      expect(store.expectedHeads[2], isNot(store.expectedHeads[1]));
+      await session.close();
+    },
+  );
+
+  test(
+    'verifyCurrentHead performs one full reopen without prepare or publish',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final project = _projectJson(revision: 0, name: 'Verified');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+      );
+      final exactHead = session.head.canonicalJson;
+      final prepareCalls = store.prepareCalls;
+      final openCalls = store.openVerifications.length;
+      final headOpenCalls = store.headVerifications.length;
+      final headBytes = await session.headFile.readAsBytes();
+
+      await session.verifyCurrentHead();
+
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.openVerifications.length, openCalls + 1);
+      expect(store.openVerifications.last, AuthoringAssetVerification.full);
+      expect(store.headVerifications.length, headOpenCalls);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, project);
+      expect(await session.headFile.readAsBytes(), headBytes);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'DataAsset prepare, list, and remove share guarded full-reopen publication',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_roundtrip');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset roundtrip'),
+      );
+      final initialPrepareCalls = store.prepareCalls;
+      final initialHeadOpenCalls = store.headVerifications.length;
+      final initialHead = session.head.canonicalJson;
+
+      expect(await session.listDataAssetStagesV1(), isEmpty);
+      expect(session.head.canonicalJson, initialHead);
+      final staged = await session.prepareAndPublishDataAssetStageV1(
+        patchReceiptPath: r'C:\Receipts\managed-patch.v2.json',
+      );
+
+      expect(staged.projectId, session.projectId);
+      expect(staged.projectRevision, 1);
+      expect(staged.head.canonicalJson, session.head.canonicalJson);
+      expect(staged.stage.targetPath, revision3DataAssetTargetPath);
+      expect(staged.stage.basisProjectRevision, 0);
+      expect(staged.stage.stagedProjectRevision, 1);
+      expect(store.dataAssetPrepareCalls, 1);
+      expect(store.prepareCalls, initialPrepareCalls);
+      expect(
+        store.headVerifications.length,
+        greaterThanOrEqualTo(initialHeadOpenCalls + 2),
+      );
+      expect(
+        store.headVerifications
+            .skip(initialHeadOpenCalls)
+            .every((value) => value == AuthoringAssetVerification.full),
+        isTrue,
+      );
+
+      final exactPublishedHead = await session.headFile.readAsBytes();
+      final listed = await session.listDataAssetStagesV1();
+      expect(listed, hasLength(1));
+      expect(
+        listed.single.manifestAsset.sha256,
+        staged.stage.manifestAsset.sha256,
+      );
+      expect(await session.headFile.readAsBytes(), exactPublishedHead);
+
+      final removed = await session.prepareAndPublishRemoveDataAssetStageV1(
+        targetPath: revision3DataAssetTargetPath.toLowerCase(),
+      );
+      expect(removed.projectRevision, 2);
+      expect(removed.removed.targetPath, revision3DataAssetTargetPath);
+      expect(session.projectRevision, 2);
+      expect(await session.listDataAssetStagesV1(), isEmpty);
+      expect(store.dataAssetRemoveCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'DataAsset head drift during native prepare never clobbers the winner',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_race');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'DataAsset race');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final externalProject = _projectJson(
+        revision: 90,
+        name: 'External DataAsset winner',
+      );
+      final externalHead = store.register(externalProject);
+      store.afterDataAssetPrepare = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: r'C:\Receipts\race.v2.json',
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit publishes through guarded full reopen and lists exact stage',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_edit');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset value edit'),
+      );
+      final headOpens = store.headVerifications.length;
+      final intent = _semanticDataAssetIntent();
+
+      final published = await session.prepareAndPublishDataAssetEditV1(
+        intent: intent,
+      );
+
+      expect(store.dataAssetEditPrepareCalls, 1);
+      expect(store.dataAssetEditIntents.single, same(intent));
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, revision3DataAssetTargetPath);
+      expect(published.stage.selectorKind, 'int32');
+      expect(published.stage.replacementByteLength, 4);
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final listed = await session.listDataAssetStagesV1();
+      expect(listed, hasLength(1));
+      expect(listed.single.targetPath, intent.expectedTargetPath);
+      expect(await session.headFile.readAsBytes(), exactHeadBytes);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'installed DataAsset edit retains exact evidence through guarded publication',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Installed DataAsset value edit',
+        ),
+      );
+      final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+        _dataAssetPackageIndexResponse(
+          session.head,
+          session.projectJson,
+          targetPath: revision3DataAssetTargetPath,
+          packageIdHex: 'e54f79b8fc97323c',
+        ),
+        expectedHead: session.head,
+      );
+      final candidate = snapshot.index.candidates.single;
+      final inspection = _installedDataAssetInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+        usmapSha256: '3' * 64,
+      );
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: DataAssetSemanticValueEditor.fromLeaf(
+          inspection.inspection.exports.single.leaves.single,
+        ).changeScalar(value: '2'),
+      );
+
+      final published = await session.prepareAndPublishInstalledDataAssetEditV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        intent: intent,
+      );
+
+      expect(store.installedDataAssetEditPrepareCalls, 1);
+      expect(store.installedDataAssetEditGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.installedDataAssetEditIntents.single, same(intent));
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, revision3DataAssetTargetPath);
+      expect(session.projectRevision, 1);
+      expect(await session.listDataAssetStagesV1(), hasLength(1));
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'reviewed installed DataAsset edit forwards only its closed intent and publishes',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'reviewed_installed_dataasset_edit',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Reviewed installed DataAsset edit',
+        ),
+      );
+      final intent = _reviewedInstalledDataAssetIntent(session);
+
+      final published = await session
+          .prepareAndPublishReviewedInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: intent,
+          );
+
+      expect(store.reviewedInstalledDataAssetEditPrepareCalls, 1);
+      expect(store.reviewedInstalledDataAssetEditGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.reviewedInstalledDataAssetEditIntents.single, same(intent));
+      expect(intent.toNativeFields().keys, <String>[
+        'candidate_ordinal',
+        'expected_package_index_seal',
+        'expected_source_snapshot_seal',
+        'reviewed_edit',
+      ]);
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, _reviewedWolfTarget);
+      expect(published.stage.selectorKind, 'vector4_f64x4');
+      expect(session.projectRevision, 1);
+      expect(await session.listDataAssetStagesV1(), hasLength(1));
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'reviewed installed DataAsset edit keeps request rejections retryable and poisons invariants',
+    () async {
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID',
+      ];
+      for (var index = 0; index < retryableCodes.length; index++) {
+        final code = retryableCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'reviewed_installed_dataasset_retry_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 0,
+            name: 'Reviewed installed DataAsset retry $index',
+          ),
+        );
+        store.nextDataAssetError = ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+          code: code,
+          message: 'fake reviewed installed DataAsset request rejection',
+        );
+
+        await expectLater(
+          session.prepareAndPublishReviewedInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: _reviewedInstalledDataAssetIntent(session),
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.projectRevision, 0, reason: code);
+        expect(store.reviewedInstalledDataAssetEditPrepareCalls, 1);
+        await session.close();
+      }
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'reviewed_installed_dataasset_invariant',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Reviewed installed DataAsset invariant',
+            ),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVARIANT',
+        message: 'fake reviewed installed DataAsset invariant failure',
+      );
+
+      await expectLater(
+        poisonSession.prepareAndPublishReviewedInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _reviewedInstalledDataAssetIntent(poisonSession),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+
+      expect(poisonSession.requiresReopen, isTrue);
+      expect(poisonSession.projectRevision, 0);
+      expect(poisonStore.reviewedInstalledDataAssetEditPrepareCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'installed DataAsset edit classifies drift, head conflict, and integrity separately',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Installed DataAsset edit retry',
+        ),
+      );
+      final retryIntent = _installedSemanticDataAssetIntent(retrySession);
+      for (final code in <String>[
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+      ]) {
+        retryStore.nextDataAssetError = ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+          code: code,
+          message: 'fake retryable installed DataAsset source drift',
+        );
+        await expectLater(
+          retrySession.prepareAndPublishInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: retryIntent,
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(retrySession.projectRevision, 0);
+      await retrySession.close();
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_head_conflict',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Installed DataAsset edit head conflict',
+            ),
+          );
+      conflictStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message: 'fake installed DataAsset head conflict',
+      );
+      await expectLater(
+        conflictSession.prepareAndPublishInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _installedSemanticDataAssetIntent(conflictSession),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      await conflictSession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_integrity',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Installed DataAsset edit integrity',
+            ),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INVARIANT',
+        message: 'fake installed DataAsset integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _installedSemanticDataAssetIntent(poisonSession),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit head drift preserves winner and requires reopen',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_edit_race');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'DataAsset edit race');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final external = _projectJson(
+        revision: 77,
+        name: 'External semantic edit winner',
+      );
+      final externalHead = store.register(external);
+      store.afterDataAssetPrepare = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit keeps input failures retryable and poisons binding drift',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_edit_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset edit retry'),
+      );
+      retryStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_EDIT_INVALID',
+        message: 'fake semantic input rejection',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(retrySession.projectRevision, 0);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_edit_binding_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'DataAsset edit binding poison',
+            ),
+          );
+      final exactHead = await poisonSession.headFile.readAsBytes();
+      poisonStore.nextDataAssetResponseMismatch = 'intent-binding';
+      await expectLater(
+        poisonSession.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(await poisonSession.headFile.readAsBytes(), exactHead);
+      expect(poisonSession.projectRevision, 0);
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'DataAsset response limits and local preflight are retryable; integrity failures poison',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'dataasset_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset retry'),
+      );
+      retryStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_RESPONSE_LIMIT',
+        message: 'fake bounded list response limit',
+      );
+      await expectLater(
+        retrySession.listDataAssetStagesV1(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DATAASSET_RESPONSE_LIMIT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+
+      retryStore.nextDataAssetError = ArgumentError(
+        'fake local path preflight',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: 'bad input',
+        ),
+        throwsArgumentError,
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.listDataAssetStagesV1(), isEmpty);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(revision: 0, name: 'DataAsset poison'),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_STORE_SEAL_MISMATCH',
+        message: 'fake DataAsset integrity failure',
+      );
+      await expectLater(
+        poisonSession.listDataAssetStagesV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'DataAsset malformed candidate response poisons without publication',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_mismatch');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset mismatch'),
+      );
+      final exactHead = await session.headFile.readAsBytes();
+      store.nextDataAssetResponseMismatch = 'revision';
+
+      await expectLater(
+        session.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: r'C:\Receipts\mismatch.v2.json',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+
+      expect(await session.headFile.readAsBytes(), exactHead);
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'content read stays exact-head, serialized, and publication-free',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'content_exact');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'Content exact');
+      final saved = _projectJson(revision: 1, name: 'After content');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final prepareCalls = store.prepareCalls;
+      final openCalls = store.openVerifications.length;
+      final headOpenCalls = store.headVerifications.length;
+      final exactHead = session.head.canonicalJson;
+      final headBytes = await session.headFile.readAsBytes();
+      final readEntered = Completer<void>();
+      final releaseRead = Completer<void>();
+      final savePrepareEntered = Completer<void>();
+      final releaseSavePrepare = Completer<void>();
+      store.afterContentRead = (_, _, _) async {
+        readEntered.complete();
+        await releaseRead.future;
+      };
+      store.afterPrepare = (_, _, _) async {
+        savePrepareEntered.complete();
+        await releaseSavePrepare.future;
+      };
+
+      final reading = session.readContentIndex();
+      await readEntered.future;
+      final saving = session.save(saved);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.openVerifications.length, openCalls);
+      expect(store.headVerifications.length, headOpenCalls);
+
+      releaseRead.complete();
+      final index = await reading;
+      await savePrepareEntered.future;
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, original);
+      releaseSavePrepare.complete();
+      await saving;
+
+      expect(index.projectId, '00000000000000000000000000000003');
+      expect(index.projectRevision, 0);
+      expect(index.projectName, 'Content exact');
+      expect(store.contentReadCalls, 1);
+      expect(store.contentExpectedHeads, <String>[exactHead]);
+      expect(store.prepareCalls, prepareCalls + 1);
+      expect(session.projectJson, saved);
+      expect(session.projectRevision, 1);
+      expect(
+        await session.headFile.readAsBytes(),
+        isNot(orderedEquals(headBytes)),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog localization read stays exact-head, serialized, and publication-free',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_exact',
+      );
+      final store = _FakeRevision3Store();
+      final original = _projectJson(
+        revision: 0,
+        name: 'Dialog localization exact',
+      );
+      final saved = _projectJson(
+        revision: 1,
+        name: 'After dialog localization',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final prepareCalls = store.prepareCalls;
+      final exactHead = session.head.canonicalJson;
+      final headBytes = await session.headFile.readAsBytes();
+      final readEntered = Completer<void>();
+      final releaseRead = Completer<void>();
+      final savePrepareEntered = Completer<void>();
+      final releaseSavePrepare = Completer<void>();
+      store.afterDialogLocalizationRead = (_, _, _) async {
+        readEntered.complete();
+        await releaseRead.future;
+      };
+      store.afterPrepare = (_, _, _) async {
+        savePrepareEntered.complete();
+        await releaseSavePrepare.future;
+      };
+
+      final reading = session.readDialogLocalizationV1(
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      );
+      await readEntered.future;
+      final saving = session.save(saved);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.prepareCalls, prepareCalls);
+
+      releaseRead.complete();
+      final result = await reading;
+      await savePrepareEntered.future;
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, original);
+      releaseSavePrepare.complete();
+      await saving;
+
+      expect(result.projectId, '00000000000000000000000000000003');
+      expect(result.projectRevision, 0);
+      expect(result.locales.single.preview, 'Bleib stehen!');
+      expect(store.dialogLocalizationReadCalls, 1);
+      expect(store.dialogLocalizationReadRoots, <String>[root.path]);
+      expect(store.dialogLocalizationReadExpectedHeads, <String>[exactHead]);
+      expect(store.dialogLocalizationReadIds, <String>[
+        '00000000000000000000000000000021',
+      ]);
+      expect(store.dialogLocalizationReadRevisions, <int>[4]);
+      expect(store.dialogLocalizationReadLocIds, <String>[
+        'GORE_EXISTING_TEXT',
+      ]);
+      expect(store.prepareCalls, prepareCalls + 1);
+      expect(session.projectRevision, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog localization stale candidate is retryable but mismatched response poisons',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Dialog localization retry',
+        ),
+      );
+      retryStore.nextDialogLocalizationReadError = const ModFfiException(
+        command: 'authoring_store_read_revision3_dialog_localization_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+        message: 'fake stale localization selection',
+      );
+      Future<AuthoringRevision3DialogLocalizationReadResult> retryRead() =>
+          retrySession.readDialogLocalizationV1(
+            localizationId: '00000000000000000000000000000021',
+            expectedLocalizationRevision: 4,
+            expectedLocId: 'GORE_EXISTING_TEXT',
+          );
+
+      await expectLater(
+        retryRead(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect((await retryRead()).projectRevision, 0);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_mismatch',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Dialog localization mismatch',
+            ),
+          );
+      poisonStore.nextDialogLocalizationReadResponseMismatch = 'project-id';
+      await expectLater(
+        poisonSession.readDialogLocalizationV1(
+          localizationId: '00000000000000000000000000000021',
+          expectedLocalizationRevision: 4,
+          expectedLocId: 'GORE_EXISTING_TEXT',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test('dialog localization post-read head drift requires reopen', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dialog_localization_drift',
+    );
+    final store = _FakeRevision3Store();
+    final original = _projectJson(
+      revision: 0,
+      name: 'Dialog localization drift',
+    );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+    );
+    final external = store.register(
+      _projectJson(revision: 91, name: 'External localization winner'),
+    );
+    store.afterDialogLocalizationRead = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.readDialogLocalizationV1(
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      ),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(session.requiresReopen, isTrue);
+    expect(store.prepareCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'localization-edit seed preserves full text and serializes exact reads',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_seed',
+      );
+      final store = _FakeRevision3Store();
+      final longText = 'Ä' * 20000;
+      final projectJson = _dialogLocalizationEditProjectJson(
+        texts: <String, String>{'de': longText, 'en': 'Welcome.'},
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final exactHead = session.head.canonicalJson;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      store.afterDialogLocalizationEditSeedRead = (_, _, _) async {
+        entered.complete();
+        await release.future;
+      };
+
+      Future<AuthoringRevision3DialogLocalizationEditSeed> read() =>
+          session.readDialogLocalizationEditSeedV1(
+            localizationId: _dialogLocalizationEditId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: _dialogLocalizationEditLocId,
+          );
+      final first = read();
+      await entered.future;
+      final second = read();
+      await Future<void>.delayed(Duration.zero);
+      expect(store.dialogLocalizationEditSeedReadCalls, 1);
+      release.complete();
+      final results = await Future.wait(
+        <Future<AuthoringRevision3DialogLocalizationEditSeed>>[first, second],
+      );
+
+      expect(results[0].locales.first.text, longText);
+      expect(results[1].projectRevision, 7);
+      expect(store.dialogLocalizationEditSeedReadCalls, 2);
+      expect(store.dialogLocalizationEditSeedReadRoots, <String>[
+        root.path,
+        root.path,
+      ]);
+      expect(store.dialogLocalizationEditSeedReadExpectedHeads, <String>[
+        exactHead,
+        exactHead,
+      ]);
+      expect(store.prepareCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'localization-edit seed retries stale selection and poisons forged identity',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_seed_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final projectJson = _dialogLocalizationEditProjectJson();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: projectJson,
+      );
+      retryStore
+          .nextDialogLocalizationEditSeedReadError = const ModFfiException(
+        command:
+            'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_CONFLICT',
+        message: 'fake stale localization selection',
+      );
+      Future<AuthoringRevision3DialogLocalizationEditSeed> retryRead() =>
+          retrySession.readDialogLocalizationEditSeedV1(
+            localizationId: _dialogLocalizationEditId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: _dialogLocalizationEditLocId,
+          );
+
+      await expectLater(
+        retryRead(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect((await retryRead()).projectRevision, 7);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_seed_forged',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: projectJson,
+          );
+      poisonStore.nextDialogLocalizationEditSeedReadResponseMismatch =
+          'project-id';
+      await expectLater(
+        poisonSession.readDialogLocalizationEditSeedV1(
+          localizationId: _dialogLocalizationEditId,
+          expectedLocalizationRevision: 4,
+          expectedLocId: _dialogLocalizationEditLocId,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'localization edit publishes exact locale deltas through two reopens',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_publish',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _dialogLocalizationEditProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final plan = await _dialogLocalizationEditPlan(
+        head: session.head,
+        projectJson: session.projectJson,
+        texts: const <String, String>{
+          'de': 'Geänderter Text.',
+          'pl': 'Witaj w Starym Obozie.',
+        },
+      );
+      final beforeHeadOpenCalls = store.headVerifications.length;
+
+      final checkpoint = await session
+          .prepareAndPublishDialogLocalizationEditV1(plan: plan);
+
+      expect(checkpoint.projectId, '00000000000000000000000000000003');
+      expect(checkpoint.projectRevision, 8);
+      expect(checkpoint.localizationId, _dialogLocalizationEditId);
+      expect(checkpoint.localizationRevision, 5);
+      expect(checkpoint.addedLocales, <String>['pl']);
+      expect(checkpoint.removedLocales, <String>['en']);
+      expect(checkpoint.head.canonicalJson, session.head.canonicalJson);
+      expect(checkpoint.projectJson, session.projectJson);
+      expect(store.dialogLocalizationEditPrepareCalls, 1);
+      expect(store.dialogLocalizationEditCurrentProjects, <String>[
+        projectJson,
+      ]);
+      expect(
+        store.dialogLocalizationEditRequests.single.expectedHead.canonicalJson,
+        isNotEmpty,
+      );
+      // Exact preflight, unpublished candidate reopen, and published reopen.
+      expect(store.headVerifications.length, beforeHeadOpenCalls + 3);
+      expect(session.projectRevision, 8);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      final seed = await reopened.readDialogLocalizationEditSeedV1(
+        localizationId: _dialogLocalizationEditId,
+        expectedLocalizationRevision: 5,
+        expectedLocId: _dialogLocalizationEditLocId,
+      );
+      expect(
+        <String, String>{
+          for (final locale in seed.locales) locale.locale: locale.text,
+        },
+        <String, String>{
+          'de': 'Geänderter Text.',
+          'pl': 'Witaj w Starym Obozie.',
+        },
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'localization edit keeps Voice conflict retryable and poisons integrity uncertainty',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_voice_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final projectJson = _dialogLocalizationEditProjectJson();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: projectJson,
+      );
+      final retryPlan = await _dialogLocalizationEditPlan(
+        head: retrySession.head,
+        projectJson: retrySession.projectJson,
+        texts: const <String, String>{'de': 'Neuer Text.', 'en': 'New text.'},
+      );
+      retryStore.nextDialogLocalizationEditPrepareError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_VOICE_CONFLICT',
+        message: 'fake Voice candidate protects the text',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishDialogLocalizationEditV1(plan: retryPlan),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_VOICE_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.projectRevision, 7);
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        (await retrySession.prepareAndPublishDialogLocalizationEditV1(
+          plan: retryPlan,
+        )).projectRevision,
+        8,
+      );
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_integrity',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: projectJson,
+          );
+      final poisonPlan = await _dialogLocalizationEditPlan(
+        head: poisonSession.head,
+        projectJson: poisonSession.projectJson,
+        texts: const <String, String>{'de': 'Integrität.', 'en': 'Integrity.'},
+      );
+      poisonStore.nextDialogLocalizationEditPrepareError =
+          const ModFfiException(
+            command:
+                'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+            code: ModFfiException.malformedNativeResponseCode,
+            message: 'fake malformed native response',
+          );
+      await expectLater(
+        poisonSession.prepareAndPublishDialogLocalizationEditV1(
+          plan: poisonPlan,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.projectRevision, 7);
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test('localization edit never clobbers a concurrent head winner', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dialog_localization_edit_race',
+    );
+    final store = _FakeRevision3Store();
+    final projectJson = _dialogLocalizationEditProjectJson();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: projectJson,
+    );
+    final plan = await _dialogLocalizationEditPlan(
+      head: session.head,
+      projectJson: session.projectJson,
+      texts: const <String, String>{
+        'de': 'Verlorener Entwurf.',
+        'en': 'Losing draft.',
+      },
+    );
+    final externalProject = _dialogLocalizationEditProjectJson(
+      revision: 91,
+      localizationRevision: 12,
+      texts: const <String, String>{'de': 'Externer Gewinner.'},
+    );
+    final externalHead = store.register(externalProject);
+    store.afterDialogLocalizationEditPrepare = (rootPath, _, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(externalHead.canonicalJson, flush: true);
+
+    await expectLater(
+      session.prepareAndPublishDialogLocalizationEditV1(plan: plan),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+    expect(session.projectJson, projectJson);
+    expect(session.projectRevision, 7);
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+
+    final reopened = await ManagedRevision3AuthoringProjectSession.open(
+      root: root,
+      store: store,
+    );
+    expect(reopened.projectJson, externalProject);
+    await reopened.close();
+  });
+
+  test(
+    'interrupted localization publication repairs only its verified candidate',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_edit_repair',
+      );
+      final store = _FakeRevision3Store();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '76000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.tempPromoted) {
+            throw const AtomicSwapException(
+              'injected localization publication failure',
+            );
+          }
+        },
+      );
+      final projectJson = _dialogLocalizationEditProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+        replacement: replacement,
+      );
+      final plan = await _dialogLocalizationEditPlan(
+        head: session.head,
+        projectJson: session.projectJson,
+        texts: const <String, String>{
+          'de': 'Wiederhergestellt.',
+          'en': 'Recovered.',
+        },
+      );
+      armed = true;
+
+      await expectLater(
+        session.prepareAndPublishDialogLocalizationEditV1(plan: plan),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.projectRevision, 7);
+      expect(session.requiresReopen, isTrue);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 8);
+      expect(await journal.exists(), isFalse);
+      final seed = await reopened.readDialogLocalizationEditSeedV1(
+        localizationId: _dialogLocalizationEditId,
+        expectedLocalizationRevision: 5,
+        expectedLocId: _dialogLocalizationEditLocId,
+      );
+      expect(seed.locales.first.text, 'Wiederhergestellt.');
+      await reopened.close();
+    },
+  );
+
+  test('content read head drift poisons without publishing', () async {
+    final root = await _projectRoot(fixture, suffix: 'content_drift');
+    final store = _FakeRevision3Store();
+    final original = _projectJson(revision: 0, name: 'Content drift');
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+    );
+    final prepareCalls = store.prepareCalls;
+    final external = store.register(
+      _projectJson(revision: 91, name: 'External content winner'),
+    );
+    store.afterContentRead = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.readContentIndex(),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.prepareCalls, prepareCalls);
+    expect(session.projectJson, original);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.readContentIndex(),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.contentReadCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'content capacity rejection is retryable while integrity failures poison',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'content_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'Content retry'),
+      );
+      retryStore.nextContentError = const ModFfiException(
+        command: 'authoring_store_read_revision3_content_index_v1',
+        code: 'AUTHORING_REVISION3_CONTENT_RESPONSE_LIMIT',
+        message: 'fake bounded content limit',
+      );
+      await expectLater(
+        retrySession.readContentIndex(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_CONTENT_RESPONSE_LIMIT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect((await retrySession.readContentIndex()).projectRevision, 0);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(fixture, suffix: 'content_poison');
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(revision: 0, name: 'Content poison'),
+          );
+      poisonStore.nextContentError = const ModFfiException(
+        command: 'authoring_store_read_revision3_content_index_v1',
+        code: 'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
+        message: 'fake content integrity failure',
+      );
+      await expectLater(
+        poisonSession.readContentIndex(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test('content response identity mismatch fails closed', () async {
+    final root = await _projectRoot(fixture, suffix: 'content_identity');
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Content identity'),
+    );
+    final exactHead = await session.headFile.readAsBytes();
+    store.nextContentResponseMismatch = 'project-id';
+
+    await expectLater(
+      session.readContentIndex(),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+
+    expect(await session.headFile.readAsBytes(), exactHead);
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test(
+    'Quest source inspection forwards the exact read-only basis without publishing',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'quest_inspection_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 12,
+        name: 'Quest inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      const gameRoot = r'D:\Games\Gothic Remake';
+      const questId = '00000000000000000000000000000071';
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+      final questPrepareCalls = store.questPrepareCalls;
+
+      final result = await session.inspectQuestSourceV1(
+        gameRoot: gameRoot,
+        questId: questId,
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 12);
+      expect(result.questId, questId);
+      expect(result.generatedSource, contains('UQuest_GoreInspection'));
+      expect(store.questInspectionCalls, 1);
+      expect(store.questInspectionRoots, <String>[root.path]);
+      expect(store.questInspectionGameRoots, <String>[gameRoot]);
+      expect(store.questInspectionExpectedHeads, <String>[exactHead]);
+      expect(store.questInspectionQuestIds, <String>[questId]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.questPrepareCalls, questPrepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 12);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Quest source inspection rejects every response basis mismatch fail-closed',
+    () async {
+      for (final mismatch in <String>[
+        'head',
+        'project-id',
+        'revision',
+        'quest',
+        'project-seal',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'quest_inspection_$mismatch',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 13,
+            name: 'Quest inspection $mismatch',
+          ),
+        );
+        final exactHeadBytes = await session.headFile.readAsBytes();
+        final prepareCalls = store.prepareCalls;
+        store.nextQuestInspectionResponseMismatch = mismatch;
+
+        await expectLater(
+          session.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+
+        expect(store.questInspectionCalls, 1, reason: mismatch);
+        expect(store.prepareCalls, prepareCalls, reason: mismatch);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(exactHeadBytes),
+          reason: mismatch,
+        );
+        expect(session.projectRevision, 13, reason: mismatch);
+        expect(session.requiresReopen, isTrue, reason: mismatch);
+        await session.close();
+      }
+    },
+  );
+
+  test('Quest source inspection detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'quest_inspection_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(
+        revision: 14,
+        name: 'Quest inspection head race',
+      ),
+    );
+    final prepareCalls = store.prepareCalls;
+    final external = store.register(
+      _projectJson(revision: 91, name: 'External inspection winner'),
+    );
+    store.afterQuestInspection = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.inspectQuestSourceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+      ),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.prepareCalls, prepareCalls);
+    expect(store.questInspectionCalls, 1);
+    expect(session.projectRevision, 14);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.inspectQuestSourceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+      ),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.questInspectionCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'Quest inspection domain errors retry while malformed, integrity, and head conflict poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 15, name: 'Quest inspection retry'),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_QUEST_INSPECTION_COLLISION_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_FAILED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_CHANGED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_MISSING',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNAVAILABLE',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNSAFE',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INVENTORY_FAILED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_TARGET_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_QUEST_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_RECOVERY_REQUIRED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_REQUEST_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_UNSUPPORTED_GENERATION',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextQuestInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_quest_source_v1',
+          code: code,
+          message: 'fake retryable Quest inspection domain error',
+        );
+        await expectLater(
+          retrySession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(
+        (await retrySession.inspectQuestSourceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          questId: '00000000000000000000000000000071',
+        )).projectRevision,
+        15,
+      );
+      expect(retryStore.questInspectionCalls, retryableCodes.length + 1);
+      await retrySession.close();
+
+      final poisonCodes = <String>[
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_QUEST_INSPECTION_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT',
+      ];
+      var ordinal = 0;
+      for (final code in poisonCodes) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'quest_inspection_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 15 + ordinal,
+                name: 'Quest inspection poison $ordinal',
+              ),
+            );
+        poisonStore.nextQuestInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_quest_source_v1',
+          code: code,
+          message: 'fake fail-closed Quest inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(
+            code == 'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: code,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          poisonSession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(poisonStore.questInspectionCalls, 1, reason: code);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'NPC source inspection uses only the exact project basis and never prepares',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_inspection_exact');
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 16,
+        name: 'NPC inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+      final npcPrepareCalls = store.npcPrepareCalls;
+
+      final result = await session.inspectNpcSourceV1(
+        npcId: revision3NpcInspectionNpcId,
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 16);
+      expect(result.npcId, revision3NpcInspectionNpcId);
+      expect(result.plan.knownParentLabel, 'Asghan');
+      expect(store.npcInspectionCalls, 1);
+      expect(store.npcInspectionRoots, <String>[root.path]);
+      expect(store.npcInspectionExpectedHeads, <String>[exactHead]);
+      expect(store.npcInspectionNpcIds, <String>[revision3NpcInspectionNpcId]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.npcPrepareCalls, npcPrepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('NPC source inspection detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'npc_inspection_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 17, name: 'NPC inspection head race'),
+    );
+    final external = store.register(
+      _projectJson(revision: 92, name: 'External NPC inspection winner'),
+    );
+    store.afterNpcInspection = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.npcInspectionCalls, 1);
+    expect(session.projectRevision, 17);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.npcInspectionCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'NPC inspection domain and local validation errors stay open while integrity errors poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 18, name: 'NPC inspection retry'),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_NPC_INSPECTION_FAILED',
+        'AUTHORING_REVISION3_NPC_INSPECTION_INPUT_LIMIT',
+        'AUTHORING_REVISION3_NPC_INSPECTION_NPC_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_PROJECT_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_REQUEST_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_RESPONSE_LIMIT',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextNpcInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_npc_source_v1',
+          code: code,
+          message: 'fake retryable NPC inspection domain error',
+        );
+        await expectLater(
+          retrySession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+
+      retryStore.nextNpcInspectionError = const FormatException(
+        'locally invalid NPC ID',
+      );
+      await expectLater(
+        retrySession.inspectNpcSourceV1(npcId: 'not-an-entity-id'),
+        throwsA(isA<FormatException>()),
+      );
+      expect(
+        retrySession.requiresReopen,
+        isFalse,
+        reason: 'local request rejection cannot poison an untouched Store',
+      );
+      expect(
+        (await retrySession.inspectNpcSourceV1(
+          npcId: revision3NpcInspectionNpcId,
+        )).projectRevision,
+        18,
+      );
+      await retrySession.close();
+
+      final poisonCodes = <String>[
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_NPC_INSPECTION_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT',
+      ];
+      var ordinal = 0;
+      for (final code in poisonCodes) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'npc_inspection_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 18 + ordinal,
+                name: 'NPC inspection poison $ordinal',
+              ),
+            );
+        poisonStore.nextNpcInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_npc_source_v1',
+          code: code,
+          message: 'fake fail-closed NPC inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(
+            code == 'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: code,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          poisonSession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(poisonStore.npcInspectionCalls, 1, reason: code);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler check binds the complete exact module graph and publishes nothing',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_exact',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final projectJson = _managedCompilerQuestProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.storeStillExactCurrent, isTrue);
+      expect(receipt.exactCurrent, isTrue);
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(receipt.recoveryRequired, isFalse);
+      expect(receipt.result.project.id, session.projectId);
+      expect(receipt.result.project.revision, 14);
+      expect(receipt.result.coverage.scriptModuleCount, 1);
+      expect(receipt.result.coverage.questModuleCount, 1);
+      expect(receipt.result.coverage.npcModuleCount, 0);
+      expect(receipt.result.compiler.runCount, 1);
+      expect(store.projectCompilerCheckCalls, 1);
+      expect(store.projectCompilerCheckRoots, <String>[root.path]);
+      expect(store.projectCompilerCheckGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.projectCompilerCheckExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(store.managedCompilerCheckCalls, 0);
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler accepts an empty graph without invoking a run',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_empty',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 14, name: 'Empty compiler graph'),
+      );
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(receipt.result.coverage.isEmpty, isTrue);
+      expect(receipt.result.compiler.notNeededEmpty, isTrue);
+      expect(receipt.result.compiler.runCount, 0);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler preserves evidence but invalidates the lease after post-call drift',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_post_drift',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+      final external = store.register(
+        _projectJson(revision: 91, name: 'External project compiler winner'),
+      );
+      store.afterProjectCompilerCheck = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(external.canonicalJson, flush: true);
+
+      final receipt = await session.checkProjectCompilerV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(receipt.result.compiler.compiledEvidenceOnly, isTrue);
+      expect(receipt.storeStillExactCurrent, isFalse);
+      expect(receipt.exactCurrent, isFalse);
+      expect(receipt.acceptedAtExactCurrent, isFalse);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), external.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'project compiler rejection and recovery are evidence, not Store mutation',
+    () async {
+      for (final outcome in <String>['failed', 'recovery']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_$outcome',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = outcome;
+        final projectJson = _managedCompilerQuestProjectJson();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: projectJson,
+        );
+        final headBytes = await session.headFile.readAsBytes();
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.acceptedAtExactCurrent, isFalse, reason: outcome);
+        expect(
+          receipt.recoveryRequired,
+          outcome == 'recovery',
+          reason: outcome,
+        );
+        expect(receipt.storeStillExactCurrent, isTrue, reason: outcome);
+        expect(session.requiresReopen, isFalse, reason: outcome);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(headBytes),
+          reason: outcome,
+        );
+        expect(session.projectJson, projectJson, reason: outcome);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler closing Store audit invalidates the lease but preserves evidence',
+    () async {
+      for (final status in <String>['drift', 'inspection_failed']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_store_audit_$status',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerStoreAudit = status;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.compiler.failure, isNotNull, reason: status);
+        expect(receipt.result.exactCurrent, isFalse, reason: status);
+        expect(receipt.storeStillExactCurrent, isFalse, reason: status);
+        expect(receipt.acceptedAtExactCurrent, isFalse, reason: status);
+        expect(session.requiresReopen, isTrue, reason: status);
+        await expectLater(
+          session.checkProjectCompilerV1(gameRoot: r'D:\Games\Gothic Remake'),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: status,
+        );
+        expect(store.projectCompilerCheckCalls, 1, reason: status);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler Game-only and not-run audits preserve a retryable lease',
+    () async {
+      for (final status in <String>['drift', 'inspection_failed']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_game_audit_$status',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerGameAudit = status;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.compiler.failure, isNotNull, reason: status);
+        expect(receipt.result.exactCurrent, isFalse, reason: status);
+        expect(receipt.storeStillExactCurrent, isTrue, reason: status);
+        expect(session.requiresReopen, isFalse, reason: status);
+        expect(
+          (await session.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          )).acceptedAtExactCurrent,
+          isTrue,
+          reason: status,
+        );
+        expect(store.projectCompilerCheckCalls, 2, reason: status);
+        await session.close();
+      }
+
+      for (final audits in <({String store, String game})>[
+        (store: 'not_run', game: 'exact'),
+        (store: 'exact', game: 'not_run'),
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_not_run_${audits.store}_${audits.game}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerOutcome = 'failed'
+          ..nextProjectCompilerStoreAudit = audits.store
+          ..nextProjectCompilerGameAudit = audits.game;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        final receipt = await session.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+
+        expect(receipt.result.exactCurrent, isFalse);
+        expect(receipt.storeStillExactCurrent, isTrue);
+        expect(session.requiresReopen, isFalse);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'project compiler mismatched evidence fails closed and retryable game input does not',
+    () async {
+      for (final mismatch in <String>[
+        'project-id',
+        'revision',
+        'coverage',
+        'manifest',
+        'executable',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'project_compiler_mismatch_$mismatch',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerCheckResponseMismatch = mismatch;
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+
+        await expectLater(
+          session.checkProjectCompilerV1(gameRoot: r'D:\Games\Gothic Remake'),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+        expect(session.requiresReopen, isTrue, reason: mismatch);
+        await session.close();
+      }
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_STAGING_UNAVAILABLE',
+        'AUTHORING_REVISION3_PROJECT_COMPILER_RESPONSE_LIMIT',
+      ]) {
+        final retryRoot = await _projectRoot(
+          fixture,
+          suffix:
+              'project_compiler_retryable_${code.split('_').last.toLowerCase()}',
+        );
+        final retryStore = _FakeRevision3Store(sealRegisteredHeads: true)
+          ..nextProjectCompilerCheckError = ModFfiException(
+            command: 'authoring_store_check_revision3_project_compiler_v1',
+            code: code,
+            message: 'fake retryable project compiler failure',
+          );
+        final retrySession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: retryRoot,
+              store: retryStore,
+              projectJson: _managedCompilerQuestProjectJson(),
+            );
+        await expectLater(
+          retrySession.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(isA<ModFfiException>()),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+        expect(
+          (await retrySession.checkProjectCompilerV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          )).acceptedAtExactCurrent,
+          isTrue,
+          reason: code,
+        );
+        await retrySession.close();
+      }
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'project_compiler_closing_store_audit_failed',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextProjectCompilerCheckError = const ModFfiException(
+          command: 'authoring_store_check_revision3_project_compiler_v1',
+          code:
+              'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_STORE_AUDIT_FAILED',
+          message: 'fake failed closing Store audit',
+        );
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _managedCompilerQuestProjectJson(),
+          );
+      await expectLater(
+        poisonSession.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await expectLater(
+        poisonSession.checkProjectCompilerV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.projectCompilerCheckCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'managed compiler check binds exact Quest selection and publishes nothing',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'managed_compiler_exact',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final projectJson = _managedCompilerQuestProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final receipt = await session.checkCompilerV1(
+        entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+        gameRoot: r'D:\Games\Gothic Remake',
+        entityId: _managedCompilerQuestId,
+        expectedEntityRevision: 8,
+        expectedModuleId: _managedCompilerQuestModuleId,
+        expectedModuleRevision: 9,
+      );
+
+      expect(receipt.storeStillExactCurrent, isTrue);
+      expect(receipt.exactCurrent, isTrue);
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(receipt.recoveryRequired, isFalse);
+      expect(receipt.result.projectId, session.projectId);
+      expect(receipt.result.projectRevision, 14);
+      expect(receipt.result.entityId, _managedCompilerQuestId);
+      expect(receipt.result.entityRevision, 8);
+      expect(receipt.result.moduleId, _managedCompilerQuestModuleId);
+      expect(receipt.result.moduleRevision, 9);
+      expect(store.managedCompilerCheckCalls, 1);
+      expect(store.managedCompilerCheckRoots, <String>[root.path]);
+      expect(store.managedCompilerCheckGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.managedCompilerCheckExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(store.managedCompilerCheckEntityIds, <String>[
+        _managedCompilerQuestId,
+      ]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 14);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('managed compiler check dispatches the exact NPC selection', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'managed_compiler_npc_exact',
+    );
+    final store = _FakeRevision3Store(sealRegisteredHeads: true);
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _managedCompilerNpcProjectJson(),
+    );
+
+    final receipt = await session.checkCompilerV1(
+      entityKind: AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+      gameRoot: r'D:\Games\Gothic Remake',
+      entityId: _managedCompilerNpcId,
+      expectedEntityRevision: 6,
+      expectedModuleId: _managedCompilerNpcModuleId,
+      expectedModuleRevision: 7,
+    );
+
+    expect(receipt.acceptedAtExactCurrent, isTrue);
+    expect(
+      receipt.result.entity.kind,
+      AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+    );
+    expect(receipt.result.entityId, _managedCompilerNpcId);
+    expect(receipt.result.moduleId, _managedCompilerNpcModuleId);
+    expect(store.managedCompilerCheckCalls, 1);
+    expect(store.managedCompilerCheckEntityIds, <String>[
+      _managedCompilerNpcId,
+    ]);
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test(
+    'managed compiler stale selection is rejected before the native callback',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'managed_compiler_stale_selection',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+
+      for (final stale
+          in <({int entityRevision, String moduleId, int moduleRevision})>[
+            (
+              entityRevision: 9,
+              moduleId: _managedCompilerQuestModuleId,
+              moduleRevision: 9,
+            ),
+            (
+              entityRevision: 8,
+              moduleId: '00000000000000000000000000000092',
+              moduleRevision: 9,
+            ),
+            (
+              entityRevision: 8,
+              moduleId: _managedCompilerQuestModuleId,
+              moduleRevision: 10,
+            ),
+          ]) {
+        await expectLater(
+          session.checkCompilerV1(
+            entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+            gameRoot: r'D:\Games\Gothic Remake',
+            entityId: _managedCompilerQuestId,
+            expectedEntityRevision: stale.entityRevision,
+            expectedModuleId: stale.moduleId,
+            expectedModuleRevision: stale.moduleRevision,
+          ),
+          throwsA(isA<ManagedRevision3CompilerSelectionStaleException>()),
+        );
+      }
+
+      expect(store.managedCompilerCheckCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'managed compiler foreign and malformed responses fail closed without publication',
+    () async {
+      for (final failure in <String>['foreign-project', 'malformed']) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'managed_compiler_$failure',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _managedCompilerQuestProjectJson(),
+        );
+        final headBytes = await session.headFile.readAsBytes();
+        final prepareCalls = store.prepareCalls;
+        if (failure == 'foreign-project') {
+          store.nextManagedCompilerCheckResponseMismatch = 'project-id';
+        } else {
+          store.nextManagedCompilerCheckError = const ModFfiException(
+            command: 'authoring_store_check_revision3_quest_compiler_v1',
+            code: ModFfiException.malformedNativeResponseCode,
+            message: 'fake malformed managed compiler response',
+          );
+        }
+
+        await expectLater(
+          session.checkCompilerV1(
+            entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+            gameRoot: r'D:\Games\Gothic Remake',
+            entityId: _managedCompilerQuestId,
+            expectedEntityRevision: 8,
+            expectedModuleId: _managedCompilerQuestModuleId,
+            expectedModuleRevision: 9,
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: failure,
+        );
+
+        expect(store.prepareCalls, prepareCalls, reason: failure);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(headBytes),
+          reason: failure,
+        );
+        expect(session.requiresReopen, isTrue, reason: failure);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'managed compiler preserves compiled evidence across post-call head drift',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'managed_compiler_post_drift',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+      final external = store.register(
+        _projectJson(revision: 91, name: 'External compiler winner'),
+      );
+      store.afterManagedCompilerCheck = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(external.canonicalJson, flush: true);
+
+      final receipt = await session.checkCompilerV1(
+        entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+        gameRoot: r'D:\Games\Gothic Remake',
+        entityId: _managedCompilerQuestId,
+        expectedEntityRevision: 8,
+        expectedModuleId: _managedCompilerQuestModuleId,
+        expectedModuleRevision: 9,
+      );
+
+      expect(receipt.result.compiler.compiledEvidenceOnly, isTrue);
+      expect(receipt.storeStillExactCurrent, isFalse);
+      expect(receipt.exactCurrent, isFalse);
+      expect(receipt.acceptedAtExactCurrent, isFalse);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), external.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'managed compiler returns structured install recovery without poisoning Store',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'managed_compiler_recovery',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextManagedCompilerCheckRecovery = true;
+      final projectJson = _managedCompilerQuestProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final receipt = await session.checkCompilerV1(
+        entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+        gameRoot: r'D:\Games\Gothic Remake',
+        entityId: _managedCompilerQuestId,
+        expectedEntityRevision: 8,
+        expectedModuleId: _managedCompilerQuestModuleId,
+        expectedModuleRevision: 9,
+      );
+
+      expect(receipt.recoveryRequired, isTrue);
+      expect(receipt.acceptedAtExactCurrent, isFalse);
+      expect(receipt.storeStillExactCurrent, isTrue);
+      expect(session.requiresReopen, isFalse);
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'managed compiler ordinary errors separate retryable input from Store uncertainty',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'managed_compiler_retryable_error',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+      retryStore.nextManagedCompilerCheckError = const ModFfiException(
+        command: 'authoring_store_check_revision3_quest_compiler_v1',
+        code: 'AUTHORING_REVISION3_COMPILER_REQUEST_INVALID',
+        message: 'fake bounded request rejection',
+      );
+
+      await expectLater(
+        _checkManagedCompilerQuest(retrySession),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_COMPILER_REQUEST_INVALID',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        (await _checkManagedCompilerQuest(retrySession)).acceptedAtExactCurrent,
+        isTrue,
+      );
+      await retrySession.close();
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_COMPILER_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_COMPILER_STORE_INVALID',
+      ]) {
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'managed_compiler_${code.toLowerCase()}',
+        );
+        final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _managedCompilerQuestProjectJson(),
+            );
+        poisonStore.nextManagedCompilerCheckError = ModFfiException(
+          command: 'authoring_store_check_revision3_quest_compiler_v1',
+          code: code,
+          message: 'fake managed compiler Store uncertainty',
+        );
+
+        await expectLater(
+          _checkManagedCompilerQuest(poisonSession),
+          throwsA(
+            code.endsWith('HEAD_CONFLICT')
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: code,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: code);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'DataAsset package index binds the exact project generation without writes',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_package_index_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 22,
+        name: 'DataAsset package index exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final result = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 22);
+      expect(
+        result.index.candidates.single.targetPath,
+        '/Game/Characters/DA_Asghan',
+      );
+      expect(store.dataAssetPackageIndexReadCalls, 1);
+      expect(store.dataAssetPackageIndexRoots, <String>[root.path]);
+      expect(store.dataAssetPackageIndexGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.dataAssetPackageIndexExpectedHeads, <String>[exactHead]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('DataAsset package index detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dataasset_package_index_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(
+        revision: 23,
+        name: 'DataAsset package index race',
+      ),
+    );
+    final external = store.register(
+      _projectJson(revision: 93, name: 'External package-index winner'),
+    );
+    store.afterDataAssetPackageIndex = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.readDataAssetPackageIndexV1(gameRoot: r'D:\Games\Gothic Remake'),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.dataAssetPackageIndexReadCalls, 1);
+    expect(session.projectRevision, 23);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.readDataAssetPackageIndexV1(gameRoot: r'D:\Games\Gothic Remake'),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.dataAssetPackageIndexReadCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'DataAsset game-domain failures retry while integrity and target drift poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_package_index_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 24,
+          name: 'DataAsset package index retry',
+        ),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_CHANGED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_GENERATION_MISMATCH',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_IO',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LAYOUT_INVALID',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LIMIT',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_PATH_UNSAFE',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_INPUT_LIMIT',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_IOSTORE_OPEN_FAILED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PACKAGE_INDEX_FAILED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PLATFORM_UNSUPPORTED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_REQUEST_INVALID',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_RESPONSE_LIMIT',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextDataAssetPackageIndexError = ModFfiException(
+          command: 'authoring_store_read_revision3_dataasset_package_index_v1',
+          code: code,
+          message: 'fake retryable DataAsset package-index error',
+        );
+        await expectLater(
+          retrySession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(
+        (await retrySession.readDataAssetPackageIndexV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        )).projectRevision,
+        24,
+      );
+      await retrySession.close();
+
+      var ordinal = 0;
+      for (final scenario in <String>['malformed', 'store', 'head', 'target']) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'dataasset_package_index_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 24 + ordinal,
+                name: 'DataAsset package-index poison $ordinal',
+              ),
+            );
+        if (scenario == 'target') {
+          poisonStore.nextDataAssetPackageIndexResponseMismatch = 'target';
+        } else {
+          final code = switch (scenario) {
+            'malformed' => ModFfiException.malformedNativeResponseCode,
+            'store' =>
+              'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_STORE_SEAL_MISMATCH',
+            'head' =>
+              'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_HEAD_CONFLICT',
+            _ => throw StateError('unknown poison scenario'),
+          };
+          poisonStore.nextDataAssetPackageIndexError = ModFfiException(
+            command:
+                'authoring_store_read_revision3_dataasset_package_index_v1',
+            code: code,
+            message: 'fake fail-closed DataAsset package-index error',
+          );
+        }
+
+        await expectLater(
+          poisonSession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(
+            scenario == 'head'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: scenario,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: scenario);
+        await expectLater(
+          poisonSession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: scenario,
+        );
+        expect(poisonStore.dataAssetPackageIndexReadCalls, 1);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'installed DataAsset inspection preserves exact snapshot and candidate identity',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_inspection_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 29,
+        name: 'Installed DataAsset inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final snapshot = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      final candidate = snapshot.index.candidates.single;
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final result = await session.inspectInstalledDataAssetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+
+      expect(result.head.canonicalJson, session.head.canonicalJson);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.candidateOrdinal, candidate.ordinal);
+      expect(result.targetPath, candidate.targetPath);
+      expect(store.installedDataAssetInspectionCalls, 1);
+      expect(store.installedDataAssetInspectionRoots, <String>[root.path]);
+      expect(store.installedDataAssetInspectionGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(
+        identical(store.installedDataAssetInspectionSnapshots.single, snapshot),
+        isTrue,
+      );
+      expect(
+        identical(
+          store.installedDataAssetInspectionCandidates.single,
+          candidate,
+        ),
+        isTrue,
+      );
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+
+      final otherSnapshot = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      await expectLater(
+        session.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: snapshot,
+          candidate: otherSnapshot.index.candidates.single,
+        ),
+        throwsArgumentError,
+      );
+      expect(store.installedDataAssetInspectionCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'installed DataAsset inspection retries game drift and poisons integrity or head conflict',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 30,
+          name: 'Installed DataAsset inspection retry',
+        ),
+      );
+      final retrySnapshot = await retrySession.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      final retryCandidate = retrySnapshot.index.candidates.single;
+      retryStore.nextInstalledDataAssetInspectionError = const ModFfiException(
+        command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+        message: 'fake retryable installed DataAsset game drift',
+      );
+
+      await expectLater(
+        retrySession.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: retrySnapshot,
+          candidate: retryCandidate,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        (await retrySession.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: retrySnapshot,
+          candidate: retryCandidate,
+        )).candidateOrdinal,
+        retryCandidate.ordinal,
+      );
+      expect(retryStore.installedDataAssetInspectionCalls, 2);
+      await retrySession.close();
+
+      for (final entry in <(String, Matcher)>[
+        (
+          'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_STORE_SEAL_MISMATCH',
+          isA<ManagedProjectVerificationException>(),
+        ),
+        (
+          'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT',
+          isA<ManagedProjectHeadConflictException>(),
+        ),
+      ]) {
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'installed_dataasset_inspection_${entry.$1.hashCode}',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 31,
+                name: 'Installed DataAsset inspection poison',
+              ),
+            );
+        final poisonSnapshot = await poisonSession.readDataAssetPackageIndexV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+        final poisonCandidate = poisonSnapshot.index.candidates.single;
+        poisonStore.nextInstalledDataAssetInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+          code: entry.$1,
+          message: 'fake fail-closed installed DataAsset inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectInstalledDataAssetV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            expectedSnapshot: poisonSnapshot,
+            candidate: poisonCandidate,
+          ),
+          throwsA(entry.$2),
+          reason: entry.$1,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: entry.$1);
+        await expectLater(
+          poisonSession.inspectInstalledDataAssetV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            expectedSnapshot: poisonSnapshot,
+            candidate: poisonCandidate,
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: entry.$1,
+        );
+        expect(poisonStore.installedDataAssetInspectionCalls, 1);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'verifyCurrentHead drift or reopen mismatch poisons the session',
+    () async {
+      for (final mode in <String>['head-drift', 'reopen-mismatch']) {
+        final root = await _projectRoot(fixture, suffix: mode);
+        final store = _FakeRevision3Store();
+        final original = _projectJson(revision: 0, name: 'Original $mode');
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final prepareCalls = store.prepareCalls;
+        if (mode == 'head-drift') {
+          final external = store.register(
+            _projectJson(revision: 91, name: 'External'),
+          );
+          await session.headFile.writeAsString(
+            external.canonicalJson,
+            flush: true,
+          );
+        } else {
+          store.nextOpenProjectOverride = _projectJson(
+            revision: 92,
+            name: 'Wrong reopen',
+          );
+        }
+
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectSessionException>()),
+          reason: mode,
+        );
+        expect(store.prepareCalls, prepareCalls, reason: mode);
+        expect(session.projectJson, original, reason: mode);
+        expect(session.requiresReopen, isTrue, reason: mode);
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mode,
+        );
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'derive rejection and callback throw prepare and publish nothing',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final prepares = store.prepareCalls;
+      final exactHead = await session.headFile.readAsBytes();
+
+      final rejection = await session.deriveAndSave<int>((latest) {
+        expect(latest, original);
+        return const ManagedProjectDerivedRejection<int>(41);
+      });
+      expect(rejection, 41);
+      expect(store.prepareCalls, prepares);
+      expect(await session.headFile.readAsBytes(), exactHead);
+
+      await expectLater(
+        session.deriveAndSave<void>((_) => throw StateError('derive failed')),
+        throwsA(isA<StateError>()),
+      );
+      expect(store.prepareCalls, prepares);
+      expect(await session.headFile.readAsBytes(), exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'an external race never clobbers and poisons edits until reopen',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+      );
+      final externalProject = _projectJson(revision: 90, name: 'External');
+      final externalHead = store.register(externalProject);
+      store.afterPrepare = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.save(_projectJson(revision: 1, name: 'Must not win')),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.requiresReopen, isTrue);
+      final prepares = store.prepareCalls;
+      await expectLater(
+        session.save(_projectJson(revision: 2, name: 'Still rejected')),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.prepareCalls, prepares);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, externalProject);
+      expect(reopened.requiresReopen, isFalse);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'interrupted publication is repaired by a full verified reopen',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '73000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.tempPromoted) {
+            throw const AtomicSwapException('injected publication failure');
+          }
+        },
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+        replacement: replacement,
+      );
+      armed = true;
+      final saved = _projectJson(revision: 1, name: 'Recovered');
+
+      await expectLater(
+        session.save(saved),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, saved);
+      expect(await journal.exists(), isFalse);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'interrupted Quest publication repairs the verified prepared candidate',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'quest_repair');
+      final store = _FakeRevision3Store();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '75000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.tempPromoted) {
+            throw const AtomicSwapException(
+              'injected Quest publication failure',
+            );
+          }
+        },
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Quest repair'),
+        replacement: replacement,
+      );
+      armed = true;
+
+      await expectLater(
+        session.prepareAndPublishQuestDraftV3(
+          gameRoot: r'D:\Games\Gothic Remake',
+          questId: '00000000000000000000000000000071',
+          scriptModuleId: '00000000000000000000000000000072',
+          displayName: 'Managed Quest 1',
+          intent: _questIntent(1),
+        ),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 1);
+      expect(await journal.exists(), isFalse);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'raw filesystem publication failure poisons and repairs on reopen',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '74000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.targetBackedUp) {
+            throw FileSystemException('injected raw publication failure');
+          }
+        },
+      );
+      final original = _projectJson(revision: 0, name: 'Original');
+      final saved = _projectJson(revision: 1, name: 'Recovered raw failure');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        replacement: replacement,
+      );
+      final originalHead = session.head.canonicalJson;
+      armed = true;
+
+      await expectLater(
+        session.save(saved),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(session.projectJson, original);
+      expect(session.head.canonicalJson, originalHead);
+      expect(await session.headFile.exists(), isFalse);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+
+      final preparesAfterFailure = store.prepareCalls;
+      await expectLater(
+        session.save(_projectJson(revision: 2, name: 'Must not prepare')),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.prepareCalls, preparesAfterFailure);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, saved);
+      expect(reopened.projectRevision, 1);
+      expect(reopened.requiresReopen, isFalse);
+      expect(
+        await reopened.headFile.readAsString(),
+        reopened.head.canonicalJson,
+      );
+      expect(await journal.exists(), isFalse);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
+    'post-publication mismatch poisons session but reopen recovers',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final saved = _projectJson(revision: 1, name: 'Saved');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      store.nextOpenProjectOverride = _projectJson(
+        revision: 99,
+        name: 'Mismatch',
+      );
+
+      await expectLater(
+        session.save(saved),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, saved);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'prepared candidate head and project mismatches never publish',
+    () async {
+      for (final mismatch in <String>['head', 'project']) {
+        final root = await _projectRoot(fixture, suffix: mismatch);
+        final store = _FakeRevision3Store();
+        final original = _projectJson(revision: 0, name: 'Original $mismatch');
+        final candidate = _projectJson(
+          revision: 1,
+          name: 'Candidate $mismatch',
+        );
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final exactPublishedHead = await session.headFile.readAsBytes();
+        if (mismatch == 'head') {
+          store.nextHeadOverride = store.register(
+            _projectJson(revision: 88, name: 'Wrong head'),
+          );
+        } else {
+          store.nextHeadProjectOverride = _projectJson(
+            revision: 89,
+            name: 'Wrong project',
+          );
+        }
+
+        await expectLater(
+          session.save(candidate),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+        expect(await session.headFile.readAsBytes(), exactPublishedHead);
+        expect(session.projectJson, original);
+        expect(session.requiresReopen, isFalse);
+
+        await session.save(candidate);
+        expect(session.projectJson, candidate);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Quest basis, response, and full-reopen mismatches never publish',
+    () async {
+      for (final mismatch in <String>[
+        'basis-head',
+        'candidate-project',
+        'revision',
+        'display-name',
+        'candidate-reopen',
+      ]) {
+        final root = await _projectRoot(fixture, suffix: 'quest_$mismatch');
+        final store = _FakeRevision3Store();
+        final original = _projectJson(revision: 0, name: 'Quest $mismatch');
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final exactHeadBytes = await session.headFile.readAsBytes();
+        final genericPrepares = store.prepareCalls;
+        if (mismatch == 'candidate-reopen') {
+          store.nextHeadOverride = store.register(
+            _projectJson(revision: 70, name: 'Wrong candidate reopen'),
+          );
+        } else {
+          store.nextQuestResponseMismatch = mismatch;
+        }
+
+        await expectLater(
+          session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+            scriptModuleId: '00000000000000000000000000000072',
+            displayName: 'Managed Quest 1',
+            intent: _questIntent(1),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+        expect(
+          await session.headFile.readAsBytes(),
+          exactHeadBytes,
+          reason: mismatch,
+        );
+        expect(session.projectJson, original, reason: mismatch);
+        final poisoned = mismatch != 'candidate-reopen';
+        expect(session.requiresReopen, poisoned, reason: mismatch);
+        expect(store.prepareCalls, genericPrepares, reason: mismatch);
+
+        if (poisoned) {
+          await expectLater(
+            session.prepareAndPublishQuestDraftV3(
+              gameRoot: r'D:\Games\Gothic Remake',
+              questId: '00000000000000000000000000000071',
+              scriptModuleId: '00000000000000000000000000000072',
+              displayName: 'Managed Quest 1',
+              intent: _questIntent(1),
+            ),
+            throwsA(isA<ManagedProjectVerificationException>()),
+            reason: mismatch,
+          );
+        } else {
+          final published = await session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+            scriptModuleId: '00000000000000000000000000000072',
+            displayName: 'Managed Quest 1',
+            intent: _questIntent(1),
+          );
+          expect(session.head.canonicalJson, published.head.canonicalJson);
+        }
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Quest semantic rejection is retryable while native integrity errors poison',
+    () async {
+      final semanticRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_semantic',
+      );
+      final semanticStore = _FakeRevision3Store();
+      final semanticSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: semanticRoot,
+            store: semanticStore,
+            projectJson: _projectJson(revision: 0, name: 'Quest semantic'),
+          );
+      final semanticHead = await semanticSession.headFile.readAsBytes();
+      semanticStore.nextQuestError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_draft_v3',
+        code: 'AUTHORING_REVISION3_QUEST_REJECTED',
+        message: 'fake semantic collision',
+      );
+      await expectLater(
+        semanticSession.prepareAndPublishQuestDraftV3(
+          gameRoot: r'D:\Games\Gothic Remake',
+          questId: '00000000000000000000000000000071',
+          scriptModuleId: '00000000000000000000000000000072',
+          displayName: 'Managed Quest 1',
+          intent: _questIntent(1),
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_QUEST_REJECTED',
+          ),
+        ),
+      );
+      expect(await semanticSession.headFile.readAsBytes(), semanticHead);
+      expect(semanticSession.requiresReopen, isFalse);
+      await semanticSession.prepareAndPublishQuestDraftV3(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+        scriptModuleId: '00000000000000000000000000000072',
+        displayName: 'Managed Quest 1',
+        intent: _questIntent(1),
+      );
+      await semanticSession.close();
+
+      for (final errorCode in <String>[
+        'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_QUEST_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INVARIANT',
+        'AUTHORING_REVISION3_QUEST_TRANSACTION_FAILED',
+        'AUTHORING_REVISION3_QUEST_PERSISTENCE_FAILED',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_QUEST_FUTURE_UNKNOWN',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: errorCode.toLowerCase(),
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 0, name: errorCode),
+        );
+        final exactHead = await session.headFile.readAsBytes();
+        store.nextQuestError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_quest_draft_v3',
+          code: errorCode,
+          message: 'fake integrity failure',
+        );
+        await expectLater(
+          session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+            scriptModuleId: '00000000000000000000000000000072',
+            displayName: 'Managed Quest 1',
+            intent: _questIntent(1),
+          ),
+          throwsA(
+            errorCode.endsWith('HEAD_CONFLICT')
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: errorCode,
+        );
+        expect(await session.headFile.readAsBytes(), exactHead);
+        expect(session.requiresReopen, isTrue);
+        final questCalls = store.questPrepareCalls;
+        await expectLater(
+          session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000073',
+            scriptModuleId: '00000000000000000000000000000074',
+            displayName: 'Managed Quest 2',
+            intent: _questIntent(2),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.questPrepareCalls, questCalls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'head drift during native Quest prepare never clobbers the winner',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'quest_race');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Quest race'),
+      );
+      final externalProject = _projectJson(
+        revision: 90,
+        name: 'External winner',
+      );
+      final externalHead = store.register(externalProject);
+      store.afterQuestPrepare = (rootPath, _, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishQuestDraftV3(
+          gameRoot: r'D:\Games\Gothic Remake',
+          questId: '00000000000000000000000000000071',
+          scriptModuleId: '00000000000000000000000000000072',
+          displayName: 'Managed Quest 1',
+          intent: _questIntent(1),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, externalProject);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'derive callback cannot re-enter save, derive, verify, or close',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+      );
+
+      final result = await session.deriveAndSave<String>((_) async {
+        await expectLater(
+          session.save(_projectJson(revision: 1, name: 'Nested')),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.deriveAndSave<void>(
+            (_) => const ManagedProjectDerivedRejection<void>(null),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.recoverAfterUncertainPublication(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.readContentIndex(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+            scriptModuleId: '00000000000000000000000000000072',
+            displayName: 'Managed Quest 1',
+            intent: _questIntent(1),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.listDataAssetStagesV1(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.prepareAndPublishDataAssetStageV1(
+            patchReceiptPath: r'C:\fixtures\patch-receipt.json',
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.prepareAndPublishRemoveDataAssetStageV1(
+            targetPath: revision3DataAssetTargetPath,
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.close(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        return const ManagedProjectDerivedRejection<String>('closed');
+      });
+      expect(result, 'closed');
+      expect(session.isClosed, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'close waits for prior work, rejects new work, and releases lock',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      store.afterPrepare = (_, _, _) async {
+        entered.complete();
+        await release.future;
+      };
+      final save = session.save(_projectJson(revision: 1, name: 'Saved'));
+      await entered.future;
+      final close = session.close();
+      await expectLater(
+        session.save(_projectJson(revision: 2, name: 'Too late')),
+        throwsA(isA<ManagedProjectSessionClosedException>()),
+      );
+      expect(session.isClosed, isFalse);
+      release.complete();
+      await save;
+      await close;
+      expect(session.isClosed, isTrue);
+
+      final lock = await ManagedProjectSessionLock.acquire(root);
+      await lock.release();
+    },
+  );
+
+  test(
+    'Voice take removal publishes through full reopen and preserves asset CAS',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_take_removal');
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final project = revision3VoiceFixtureProjectWithExistingSlotJson(
+        candidateCount: 2,
+      );
+      final beforeAssetStore =
+          (jsonDecode(project) as Map<String, Object?>)['asset_store'];
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+      );
+      final headOpens = store.headVerifications.length;
+
+      final removed = await _removeVoiceTake(session);
+
+      expect(session.supportsVoiceTakeRemoval, isTrue);
+      expect(store.voiceTakeRemovalCalls, 1);
+      expect(removed.projectRevision, session.projectRevision);
+      expect(removed.slotRevision, 1);
+      expect(removed.takeRevision, 0);
+      expect(removed.selectionCleared, isTrue);
+      expect(removed.takeEntityRemoved, isTrue);
+      expect(removed.remainingCandidateCount, 1);
+      final published = jsonDecode(session.projectJson) as Map<String, Object?>;
+      expect(published['asset_store'], beforeAssetStore);
+      expect(
+        (published['entities']! as Map),
+        isNot(contains(revision3VoiceFixtureTakeId)),
+      );
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'retryable Voice take removal conflict keeps session writable',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_remove_retry');
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(
+          candidateCount: 2,
+        ),
+      );
+      final exactHead = session.head.canonicalJson;
+      store.nextVoiceTakeRemovalError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+        message: 'injected closed conflict',
+      );
+
+      await expectLater(
+        _removeVoiceTake(session),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+          ),
+        ),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(session.head.canonicalJson, exactHead);
+      final removed = await _removeVoiceTake(session);
+      expect(removed.projectRevision, session.projectRevision);
+      expect(store.voiceTakeRemovalCalls, 2);
+      await session.close();
+    },
+  );
+
+  test('uncertain Voice take removal failure requires reopen', () async {
+    final root = await _projectRoot(fixture, suffix: 'voice_remove_poison');
+    final store = _FakeRevision3VoiceTakeRemovalStore()
+      ..nextVoiceTakeRemovalError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_STORE_IO',
+        message: 'injected uncertain Store failure',
+      );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    final calls = store.voiceTakeRemovalCalls;
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.voiceTakeRemovalCalls, calls);
+    await session.close();
+  });
+
+  test(
+    'local Voice take removal revision limit avoids Store and keeps session usable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_remove_revision_limit',
+      );
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final project =
+          (jsonDecode(revision3VoiceFixtureProjectWithExistingSlotJson())
+                as Map<String, Object?>)
+            ..['revision'] = 0x7fffffffffffffff;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: jsonEncode(project),
+      );
+      final exactHead = session.head.canonicalJson;
+
+      await expectLater(
+        _removeVoiceTake(session),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REVISION_LIMIT',
+          ),
+        ),
+      );
+      expect(store.voiceTakeRemovalCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      expect(session.head.canonicalJson, exactHead);
+      await session.verifyCurrentHead();
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('Voice take removal detects post-prepare head drift', () async {
+    final root = await _projectRoot(fixture, suffix: 'voice_remove_drift');
+    final store = _FakeRevision3VoiceTakeRemovalStore();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+    final drift = store.register(
+      revision3VoiceFixtureProjectWithExistingSlotJson(candidateCount: 2),
+    );
+    store.afterVoiceTakeRemovalPrepare = (root) async {
+      await File(
+        p.join(root, 'gore-project.json'),
+      ).writeAsString(drift.canonicalJson, flush: true);
+    };
+
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test('checkpoint-only store does not claim Voice take removal', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'voice_remove_unsupported',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+
+    expect(session.supportsVoiceTakeRemoval, isFalse);
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<UnsupportedError>()),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test('dialog Voice slot removal publishes through full reopen', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dialog_voice_slot_remove',
+    );
+    final store = _FakeRevision3DialogVoiceSlotRemovalStore();
+    final project = revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+      1,
+      generatedSlots: true,
+    );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: project,
+    );
+    final headOpens = store.headVerifications.length;
+
+    final removed = await _removeDialogVoiceSlot(session);
+
+    expect(session.supportsDialogVoiceSlotRemoval, isTrue);
+    expect(store.removalCalls, 1);
+    expect(removed.projectRevision, session.projectRevision);
+    expect(removed.lineRevision, 3);
+    expect(removed.removedSlotRevision, 0);
+    expect(
+      removed.removedTargetResolution,
+      Revision3ContentVoiceTargetResolution.unresolved,
+    );
+    final published = jsonDecode(session.projectJson) as Map<String, Object?>;
+    expect(
+      (published['entities']! as Map),
+      isNot(contains(revision3DialogVoiceSlotRemovalSlotId)),
+    );
+    expect(
+      store.headVerifications.skip(headOpens),
+      everyElement(AuthoringAssetVerification.full),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test(
+    'closed dialog Voice slot conflict remains retryable; uncertainty poisons',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_remove_errors',
+      );
+      final store = _FakeRevision3DialogVoiceSlotRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+          1,
+          generatedSlots: true,
+        ),
+      );
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_NOT_EMPTY',
+        message: 'injected correctable conflict',
+      );
+      await expectLater(
+        _removeDialogVoiceSlot(session),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_STORE_INVARIANT',
+        message: 'injected uncertain failure',
+      );
+      await expectLater(
+        _removeDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'checkpoint-only store does not claim dialog Voice slot creation',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_unsupported',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _dialogVoiceSlotCreationProjectJson(),
+      );
+
+      expect(session.supportsDialogVoiceSlotCreation, isFalse);
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog Voice slot creation publishes exact delta through full reopen',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final basisJson = _dialogVoiceSlotCreationProjectJson();
+      final basis = (jsonDecode(basisJson) as Map).cast<String, Object?>();
+      final basisEntities = (basis['entities']! as Map).cast<String, Object?>();
+      final basisLocalization = jsonEncode(
+        basisEntities[revision3VoiceFixtureLocalizationId],
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisJson,
+      );
+      final headOpens = store.headVerifications.length;
+
+      final created = await _createDialogVoiceSlot(session);
+
+      expect(session.supportsDialogVoiceSlotCreation, isTrue);
+      expect(store.creationCalls, 1);
+      expect(created.projectRevision, 8);
+      expect(created.projectRevision, session.projectRevision);
+      expect(created.lineRevision, 3);
+      expect(created.localizationRevision, 4);
+      expect(created.slotRevision, 0);
+      expect(created.locale, 'de');
+      expect(
+        created.targetResolution,
+        Revision3ContentVoiceTargetResolution.unresolved,
+      );
+      final published = (jsonDecode(session.projectJson) as Map)
+          .cast<String, Object?>();
+      final entities = (published['entities']! as Map).cast<String, Object?>();
+      expect(entities.length, basisEntities.length + 1);
+      expect(entities, contains(revision3VoiceFixtureSlotId));
+      expect(
+        jsonEncode(entities[revision3VoiceFixtureLocalizationId]),
+        basisLocalization,
+      );
+      final line = (entities[revision3VoiceFixtureLineId]! as Map)
+          .cast<String, Object?>();
+      expect(line['revision'], 3);
+      final linePayload = (line['payload']! as Map).cast<String, Object?>();
+      final lineData = (linePayload['data']! as Map).cast<String, Object?>();
+      final slots = (lineData['voice_slots']! as Map).cast<String, Object?>();
+      expect((slots['de']! as Map)['id'], revision3VoiceFixtureSlotId);
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'closed dialog Voice slot creation conflict stays retryable while unknown integrity poisons',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_errors',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _dialogVoiceSlotCreationProjectJson(),
+      );
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_SLOT_CONFLICT',
+        message: 'injected correctable conflict',
+      );
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.verifyCurrentHead();
+
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_STORE_INVARIANT',
+        message: 'injected uncertain integrity failure',
+      );
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog Voice slot creation post-publication reopen mismatch poisons and cannot retry',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_create_reopen_mismatch',
+      );
+      final store = _FakeRevision3DialogVoiceSlotCreationStore();
+      final basisJson = _dialogVoiceSlotCreationProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisJson,
+      );
+      store.nextOpenProjectOverride = basisJson;
+
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.creationCalls, 1);
+      expect(session.projectRevision, 7);
+      expect(session.requiresReopen, isTrue);
+      await expectLater(
+        _createDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.creationCalls, 1);
+      await session.close();
+    },
+  );
+
+  for (final kind in AuthoringStoryDraftKind.values) {
+    test(
+      '${kind.wireName} removal publishes only the Draft/module pair through full reopen',
+      () async {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'story_remove_${kind.wireName}',
+        );
+        final store = _FakeRevision3StoryDraftRemovalStore();
+        final project = kind == AuthoringStoryDraftKind.npcDraft
+            ? _managedCompilerNpcProjectJson()
+            : _managedCompilerQuestProjectJson();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: project,
+        );
+        final headOpens = store.headVerifications.length;
+
+        final removed = await _removeStoryDraft(session, kind);
+
+        expect(session.supportsStoryDraftRemoval, isTrue);
+        expect(store.storyDraftRemovalCalls, 1);
+        expect(removed.projectId, session.projectId);
+        expect(removed.projectRevision, 15);
+        expect(removed.head.canonicalJson, session.head.canonicalJson);
+        expect(removed.removedDraftKind, kind);
+        final entities =
+            ((jsonDecode(session.projectJson) as Map)['entities']! as Map)
+                .cast<String, Object?>();
+        expect(entities.containsKey(removed.removedDraftId), isFalse);
+        expect(entities.containsKey(removed.removedScriptModuleId), isFalse);
+        expect(
+          store.headVerifications.skip(headOpens),
+          everyElement(AuthoringAssetVerification.full),
+        );
+        expect(session.requiresReopen, isFalse);
+        await session.close();
+      },
+    );
+  }
+
+  test(
+    'every correctable Story Draft removal code keeps the session writable',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'story_remove_retry');
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+      );
+      final exactHead = session.head.canonicalJson;
+      const codes = <String>{
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_TARGET_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_OWNERSHIP_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REFERENCE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_INVALID',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+      };
+
+      for (final code in codes) {
+        store.nextStoryDraftRemovalError = ModFfiException(
+          command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+          code: code,
+          message: 'injected correctable removal failure',
+        );
+        await expectLater(
+          _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+      }
+
+      final removed = await _removeStoryDraft(
+        session,
+        AuthoringStoryDraftKind.npcDraft,
+      );
+      expect(removed.projectRevision, 15);
+      expect(store.storyDraftRemovalCalls, codes.length + 1);
+      await session.close();
+    },
+  );
+
+  test('uncertain Story Draft removal codes poison authoring', () async {
+    final cases = <({String code, Matcher matcher})>[
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT',
+        matcher: isA<ManagedProjectHeadConflictException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_MISSING',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_INVALID',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INVARIANT',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_STORE_IO',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: ModFfiException.malformedNativeResponseCode,
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_FUTURE_UNKNOWN',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+    ];
+    for (var index = 0; index < cases.length; index++) {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_poison_$index',
+      );
+      final testCase = cases[index];
+      final store = _FakeRevision3StoryDraftRemovalStore()
+        ..nextStoryDraftRemovalError = ModFfiException(
+          command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+          code: testCase.code,
+          message: 'injected uncertain removal failure',
+        );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.questDraft),
+        throwsA(testCase.matcher),
+      );
+      expect(session.requiresReopen, isTrue);
+      final calls = store.storyDraftRemovalCalls;
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.questDraft),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.storyDraftRemovalCalls, calls);
+      await session.close();
+    }
+  });
+
+  test(
+    'local Story Draft revision limit remains prepublication and retry-safe',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_revision_limit',
+      );
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      final project =
+          (jsonDecode(_managedCompilerNpcProjectJson()) as Map)
+              .cast<String, Object?>()
+            ..['revision'] = 0x7fffffffffffffff;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: jsonEncode(project),
+      );
+      final exactHead = session.head.canonicalJson;
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+          ),
+        ),
+      );
+      expect(store.storyDraftRemovalCalls, 0);
+      expect(session.projectRevision, 0x7fffffffffffffff);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.verifyCurrentHead();
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'uncertain Story Draft removal CAS is repaired to its exact candidate',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'story_remove_repair');
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '79000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.tempPromoted) {
+            throw const AtomicSwapException(
+              'injected Story Draft removal publication failure',
+            );
+          }
+        },
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+        replacement: replacement,
+      );
+      armed = true;
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.projectRevision, 14);
+      expect(session.requiresReopen, isTrue);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 15);
+      expect(await journal.exists(), isFalse);
+      expect(reopened.requiresReopen, isFalse);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'checkpoint-only revision-3 stores do not claim Story Draft removal',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_unsupported',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+      );
+
+      expect(session.supportsStoryDraftRemoval, isFalse);
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('one managed root has one exclusive R3 session', () async {
+    final root = await _projectRoot(fixture);
+    final store = _FakeRevision3Store();
+    final first = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+    );
+
+    await expectLater(
+      ManagedRevision3AuthoringProjectSession.open(root: root, store: store),
+      throwsA(isA<ManagedProjectLockException>()),
+    );
+    await first.close();
+  });
+}
+
+Future<ManagedRevision3StoryDraftRemovalCheckpoint> _removeStoryDraft(
+  ManagedRevision3AuthoringProjectSession session,
+  AuthoringStoryDraftKind kind,
+) => session.prepareAndPublishRemoveStoryDraftV1(
+  draftId: kind == AuthoringStoryDraftKind.npcDraft
+      ? _managedCompilerNpcId
+      : _managedCompilerQuestId,
+  draftKind: kind,
+  expectedDraftRevision: kind == AuthoringStoryDraftKind.npcDraft ? 6 : 8,
+  scriptModuleId: kind == AuthoringStoryDraftKind.npcDraft
+      ? _managedCompilerNpcModuleId
+      : _managedCompilerQuestModuleId,
+  expectedScriptModuleRevision: kind == AuthoringStoryDraftKind.npcDraft
+      ? 7
+      : 9,
+);
+
+Future<ManagedRevision3QuestContextEditCheckpoint> _publishQuestContext(
+  ManagedRevision3AuthoringProjectSession session,
+  Revision3QuestOutlineFixture fixture,
+) => session.prepareAndPublishQuestContextEditV1(
+  gameRoot: r'D:\Games\Gothic Remake',
+  questId: revision3QuestOutlineQuestId,
+  expectedQuestRevision: fixture.questRevision,
+  expectedModuleId: revision3QuestOutlineModuleId,
+  expectedModuleRevision: fixture.moduleRevision,
+  expectedStoryCatalogSeal: fixture.storyCatalogSeal,
+  description: 'Find Homer and report back safely.',
+  parentCatalogId: revision3QuestContextParentCatalogId,
+  giverCatalogId: revision3QuestContextGiverCatalogId,
+  expectedParentRuntimeClass: revision3QuestContextParentRuntimeClass,
+  expectedParentCatalogLayer: 'base-game.quest-parent.v1',
+  expectedParentAuthoringSelector: 'SwampCamp_SCChapter3',
+  expectedParentSourceSeal: _contextSourceSeal(11, '1'),
+  expectedGiverRuntimeUniqueName: revision3QuestContextGiverRuntimeUniqueName,
+  expectedGiverCatalogLayer: 'base-game.npc.v1',
+  expectedGiverAuthoringSelector: revision3QuestContextGiverRuntimeUniqueName,
+  expectedGiverSourceSeal: _contextSourceSeal(12, '2'),
+);
+
+Revision3DialogLineEntryTechnicalPlan _dialogLinePlan() {
+  final index = Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': '00000000000000000000000000000003',
+    'project_revision': 0,
+    'project_name': 'Dialog project',
+    'project_version': '1.0.0',
+    'project_author': 'revision-3 session tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 171698176,
+        'sha256':
+            'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+      },
+    },
+    'authoring_locales': <Object?>[],
+    'entity_counts': <String, Object?>{},
+    'entities': <Object?>[],
+    'assets': <Object?>[],
+  });
+  return Revision3DialogLineEntryTechnicalPlan.forCheckpoint(
+    catalog: Revision3DialogLineEntryCatalog.fromContentIndex(index),
+    input: Revision3DialogLineEntryInput.create(
+      lineDisplayName: 'Gate greeting',
+      speakerHint: 'Asghan',
+      locale: 'de',
+      text: 'Halt! Wer da?',
+    ),
+  );
+}
+
+AuthoringDraftContentSeal _contextSourceSeal(int bytes, String digit) =>
+    AuthoringDraftContentSeal.fromJson(<String, Object?>{
+      'byte_len': bytes,
+      'sha256': List<String>.filled(64, digit).join(),
+    });
+
+typedef _AfterPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead head,
+      String projectJson,
+    );
+
+typedef _AfterQuestPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+      String candidateProjectJson,
+    );
+
+typedef _AfterNpcPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+      String candidateProjectJson,
+    );
+
+typedef _AfterContentRead =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDialogLocalizationRead =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDialogLocalizationEditSeedRead =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDialogLocalizationEditPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+      String candidateProjectJson,
+    );
+
+typedef _AfterQuestInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterNpcInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterManagedCompilerCheck =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterProjectCompilerCheck =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDataAssetPackageIndex =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterInstalledDataAssetInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+      AuthoringRevision3DataAssetPackageCandidate candidate,
+    );
+
+typedef _AfterDataAssetPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+    );
+
+typedef _AfterDataAssetList =
+    FutureOr<void> Function(String root, AuthoringWorkingHead expectedHead);
+
+typedef _AfterVoiceBuild =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3VoiceBuildResult result,
+    );
+
+typedef _AfterVoicePlan =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3VoiceBuildPlanResult result,
+    );
+
+typedef _AfterProjectBuildPlan =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3ProjectBuildPlanResult result,
+    );
+
+typedef _AfterExactSnapshotExportV2 =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      AuthoringRevision3ExactSnapshotExportResultV2 result,
+    );
+
+DataAssetSemanticEditIntent _semanticDataAssetIntent() {
+  final response = validDataAssetInspectionResponse();
+  (response['binding']! as Map<String, Object?>)['usmap_sha256'] = '3' * 64;
+  dataAssetSelector(response)['usmap_sha256'] = '3' * 64;
+  final inspection = DataAssetInspection.fromJson(response);
+  return DataAssetSemanticValueEditor.fromLeaf(
+        inspection.exports.single.leaves.single,
+      )
+      .previewScalar(
+        extractReceiptPath: r'C:\proof\extract-receipt.v2.json',
+        expectedTargetPath: revision3DataAssetTargetPath,
+        value: '2',
+      )
+      .intent;
+}
+
+DataAssetInstalledSemanticEditIntent _installedSemanticDataAssetIntent(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    _dataAssetPackageIndexResponse(
+      session.head,
+      session.projectJson,
+      targetPath: revision3DataAssetTargetPath,
+      packageIdHex: 'e54f79b8fc97323c',
+    ),
+    expectedHead: session.head,
+  );
+  final candidate = snapshot.index.candidates.single;
+  final inspection = _installedDataAssetInspectionResult(
+    expectedSnapshot: snapshot,
+    candidate: candidate,
+    usmapSha256: '3' * 64,
+  );
+  return DataAssetInstalledSemanticEditIntent.fromInspection(
+    snapshot: snapshot,
+    candidate: candidate,
+    inspection: inspection,
+    change: DataAssetSemanticValueEditor.fromLeaf(
+      inspection.inspection.exports.single.leaves.single,
+    ).changeScalar(value: '2'),
+  );
+}
+
+const _reviewedWolfTarget =
+    '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps';
+const _reviewedWolfVectorHex =
+    '000000000000244000000000000024400000000000000000000000000000f03f';
+
+ReviewedInstalledDataAssetEditIntent _reviewedInstalledDataAssetIntent(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    _dataAssetPackageIndexResponse(
+      session.head,
+      session.projectJson,
+      targetPath: _reviewedWolfTarget,
+      packageIdHex: '01e173a19ea374c9',
+    ),
+    expectedHead: session.head,
+  );
+  final candidate = snapshot.index.candidates.single;
+  final inspection = _installedDataAssetInspectionResult(
+    expectedSnapshot: snapshot,
+    candidate: candidate,
+    usmapSha256: '3' * 64,
+    reviewedFootstep: true,
+  );
+  return ReviewedInstalledDataAssetEditIntent.fromInspection(
+    snapshot: snapshot,
+    candidate: candidate,
+    inspection: inspection,
+    request: ReviewedDataAssetEditRequest.feetTextureSize(x: '12.5', y: '8'),
+  );
+}
+
+int _voiceTakeRevision(String projectJson, String takeId) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final take = (entities[takeId]! as Map).cast<String, Object?>();
+  return take['revision']! as int;
+}
+
+Future<ManagedRevision3VoiceTakeRemovalCheckpoint> _removeVoiceTake(
+  ManagedRevision3AuthoringProjectSession session, {
+  String takeId = revision3VoiceFixtureTakeId,
+}) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final slot = (entities[revision3VoiceFixtureSlotId]! as Map)
+      .cast<String, Object?>();
+  final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+  final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+  final selected = slotData['selected'];
+  final selectedId = selected == null
+      ? null
+      : (selected as Map)['id']! as String;
+  final take = (entities[takeId]! as Map).cast<String, Object?>();
+  return session.prepareAndPublishVoiceTakeRemovalV1(
+    lineId: revision3VoiceFixtureLineId,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    slotId: revision3VoiceFixtureSlotId,
+    expectedSlotRevision: slot['revision']! as int,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+    takeId: takeId,
+    expectedTakeRevision: take['revision']! as int,
+    expectedSelectedTakeId: selectedId,
+  );
+}
+
+Future<ManagedRevision3DialogVoiceSlotRemovalCheckpoint> _removeDialogVoiceSlot(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  final slot = (entities[revision3DialogVoiceSlotRemovalSlotId]! as Map)
+      .cast<String, Object?>();
+  return session.prepareAndPublishDialogVoiceSlotRemovalV1(
+    lineId: revision3VoiceFixtureLineId,
+    expectedLineRevision: line['revision']! as int,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    slotId: revision3DialogVoiceSlotRemovalSlotId,
+    expectedSlotRevision: slot['revision']! as int,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+  );
+}
+
+String _dialogVoiceSlotCreationProjectJson() {
+  final project = (jsonDecode(revision3VoiceFixtureProjectJson()) as Map)
+      .cast<String, Object?>();
+  project['authoring_locales'] = <Object?>['de'];
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final localization = (entities[revision3VoiceFixtureLocalizationId]! as Map)
+      .cast<String, Object?>();
+  final payload = (localization['payload']! as Map).cast<String, Object?>();
+  final data = (payload['data']! as Map).cast<String, Object?>();
+  data['texts'] = <String, Object?>{'de': 'Willkommen.'};
+  payload['data'] = data;
+  localization['payload'] = payload;
+  entities[revision3VoiceFixtureLocalizationId] = localization;
+  project['entities'] = SplayTreeMap<String, Object?>.from(entities);
+  return jsonEncode(project);
+}
+
+Future<ManagedRevision3DialogVoiceSlotCreationCheckpoint>
+_createDialogVoiceSlot(ManagedRevision3AuthoringProjectSession session) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  final localization = (entities[revision3VoiceFixtureLocalizationId]! as Map)
+      .cast<String, Object?>();
+  return session.prepareAndPublishDialogVoiceSlotCreationV1(
+    lineId: revision3VoiceFixtureLineId,
+    expectedLineRevision: line['revision']! as int,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    expectedLocalizationRevision: localization['revision']! as int,
+    slotId: revision3VoiceFixtureSlotId,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+  );
+}
+
+Future<ManagedRevision3NpcProfileEditCheckpoint> _publishNpcProfile(
+  ManagedRevision3AuthoringProjectSession session,
+  Revision3NpcProfileTestFixture profile, {
+  AuthoringRevision3NpcProfileEditSeed? seed,
+  String displayName = 'Renamed Managed Guard',
+  bool archetypeChanged = false,
+}) => session.prepareAndPublishNpcProfileEditV1(
+  gameRoot: r'D:\Games\Gothic Remake',
+  seed: seed ?? profile.seed,
+  expectedStoryCatalogSeal: profile.catalog().storyCatalogSeal!,
+  expectedNpcCatalogSeal: profile.catalog().npcCatalogSeal!,
+  expectedParentCatalogId: revision3NpcProfileAsghanId,
+  expectedCurrentParentTriple: revision3NpcProfileExpectation(
+    profile.asghanTriple,
+  ),
+  displayName: displayName,
+  parentCatalogId: archetypeChanged
+      ? revision3NpcProfileViperId
+      : revision3NpcProfileAsghanId,
+  expectedParentTriple: revision3NpcProfileExpectation(
+    archetypeChanged ? profile.viperTriple : profile.asghanTriple,
+  ),
+  expectedArchetypeChanged: archetypeChanged,
+  expectedModuleRegenerated: archetypeChanged,
+);
+
+String _npcProfileCandidate({
+  required String currentProjectJson,
+  required AuthoringRevision3NpcProfileEditRequestV1 request,
+}) {
+  final project = (jsonDecode(currentProjectJson) as Map)
+      .cast<String, Object?>();
+  project['revision'] = request.expectedRevision + 1;
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final npc = (entities[request.npcId]! as Map).cast<String, Object?>();
+  npc['display_name'] = request.displayName;
+  npc['revision'] = request.expectedNpcRevision + 1;
+  if (request.expectsArchetypeChanged) {
+    final npcPayload = (npc['payload']! as Map).cast<String, Object?>();
+    final npcData = (npcPayload['data']! as Map).cast<String, Object?>();
+    final input = (npcData['input']! as Map).cast<String, Object?>();
+    final target = (project['target']! as Map).cast<String, Object?>();
+    input['parent_character_definition'] = _npcProfileParentJson(
+      request.expectedParentTriple.characterDefinition,
+      target,
+    );
+    input['parent_ai_agent_config'] = _npcProfileParentJson(
+      request.expectedParentTriple.aiAgentConfig,
+      target,
+    );
+    input['parent_spawn_definition'] = _npcProfileParentJson(
+      request.expectedParentTriple.spawnDefinition,
+      target,
+    );
+    final module = (entities[request.scriptModuleId]! as Map)
+        .cast<String, Object?>();
+    module['revision'] = request.expectedScriptModuleRevision + 1;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final source = revision3NpcFixtureSource(input);
+    moduleData['source'] = source;
+    moduleData['source_sha256'] = crypto.sha256
+        .convert(utf8.encode(source))
+        .toString();
+    moduleData['input_fingerprint'] = revision3NpcFixtureInputFingerprint(
+      input,
+    );
+  }
+  return jsonEncode(project);
+}
+
+Map<String, Object?> _npcProfileParentJson(
+  AuthoringRevision3NpcProfileParentExpectation parent,
+  Map<String, Object?> target,
+) => <String, Object?>{
+  'generation': target,
+  'source_seal': <String, Object?>{
+    'byte_len': parent.sourceSeal.byteLength,
+    'sha256': parent.sourceSeal.sha256,
+  },
+  'catalog_layer': parent.catalogLayer,
+  'canonical_selector': parent.authoringSelector,
+  'runtime_class': parent.runtimeClass,
+};
+
+Map<String, Object?> _npcProfilePreparedResponse({
+  required AuthoringRevision3NpcProfileEditRequestV1 request,
+  required AuthoringWorkingHead candidateHead,
+  required String candidateProjectJson,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'prepared_unpublished',
+  'basis_head_json': request.expectedHead.canonicalJson,
+  'head_json': candidateHead.canonicalJson,
+  'project_json': candidateProjectJson,
+  'project_id': request.expectedProjectId,
+  'revision': request.expectedRevision + 1,
+  'npc_id': request.npcId,
+  'npc_revision': request.expectedNpcRevision + 1,
+  'script_module_id': request.scriptModuleId,
+  'script_module_revision':
+      request.expectedScriptModuleRevision +
+      (request.expectsModuleRegenerated ? 1 : 0),
+  'display_name': request.displayName,
+  'previous_parent_catalog_id': request.expectedParentCatalogId,
+  'parent_catalog_id': request.parentCatalogId,
+  'story_catalog_seal': <String, Object?>{
+    'byte_len': request.expectedStoryCatalogSeal.byteLength,
+    'sha256': request.expectedStoryCatalogSeal.sha256,
+  },
+  'npc_catalog_seal': <String, Object?>{
+    'byte_len': request.expectedNpcCatalogSeal.byteLength,
+    'sha256': request.expectedNpcCatalogSeal.sha256,
+  },
+  'name_changed': request.expectsNameChanged,
+  'archetype_changed': request.expectsArchetypeChanged,
+  'module_regenerated': request.expectsModuleRegenerated,
+  'build_status': 'blocked',
+  'runtime_status': 'runtime_unqualified',
+  'catalog_authority': 'not_granted',
+  'collision_authority': 'not_granted',
+  'publication_status': 'not_supported',
+};
+
+class _FakeRevision3Store
+    implements
+        ManagedRevision3AuthoringStore,
+        ManagedRevision3ProjectBuildPlanStore,
+        ManagedRevision3VoiceTakeMediaQaStore,
+        ManagedRevision3VoiceTakePreviewStore,
+        ManagedRevision3NpcProfileEditStore {
+  _FakeRevision3Store({this.sealRegisteredHeads = false});
+
+  final bool sealRegisteredHeads;
+  final Map<String, String> _projectsByHead = <String, String>{};
+  final List<AuthoringAssetVerification> openVerifications =
+      <AuthoringAssetVerification>[];
+  final List<AuthoringAssetVerification> headVerifications =
+      <AuthoringAssetVerification>[];
+  final List<String> openedPublishedHeads = <String>[];
+  final List<String> openedCheckpointHeads = <String>[];
+  final List<String?> expectedHeads = <String?>[];
+  int _sequence = 0;
+  int prepareCalls = 0;
+  int questPrepareCalls = 0;
+  int questOutlinePrepareCalls = 0;
+  int questTransitionsPrepareCalls = 0;
+  int questContextPrepareCalls = 0;
+  int npcPrepareCalls = 0;
+  int npcProfilePrepareCalls = 0;
+  int dialogLinePrepareCalls = 0;
+  int voicePrepareCalls = 0;
+  int voiceMediaQaCalls = 0;
+  int voicePreviewCalls = 0;
+  int voiceSelectionPrepareCalls = 0;
+  int voiceTakeStatusPrepareCalls = 0;
+  int voiceTargetPrepareCalls = 0;
+  int voicePlanCalls = 0;
+  int projectBuildPlanCalls = 0;
+  int voiceBuildCalls = 0;
+  int contentReadCalls = 0;
+  int dialogLocalizationReadCalls = 0;
+  int dialogLocalizationEditSeedReadCalls = 0;
+  int dialogLocalizationEditPrepareCalls = 0;
+  int questInspectionCalls = 0;
+  int npcInspectionCalls = 0;
+  int managedCompilerCheckCalls = 0;
+  int projectCompilerCheckCalls = 0;
+  int dataAssetPackageIndexReadCalls = 0;
+  int installedDataAssetInspectionCalls = 0;
+  int installedDataAssetEditPrepareCalls = 0;
+  int reviewedInstalledDataAssetEditPrepareCalls = 0;
+  int dataAssetPrepareCalls = 0;
+  int dataAssetEditPrepareCalls = 0;
+  int dataAssetListCalls = 0;
+  int dataAssetRemoveCalls = 0;
+  _AfterPrepare? afterPrepare;
+  _AfterQuestPrepare? afterQuestPrepare;
+  _AfterNpcPrepare? afterNpcPrepare;
+  _AfterContentRead? afterContentRead;
+  _AfterDialogLocalizationRead? afterDialogLocalizationRead;
+  _AfterDialogLocalizationEditSeedRead? afterDialogLocalizationEditSeedRead;
+  _AfterDialogLocalizationEditPrepare? afterDialogLocalizationEditPrepare;
+  _AfterQuestInspection? afterQuestInspection;
+  _AfterNpcInspection? afterNpcInspection;
+  _AfterManagedCompilerCheck? afterManagedCompilerCheck;
+  _AfterProjectCompilerCheck? afterProjectCompilerCheck;
+  _AfterDataAssetPackageIndex? afterDataAssetPackageIndex;
+  _AfterInstalledDataAssetInspection? afterInstalledDataAssetInspection;
+  _AfterDataAssetPrepare? afterDataAssetPrepare;
+  _AfterDataAssetList? afterDataAssetList;
+  _AfterVoicePlan? afterVoicePlan;
+  _AfterProjectBuildPlan? afterProjectBuildPlan;
+  _AfterVoiceBuild? afterVoiceBuild;
+  final List<String> questGameRoots = <String>[];
+  final List<String> questCurrentProjects = <String>[];
+  final List<AuthoringRevision3QuestDraftRequestV3> questRequests =
+      <AuthoringRevision3QuestDraftRequestV3>[];
+  final List<AuthoringRevision3QuestTransitionsEditRequestV1>
+  questTransitionsRequests =
+      <AuthoringRevision3QuestTransitionsEditRequestV1>[];
+  final List<String> npcGameRoots = <String>[];
+  final List<String> npcCurrentProjects = <String>[];
+  final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
+      <AuthoringRevision3NpcDraftRequestV1>[];
+  final List<AuthoringRevision3NpcProfileEditRequestV1> npcProfileRequests =
+      <AuthoringRevision3NpcProfileEditRequestV1>[];
+  final List<String> dialogLineCurrentProjects = <String>[];
+  final List<AuthoringRevision3DialogLineEntryRequestV1> dialogLineRequests =
+      <AuthoringRevision3DialogLineEntryRequestV1>[];
+  final List<String> voiceSources = <String>[];
+  final List<String> voiceGameRoots = <String>[];
+  final List<String> voiceCurrentProjects = <String>[];
+  final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
+      <AuthoringRevision3VoiceTakeRequestV1>[];
+  final List<AuthoringRevision3VoiceTakePreviewRequestV1> voiceMediaQaRequests =
+      <AuthoringRevision3VoiceTakePreviewRequestV1>[];
+  final List<String> voicePreviewRoots = <String>[];
+  String? _registeredVoicePreviewRoot;
+  final List<AuthoringRevision3VoiceTakePreviewRequestV1> voicePreviewRequests =
+      <AuthoringRevision3VoiceTakePreviewRequestV1>[];
+  final List<AuthoringRevision3VoiceTakeSelectionRequestV1>
+  voiceSelectionRequests = <AuthoringRevision3VoiceTakeSelectionRequestV1>[];
+  final List<AuthoringRevision3VoiceTakeStatusRequestV1>
+  voiceTakeStatusRequests = <AuthoringRevision3VoiceTakeStatusRequestV1>[];
+  final List<AuthoringRevision3VoiceTargetRequestV1> voiceTargetRequests =
+      <AuthoringRevision3VoiceTargetRequestV1>[];
+  final List<String> voicePlanCurrentProjects = <String>[];
+  final List<String> voicePlanExpectedHeads = <String>[];
+  final List<String> projectBuildPlanCurrentProjects = <String>[];
+  final List<String> projectBuildPlanExpectedHeads = <String>[];
+  final List<String> voiceBuildOutputs = <String>[];
+  final List<String> voiceBuildGameRoots = <String>[];
+  String? nextQuestResponseMismatch;
+  ModFfiException? nextQuestError;
+  ModFfiException? nextQuestOutlineError;
+  ModFfiException? nextQuestTransitionsError;
+  ModFfiException? nextQuestContextError;
+  String? nextQuestContextProvenanceMismatch;
+  Object? nextNpcError;
+  Object? nextNpcProfileError;
+  String? nextNpcProfileResponseMismatch;
+  Object? nextVoiceError;
+  Object? nextVoiceMediaQaError;
+  String? nextVoiceMediaQaStatus;
+  Object? nextVoicePreviewError;
+  bool blockVoicePreviewCleanupOnError = false;
+  Object? nextVoiceSelectionError;
+  Object? nextVoiceTakeStatusError;
+  Object? nextVoiceTargetError;
+  Object? nextVoicePlanError;
+  Object? nextProjectBuildPlanError;
+  Object? nextVoiceBuildError;
+  ModFfiException? nextContentError;
+  String? nextContentResponseMismatch;
+  Object? nextDialogLocalizationReadError;
+  String? nextDialogLocalizationReadResponseMismatch;
+  Object? nextDialogLocalizationEditSeedReadError;
+  String? nextDialogLocalizationEditSeedReadResponseMismatch;
+  Object? nextDialogLocalizationEditPrepareError;
+  Object? nextQuestInspectionError;
+  String? nextQuestInspectionResponseMismatch;
+  Object? nextNpcInspectionError;
+  String? nextNpcInspectionResponseMismatch;
+  Object? nextManagedCompilerCheckError;
+  String? nextManagedCompilerCheckResponseMismatch;
+  bool nextManagedCompilerCheckRecovery = false;
+  Object? nextProjectCompilerCheckError;
+  String? nextProjectCompilerCheckResponseMismatch;
+  String nextProjectCompilerOutcome = 'compiled';
+  String nextProjectCompilerStoreAudit = 'exact';
+  String nextProjectCompilerGameAudit = 'exact';
+  Object? nextDataAssetPackageIndexError;
+  String? nextDataAssetPackageIndexResponseMismatch;
+  Object? nextInstalledDataAssetInspectionError;
+  Object? nextDataAssetError;
+  String? nextDataAssetResponseMismatch;
+  final List<String> contentExpectedHeads = <String>[];
+  final List<String> dialogLocalizationReadRoots = <String>[];
+  final List<String> dialogLocalizationReadExpectedHeads = <String>[];
+  final List<String> dialogLocalizationReadIds = <String>[];
+  final List<int> dialogLocalizationReadRevisions = <int>[];
+  final List<String> dialogLocalizationReadLocIds = <String>[];
+  final List<String> dialogLocalizationEditSeedReadRoots = <String>[];
+  final List<String> dialogLocalizationEditSeedReadExpectedHeads = <String>[];
+  final List<String> dialogLocalizationEditSeedReadIds = <String>[];
+  final List<int> dialogLocalizationEditSeedReadRevisions = <int>[];
+  final List<String> dialogLocalizationEditSeedReadLocIds = <String>[];
+  final List<String> dialogLocalizationEditCurrentProjects = <String>[];
+  final List<AuthoringRevision3DialogLocalizationEditRequestV1>
+  dialogLocalizationEditRequests =
+      <AuthoringRevision3DialogLocalizationEditRequestV1>[];
+  final List<String> questInspectionRoots = <String>[];
+  final List<String> questInspectionGameRoots = <String>[];
+  final List<String> questInspectionExpectedHeads = <String>[];
+  final List<String> questInspectionQuestIds = <String>[];
+  final List<String> npcInspectionRoots = <String>[];
+  final List<String> npcInspectionExpectedHeads = <String>[];
+  final List<String> npcInspectionNpcIds = <String>[];
+  final List<String> managedCompilerCheckRoots = <String>[];
+  final List<String> managedCompilerCheckGameRoots = <String>[];
+  final List<String> managedCompilerCheckExpectedHeads = <String>[];
+  final List<String> managedCompilerCheckEntityIds = <String>[];
+  final List<String> projectCompilerCheckRoots = <String>[];
+  final List<String> projectCompilerCheckGameRoots = <String>[];
+  final List<String> projectCompilerCheckExpectedHeads = <String>[];
+  final List<String> dataAssetPackageIndexGameRoots = <String>[];
+  final List<String> dataAssetPackageIndexRoots = <String>[];
+  final List<String> dataAssetPackageIndexExpectedHeads = <String>[];
+  final List<String> installedDataAssetInspectionGameRoots = <String>[];
+  final List<String> installedDataAssetInspectionRoots = <String>[];
+  final List<String> installedDataAssetInspectionExpectedHeads = <String>[];
+  final List<AuthoringRevision3DataAssetPackageIndexResult>
+  installedDataAssetInspectionSnapshots =
+      <AuthoringRevision3DataAssetPackageIndexResult>[];
+  final List<AuthoringRevision3DataAssetPackageCandidate>
+  installedDataAssetInspectionCandidates =
+      <AuthoringRevision3DataAssetPackageCandidate>[];
+  final List<String> installedDataAssetEditGameRoots = <String>[];
+  final List<DataAssetInstalledSemanticEditIntent>
+  installedDataAssetEditIntents = <DataAssetInstalledSemanticEditIntent>[];
+  final List<String> reviewedInstalledDataAssetEditGameRoots = <String>[];
+  final List<ReviewedInstalledDataAssetEditIntent>
+  reviewedInstalledDataAssetEditIntents =
+      <ReviewedInstalledDataAssetEditIntent>[];
+  String? nextOpenProjectOverride;
+  AuthoringWorkingHead? nextHeadOverride;
+  String? nextHeadProjectOverride;
+  final Map<String, Revision3DataAssetFixture> _dataAssetByHead =
+      <String, Revision3DataAssetFixture>{};
+  final List<DataAssetSemanticEditIntent> dataAssetEditIntents =
+      <DataAssetSemanticEditIntent>[];
+
+  AuthoringWorkingHead register(String projectJson) {
+    _sequence++;
+    final sha = sealRegisteredHeads
+        ? crypto.sha256.convert(utf8.encode(projectJson)).toString()
+        : _sequence.toRadixString(16).padLeft(64, '0');
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': utf8.encode(projectJson).length,
+          'sha256': sha,
+        },
+      }),
+    );
+    _projectsByHead[head.canonicalJson] = projectJson;
+    return head;
+  }
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) async {
+    openVerifications.add(verification);
+    final rawHead = await File(
+      p.join(root, 'gore-project.json'),
+    ).readAsString();
+    openedPublishedHeads.add(rawHead);
+    final head = AuthoringWorkingHead.fromCanonicalJson(rawHead);
+    final project = _projectsByHead[rawHead];
+    if (project == null) throw StateError('unknown published head');
+    final override = nextOpenProjectOverride;
+    nextOpenProjectOverride = null;
+    return AuthoringRevision3StoreOpenedResult.fromJson(
+      _openedResponse(head, override ?? project),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) async {
+    headVerifications.add(verification);
+    openedCheckpointHeads.add(head.canonicalJson);
+    final project = _projectsByHead[head.canonicalJson];
+    if (project == null) throw StateError('unknown checkpoint head');
+    final headOverride = nextHeadOverride;
+    nextHeadOverride = null;
+    final projectOverride = nextHeadProjectOverride;
+    nextHeadProjectOverride = null;
+    return AuthoringRevision3StoreOpenedResult.fromJson(
+      _openedResponse(headOverride ?? head, projectOverride ?? project),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3CheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) async {
+    prepareCalls++;
+    expectedHeads.add(expectedHead?.canonicalJson);
+    final headFile = File(p.join(root, 'gore-project.json'));
+    final actual = await headFile.exists()
+        ? await headFile.readAsString()
+        : null;
+    if (actual != expectedHead?.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_checkpoint',
+        code: 'AUTHORING_STORE_HEAD_CONFLICT',
+        message: 'fake native head CAS rejected',
+      );
+    }
+    final head = register(projectJson);
+    final hook = afterPrepare;
+    afterPrepare = null;
+    await hook?.call(root, head, projectJson);
+    return AuthoringRevision3CheckpointPreparation.fromJson(
+      _preparedResponse(head),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestDraftPreparation> prepareQuestDraftV3({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required String questRequestJson,
+  }) async {
+    questPrepareCalls++;
+    questGameRoots.add(gameRoot);
+    questCurrentProjects.add(currentProjectJson);
+    final request = AuthoringRevision3QuestDraftRequestV3.fromCanonicalJson(
+      questRequestJson,
+    );
+    questRequests.add(request);
+    final injectedError = nextQuestError;
+    nextQuestError = null;
+    if (injectedError != null) throw injectedError;
+
+    final headFile = File(p.join(root, 'gore-project.json'));
+    final actual = await headFile.readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_draft_v3',
+        code: 'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT',
+        message: 'fake native Quest basis CAS rejected',
+      );
+    }
+    final basis = jsonDecode(currentProjectJson) as Map<String, Object?>;
+    if (basis['project_id'] != request.expectedProjectId ||
+        basis['revision'] != request.expectedRevision) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_draft_v3',
+        code: 'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT',
+        message: 'fake native Quest project binding rejected',
+      );
+    }
+    final projectId = request.expectedProjectId;
+    final rawEntities = (basis['entities'] as Map).cast<String, Object?>();
+    final entities = SplayTreeMap<String, Object?>.from(rawEntities);
+    final questInput = _questInput(
+      request: request,
+      basisHead: request.expectedHead,
+      target: (basis['target'] as Map).cast<String, Object?>(),
+    );
+    entities[request.questId] = _questEntity(
+      projectId: projectId,
+      request: request,
+      input: questInput,
+    );
+    entities[request.scriptModuleId] = _questModuleEntity(
+      projectId: projectId,
+      request: request,
+      input: questInput,
+    );
+    basis['revision'] = request.expectedRevision + 1;
+    basis['entities'] = entities;
+    final assetStore = (basis['asset_store'] as Map).cast<String, Object?>();
+    final assets = SplayTreeMap<String, Object?>.from(
+      (assetStore['assets'] as Map).cast<String, Object?>(),
+    );
+    assets[_questArtifactSha] = <String, Object?>{
+      'byte_len': 123,
+      'media_type':
+          'application/vnd.gore.quest-collision-capability+json;version=2',
+    };
+    assetStore['assets'] = assets;
+    basis['asset_store'] = assetStore;
+    var candidateProject = jsonEncode(basis);
+    var candidateHead = register(candidateProject);
+    final hook = afterQuestPrepare;
+    afterQuestPrepare = null;
+    await hook?.call(
+      root,
+      request.expectedHead,
+      candidateHead,
+      candidateProject,
+    );
+
+    final mismatch = nextQuestResponseMismatch;
+    nextQuestResponseMismatch = null;
+    var basisHead = request.expectedHead;
+    var responseRevision = request.expectedRevision + 1;
+    var responseQuestId = request.questId;
+    var responseModuleId = request.scriptModuleId;
+    if (mismatch == 'basis-head') {
+      basisHead = register(_projectJson(revision: 81, name: 'Wrong basis'));
+    } else if (mismatch == 'candidate-project') {
+      candidateProject = candidateProject.replaceAll(
+        projectId,
+        '00000000000000000000000000000093',
+      );
+      candidateHead = register(candidateProject);
+    } else if (mismatch == 'revision') {
+      responseRevision++;
+    } else if (mismatch == 'display-name') {
+      candidateProject = candidateProject.replaceFirst(
+        '"display_name":"${request.displayName}"',
+        '"display_name":"Wrong prepared Quest"',
+      );
+      candidateHead = register(candidateProject);
+    } else if (mismatch == 'quest-id') {
+      responseQuestId = request.scriptModuleId;
+    } else if (mismatch == 'module-id') {
+      responseModuleId = request.questId;
+    }
+    try {
+      return AuthoringRevision3QuestDraftPreparation.fromJson(
+        _questPreparedResponse(
+          basisHead: basisHead,
+          candidateHead: candidateHead,
+          candidateProjectJson: candidateProject,
+          revision: responseRevision,
+          questId: responseQuestId,
+          scriptModuleId: responseModuleId,
+        ),
+      );
+    } on FormatException catch (error) {
+      if (mismatch == null) rethrow;
+      throw ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_draft_v3',
+        code: ModFfiException.malformedNativeResponseCode,
+        message: error.message.toString(),
+      );
+    }
+  }
+
+  @override
+  Future<AuthoringRevision3QuestOutlineEditPreparationV2>
+  prepareQuestOutlineEditV2({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV2 request,
+  }) async {
+    questOutlinePrepareCalls++;
+    final injected = nextQuestOutlineError;
+    nextQuestOutlineError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_outline_edit_v2',
+        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_V2_HEAD_CONFLICT',
+        message: 'fake native Quest outline-v2 basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[request.questId]! as Map).cast<String, Object?>();
+    quest['revision'] = request.expectedQuestRevision + 1;
+    quest['display_name'] = request.displayName;
+    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+    final questData = (questPayload['data']! as Map).cast<String, Object?>();
+    final input = (questData['input']! as Map).cast<String, Object?>();
+    input['title'] = request.questTitle;
+    input['objective_title'] = request.objectives.first.title;
+    input['additional_objective_titles'] = [
+      for (final objective in request.objectives.skip(1)) objective.title,
+    ];
+    final transitionPlan = (input['transition_plan']! as Map)
+        .cast<String, Object?>();
+    transitionPlan['objective_order'] = [
+      for (final objective in request.objectives) objective.slot,
+    ];
+
+    final module = (entities[request.moduleId]! as Map).cast<String, Object?>();
+    module['revision'] = request.expectedModuleRevision + 1;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final source = '${moduleData['source']}\n// outline-v2 fixture';
+    moduleData['source'] = source;
+    moduleData['source_sha256'] = crypto.sha256
+        .convert(utf8.encode(source))
+        .toString();
+    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
+
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
+      transitionPlan,
+    );
+    return AuthoringRevision3QuestOutlineEditPreparationV2.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'quest_id': request.questId,
+        'module_id': request.moduleId,
+        'quest_revision': request.expectedQuestRevision + 1,
+        'module_revision': request.expectedModuleRevision + 1,
+        'transition_plan_seal': <String, Object?>{
+          'byte_len': plan.contentSeal.byteLength,
+          'sha256': plan.contentSeal.sha256,
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestTransitionsEditPreparation>
+  prepareQuestTransitionsEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTransitionsEditRequestV1 request,
+  }) async {
+    questTransitionsPrepareCalls++;
+    questTransitionsRequests.add(request);
+    final injected = nextQuestTransitionsError;
+    nextQuestTransitionsError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_HEAD_CONFLICT',
+        message: 'fake native Quest transitions basis CAS rejected',
+      );
+    }
+    final fixture = Revision3QuestOutlineFixture();
+    if (currentProjectJson != fixture.projectJson) {
+      throw StateError('fake transitions fixture received an unexpected basis');
+    }
+    final candidate = fixture.projectObject();
+    candidate['revision'] = fixture.projectRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+        .cast<String, Object?>();
+    quest['revision'] = fixture.questRevision + 1;
+    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+    final questData = (questPayload['data']! as Map).cast<String, Object?>();
+    questData['generator_version'] = 4;
+    final input = (questData['input']! as Map).cast<String, Object?>();
+    input['transition_plan'] = request.transitionPlan.toJson();
+
+    final module = (entities[revision3QuestOutlineModuleId]! as Map)
+        .cast<String, Object?>();
+    module['revision'] = fixture.moduleRevision + 1;
+    final origin = (module['origin']! as Map).cast<String, Object?>();
+    origin['generator_version'] = 4;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    moduleData['generator_version'] = 4;
+    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
+
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    final response = <String, Object?>{
+      'ok': true,
+      'outcome': 'prepared_unpublished',
+      'basis_head_json': request.expectedHead.canonicalJson,
+      'head_json': candidateHead.canonicalJson,
+      'project_json': candidateProject,
+      'project_id': revision3QuestOutlineProjectId,
+      'revision': fixture.projectRevision + 1,
+      'quest_id': revision3QuestOutlineQuestId,
+      'module_id': revision3QuestOutlineModuleId,
+      'quest_revision': fixture.questRevision + 1,
+      'module_revision': fixture.moduleRevision + 1,
+      'transition_plan_seal': <String, Object?>{
+        'byte_len': request.transitionPlan.contentSeal.byteLength,
+        'sha256': request.transitionPlan.contentSeal.sha256,
+      },
+      'build_status': 'blocked',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    };
+    return AuthoringRevision3QuestTransitionsEditPreparation.fromJson(
+      response,
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestContextEditPreparation>
+  prepareQuestContextEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestContextEditRequestV1 request,
+  }) async {
+    questContextPrepareCalls++;
+    final injected = nextQuestContextError;
+    nextQuestContextError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_CONTEXT_HEAD_CONFLICT',
+        message: 'fake native Quest context basis CAS rejected',
+      );
+    }
+    final fixture = Revision3QuestOutlineFixture();
+    if (currentProjectJson != fixture.projectJson) {
+      throw StateError('fake context fixture received an unexpected basis');
+    }
+    final mismatch = nextQuestContextProvenanceMismatch;
+    nextQuestContextProvenanceMismatch = null;
+    final response = fixture.contextResponse(
+      description: request.description,
+      parentCatalogId: request.parentCatalogId,
+      giverCatalogId: request.giverCatalogId,
+      parentCatalogLayer: mismatch == 'layer'
+          ? 'base-game.quest-parent.wrong'
+          : 'base-game.quest-parent.v1',
+      parentAuthoringSelector: mismatch == 'selector'
+          ? 'WrongSameRuntimeSelector'
+          : 'SwampCamp_SCChapter3',
+      parentSourceSeal: mismatch == 'seal'
+          ? <String, Object?>{
+              'byte_len': 99,
+              'sha256': List<String>.filled(64, '8').join(),
+            }
+          : null,
+    );
+    response['basis_head_json'] = request.expectedHead.canonicalJson;
+    final candidateProject = response['project_json']! as String;
+    final candidateHead = register(candidateProject);
+    response['head_json'] = candidateHead.canonicalJson;
+    try {
+      return AuthoringRevision3QuestContextEditPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: ModFfiException.malformedNativeResponseCode,
+        message: error.message.toString(),
+      );
+    }
+  }
+
+  @override
+  Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcDraftRequestV1 request,
+  }) async {
+    npcPrepareCalls++;
+    npcGameRoots.add(gameRoot);
+    npcCurrentProjects.add(currentProjectJson);
+    npcRequests.add(request);
+    final injectedError = nextNpcError;
+    nextNpcError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_npc_draft_v1',
+        code: 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT',
+        message: 'fake native NPC basis CAS rejected',
+      );
+    }
+    final fixture = Revision3NpcFixture.fromBasis(
+      basisHead: request.expectedHead,
+      basisProjectJson: currentProjectJson,
+      request: request,
+    );
+    _projectsByHead[fixture.candidateHead.canonicalJson] =
+        fixture.candidateProjectJson;
+    final hook = afterNpcPrepare;
+    afterNpcPrepare = null;
+    await hook?.call(
+      root,
+      request.expectedHead,
+      fixture.candidateHead,
+      fixture.candidateProjectJson,
+    );
+    return AuthoringRevision3NpcDraftPreparation.fromJson(
+      fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3NpcProfileEditPreparation> prepareNpcProfileEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcProfileEditRequestV1 request,
+  }) async {
+    npcProfilePrepareCalls++;
+    npcProfileRequests.add(request);
+    final injected = nextNpcProfileError;
+    nextNpcProfileError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+        code: 'AUTHORING_REVISION3_NPC_PROFILE_HEAD_CONFLICT',
+        message: 'fake native NPC profile basis CAS rejected',
+      );
+    }
+    final candidate = _npcProfileCandidate(
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+    final candidateHead = register(candidate);
+    final response = _npcProfilePreparedResponse(
+      request: request,
+      candidateHead: candidateHead,
+      candidateProjectJson: candidate,
+    );
+    final mismatch = nextNpcProfileResponseMismatch;
+    nextNpcProfileResponseMismatch = null;
+    if (mismatch == 'npc-revision') {
+      response['npc_revision'] = request.expectedNpcRevision + 2;
+    } else if (mismatch == 'module-regenerated') {
+      response['module_regenerated'] = !request.expectsModuleRegenerated;
+    }
+    return AuthoringRevision3NpcProfileEditPreparation.fromJson(
+      response,
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLineEntryPreparation> prepareDialogLineV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLineEntryRequestV1 request,
+  }) async {
+    dialogLinePrepareCalls++;
+    dialogLineCurrentProjects.add(currentProjectJson);
+    dialogLineRequests.add(request);
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dialog_line_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_HEAD_CONFLICT',
+        message: 'fake native dialog-line basis CAS rejected',
+      );
+    }
+
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = SplayTreeMap<String, Object?>.from(
+      (candidate['entities']! as Map).cast<String, Object?>(),
+    );
+    final locales = SplayTreeSet<String>.from(
+      (candidate['authoring_locales']! as List).cast<String>(),
+    );
+    final localization = request.localization;
+    final String localizationAction;
+    switch (localization) {
+      case AuthoringRevision3DialogLocalizationCreateIntentV1():
+        localizationAction = 'created';
+        locales.addAll(localization.texts.keys);
+        entities[localization.localizationId] = <String, Object?>{
+          'id': localization.localizationId,
+          'display_name': localization.displayName,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': localization.locId,
+          },
+          'revision': 0,
+          'payload': <String, Object?>{
+            'kind': 'localization_entry',
+            'data': <String, Object?>{
+              'loc_id': localization.locId,
+              'texts': localization.texts,
+            },
+          },
+        };
+      case AuthoringRevision3DialogLocalizationReuseExactIntentV1():
+        localizationAction = 'reused_exact';
+    }
+
+    final voiceSlots = SplayTreeMap<String, Object?>();
+    final slot = request.voiceSlot;
+    if (slot != null) {
+      locales.add(slot.locale);
+      voiceSlots[slot.locale] = _dialogLineRef(
+        request.expectedProjectId,
+        slot.slotId,
+        'voice_slot',
+      );
+      entities[slot.slotId] = <String, Object?>{
+        'id': slot.slotId,
+        'display_name': slot.displayName,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': 'gore-authoring.voice-slot',
+          'generator_version': 1,
+          'owner': _dialogLineRef(
+            request.expectedProjectId,
+            request.lineId,
+            'dialog_line',
+          ),
+        },
+        'revision': 0,
+        'payload': <String, Object?>{
+          'kind': 'voice_slot',
+          'data': <String, Object?>{
+            'locale': slot.locale,
+            'target_resolution': <String, Object?>{'state': 'unresolved'},
+            'candidates': <Object?>[],
+          },
+        },
+      };
+    }
+    entities[request.lineId] = <String, Object?>{
+      'id': request.lineId,
+      'display_name': request.lineDisplayName,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': request.lineAuthoredIdentity,
+      },
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'dialog_line',
+        'data': <String, Object?>{
+          'localization': _dialogLineRef(
+            request.expectedProjectId,
+            localization.localizationId,
+            'localization_entry',
+          ),
+          if (request.speakerHint != null) 'speaker_hint': request.speakerHint,
+          'voice_slots': voiceSlots,
+        },
+      },
+    };
+    candidate['authoring_locales'] = locales.toList(growable: false);
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3DialogLineEntryPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': localization.localizationId,
+        'localization_action': localizationAction,
+        'voice_slot_id': slot?.slotId,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'topic_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
+    required String root,
+    required String gameRoot,
+    required String source,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRequestV1 request,
+  }) async {
+    voicePrepareCalls++;
+    voiceGameRoots.add(gameRoot);
+    voiceSources.add(source);
+    voiceCurrentProjects.add(currentProjectJson);
+    voiceRequests.add(request);
+    final injectedError = nextVoiceError;
+    nextVoiceError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_v1',
+        code: 'AUTHORING_REVISION3_VOICE_HEAD_CONFLICT',
+        message: 'fake native Voice basis CAS rejected',
+      );
+    }
+    final fixture = Revision3VoiceFixture.fromBasis(
+      basisHead: request.expectedHead,
+      basisProjectJson: currentProjectJson,
+      request: request,
+    );
+    _projectsByHead[fixture.candidateHead.canonicalJson] =
+        fixture.candidateProjectJson;
+    return AuthoringRevision3VoiceTakePreparation.fromJson(
+      fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeMediaQaResult> inspectVoiceTakeMediaV1({
+    required String root,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    voiceMediaQaCalls++;
+    voiceMediaQaRequests.add(request);
+    final injectedError = nextVoiceMediaQaError;
+    nextVoiceMediaQaError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_voice_take_media_v1',
+        code: 'AUTHORING_REVISION3_VOICE_MEDIA_HEAD_CONFLICT',
+        message: 'fake native Voice media QA basis CAS rejected',
+      );
+    }
+    final status = nextVoiceMediaQaStatus ?? 'recorded';
+    nextVoiceMediaQaStatus = null;
+    return AuthoringRevision3VoiceTakeMediaQaResult.fromJson(
+      revision3VoiceMediaQaResponse(request: request, status: status),
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewRegistration>
+  registerVoiceTakePreviewV1({required String root}) async {
+    final previewRoot = (await createRevision3VoicePreviewTestRoot()).path;
+    _registeredVoicePreviewRoot = previewRoot;
+    return AuthoringRevision3VoiceTakePreviewRegistration.fromJson(
+      revision3VoicePreviewRegistrationResponse(previewRoot: previewRoot),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreviewMaterialization>
+  materializeVoiceTakePreviewV1({
+    required String root,
+    required String cleanupToken,
+    required String previewRoot,
+    required AuthoringRevision3VoiceTakePreviewRequestV1 request,
+  }) async {
+    voicePreviewCalls++;
+    voicePreviewRoots.add(previewRoot);
+    voicePreviewRequests.add(request);
+    final injectedError = nextVoicePreviewError;
+    nextVoicePreviewError = null;
+    if (injectedError != null) {
+      if (blockVoicePreviewCleanupOnError) {
+        blockVoicePreviewCleanupOnError = false;
+        await File(p.join(previewRoot, 'unexpected')).writeAsString('lock');
+      }
+      throw injectedError;
+    }
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_materialize_revision3_voice_take_preview_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PREVIEW_HEAD_CONFLICT',
+        message: 'fake native Voice preview basis CAS rejected',
+      );
+    }
+    await File(
+      p.join(previewRoot, 'preview.ogg'),
+    ).writeAsBytes(revision3VoicePreviewBytes, flush: true);
+    return AuthoringRevision3VoiceTakePreviewMaterialization.fromJson(
+      revision3VoicePreviewResponse(
+        previewRoot: previewRoot,
+        cleanupToken: cleanupToken,
+        request: request,
+      ),
+      previewRoot: previewRoot,
+      cleanupToken: cleanupToken,
+      request: request,
+    );
+  }
+
+  @override
+  Future<void> releaseVoiceTakePreviewV1({required String cleanupToken}) async {
+    if (cleanupToken != revision3VoicePreviewCleanupToken ||
+        _registeredVoicePreviewRoot == null) {
+      throw StateError('unknown fake Voice preview cleanup token');
+    }
+    final root = Directory(_registeredVoicePreviewRoot!);
+    final entries = await root.list(followLinks: false).toList();
+    if (entries.length > 1 ||
+        (entries.isNotEmpty &&
+            (p.basename(entries.single.path) != 'preview.ogg' ||
+                await FileSystemEntity.type(
+                      entries.single.path,
+                      followLinks: false,
+                    ) !=
+                    FileSystemEntityType.file))) {
+      throw const FileSystemException('fake retained cleanup failure');
+    }
+    if (entries.isNotEmpty) await entries.single.delete();
+    await root.delete();
+    _registeredVoicePreviewRoot = null;
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeSelectionPreparation>
+  prepareVoiceTakeSelectionV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  }) async {
+    voiceSelectionPrepareCalls++;
+    voiceSelectionRequests.add(request);
+    final injectedError = nextVoiceSelectionError;
+    nextVoiceSelectionError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+        code: 'AUTHORING_REVISION3_VOICE_SELECTION_HEAD_CONFLICT',
+        message: 'fake native Voice selection basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = request.expectedSlotRevision + 1;
+    final payload = (slot['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final selected = request.selectedTakeId;
+    if (selected == null) {
+      data.remove('selected');
+    } else {
+      data['selected'] = <String, Object?>{
+        'project_id': request.expectedProjectId,
+        'id': selected,
+        'expected_kind': 'voice_take',
+      };
+    }
+    payload['data'] = data;
+    slot['payload'] = payload;
+    entities[request.slotId] = slot;
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3VoiceTakeSelectionPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision + 1,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'previous_selected_take_id': request.expectedSelectedTakeId,
+        'selected_take_id': request.selectedTakeId,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeStatusPreparation>
+  prepareVoiceTakeStatusV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeStatusRequestV1 request,
+  }) async {
+    voiceTakeStatusPrepareCalls++;
+    voiceTakeStatusRequests.add(request);
+    final injectedError = nextVoiceTakeStatusError;
+    nextVoiceTakeStatusError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_STATUS_HEAD_CONFLICT',
+        message: 'fake native Voice take status basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final take = (entities[request.takeId]! as Map).cast<String, Object?>();
+    take['revision'] = request.expectedTakeRevision + 1;
+    final payload = (take['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    data['status'] = request.desiredStatus.name;
+    payload['data'] = data;
+    take['payload'] = payload;
+    entities[request.takeId] = take;
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3VoiceTakeStatusPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'take_id': request.takeId,
+        'take_revision': request.expectedTakeRevision + 1,
+        'previous_status': request.expectedStatus.name,
+        'status': request.desiredStatus.name,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTargetPreparation> prepareVoiceTargetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTargetRequestV1 request,
+  }) async {
+    voiceTargetPrepareCalls++;
+    voiceTargetRequests.add(request);
+    final injectedError = nextVoiceTargetError;
+    nextVoiceTargetError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_HEAD_CONFLICT',
+        message: 'fake native Voice target basis CAS rejected',
+      );
+    }
+    final target = <String, Object?>{
+      'archive': 'german_new.zip',
+      'member': 'Voices/Hero/${request.expectedLocId}.ogg',
+      'operation': 'replace',
+      'archive_seal': <String, Object?>{'byte_len': 4096, 'sha256': 'c' * 64},
+      'member_proof': <String, Object?>{
+        'state': 'present',
+        'uncompressed_size': 8192,
+        'crc32': 42,
+      },
+    };
+    final resolution = <String, Object?>{'state': 'resolved', 'target': target};
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = (slot['revision']! as int) + 1;
+    final payload = (slot['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    data['target_resolution'] = resolution;
+    payload['data'] = data;
+    slot['payload'] = payload;
+    entities[request.slotId] = slot;
+    candidate['entities'] = entities;
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3VoiceTargetPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': revision3VoiceFixtureLocalizationId,
+        'slot_id': request.slotId,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'resolution': 'resolved',
+        'match_count': 1,
+        'target_resolution': resolution,
+        'archive_observation': <String, Object?>{
+          'archive': 'german_new.zip',
+          'archive_seal': <String, Object?>{
+            'byte_len': 4096,
+            'sha256': 'c' * 64,
+          },
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3ProjectBuildPlanResult> planProjectBuildV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    projectBuildPlanCalls++;
+    projectBuildPlanCurrentProjects.add(currentProjectJson);
+    projectBuildPlanExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextProjectBuildPlanError;
+    nextProjectBuildPlanError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_plan_revision3_project_build_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_BUILD_PLAN_HEAD_CONFLICT',
+        message: 'fake native project build-plan basis CAS rejected',
+      );
+    }
+    final result = AuthoringRevision3ProjectBuildPlanResult.fromJson(
+      _emptyProjectBuildPlanResponse(currentProjectJson, expectedHead),
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+    );
+    await afterProjectBuildPlan?.call(root, result);
+    return result;
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    voicePlanCalls++;
+    voicePlanCurrentProjects.add(currentProjectJson);
+    voicePlanExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextVoicePlanError;
+    nextVoicePlanError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT',
+        message: 'fake native Voice plan basis CAS rejected',
+      );
+    }
+    final project = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'blocked',
+        'basis_head_json': expectedHead.canonicalJson,
+        'project_id': project['project_id'],
+        'project_revision': project['revision'],
+        'total_slots': 0,
+        'ready_slots': 0,
+        'blockers': <Object?>[
+          <String, Object?>{'reason': 'no_voice_slots'},
+        ],
+        'plan_authority': 'read_only_voice_build_plan_v1',
+        'build_authority': 'not_granted',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+    );
+    await afterVoicePlan?.call(root, result);
+    return result;
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    voiceBuildCalls++;
+    voiceBuildGameRoots.add(gameRoot);
+    voiceBuildOutputs.add(output);
+    final injectedError = nextVoiceBuildError;
+    nextVoiceBuildError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT',
+        message: 'fake native Voice build basis CAS rejected',
+      );
+    }
+    final project = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    final result = AuthoringRevision3VoiceBuildResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'built',
+        'basis_head_json': expectedHead.canonicalJson,
+        'project_id': project['project_id'],
+        'project_revision': project['revision'],
+        'output': output,
+        'edit_count': 1,
+        'file_count': 3,
+        'bundle_bytes': 1234,
+        'bundle_sha256': 'd' * 64,
+        'build_authority': 'generation_sealed_existing_member_bundle_v1',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+      expectedOutput: output,
+    );
+    await afterVoiceBuild?.call(root, result);
+    return result;
+  }
+
+  @override
+  Future<AuthoringRevision3ContentIndexResult> readContentIndex({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    contentReadCalls++;
+    contentExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextContentError;
+    nextContentError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_read_revision3_content_index_v1',
+        code: 'AUTHORING_REVISION3_CONTENT_HEAD_CONFLICT',
+        message: 'fake native content head CAS rejected',
+      );
+    }
+    final project = _projectsByHead[actual];
+    if (project == null) throw StateError('unknown content checkpoint head');
+    final hook = afterContentRead;
+    afterContentRead = null;
+    await hook?.call(root, expectedHead, project);
+
+    final mismatch = nextContentResponseMismatch;
+    nextContentResponseMismatch = null;
+    return AuthoringRevision3ContentIndexResult.fromJson(
+      _contentResponse(
+        expectedHead,
+        project,
+        responseProjectId: mismatch == 'project-id'
+            ? '93939393939393939393939393939393'
+            : null,
+      ),
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationReadCalls++;
+    dialogLocalizationReadRoots.add(root);
+    dialogLocalizationReadExpectedHeads.add(expectedHead.canonicalJson);
+    dialogLocalizationReadIds.add(localizationId);
+    dialogLocalizationReadRevisions.add(expectedLocalizationRevision);
+    dialogLocalizationReadLocIds.add(expectedLocId);
+    final injectedError = nextDialogLocalizationReadError;
+    nextDialogLocalizationReadError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_read_revision3_dialog_localization_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_HEAD_CONFLICT',
+        message: 'fake native dialog localization basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown dialog localization checkpoint head');
+    }
+    final hook = afterDialogLocalizationRead;
+    afterDialogLocalizationRead = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final mismatch = nextDialogLocalizationReadResponseMismatch;
+    nextDialogLocalizationReadResponseMismatch = null;
+    final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+      expectedHead: expectedHead,
+      localizationId: localizationId,
+      expectedLocalizationRevision: expectedLocalizationRevision,
+      expectedLocId: expectedLocId,
+    );
+    return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+      _dialogLocalizationReadResponse(
+        head: expectedHead,
+        projectId: mismatch == 'project-id'
+            ? '93939393939393939393939393939393'
+            : project['project_id']! as String,
+        projectRevision: mismatch == 'project-revision'
+            ? (project['revision']! as int) + 1
+            : project['revision']! as int,
+        localizationId: localizationId,
+        localizationRevision: expectedLocalizationRevision,
+        locId: expectedLocId,
+      ),
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationEditSeedReadCalls++;
+    dialogLocalizationEditSeedReadRoots.add(root);
+    dialogLocalizationEditSeedReadExpectedHeads.add(expectedHead.canonicalJson);
+    dialogLocalizationEditSeedReadIds.add(localizationId);
+    dialogLocalizationEditSeedReadRevisions.add(expectedLocalizationRevision);
+    dialogLocalizationEditSeedReadLocIds.add(expectedLocId);
+    final injectedError = nextDialogLocalizationEditSeedReadError;
+    nextDialogLocalizationEditSeedReadError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_HEAD_CONFLICT',
+        message: 'fake native localization-edit seed basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown localization-edit seed checkpoint head');
+    }
+    final hook = afterDialogLocalizationEditSeedRead;
+    afterDialogLocalizationEditSeedRead = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
+      expectedHead: expectedHead,
+      localizationId: localizationId,
+      expectedLocalizationRevision: expectedLocalizationRevision,
+      expectedLocId: expectedLocId,
+    );
+    final mismatch = nextDialogLocalizationEditSeedReadResponseMismatch;
+    nextDialogLocalizationEditSeedReadResponseMismatch = null;
+    try {
+      return AuthoringRevision3DialogLocalizationEditSeed.fromJson(
+        _dialogLocalizationEditSeedResponse(
+          head: expectedHead,
+          projectJson: projectJson,
+          localizationId: localizationId,
+          responseProjectId: mismatch == 'project-id'
+              ? '93939393939393939393939393939393'
+              : null,
+          responseProjectRevisionDelta: mismatch == 'project-revision' ? 1 : 0,
+        ),
+        request: request,
+      );
+    } on FormatException catch (error) {
+      if (mismatch == null) rethrow;
+      throw ModFfiException(
+        command:
+            'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
+        code: ModFfiException.malformedNativeResponseCode,
+        message: error.message.toString(),
+      );
+    }
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditPreparation>
+  prepareDialogLocalizationEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLocalizationEditRequestV1 request,
+  }) async {
+    dialogLocalizationEditPrepareCalls++;
+    dialogLocalizationEditCurrentProjects.add(currentProjectJson);
+    dialogLocalizationEditRequests.add(request);
+    final injectedError = nextDialogLocalizationEditPrepareError;
+    nextDialogLocalizationEditPrepareError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_HEAD_CONFLICT',
+        message: 'fake native localization-edit basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    final entities = SplayTreeMap<String, Object?>.from(
+      (candidate['entities']! as Map).cast<String, Object?>(),
+    );
+    final entity = (entities[request.localizationId]! as Map)
+        .cast<String, Object?>();
+    final payload = (entity['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final previousTexts = (data['texts']! as Map).cast<String, Object?>();
+    final addedLocales = request.texts.keys
+        .where((locale) => !previousTexts.containsKey(locale))
+        .toList(growable: false);
+    final removedLocales = previousTexts.keys
+        .where((locale) => !request.texts.containsKey(locale))
+        .toList(growable: false);
+
+    data['texts'] = SplayTreeMap<String, String>.from(request.texts);
+    payload['data'] = data;
+    entity['revision'] = request.expectedLocalizationRevision + 1;
+    entity['payload'] = payload;
+    entities[request.localizationId] = entity;
+    candidate['revision'] = request.expectedRevision + 1;
+    candidate['authoring_locales'] = SplayTreeSet<String>.from(<String>{
+      ...(candidate['authoring_locales']! as List).cast<String>(),
+      ...request.texts.keys,
+    }).toList(growable: false);
+    candidate['entities'] = entities;
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    final hook = afterDialogLocalizationEditPrepare;
+    afterDialogLocalizationEditPrepare = null;
+    await hook?.call(
+      root,
+      request.expectedHead,
+      candidateHead,
+      candidateProjectJson,
+    );
+    return AuthoringRevision3DialogLocalizationEditPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'localization_id': request.localizationId,
+        'localization_revision': request.expectedLocalizationRevision + 1,
+        'added_locales': addedLocales,
+        'removed_locales': removedLocales,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'topic_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) async {
+    questInspectionCalls++;
+    questInspectionRoots.add(root);
+    questInspectionGameRoots.add(gameRoot);
+    questInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    questInspectionQuestIds.add(questId);
+    final injectedError = nextQuestInspectionError;
+    nextQuestInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_quest_source_v1',
+        code: 'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native Quest inspection head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown Quest inspection checkpoint head');
+    }
+    final hook = afterQuestInspection;
+    afterQuestInspection = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextQuestInspectionResponseMismatch;
+    nextQuestInspectionResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final responseHead = mismatch == 'head'
+        ? register(projectJson)
+        : expectedHead;
+    final responseQuestId = mismatch == 'quest'
+        ? '00000000000000000000000000000073'
+        : questId;
+    return _questSourceInspectionResult(
+      head: responseHead,
+      projectJson: projectJson,
+      questId: responseQuestId,
+      projectId: mismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id']! as String,
+      projectRevision: mismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision']! as int,
+      projectSealJson: mismatch == 'project-seal'
+          ? _projectJson(revision: 99, name: 'Mismatched inspection seal')
+          : projectJson,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) async {
+    npcInspectionCalls++;
+    npcInspectionRoots.add(root);
+    npcInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    npcInspectionNpcIds.add(npcId);
+    final injectedError = nextNpcInspectionError;
+    nextNpcInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_npc_source_v1',
+        code: 'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native NPC inspection head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown NPC inspection checkpoint head');
+    }
+    final hook = afterNpcInspection;
+    afterNpcInspection = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextNpcInspectionResponseMismatch;
+    nextNpcInspectionResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    return revision3NpcInspectionResult(
+      head: mismatch == 'head' ? register(projectJson) : expectedHead,
+      projectJson: projectJson,
+      projectId: mismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id']! as String,
+      projectRevision: mismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision']! as int,
+      npcId: mismatch == 'npc' ? '00000000000000000000000000000053' : npcId,
+      projectSealJson: mismatch == 'project-seal'
+          ? _projectJson(revision: 99, name: 'Mismatched NPC inspection seal')
+          : projectJson,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkQuestCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) => _checkManagedCompilerV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+    entityId: questId,
+  );
+
+  @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) => _checkManagedCompilerV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    entityKind: AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+    entityId: npcId,
+  );
+
+  @override
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    projectCompilerCheckCalls++;
+    projectCompilerCheckRoots.add(root);
+    projectCompilerCheckGameRoots.add(gameRoot);
+    projectCompilerCheckExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextProjectCompilerCheckError;
+    nextProjectCompilerCheckError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_check_revision3_project_compiler_v1',
+        code: 'AUTHORING_REVISION3_PROJECT_COMPILER_HEAD_CONFLICT',
+        message: 'fake native project compiler basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown project compiler checkpoint head');
+    }
+    final mismatch = nextProjectCompilerCheckResponseMismatch;
+    nextProjectCompilerCheckResponseMismatch = null;
+    final outcome = nextProjectCompilerOutcome;
+    nextProjectCompilerOutcome = 'compiled';
+    final storeAudit = nextProjectCompilerStoreAudit;
+    nextProjectCompilerStoreAudit = 'exact';
+    final gameAudit = nextProjectCompilerGameAudit;
+    nextProjectCompilerGameAudit = 'exact';
+    final result = _projectCompilerCheckResult(
+      head: expectedHead,
+      projectJson: projectJson,
+      responseMismatch: mismatch,
+      outcome: outcome,
+      storeAudit: storeAudit,
+      gameAudit: gameAudit,
+    );
+    final hook = afterProjectCompilerCheck;
+    afterProjectCompilerCheck = null;
+    await hook?.call(root, expectedHead, projectJson);
+    return result;
+  }
+
+  Future<AuthoringRevision3ManagedCompilerCheckResult> _checkManagedCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String entityId,
+  }) async {
+    managedCompilerCheckCalls++;
+    managedCompilerCheckRoots.add(root);
+    managedCompilerCheckGameRoots.add(gameRoot);
+    managedCompilerCheckExpectedHeads.add(expectedHead.canonicalJson);
+    managedCompilerCheckEntityIds.add(entityId);
+    final injectedError = nextManagedCompilerCheckError;
+    nextManagedCompilerCheckError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_check_revision3_managed_compiler_v1',
+        code: 'AUTHORING_REVISION3_COMPILER_HEAD_CONFLICT',
+        message: 'fake native managed compiler basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown managed compiler checkpoint head');
+    }
+    final mismatch = nextManagedCompilerCheckResponseMismatch;
+    nextManagedCompilerCheckResponseMismatch = null;
+    final recovery = nextManagedCompilerCheckRecovery;
+    nextManagedCompilerCheckRecovery = false;
+    final result = _managedCompilerCheckResult(
+      head: expectedHead,
+      projectJson: projectJson,
+      entityKind: entityKind,
+      entityId: entityId,
+      responseMismatch: mismatch,
+      recoveryRequired: recovery,
+    );
+    final hook = afterManagedCompilerCheck;
+    afterManagedCompilerCheck = null;
+    await hook?.call(root, expectedHead, projectJson);
+    return result;
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    dataAssetPackageIndexReadCalls++;
+    dataAssetPackageIndexRoots.add(root);
+    dataAssetPackageIndexGameRoots.add(gameRoot);
+    dataAssetPackageIndexExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextDataAssetPackageIndexError;
+    nextDataAssetPackageIndexError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_read_revision3_dataasset_package_index_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_HEAD_CONFLICT',
+        message: 'fake native DataAsset package-index head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown DataAsset package-index checkpoint head');
+    }
+    final hook = afterDataAssetPackageIndex;
+    afterDataAssetPackageIndex = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextDataAssetPackageIndexResponseMismatch;
+    nextDataAssetPackageIndexResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final target = (project['target'] as Map).cast<String, Object?>();
+    final executable = (target['executable'] as Map).cast<String, Object?>();
+    final packageIndexJson = jsonEncode(<String, Object?>{
+      'status': 'complete_index',
+      'physical_chunk_count': 1,
+      'winning_export_bundle_count': 1,
+      'directory_indexed_export_bundle_count': 1,
+      'out_of_scope_export_bundle_count': 0,
+      'candidates': <Object?>[
+        <String, Object?>{
+          'target_path': '/Game/Characters/DA_Asghan',
+          'package_id_hex': '0123456789abcdef',
+        },
+      ],
+      'partial_reasons': <Object?>[],
+    });
+    final packageIndexBytes = utf8.encode(packageIndexJson);
+    Map<String, Object?> seal(int byteLength, String sha256) =>
+        <String, Object?>{'byte_len': byteLength, 'sha256': sha256};
+    return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+      <String, Object?>{
+        'authority_status': 'not_granted',
+        'build_status': 'not_evaluated',
+        'candidate_count': 1,
+        'content_status': 'metadata_candidates_only',
+        'export_bundle_payload_status': 'not_read',
+        'head_json': mismatch == 'head'
+            ? register(projectJson).canonicalJson
+            : expectedHead.canonicalJson,
+        'mount_inventory_entry_count': 2,
+        'mount_inventory_seal': seal(80, 'b' * 64),
+        'mutation_status': 'not_supported',
+        'ok': true,
+        'outcome': 'audit_only',
+        'package_index_json': packageIndexJson,
+        'package_index_seal': seal(
+          packageIndexBytes.length,
+          crypto.sha256.convert(packageIndexBytes).toString(),
+        ),
+        'package_index_status': 'complete_index',
+        'project_id': mismatch == 'project-id'
+            ? '93939393939393939393939393939393'
+            : project['project_id'],
+        'project_revision': mismatch == 'revision'
+            ? (project['revision']! as int) + 1
+            : project['revision'],
+        'publication_status': 'not_supported',
+        'runtime_status': 'runtime_unqualified',
+        'scope': 'installed_dataasset_package_candidates_only',
+        'source_snapshot_seal': seal(120, 'c' * 64),
+        'target_executable_seal': mismatch == 'target'
+            ? seal(executable['byte_len']! as int, 'd' * 64)
+            : executable,
+      },
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) async {
+    installedDataAssetInspectionCalls++;
+    installedDataAssetInspectionRoots.add(root);
+    installedDataAssetInspectionGameRoots.add(gameRoot);
+    installedDataAssetInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    installedDataAssetInspectionSnapshots.add(expectedSnapshot);
+    installedDataAssetInspectionCandidates.add(candidate);
+    final injectedError = nextInstalledDataAssetInspectionError;
+    nextInstalledDataAssetInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+        code:
+            'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native installed DataAsset inspection head CAS rejected',
+      );
+    }
+    final hook = afterInstalledDataAssetInspection;
+    afterInstalledDataAssetInspection = null;
+    await hook?.call(root, expectedHead, expectedSnapshot, candidate);
+    return _installedDataAssetInspectionResult(
+      expectedSnapshot: expectedSnapshot,
+      candidate: candidate,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) async {
+    installedDataAssetEditPrepareCalls++;
+    installedDataAssetEditGameRoots.add(gameRoot);
+    installedDataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message: 'fake native installed DataAsset edit basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: intent.selector.toJson(),
+      replacementHex: _installedSemanticReplacementHex(intent),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final nativeFields = intent.toNativeFields();
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = intent.intentBindingSha256
+      ..['installed_proof_binding_sha256'] = intent.installedProofBindingSha256
+      ..['installed_source'] = <String, Object?>{
+        'candidate_ordinal': intent.candidate.ordinal,
+        'format': 'gore.authoring.revision3-installed-dataasset-source.v1',
+        'inspection_binding': nativeFields['expected_inspection_binding'],
+        'package_index_seal': nativeFields['expected_package_index_seal'],
+        'source_snapshot_seal': nativeFields['expected_source_snapshot_seal'],
+        'usmap_content_seal': nativeFields['expected_usmap_content_seal'],
+        'usmap_inventory_seal': nativeFields['expected_usmap_inventory_seal'],
+      };
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedIntentBindingSha256: intent.intentBindingSha256,
+      expectedInstalledIntent: intent,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareReviewedInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) async {
+    reviewedInstalledDataAssetEditPrepareCalls++;
+    reviewedInstalledDataAssetEditGameRoots.add(gameRoot);
+    reviewedInstalledDataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+        code:
+            'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message:
+            'fake native reviewed installed DataAsset edit basis CAS rejected',
+      );
+    }
+    final change = DataAssetSemanticValueEditor.fromLeaf(intent.evidence.leaf)
+        .changeComponents(
+          values: <String>[
+            intent.request.x,
+            intent.request.y,
+            intent.evidence.currentZ,
+            intent.evidence.currentW,
+          ],
+        );
+    final selector = intent.evidence.leaf.selector;
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: selector.toJson(),
+      replacementHex: _semanticReplacementWireHex(change.replacement),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final inspected = intent.inspection.inspection;
+    Map<String, Object?> inspectedSeal(int byteLength, String sha256) =>
+        <String, Object?>{'byte_len': byteLength, 'sha256': sha256};
+    final outerIntentBinding = change.replacement.intentBindingSha256For(
+      expectedTargetPath: intent.expectedTargetPath,
+      selector: selector,
+    );
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = outerIntentBinding
+      ..['installed_proof_binding_sha256'] = intent.installedProofBindingSha256
+      ..['installed_source'] = <String, Object?>{
+        'candidate_ordinal': intent.candidate.ordinal,
+        'format': 'gore.authoring.revision3-installed-dataasset-source.v1',
+        'inspection_binding': <String, Object?>{
+          'uasset': inspectedSeal(
+            inspected.input.uassetLength,
+            inspected.binding.packageSeal.uassetSha256,
+          ),
+          'uexp': inspectedSeal(
+            inspected.input.uexpLength,
+            inspected.binding.packageSeal.uexpSha256,
+          ),
+          'usmap': inspectedSeal(
+            inspected.input.usmapLength,
+            inspected.binding.usmapSha256,
+          ),
+        },
+        'package_index_seal': <String, Object?>{
+          'byte_len': intent.snapshot.packageIndexSeal.byteLength,
+          'sha256': intent.snapshot.packageIndexSeal.sha256,
+        },
+        'source_snapshot_seal': <String, Object?>{
+          'byte_len': intent.snapshot.sourceSnapshotSeal.byteLength,
+          'sha256': intent.snapshot.sourceSnapshotSeal.sha256,
+        },
+        'usmap_content_seal': <String, Object?>{
+          'byte_len': intent.inspection.usmapContentSeal.byteLength,
+          'sha256': intent.inspection.usmapContentSeal.sha256,
+        },
+        'usmap_inventory_seal': <String, Object?>{
+          'byte_len': intent.inspection.usmapInventorySeal.byteLength,
+          'sha256': intent.inspection.usmapInventorySeal.sha256,
+        },
+      }
+      ..['reviewed_edit'] = <String, Object?>{
+        'format': reviewedDataAssetEditRequestFormat,
+        'schema_id': footstepPresetSchemaId,
+        'schema_revision': footstepPresetSchemaRevision,
+        'field_id': feetTextureSizeFieldId,
+        'target_id': 'g1r:dataasset:footstep-preset:wolf',
+      }
+      ..['reviewed_before'] = <String, Object?>{
+        'x': _reviewedResponseDecimal(intent.evidence.currentX),
+        'y': _reviewedResponseDecimal(intent.evidence.currentY),
+        'z': _reviewedResponseDecimal(intent.evidence.currentZ),
+        'w': _reviewedResponseDecimal(intent.evidence.currentW),
+      }
+      ..['reviewed_after'] = <String, Object?>{
+        'x': _reviewedResponseDecimal(intent.request.x),
+        'y': _reviewedResponseDecimal(intent.request.y),
+        'z': _reviewedResponseDecimal(intent.evidence.currentZ),
+        'w': _reviewedResponseDecimal(intent.evidence.currentW),
+      }
+      ..['reviewed_intent_binding_sha256'] =
+          intent.expectedReviewedIntentBindingSha256;
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedReviewedInstalledIntent: intent,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  }) async {
+    dataAssetPrepareCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_stage_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final response = fixture.prepareResponse();
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetEditV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    dataAssetEditPrepareCalls++;
+    dataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset edit basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: intent.selector.toJson(),
+      replacementHex: _semanticReplacementHex(intent),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = intent.intentBindingSha256;
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    if (mismatch == 'intent-binding') {
+      response['intent_binding_sha256'] = 'f' * 64;
+    }
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedIntentBindingSha256: intent.intentBindingSha256,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    dataAssetListCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset list CAS rejected',
+      );
+    }
+    final hook = afterDataAssetList;
+    afterDataAssetList = null;
+    await hook?.call(root, expectedHead);
+    final fixture = _dataAssetByHead[expectedHead.canonicalJson];
+    final response =
+        fixture?.listResponse() ??
+        <String, Object?>{
+          'ok': true,
+          'outcome': 'listed_exact_head',
+          'basis_head_json': expectedHead.canonicalJson,
+          'revision':
+              (jsonDecode(project) as Map<String, Object?>)['revision']! as int,
+          'stages': <Object?>[],
+          'build_status': 'blocked',
+          'runtime_status': 'runtime_unqualified',
+          'artifact_authority': 'not_granted',
+          'publication_status': 'not_supported',
+        };
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStageListResult.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStageRemovalPreparation>
+  prepareRemoveDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  }) async {
+    dataAssetRemoveCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final fixture = _dataAssetByHead[actual];
+    if (actual != expectedHead.canonicalJson || fixture == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_TARGET_MISSING',
+        message: 'fake native DataAsset target is absent',
+      );
+    }
+    _projectsByHead[fixture.removedHead.canonicalJson] =
+        fixture.removedProjectJson;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.removedHead);
+    final response = fixture.removalResponse();
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStageRemovalPreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      requestedTargetPath: targetPath,
+    );
+  }
+}
+
+final class _FakeRevision3StoryDraftRemovalStore extends _FakeRevision3Store
+    implements ManagedRevision3StoryDraftRemovalStore {
+  int storyDraftRemovalCalls = 0;
+  Object? nextStoryDraftRemovalError;
+
+  @override
+  Future<AuthoringRevision3StoryDraftRemovalPreparation>
+  prepareRemoveStoryDraftV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3StoryDraftRemovalRequestV1 request,
+  }) async {
+    storyDraftRemovalCalls++;
+    final injected = nextStoryDraftRemovalError;
+    nextStoryDraftRemovalError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT',
+        message: 'fake native Story Draft removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    entities.remove(request.draftId);
+    entities.remove(request.scriptModuleId);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_remove_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'removed': <String, Object?>{
+          'draft': <String, Object?>{
+            'id': request.draftId,
+            'kind': request.draftKind.wireName,
+            'revision': request.expectedDraftRevision,
+          },
+          'script_module': <String, Object?>{
+            'id': request.scriptModuleId,
+            'kind': 'script_module',
+            'revision': request.expectedScriptModuleRevision,
+          },
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'artifact_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3VoiceTakeRemovalStore extends _FakeRevision3Store
+    implements ManagedRevision3VoiceTakeRemovalStore {
+  int voiceTakeRemovalCalls = 0;
+  Object? nextVoiceTakeRemovalError;
+  Future<void> Function(String root)? afterVoiceTakeRemovalPrepare;
+
+  @override
+  Future<AuthoringRevision3VoiceTakeRemovalPreparation>
+  prepareVoiceTakeRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
+  }) async {
+    voiceTakeRemovalCalls++;
+    final injected = nextVoiceTakeRemovalError;
+    nextVoiceTakeRemovalError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_HEAD_CONFLICT',
+        message: 'fake native Voice take removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = request.expectedSlotRevision + 1;
+    final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+    final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+    final candidates = (slotData['candidates']! as List)
+        .map((value) => (value as Map).cast<String, Object?>())
+        .where((reference) => reference['id'] != request.takeId)
+        .map<Object?>((reference) => reference)
+        .toList(growable: false);
+    slotData['candidates'] = candidates;
+    final selectionCleared = request.expectedSelectedTakeId == request.takeId;
+    if (selectionCleared) slotData.remove('selected');
+    slotPayload['data'] = slotData;
+    slot['payload'] = slotPayload;
+    entities[request.slotId] = slot;
+    entities.remove(request.takeId);
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    final hook = afterVoiceTakeRemovalPrepare;
+    afterVoiceTakeRemovalPrepare = null;
+    await hook?.call(root);
+    return AuthoringRevision3VoiceTakeRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision + 1,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'take_id': request.takeId,
+        'take_revision': request.expectedTakeRevision,
+        'previous_selected_take_id': request.expectedSelectedTakeId,
+        'selection_cleared': selectionCleared,
+        'take_entity_removed': true,
+        'remaining_candidate_count': candidates.length,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3DialogVoiceSlotRemovalStore
+    extends _FakeRevision3Store
+    implements ManagedRevision3DialogVoiceSlotRemovalStore {
+  int removalCalls = 0;
+  Object? nextError;
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotRemovalPreparation>
+  prepareDialogVoiceSlotRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
+  }) async {
+    removalCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_HEAD_CONFLICT',
+        message: 'fake native dialog Voice slot removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final line = (entities[request.lineId]! as Map).cast<String, Object?>();
+    line['revision'] = request.expectedLineRevision + 1;
+    final payload = (line['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final slots = (data['voice_slots']! as Map).cast<String, Object?>();
+    slots.remove(request.locale);
+    data['voice_slots'] = slots;
+    payload['data'] = data;
+    line['payload'] = payload;
+    entities[request.lineId] = line;
+    entities.remove(request.slotId);
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3DialogVoiceSlotRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'line_revision': request.expectedLineRevision + 1,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'removed_slot_revision': request.expectedSlotRevision,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'removed_target_resolution': 'unresolved',
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'target_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3DialogVoiceSlotCreationStore
+    extends _FakeRevision3Store
+    implements ManagedRevision3DialogVoiceSlotCreationStore {
+  int creationCalls = 0;
+  Object? nextError;
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotCreationPreparation>
+  prepareDialogVoiceSlotCreationV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotCreationRequestV1 request,
+  }) async {
+    creationCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_creation_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_CREATION_HEAD_CONFLICT',
+        message: 'fake native dialog Voice slot creation basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final line = (entities[request.lineId]! as Map).cast<String, Object?>();
+    line['revision'] = request.expectedLineRevision + 1;
+    final linePayload = (line['payload']! as Map).cast<String, Object?>();
+    final lineData = (linePayload['data']! as Map).cast<String, Object?>();
+    final slots = (lineData['voice_slots']! as Map).cast<String, Object?>();
+    slots[request.locale] = <String, Object?>{
+      'project_id': request.expectedProjectId,
+      'id': request.slotId,
+      'expected_kind': 'voice_slot',
+    };
+    lineData['voice_slots'] = slots;
+    linePayload['data'] = lineData;
+    line['payload'] = linePayload;
+    entities[request.lineId] = line;
+    entities[request.slotId] = <String, Object?>{
+      'id': request.slotId,
+      'display_name': 'Voice ${request.locale}',
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.voice-slot',
+        'generator_version': 1,
+        'owner': <String, Object?>{
+          'project_id': request.expectedProjectId,
+          'id': request.lineId,
+          'expected_kind': 'dialog_line',
+        },
+      },
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'voice_slot',
+        'data': <String, Object?>{
+          'locale': request.locale,
+          'target_resolution': <String, Object?>{'state': 'unresolved'},
+          'candidates': <Object?>[],
+        },
+      },
+    };
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    final localization = (entities[request.localizationId]! as Map)
+        .cast<String, Object?>();
+    return AuthoringRevision3DialogVoiceSlotCreationPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'line_revision': request.expectedLineRevision + 1,
+        'localization_id': request.localizationId,
+        'localization_revision': localization['revision']! as int,
+        'slot_id': request.slotId,
+        'slot_revision': 0,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'target_resolution': 'unresolved',
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'target_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3RestorableExportStore extends _FakeRevision3Store
+    implements ManagedRevision3RestorableSnapshotExportStore {
+  _FakeRevision3RestorableExportStore();
+
+  int exportCalls = 0;
+  final List<String> exportRoots = <String>[];
+  final List<String> exportExpectedHeads = <String>[];
+  final List<String> exportOutputs = <String>[];
+  String nextOutcome = 'exported';
+  Object? nextExportError;
+  String? nextProjectIdOverride;
+  int? nextProjectRevisionOverride;
+  String? nextOutputOverride;
+  AuthoringWorkingHead? nextBasisHeadOverride;
+  _AfterExactSnapshotExportV2? afterExport;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResultV2> exportExactSnapshotV2({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    exportCalls++;
+    exportRoots.add(root);
+    exportExpectedHeads.add(expectedHead.canonicalJson);
+    exportOutputs.add(output);
+    final injectedError = nextExportError;
+    nextExportError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_export_revision3_exact_snapshot_v2',
+        code: 'AUTHORING_REVISION3_EXPORT_HEAD_CONFLICT',
+        message: 'fake native restorable snapshot export basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown restorable snapshot export checkpoint head');
+    }
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final responseHead = nextBasisHeadOverride ?? expectedHead;
+    nextBasisHeadOverride = null;
+    final responseOutput = nextOutputOverride ?? output;
+    nextOutputOverride = null;
+    final outcome = nextOutcome;
+    nextOutcome = 'exported';
+    final warning = switch (outcome) {
+      'exported' => null,
+      'exported_with_cleanup_warning' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_CLEANUP_WARNING',
+        'message':
+            'the verified snapshot was published, but private staging cleanup was incomplete',
+      },
+      'publication_uncertain' => <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_PUBLICATION_UNCERTAIN',
+        'message': 'publication may have completed; do not retry automatically',
+      },
+      _ => null,
+    };
+    final publicationStatus = switch (outcome) {
+      'exported' => 'published',
+      'exported_with_cleanup_warning' => 'published_with_cleanup_warning',
+      'publication_uncertain' => 'publication_uncertain',
+      _ => 'published',
+    };
+    final result = AuthoringRevision3ExactSnapshotExportResultV2.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': outcome,
+        'format': 'managed_revision3_exact_snapshot_v2',
+        'artifact_kind': 'portable_snapshot_restorable_copy',
+        'restore_status': 'supported',
+        'basis_head_json': responseHead.canonicalJson,
+        'project_id': nextProjectIdOverride ?? project['project_id'],
+        'project_revision': nextProjectRevisionOverride ?? project['revision'],
+        'output': responseOutput,
+        'archive': <String, Object?>{'byte_len': 16384, 'sha256': 'c' * 64},
+        'manifest': <String, Object?>{
+          'relative_name': 'gore-export.json',
+          'byte_len': 512,
+          'sha256': 'd' * 64,
+        },
+        'closure': <String, Object?>{
+          'snapshot_objects': 1,
+          'entity_objects': 0,
+          'asset_objects': 0,
+          'archive_entries': 4,
+          'uncompressed_bytes': 8192,
+        },
+        'publication_status': publicationStatus,
+        'retry_safe': false,
+        'warning': warning,
+        'project_mutation': 'not_performed',
+        'game_mutation': 'not_performed',
+        'save_mutation': 'not_performed',
+        'build_status': 'not_performed',
+        'deployment_status': 'not_performed',
+        'runtime_status': 'runtime_unqualified',
+      },
+      expectedHead: responseHead,
+      expectedOutput: responseOutput,
+    );
+    nextProjectIdOverride = null;
+    nextProjectRevisionOverride = null;
+    final hook = afterExport;
+    afterExport = null;
+    await hook?.call(root, expectedHead, result);
+    return result;
+  }
+}
+
+String _semanticReplacementHex(DataAssetSemanticEditIntent intent) =>
+    _semanticReplacementWireHex(intent.replacement);
+
+String _installedSemanticReplacementHex(
+  DataAssetInstalledSemanticEditIntent intent,
+) => _semanticReplacementWireHex(intent.replacement);
+
+String _reviewedResponseDecimal(String source) {
+  var rendered = double.parse(source).toString().replaceFirst('e+', 'e');
+  final exponentIndex = rendered.indexOf('e');
+  final mantissaEnd = exponentIndex < 0 ? rendered.length : exponentIndex;
+  if (rendered.substring(0, mantissaEnd).endsWith('.0')) {
+    rendered =
+        '${rendered.substring(0, mantissaEnd - 2)}${rendered.substring(mantissaEnd)}';
+  }
+  return rendered;
+}
+
+String _semanticReplacementWireHex(DataAssetSemanticReplacement replacement) {
+  final wire = replacement.toJson();
+  final kind = wire['kind']! as String;
+  final bytes = switch (kind) {
+    'bool' => <int>[(wire['value']! as bool) ? 1 : 0],
+    'byte' => _semanticIntegerBytes(wire['decimal']! as String, 1),
+    'int8' => _semanticIntegerBytes(wire['decimal']! as String, 1),
+    'int16' => _semanticIntegerBytes(wire['decimal']! as String, 2),
+    'int32' => _semanticIntegerBytes(wire['decimal']! as String, 4),
+    'int64' => _semanticIntegerBytes(wire['decimal']! as String, 8),
+    'uint16' => _semanticIntegerBytes(wire['decimal']! as String, 2),
+    'uint32' => _semanticIntegerBytes(wire['decimal']! as String, 4),
+    'uint64' => _semanticIntegerBytes(wire['decimal']! as String, 8),
+    'float32' => _semanticFloatBytes(<String>[
+      wire['decimal']! as String,
+    ], singlePrecision: true),
+    'float64' => _semanticFloatBytes(<String>[
+      wire['decimal']! as String,
+    ], singlePrecision: false),
+    'linear_color_f32x4' => _semanticFloatBytes(<String>[
+      wire['r']! as String,
+      wire['g']! as String,
+      wire['b']! as String,
+      wire['a']! as String,
+    ], singlePrecision: true),
+    'vector4_f64x4' => _semanticFloatBytes(<String>[
+      wire['x']! as String,
+      wire['y']! as String,
+      wire['z']! as String,
+      wire['w']! as String,
+    ], singlePrecision: false),
+    _ => throw StateError('unsupported fake semantic replacement $kind'),
+  };
+  return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
+
+List<int> _semanticIntegerBytes(String decimal, int width) {
+  var value = BigInt.parse(decimal);
+  if (value.isNegative) value += BigInt.one << (width * 8);
+  return List<int>.generate(
+    width,
+    (index) => ((value >> (index * 8)) & BigInt.from(0xff)).toInt(),
+  );
+}
+
+List<int> _semanticFloatBytes(
+  List<String> values, {
+  required bool singlePrecision,
+}) {
+  final width = singlePrecision ? 4 : 8;
+  final data = ByteData(width * values.length);
+  for (var index = 0; index < values.length; index++) {
+    final value = double.parse(values[index]);
+    if (singlePrecision) {
+      data.setFloat32(index * width, value, Endian.little);
+    } else {
+      data.setFloat64(index * width, value, Endian.little);
+    }
+  }
+  return data.buffer.asUint8List();
+}
+
+Future<Directory> _projectRoot(Directory fixture, {String suffix = ''}) async {
+  final root = Directory(
+    p.join(fixture.path, suffix.isEmpty ? 'project' : 'project_$suffix'),
+  );
+  await root.create();
+  return root;
+}
+
+const _managedCompilerQuestId = '00000000000000000000000000000071';
+const _managedCompilerQuestModuleId = '00000000000000000000000000000072';
+const _managedCompilerNpcId = '00000000000000000000000000000081';
+const _managedCompilerNpcModuleId = '00000000000000000000000000000082';
+
+Future<ManagedRevision3CompilerCheckReceipt> _checkManagedCompilerQuest(
+  ManagedRevision3AuthoringProjectSession session,
+) => session.checkCompilerV1(
+  entityKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+  gameRoot: r'D:\Games\Gothic Remake',
+  entityId: _managedCompilerQuestId,
+  expectedEntityRevision: 8,
+  expectedModuleId: _managedCompilerQuestModuleId,
+  expectedModuleRevision: 9,
+);
+
+String _managedCompilerQuestProjectJson() {
+  final basis = _projectJson(revision: 13, name: 'Managed compiler check');
+  final basisHead = revision3NpcFixtureHead(basis);
+  final request = AuthoringRevision3QuestDraftRequestV3(
+    expectedHead: basisHead,
+    expectedProjectId: '00000000000000000000000000000003',
+    expectedRevision: 13,
+    questId: _managedCompilerQuestId,
+    scriptModuleId: _managedCompilerQuestModuleId,
+    displayName: 'Compiler Quest',
+    intent: _questIntent(71),
+  );
+  final project = (jsonDecode(basis) as Map).cast<String, Object?>();
+  final input = _questInput(
+    request: request,
+    basisHead: basisHead,
+    target: (project['target']! as Map).cast<String, Object?>(),
+  );
+  final entity = _questEntity(
+    projectId: request.expectedProjectId,
+    request: request,
+    input: input,
+  )..['revision'] = 8;
+  final module = _questModuleEntity(
+    projectId: request.expectedProjectId,
+    request: request,
+    input: input,
+  )..['revision'] = 9;
+  project
+    ..['revision'] = 14
+    ..['entities'] = <String, Object?>{
+      request.questId: entity,
+      request.scriptModuleId: module,
+    }
+    ..['asset_store'] = <String, Object?>{
+      'assets': <String, Object?>{
+        _questArtifactSha: <String, Object?>{
+          'byte_len': 123,
+          'media_type':
+              'application/vnd.gore.quest-collision-capability+json;version=2',
+        },
+      },
+    };
+  return jsonEncode(project);
+}
+
+String _managedCompilerNpcProjectJson() {
+  final basis = _projectJson(revision: 13, name: 'Managed NPC compiler check');
+  final basisHead = revision3NpcFixtureHead(basis);
+  final request = AuthoringRevision3NpcDraftRequestV1.forProject(
+    expectedHead: basisHead,
+    currentProjectJson: basis,
+    npcId: _managedCompilerNpcId,
+    scriptModuleId: _managedCompilerNpcModuleId,
+    displayName: 'Compiler Guard',
+    intent: _npcIntent(81),
+  );
+  final fixture = Revision3NpcFixture.fromBasis(
+    basisHead: basisHead,
+    basisProjectJson: basis,
+    request: request,
+  );
+  final project = (jsonDecode(fixture.candidateProjectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  (entities[_managedCompilerNpcId]! as Map<String, Object?>)['revision'] = 6;
+  (entities[_managedCompilerNpcModuleId]! as Map<String, Object?>)['revision'] =
+      7;
+  return jsonEncode(project);
+}
+
+AuthoringRevision3ManagedCompilerCheckResult _managedCompilerCheckResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+  required String entityId,
+  String? responseMismatch,
+  bool recoveryRequired = false,
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final entity = (entities[entityId]! as Map).cast<String, Object?>();
+  final entityPayload = (entity['payload']! as Map).cast<String, Object?>();
+  final entityData = (entityPayload['data']! as Map).cast<String, Object?>();
+  final moduleReference = (entityData['script_module']! as Map)
+      .cast<String, Object?>();
+  final moduleId = moduleReference['id']! as String;
+  final module = (entities[moduleId]! as Map).cast<String, Object?>();
+  final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+  final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+  final projectBytes = utf8.encode(projectJson);
+  final returnedProjectId = responseMismatch == 'project-id'
+      ? '00000000000000000000000000000093'
+      : project['project_id']! as String;
+  final returnedModuleId = responseMismatch == 'module-id'
+      ? '00000000000000000000000000000092'
+      : moduleId;
+  final compiler = recoveryRequired
+      ? <String, Object?>{
+          'outcome': 'failed',
+          'compile_error': <String, Object?>{
+            'code': 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+            'message': 'restore requires explicit recovery',
+          },
+          'compiler_diagnostics': null,
+          'install_restore': 'not_started',
+          'recovery_required': true,
+          'output_discarded': true,
+        }
+      : <String, Object?>{
+          'outcome': 'compiled_evidence_only',
+          'compile_error': null,
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'captured',
+            'messages': <Object?>[],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+          'output_discarded': true,
+        };
+  return AuthoringRevision3ManagedCompilerCheckResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'compiler_check_only',
+      'exact_current': !recoveryRequired,
+      'head_json': head.canonicalJson,
+      'project': <String, Object?>{
+        'id': returnedProjectId,
+        'revision': project['revision'],
+        'seal': <String, Object?>{
+          'byte_len': projectBytes.length,
+          'sha256': crypto.sha256.convert(projectBytes).toString(),
+        },
+      },
+      'entity': <String, Object?>{
+        'kind': entityKind.wireName,
+        'id': entityId,
+        'revision': responseMismatch == 'entity-revision'
+            ? (entity['revision']! as int) + 1
+            : entity['revision'],
+      },
+      'module': <String, Object?>{
+        'id': returnedModuleId,
+        'revision': responseMismatch == 'module-revision'
+            ? (module['revision']! as int) + 1
+            : module['revision'],
+        'namespace': moduleData['module_namespace'],
+        'relative_path': moduleData['module_relative_path'],
+        'source_sha256': moduleData['source_sha256'],
+      },
+      'compiler': compiler,
+      'scope': 'compiler_check_only',
+      'build_status': 'blocked',
+      'deploy_status': 'not_supported',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedEntityId: entityId,
+    expectedKind: entityKind,
+  );
+}
+
+AuthoringRevision3ProjectCompilerCheckResult _projectCompilerCheckResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  String? responseMismatch,
+  String outcome = 'compiled',
+  String storeAudit = 'exact',
+  String gameAudit = 'exact',
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  var scriptCount = 0;
+  var questCount = 0;
+  var npcCount = 0;
+  for (final value in entities.values) {
+    final entity = (value as Map).cast<String, Object?>();
+    final payload = (entity['payload']! as Map).cast<String, Object?>();
+    switch (payload['kind']) {
+      case 'script_module':
+        scriptCount++;
+      case 'quest_draft':
+        questCount++;
+      case 'npc_draft':
+        npcCount++;
+    }
+  }
+  if (responseMismatch == 'coverage') {
+    scriptCount++;
+    npcCount++;
+  }
+  final target = (project['target']! as Map).cast<String, Object?>();
+  final executable = (target['executable']! as Map).cast<String, Object?>();
+  final projectBytes = utf8.encode(projectJson);
+  final projectSha = crypto.sha256.convert(projectBytes).toString();
+  final manifest = _projectCompilerModuleManifest(projectJson);
+  final empty = scriptCount == 0;
+  final recovery = outcome == 'recovery';
+  final compiler = empty
+      ? <String, Object?>{
+          'outcome': 'not_needed_empty',
+          'run_count': 0,
+          'compile_error': null,
+          'compiler_diagnostics': null,
+          'install_restore': 'not_started',
+          'recovery_required': false,
+          'output_disposition': 'not_created',
+        }
+      : recovery
+      ? <String, Object?>{
+          'outcome': 'failed',
+          'run_count': 0,
+          'compile_error': <String, Object?>{
+            'code': 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+            'message': 'restore requires explicit recovery',
+          },
+          'compiler_diagnostics': null,
+          'install_restore': 'not_started',
+          'recovery_required': true,
+          'output_disposition': 'recovery_retained',
+        }
+      : outcome == 'failed'
+      ? <String, Object?>{
+          'outcome': 'failed',
+          'run_count': 1,
+          'compile_error': <String, Object?>{
+            'code': 'COMPILER_REGEN_FAILED',
+            'message': 'project compiler rejected one common source tree',
+          },
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'captured',
+            'messages': <Object?>[
+              <String, Object?>{
+                'file': 'GoreMods/Project/Quest.as',
+                'line': 7,
+                'column': 3,
+                'severity': 'error',
+                'message': 'bounded project compiler error',
+              },
+            ],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+          'output_disposition': 'discarded',
+        }
+      : <String, Object?>{
+          'outcome': 'compiled_evidence_only',
+          'run_count': 1,
+          'compile_error': null,
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'captured',
+            'messages': <Object?>[],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+          'output_disposition': 'discarded',
+        };
+  return AuthoringRevision3ProjectCompilerCheckResult.fromJson(<
+    String,
+    Object?
+  >{
+    'ok': true,
+    'outcome': 'project_compiler_check_only',
+    'exact_current': storeAudit == 'exact' && gameAudit == 'exact',
+    'closing_audit': <String, Object?>{'store': storeAudit, 'game': gameAudit},
+    'head_json': head.canonicalJson,
+    'project': <String, Object?>{
+      'id': responseMismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id'],
+      'revision': responseMismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision'],
+      'seal': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': responseMismatch == 'project-seal'
+            ? '9999999999999999999999999999999999999999999999999999999999999999'
+            : projectSha,
+      },
+    },
+    'game_inputs': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': responseMismatch == 'executable'
+            ? (executable['byte_len']! as int) + 1
+            : executable['byte_len'],
+        'sha256': executable['sha256'],
+      },
+      'shipping_cache': <String, Object?>{
+        'byte_len': 128,
+        'sha256':
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
+      'binds_cache': <String, Object?>{
+        'byte_len': 64,
+        'sha256':
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      },
+      'story_catalog': <String, Object?>{
+        'byte_len': 256,
+        'sha256':
+            'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      },
+    },
+    'coverage': <String, Object?>{
+      'script_module_count': scriptCount,
+      'quest_module_count': questCount,
+      'npc_module_count': npcCount,
+      'module_manifest': <String, Object?>{
+        'byte_len': manifest.byteLength,
+        'sha256': responseMismatch == 'manifest'
+            ? 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+            : manifest.sha256,
+      },
+    },
+    'compiler': compiler,
+    'scope': 'project_compiler_check_only',
+    'build_status': 'blocked',
+    'deploy_status': 'not_supported',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  }, expectedHead: head);
+}
+
+({int byteLength, String sha256}) _projectCompilerModuleManifest(
+  String projectJson,
+) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final projectId = project['project_id']! as String;
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final modules = <Map<String, Object?>>[];
+  for (final ownerEntry in entities.entries) {
+    final owner = (ownerEntry.value as Map).cast<String, Object?>();
+    final payload = (owner['payload']! as Map).cast<String, Object?>();
+    final ownerKind = switch (payload['kind']) {
+      'quest_draft' => 'quest_draft',
+      'npc_draft' => 'npc_draft',
+      _ => null,
+    };
+    if (ownerKind == null) continue;
+    final ownerData = (payload['data']! as Map).cast<String, Object?>();
+    final moduleReference = (ownerData['script_module']! as Map)
+        .cast<String, Object?>();
+    final moduleId = moduleReference['id']! as String;
+    final module = (entities[moduleId]! as Map).cast<String, Object?>();
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final sourceBytes = utf8.encode(moduleData['source']! as String);
+    modules.add(<String, Object?>{
+      'owner_kind': ownerKind,
+      'owner_id': ownerEntry.key,
+      'owner_revision': owner['revision'],
+      'module_id': moduleId,
+      'module_revision': module['revision'],
+      'module_namespace': moduleData['module_namespace'],
+      'module_relative_path': moduleData['module_relative_path'],
+      'source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': crypto.sha256.convert(sourceBytes).toString(),
+      },
+    });
+  }
+  modules.sort(
+    (left, right) =>
+        (left['module_id']! as String).compareTo(right['module_id']! as String),
+  );
+  final projectBytes = utf8.encode(projectJson);
+  final manifestBytes = utf8.encode(
+    jsonEncode(<String, Object?>{
+      'format': 'revision3_project_compiler_module_manifest',
+      'schema_revision': 1,
+      'project_id': projectId,
+      'project_revision': project['revision'],
+      'canonical_project': <String, Object?>{
+        'byte_len': projectBytes.length,
+        'sha256': crypto.sha256.convert(projectBytes).toString(),
+      },
+      'modules': modules,
+    }),
+  );
+  return (
+    byteLength: manifestBytes.length,
+    sha256: crypto.sha256.convert(manifestBytes).toString(),
+  );
+}
+
+Map<String, Object?> _emptyProjectBuildPlanResponse(
+  String projectJson,
+  AuthoringWorkingHead head,
+) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  Map<String, Object?> seal(List<int> bytes) => <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+
+  final projectSeal = seal(utf8.encode(projectJson));
+  final inputProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-input.v1',
+    'project': projectSeal,
+    'dataasset_stage_manifests': <Object?>[],
+  };
+  final inputSeal = seal(utf8.encode(jsonEncode(inputProjection)));
+  final domains = <Object?>[
+    for (final domain in const <String>[
+      'localization',
+      'dialog',
+      'voice',
+      'npc',
+      'quest',
+      'scripts',
+      'items',
+      'data_assets',
+    ])
+      <String, Object?>{
+        'domain': domain,
+        'status': 'not_present',
+        'content_count': 0,
+        'ready_count': 0,
+        'blocked_count': 0,
+      },
+  ];
+  final planProjection = <String, Object?>{
+    'format': 'gore.authoring.revision3-project-build-plan.v1',
+    'schema_revision': 1,
+    'project_id': project['project_id'],
+    'project_revision': project['revision'],
+    'outcome': 'empty',
+    'production_content_count': 0,
+    'input_seal': inputSeal,
+    'domains': domains,
+    'blockers': <Object?>[],
+    'scope': 'project_build_readiness_only',
+    'build_authority': 'not_granted',
+    'artifact_status': 'not_created',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
+  final planSeal = seal(utf8.encode(jsonEncode(planProjection)));
+  return <String, Object?>{
+    'ok': true,
+    'basis_head_json': head.canonicalJson,
+    'plan': <String, Object?>{
+      'schema_revision': 1,
+      'project_id': project['project_id'],
+      'project_revision': project['revision'],
+      'outcome': 'empty',
+      'production_content_count': 0,
+      'input_seal': inputSeal,
+      'plan_seal': planSeal,
+      'domains': domains,
+      'blockers': <Object?>[],
+      'scope': 'project_build_readiness_only',
+      'build_authority': 'not_granted',
+      'artifact_status': 'not_created',
+      'deployment_status': 'not_performed',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+  };
+}
+
+String _projectJson({
+  required int revision,
+  required String name,
+}) => jsonEncode(<String, Object?>{
+  'format': 2,
+  'schema_revision': 3,
+  'project_id': '00000000000000000000000000000003',
+  'revision': revision,
+  'meta': <String, Object?>{
+    'name': name,
+    'version': '1.0.0',
+    'author': 'revision-3 session tests',
+  },
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entities': <String, Object?>{},
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
+
+String _dialogLocalizationEditProjectJson({
+  int revision = 7,
+  int localizationRevision = 4,
+  Map<String, String> texts = const <String, String>{
+    'de': 'Willkommen im Alten Lager.',
+    'en': 'Welcome to the Old Camp.',
+  },
+}) => jsonEncode(<String, Object?>{
+  'format': 2,
+  'schema_revision': 3,
+  'project_id': '00000000000000000000000000000003',
+  'revision': revision,
+  'meta': <String, Object?>{
+    'name': 'Localization edit',
+    'version': '1.0.0',
+    'author': 'revision-3 session tests',
+  },
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': (texts.keys.toList(growable: false)..sort()),
+  'entities': SplayTreeMap<String, Object?>.from(<String, Object?>{
+    _dialogLocalizationEditId: <String, Object?>{
+      'id': _dialogLocalizationEditId,
+      'display_name': 'Asghan welcome text',
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': _dialogLocalizationEditLocId,
+      },
+      'revision': localizationRevision,
+      'payload': <String, Object?>{
+        'kind': 'localization_entry',
+        'data': <String, Object?>{
+          'loc_id': _dialogLocalizationEditLocId,
+          'texts': SplayTreeMap<String, String>.from(texts),
+        },
+      },
+    },
+  }),
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
+
+Revision3ContentIndex _dialogLocalizationEditContentIndex(String projectJson) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final meta = (project['meta']! as Map).cast<String, Object?>();
+  final entity =
+      ((project['entities']! as Map)[_dialogLocalizationEditId]! as Map)
+          .cast<String, Object?>();
+  final origin = (entity['origin']! as Map).cast<String, Object?>();
+  final data = ((entity['payload']! as Map)['data']! as Map)
+      .cast<String, Object?>();
+  final locales = (data['texts']! as Map).keys.cast<String>().toList()..sort();
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': project['project_id'],
+    'project_revision': project['revision'],
+    'project_name': meta['name'],
+    'project_version': meta['version'],
+    'project_author': meta['author'],
+    'target': project['target'],
+    'authoring_locales': project['authoring_locales'],
+    'entity_counts': <String, Object?>{'localization_entry': 1},
+    'entities': <Object?>[
+      <String, Object?>{
+        'id': entity['id'],
+        'kind': 'localization_entry',
+        'display_name': entity['display_name'],
+        'revision': entity['revision'],
+        'origin': origin,
+        'summary': <String, Object?>{
+          'kind': 'localization_entry',
+          'data': <String, Object?>{
+            'loc_id': data['loc_id'],
+            'locales': locales,
+          },
+        },
+        'references': <Object?>[],
+        'asset_references': <Object?>[],
+      },
+    ],
+    'assets': <Object?>[],
+  });
+}
+
+Map<String, Object?> _dialogLocalizationEditSeedResponse({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required String localizationId,
+  String? responseProjectId,
+  int responseProjectRevisionDelta = 0,
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entity = ((project['entities']! as Map)[localizationId]! as Map)
+      .cast<String, Object?>();
+  final data = ((entity['payload']! as Map)['data']! as Map)
+      .cast<String, Object?>();
+  final texts = (data['texts']! as Map).cast<String, Object?>();
+  final locales = texts.keys.toList(growable: false)..sort();
+  return <String, Object?>{
+    'ok': true,
+    'outcome': 'read_only',
+    'head_json': head.canonicalJson,
+    'project_id': responseProjectId ?? project['project_id'],
+    'project_revision':
+        (project['revision']! as int) + responseProjectRevisionDelta,
+    'localization_id': localizationId,
+    'localization_revision': entity['revision'],
+    'loc_id': data['loc_id'],
+    'locales': <Object?>[
+      for (final locale in locales)
+        <String, Object?>{
+          'locale': locale,
+          'text': texts[locale],
+          'voice_slot_present': false,
+          'candidate_count': 0,
+        },
+    ],
+    'line_backlinks': <Object?>[],
+    'content_authority': 'read_only_exact_current_localization_edit_seed',
+    'build_status': 'not_evaluated',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_applicable',
+  };
+}
+
+AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditExactSeed({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entity =
+      ((project['entities']! as Map)[_dialogLocalizationEditId]! as Map)
+          .cast<String, Object?>();
+  final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
+    expectedHead: head,
+    localizationId: _dialogLocalizationEditId,
+    expectedLocalizationRevision: entity['revision']! as int,
+    expectedLocId: _dialogLocalizationEditLocId,
+  );
+  return AuthoringRevision3DialogLocalizationEditSeed.fromJson(
+    _dialogLocalizationEditSeedResponse(
+      head: head,
+      projectJson: projectJson,
+      localizationId: _dialogLocalizationEditId,
+    ),
+    request: request,
+  );
+}
+
+Future<Revision3DialogLocalizationEditTechnicalPlan>
+_dialogLocalizationEditPlan({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required Map<String, String> texts,
+}) async {
+  final index = _dialogLocalizationEditContentIndex(projectJson);
+  final exact = _dialogLocalizationEditExactSeed(
+    head: head,
+    projectJson: projectJson,
+  );
+  final previousTexts = <String, String>{
+    for (final locale in exact.locales) locale.locale: locale.text,
+  };
+  late Revision3DialogLocalizationEditTechnicalPlan captured;
+  final service = Revision3DialogLocalizationEditAuthoringService(
+    loadContentIndex: () async => index,
+    loadExactSeed:
+        ({
+          required expectedProjectId,
+          required expectedProjectRevision,
+          required localizationId,
+          required expectedLocalizationRevision,
+          required expectedLocId,
+        }) async => exact,
+    publishTechnicalPlan:
+        ({
+          required expectedProjectId,
+          required expectedProjectRevision,
+          required plan,
+        }) async {
+          captured = plan;
+          return Revision3DialogLocalizationEditPublication(
+            projectId: expectedProjectId,
+            projectRevision: expectedProjectRevision + 1,
+            localizationId: _dialogLocalizationEditId,
+            localizationRevision: exact.localizationRevision + 1,
+            addedLocales: texts.keys
+                .where((locale) => !previousTexts.containsKey(locale))
+                .toList(growable: false),
+            removedLocales: previousTexts.keys
+                .where((locale) => !texts.containsKey(locale))
+                .toList(growable: false),
+          );
+        },
+  );
+  final catalog = await service.loadCatalog();
+  final seed = await service.loadSeed(
+    catalog: catalog,
+    choice: catalog.choices.single,
+  );
+  await service.publish(
+    seed: seed,
+    input: Revision3DialogLocalizationEditInput(texts: texts),
+  );
+  return captured;
+}
+
+Map<String, Object?> _dialogLineRef(
+  String projectId,
+  String entityId,
+  String expectedKind,
+) => <String, Object?>{
+  'project_id': projectId,
+  'id': entityId,
+  'expected_kind': expectedKind,
+};
+
+Map<String, Object?> _contentResponse(
+  AuthoringWorkingHead head,
+  String projectJson, {
+  String? responseProjectId,
+}) {
+  final project = jsonDecode(projectJson) as Map<String, Object?>;
+  final projectId = responseProjectId ?? project['project_id']! as String;
+  final revision = project['revision']! as int;
+  final meta = (project['meta']! as Map).cast<String, Object?>();
+  final target = (project['target']! as Map).cast<String, Object?>();
+  return <String, Object?>{
+    'ok': true,
+    'head_json': head.canonicalJson,
+    'project_id': projectId,
+    'project_revision': revision,
+    'index_json': jsonEncode(<String, Object?>{
+      'schema_revision': 1,
+      'project_id': projectId,
+      'project_revision': revision,
+      'project_name': meta['name'],
+      'project_version': meta['version'],
+      'project_author': meta['author'],
+      'target': target,
+      'authoring_locales': project['authoring_locales'],
+      'entity_counts': <String, Object?>{},
+      'entities': <Object?>[],
+      'assets': <Object?>[],
+    }),
+    'content_authority': 'read_only_exact_current_project',
+    'build_status': 'not_evaluated',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_applicable',
+  };
+}
+
+Map<String, Object?> _dialogLocalizationReadResponse({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'read_only',
+  'head_json': head.canonicalJson,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'localization_id': localizationId,
+  'localization_revision': localizationRevision,
+  'loc_id': locId,
+  'locales': <Object?>[
+    <String, Object?>{
+      'locale': 'de',
+      'preview': 'Bleib stehen!',
+      'truncated': false,
+      'has_nonempty_text': true,
+    },
+  ],
+  'content_authority': 'read_only_exact_current_localization',
+  'build_status': 'not_evaluated',
+  'runtime_status': 'runtime_unqualified',
+  'publication_status': 'not_applicable',
+};
+
+Map<String, Object?> _dataAssetPackageIndexResponse(
+  AuthoringWorkingHead head,
+  String projectJson, {
+  String targetPath = '/Game/Characters/DA_Asghan',
+  String packageIdHex = '0123456789abcdef',
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final target = (project['target'] as Map).cast<String, Object?>();
+  final indexJson = jsonEncode(<String, Object?>{
+    'status': 'complete_index',
+    'physical_chunk_count': 1,
+    'winning_export_bundle_count': 1,
+    'directory_indexed_export_bundle_count': 1,
+    'out_of_scope_export_bundle_count': 0,
+    'candidates': <Object?>[
+      <String, Object?>{
+        'target_path': targetPath,
+        'package_id_hex': packageIdHex,
+      },
+    ],
+    'partial_reasons': <Object?>[],
+  });
+  final indexBytes = utf8.encode(indexJson);
+  Map<String, Object?> seal(int byteLength, String sha256) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': sha256,
+  };
+  return <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_count': 1,
+    'content_status': 'metadata_candidates_only',
+    'export_bundle_payload_status': 'not_read',
+    'head_json': head.canonicalJson,
+    'mount_inventory_entry_count': 2,
+    'mount_inventory_seal': seal(80, 'b' * 64),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'audit_only',
+    'package_index_json': indexJson,
+    'package_index_seal': seal(
+      indexBytes.length,
+      crypto.sha256.convert(indexBytes).toString(),
+    ),
+    'package_index_status': 'complete_index',
+    'project_id': project['project_id'],
+    'project_revision': project['revision'],
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'installed_dataasset_package_candidates_only',
+    'source_snapshot_seal': seal(120, 'c' * 64),
+    'target_executable_seal': target['executable'],
+  };
+}
+
+AuthoringRevision3InstalledDataAssetInspectionResult
+_installedDataAssetInspectionResult({
+  required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+  String usmapSha256 = '',
+  bool reviewedFootstep = false,
+}) {
+  final inspection = reviewedFootstep
+      ? _reviewedFootstepInspectionResponse()
+      : validDataAssetInspectionResponse();
+  final expectedUsmap = usmapSha256.isEmpty ? 'c' * 64 : usmapSha256;
+  (inspection['binding']! as Map<String, Object?>)['usmap_sha256'] =
+      expectedUsmap;
+  dataAssetSelector(inspection)['usmap_sha256'] = expectedUsmap;
+  return AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+    <String, Object?>{
+      'authority_status': 'not_granted',
+      'build_status': 'not_evaluated',
+      'candidate_ordinal': candidate.ordinal,
+      'head_json': expectedSnapshot.head.canonicalJson,
+      'inspection': inspection,
+      'mutation_status': 'not_supported',
+      'ok': true,
+      'outcome': 'inspection_only',
+      'package_id_hex': candidate.packageIdHex,
+      'package_index_seal': <String, Object?>{
+        'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
+        'sha256': expectedSnapshot.packageIndexSeal.sha256,
+      },
+      'project_id': expectedSnapshot.projectId,
+      'project_revision': expectedSnapshot.projectRevision,
+      'publication_status': 'not_supported',
+      'runtime_status': 'runtime_unqualified',
+      'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+      'source_snapshot_seal': <String, Object?>{
+        'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
+        'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
+      },
+      'target_path': candidate.targetPath,
+      'usmap_content_seal': <String, Object?>{
+        'byte_len': 256,
+        'sha256': expectedUsmap,
+      },
+      'usmap_inventory_seal': <String, Object?>{
+        'byte_len': 96,
+        'sha256': 'e' * 64,
+      },
+    },
+    expectedSnapshot: expectedSnapshot,
+    requestedOrdinal: candidate.ordinal,
+  );
+}
+
+Map<String, Object?> _reviewedFootstepInspectionResponse() {
+  final inspection = validDataAssetInspectionResponse(
+    objectName: 'DA_WolfFootsteps',
+  );
+  final export = dataAssetExport(inspection);
+  export
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['schema'] = '/Script/G1R.FootstepTag';
+  final selector = dataAssetSelector(inspection);
+  selector
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['kind'] = 'vector4_f64x4'
+    ..['path'] = <Object?>[
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'BoneData',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'FootstepTag',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{
+          'type': 'struct',
+          'name': 'BoneFeetData',
+        },
+      },
+      <String, Object?>{
+        'step': 'struct',
+        'name': 'BoneFeetData',
+        'schema_name': '/Script/G1R.BoneFeetData',
+      },
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'FeetTextureSize',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'BoneFeetData',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{'type': 'struct', 'name': 'Vector4'},
+      },
+    ]
+    ..['expected_hex'] = _reviewedWolfVectorHex;
+  return inspection;
+}
+
+AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required String questId,
+  required String projectId,
+  required int projectRevision,
+  String? projectSealJson,
+}) {
+  const moduleId = '00000000000000000000000000000072';
+  const source = '''class UQuest_GoreInspection : UQuest
+{
+    void OnStart() {}
+}
+''';
+  final sourceBytes = utf8.encode(source);
+  final sourceSha = crypto.sha256.convert(sourceBytes).toString();
+  final sealedProjectJson = projectSealJson ?? projectJson;
+  final projectBytes = utf8.encode(sealedProjectJson);
+  final projectSeal = <String, Object?>{
+    'byte_len': projectBytes.length,
+    'sha256': crypto.sha256.convert(projectBytes).toString(),
+  };
+  Map<String, Object?> seal(int byteLength, String digit) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': List<String>.filled(64, digit).join(),
+  };
+  Map<String, Object?> typedRef(String id, String kind) => <String, Object?>{
+    'project_id': projectId,
+    'id': id,
+    'expected_kind': kind,
+  };
+  final planJson = jsonEncode(<String, Object?>{
+    'format': 'revision3_quest_source_inspection_plan',
+    'schema_revision': 3,
+    'scope': 'source_inspection_only',
+    'build_status': 'blocked',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+    'provenance': <String, Object?>{
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'target_executable': seal(171698176, '2'),
+      'canonical_project': projectSeal,
+      'collision_basis_head': jsonDecode(head.canonicalJson),
+      'collision_basis_project': seal(1024, '3'),
+      'collision_nonquest_project': seal(900, '4'),
+      'collision_prior_quest_count': 2,
+      'collision_prior_quest_evidence': seal(300, '5'),
+      'collision_artifact': seal(700, '6'),
+      'collision_source': seal(700, '7'),
+    },
+    'module': <String, Object?>{
+      'quest': typedRef(questId, 'quest_draft'),
+      'script_module': typedRef(moduleId, 'script_module'),
+      'draft_input': seal(420, '8'),
+      'persisted_source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': sourceSha,
+      },
+      'generated': <String, Object?>{
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': typedRef(questId, 'quest_draft'),
+        'module_namespace': 'GoreMods.Quests.Inspection',
+        'module_relative_path': 'GoreMods/Quests/Inspection.as',
+        'source': source,
+        'source_sha256': sourceSha,
+        'input_fingerprint': List<String>.filled(64, '9').join(),
+        'status': <String, Object?>{
+          'authoring': 'offline_draft',
+          'runtime': 'runtime_unqualified',
+        },
+      },
+    },
+  });
+  final planBytes = utf8.encode(planJson);
+  return AuthoringRevision3QuestSourceInspectionResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'inspection_only',
+      'head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'project_seal': projectSeal,
+      'quest_id': questId,
+      'plan_json': planJson,
+      'plan_seal': <String, Object?>{
+        'byte_len': planBytes.length,
+        'sha256': crypto.sha256.convert(planBytes).toString(),
+      },
+      'scope': 'source_inspection_only',
+      'build_status': 'blocked',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedQuestId: questId,
+  );
+}
+
+const _questArtifactSha =
+    'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
+Map<String, Object?> _questSeal(int byteLength, String digit) =>
+    <String, Object?>{
+      'byte_len': byteLength,
+      'sha256': List<String>.filled(64, digit).join(),
+    };
+
+Map<String, Object?> _questInput({
+  required AuthoringRevision3QuestDraftRequestV3 request,
+  required AuthoringWorkingHead basisHead,
+  required Map<String, Object?> target,
+}) => <String, Object?>{
+  'target': target,
+  'quest_id': request.questId,
+  'module_namespace': request.intent.moduleNamespace,
+  'technical_id': request.intent.technicalId,
+  'text_helper': request.intent.textHelper,
+  'parent_quest': <String, Object?>{
+    'generation': target,
+    'source_seal': _questSeal(11, '1'),
+    'catalog_layer': 'base-game.quest-parent.v1',
+    'canonical_selector': 'SwampCamp_SCChapter2',
+    'runtime_class': 'UQuest_SwampCamp_SCChapter2',
+  },
+  'giver': <String, Object?>{
+    'generation': target,
+    'source_seal': _questSeal(12, '2'),
+    'catalog_layer': 'base-game.npc.v1',
+    'canonical_selector': 'OM_GRD_Asghan_263',
+    'runtime_unique_name': 'OM_GRD_Asghan_263',
+  },
+  'title': request.intent.title,
+  'description': request.intent.description,
+  'objective_title': request.intent.objectiveTitle,
+  if (request.intent.additionalObjectiveTitles.isNotEmpty)
+    'additional_objective_titles': request.intent.additionalObjectiveTitles,
+  'transition_plan':
+      AuthoringRevision3QuestTransitionPlanV1.defaultForObjectives(
+        request.intent.additionalObjectiveTitles.length + 1,
+      ).toJson(),
+  'collision_catalog': <String, Object?>{
+    'generation': target,
+    'catalog_layer':
+        'base-game-plus-exact-revision3-project.story-collisions.v2',
+    'artifact': _questSeal(123, 'e'),
+    'source_seal': _questSeal(123, 'f'),
+    'basis_snapshot': <String, Object?>{
+      'byte_len': basisHead.snapshotByteLength,
+      'sha256': basisHead.snapshotSha256,
+    },
+  },
+};
+
+String _questInputFingerprint(Map<String, Object?> input) {
+  return revision3QuestInputFingerprint(input);
+}
+
+Map<String, Object?> _questEntity({
+  required String projectId,
+  required AuthoringRevision3QuestDraftRequestV3 request,
+  required Map<String, Object?> input,
+}) => <String, Object?>{
+  'id': request.questId,
+  'display_name': request.displayName,
+  'origin': <String, Object?>{
+    'type': 'new',
+    'authored_runtime_id': request.intent.technicalId,
+  },
+  'revision': 0,
+  'payload': <String, Object?>{
+    'kind': 'quest_draft',
+    'data': <String, Object?>{
+      'generator_id': 'gore-authoring.draft-quest-skeleton',
+      'generator_version': 4,
+      'input': input,
+      'script_module': <String, Object?>{
+        'project_id': projectId,
+        'id': request.scriptModuleId,
+        'expected_kind': 'script_module',
+      },
+    },
+  },
+};
+
+Map<String, Object?> _questModuleEntity({
+  required String projectId,
+  required AuthoringRevision3QuestDraftRequestV3 request,
+  required Map<String, Object?> input,
+}) {
+  final source = revision3QuestGeneratedSource(
+    technicalId: request.intent.technicalId,
+    textHelper: request.intent.textHelper,
+    parentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
+    giverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+    title: request.intent.title,
+    description: request.intent.description,
+    objectiveTitle: request.intent.objectiveTitle,
+    additionalObjectiveTitles: request.intent.additionalObjectiveTitles,
+  );
+  return <String, Object?>{
+    'id': request.scriptModuleId,
+    'display_name': '${request.displayName} Script',
+    'origin': <String, Object?>{
+      'type': 'generated',
+      'generator_id': 'gore-authoring.draft-quest-skeleton',
+      'generator_version': 4,
+      'owner': <String, Object?>{
+        'project_id': projectId,
+        'id': request.questId,
+        'expected_kind': 'quest_draft',
+      },
+    },
+    'revision': 0,
+    'payload': <String, Object?>{
+      'kind': 'script_module',
+      'data': <String, Object?>{
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': <String, Object?>{
+          'project_id': projectId,
+          'id': request.questId,
+          'expected_kind': 'quest_draft',
+        },
+        'module_namespace': request.intent.moduleNamespace,
+        'module_relative_path':
+            '${request.intent.moduleNamespace.replaceAll('.', '/')}.as',
+        'source': source,
+        'source_sha256': crypto.sha256.convert(utf8.encode(source)).toString(),
+        'input_fingerprint': _questInputFingerprint(input),
+        'status': <String, Object?>{
+          'authoring': 'offline_draft',
+          'runtime': 'runtime_unqualified',
+        },
+      },
+    },
+  };
+}
+
+Map<String, Object?> _questPreparedResponse({
+  required AuthoringWorkingHead basisHead,
+  required AuthoringWorkingHead candidateHead,
+  required String candidateProjectJson,
+  required int revision,
+  required String questId,
+  required String scriptModuleId,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'prepared_unpublished',
+  'basis_head_json': basisHead.canonicalJson,
+  'head_json': candidateHead.canonicalJson,
+  'project_json': candidateProjectJson,
+  'revision': revision,
+  'quest_id': questId,
+  'script_module_id': scriptModuleId,
+  'artifact_deduplicated': false,
+  'build_status': 'blocked',
+  'runtime_status': 'runtime_unqualified',
+  'artifact_authority': 'not_granted',
+  'source_inspection': 'fresh_capability_required',
+  'publication_status': 'not_supported',
+};
+
+AuthoringRevision3QuestDraftIntentV3 _questIntent(
+  int ordinal, {
+  List<String> additionalObjectiveTitles = const <String>[],
+}) => AuthoringRevision3QuestDraftIntentV3(
+  moduleNamespace: 'GoreMods.Quests.Managed$ordinal',
+  technicalId: 'GORE_MANAGED_QUEST_$ordinal',
+  textHelper: 'GoreManagedQuest${ordinal}Text',
+  parentCatalogId: 'g1r:quest-parent:swampcamp_scchapter2',
+  giverCatalogId: 'g1r:npc:om_grd_asghan_263',
+  title: 'Managed Quest $ordinal',
+  description: 'Exercise safe managed Quest publication.',
+  objectiveTitle: 'Finish Managed Quest $ordinal',
+  additionalObjectiveTitles: additionalObjectiveTitles,
+);
+
+AuthoringRevision3NpcDraftIntentV1 _npcIntent(int ordinal) =>
+    AuthoringRevision3NpcDraftIntentV1(
+      moduleNamespace: 'GoreMods.Npcs.Managed$ordinal',
+      uniqueName: 'GoreManagedNpc$ordinal',
+      parentCatalogId: 'g1r:npc:om_grd_asghan_263',
+    );
+
+Map<String, Object?> _preparedResponse(AuthoringWorkingHead head) =>
+    <String, Object?>{'ok': true, 'head_json': head.canonicalJson};
+
+Map<String, Object?> _openedResponse(
+  AuthoringWorkingHead head,
+  String projectJson,
+) => <String, Object?>{..._preparedResponse(head), 'project_json': projectJson};
+
+Map<String, Object?> _restorableExportResponse({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'exported',
+  'format': 'managed_revision3_exact_snapshot_v2',
+  'artifact_kind': 'portable_snapshot_restorable_copy',
+  'restore_status': 'supported',
+  'basis_head_json': head.canonicalJson,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'output': output,
+  'archive': <String, Object?>{'byte_len': 16384, 'sha256': 'c' * 64},
+  'manifest': <String, Object?>{
+    'relative_name': 'gore-export.json',
+    'byte_len': 512,
+    'sha256': 'd' * 64,
+  },
+  'closure': <String, Object?>{
+    'snapshot_objects': 1,
+    'entity_objects': 0,
+    'asset_objects': 0,
+    'archive_entries': 4,
+    'uncompressed_bytes': 8192,
+  },
+  'publication_status': 'published',
+  'retry_safe': false,
+  'warning': null,
+  'project_mutation': 'not_performed',
+  'game_mutation': 'not_performed',
+  'save_mutation': 'not_performed',
+  'build_status': 'not_performed',
+  'deployment_status': 'not_performed',
+  'runtime_status': 'runtime_unqualified',
+};

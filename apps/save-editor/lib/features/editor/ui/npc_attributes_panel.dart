@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart'
-    show HeroAttributeGroup, heroAttributeGroup, heroAttributeRank;
+    show
+        AttributeLabelResolver,
+        HeroAttributeGroup,
+        heroAttributeGroup,
+        heroAttributeLabel,
+        heroAttributeRank;
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/ui/grouped_attribute_sidebar.dart';
@@ -82,6 +87,7 @@ class NpcAttributesPanel extends StatefulWidget {
     this.status,
     this.initialPending,
     this.skillsSection,
+    this.attributeLabel,
   });
 
   final Future<NpcAttributesResult> Function() load;
@@ -114,6 +120,11 @@ class NpcAttributesPanel extends StatefulWidget {
   /// attribute values, so that group is otherwise dropped; the skills editor
   /// gives it a purpose.
   final Widget? skillsSection;
+
+  /// Resolves raw save ids to player-facing names. [setClass] is derived from
+  /// the typed path returned by the core. Falls back safely when no catalog is
+  /// available.
+  final AttributeLabelResolver? attributeLabel;
 
   @override
   State<NpcAttributesPanel> createState() => _NpcAttributesPanelState();
@@ -206,6 +217,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
 
   Future<void> _reloadStatus() async {
     final status = widget.status;
+    final epoch = ++_statusEpoch;
     if (status == null) {
       setState(() {
         _statusActor = null;
@@ -213,14 +225,25 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
       });
       return;
     }
-    final epoch = ++_statusEpoch;
-    setState(() => _statusLoading = true);
-    final page = await status.load();
-    if (!mounted || epoch != _statusEpoch) return;
     setState(() {
-      _statusLoading = false;
-      _statusActor = _matchStatusSelf(page, status.npcId);
+      _statusLoading = true;
     });
+    try {
+      final page = await status.load();
+      if (!mounted || epoch != _statusEpoch) return;
+      setState(() {
+        _statusLoading = false;
+        _statusActor = page.error == null
+            ? _matchStatusSelf(page, status.npcId)
+            : null;
+      });
+    } catch (_) {
+      if (!mounted || epoch != _statusEpoch) return;
+      setState(() {
+        _statusLoading = false;
+        _statusActor = null;
+      });
+    }
   }
 
   Future<void> _reload() async {
@@ -284,14 +307,17 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         if (text == null) continue;
         // A cleared field is almost certainly an accident.
         if (text.trim().isEmpty) {
-          final errMsg = l10n.attributeEmpty(attribute.key);
+          final errMsg = l10n.attributeEmpty(_displayLabel(attribute));
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
         }
         final value = double.tryParse(text.trim());
         if (value == null) {
-          final errMsg = l10n.attributeInvalidNumber(attribute.key, text);
+          final errMsg = l10n.attributeInvalidNumber(
+            _displayLabel(attribute),
+            text,
+          );
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
@@ -348,11 +374,10 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     final hasSkills = widget.skillsSection != null;
     final groups = HeroAttributeGroup.values
         .where(
-          (g) =>
-              g == HeroAttributeGroup.thieving
-                  ? hasSkills
-                  : byGroup[g]?.isNotEmpty == true ||
-                        (hasStatus && g == HeroAttributeGroup.core),
+          (g) => g == HeroAttributeGroup.thieving
+              ? hasSkills
+              : byGroup[g]?.isNotEmpty == true ||
+                    (hasStatus && g == HeroAttributeGroup.core),
         )
         .toList();
 
@@ -380,7 +405,8 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         );
       }
       final attributes = byGroup[group] ?? const [];
-      // The Status row is the FIRST entry of the core group detail (NPC-only).
+      // Status is a separate, authoritative NPC row at the start of the core
+      // group detail. Relationship editing lives in the Events sub-tab.
       final statusRow = (hasStatus && group == HeroAttributeGroup.core)
           ? _buildStatusRow(context)
           : null;
@@ -398,6 +424,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               // drafts from a previous NPC never carry over.
               key: ValueKey((widget.reloadKey, a.key, a.basePath)),
               attribute: a,
+              label: _displayLabel(a),
               editable: widget.editable,
               initialBaseText: _pending[_pathKey(a.basePath)],
               initialCurrentText: _pending[_pathKey(a.currentPath)],
@@ -427,6 +454,26 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
           ),
       ],
     );
+  }
+
+  String _displayLabel(NpcAttributeRow attribute) =>
+      widget.attributeLabel?.call(
+        attribute.key,
+        _setClassFromPaths(attribute),
+      ) ??
+      heroAttributeLabel(attribute.key);
+
+  String? _setClassFromPaths(NpcAttributeRow attribute) {
+    for (final path in [attribute.basePath, attribute.currentPath]) {
+      final index = path.indexOf('AttributeSetsByClass');
+      if (index < 0 || index + 1 >= path.length) continue;
+      var value = path[index + 1].trim();
+      if (value.startsWith('{') && value.endsWith('}')) {
+        value = value.substring(1, value.length - 1);
+      }
+      if (value.isNotEmpty) return value;
+    }
+    return null;
   }
 
   /// The NPC Status row shown as the FIRST entry of the core ("Hauptwerte")
@@ -527,6 +574,7 @@ class _NpcAttributeRow extends StatefulWidget {
   const _NpcAttributeRow({
     super.key,
     required this.attribute,
+    required this.label,
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -535,6 +583,7 @@ class _NpcAttributeRow extends StatefulWidget {
   });
 
   final NpcAttributeRow attribute;
+  final String label;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -571,13 +620,13 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
 
   @override
   Widget build(BuildContext context) {
-    final label = widget.attribute.key;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 620;
           final baseField = TextField(
+            key: ValueKey('npc-attribute:${widget.attribute.key}:base'),
             controller: _baseController,
             enabled: widget.editable,
             onChanged: widget.onBaseChanged,
@@ -586,10 +635,11 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeBase(label),
+              labelText: AppLocalizations.of(context).attributeBaseValue,
             ),
           );
           final currentField = TextField(
+            key: ValueKey('npc-attribute:${widget.attribute.key}:current'),
             controller: _currentController,
             enabled: widget.editable,
             onChanged: widget.onCurrentChanged,
@@ -598,11 +648,11 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeCurrent(label),
+              labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
           final rowLabel = Text(
-            label,
+            widget.label,
             style: Theme.of(context).textTheme.labelLarge,
           );
           if (compact) {

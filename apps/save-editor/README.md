@@ -4,14 +4,38 @@
 provides a Flutter interface backed by a Rust savegame core. It is one project
 in the [gore](../../README.md) monorepo.
 
+This is *not* modding — it changes your saved progress and never touches the
+game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
+[Mod Studio](../mod-studio/README.md).
+
 ## Features
 
-- Profile: Change difficulty settings
-- Player: Edit stats, skills, location and much more
-- Inventory: Change count of existing items; add new items from a bundled catalog with categorized browsing.
+- Profile: Change difficulty settings; set the in-game time (play clock).
+- Player & NPCs: Edit stats, attributes, all talents/skills and much more;
+  revive a dead NPC (restore health, strip the death state).
+- Position: Move the player to exact coordinates or a named location, with an
+  optional facing direction. NPC saved/spawn poses are shown read-only: the game
+  rebuilds NPC placement from world data when loading, so editing those save
+  records would not move the NPC in game.
+- Inventory: Change count of existing items; add new items from a bundled
+  catalog with categorized browsing; remove items; detect and repair damaged
+  slot IDs; reset an inventory to a clean starting state.
+- Faction crimes: Clear an NPC's crimes to reset the hostility its guild holds
+  against you.
+- Glossary: Browse and edit NPC, creature, and location entries, including
+  their individual text entries and NPC discovery states.
 - Progression: Edit quest markers, NPC knowledge and events
 - Almost all data can be changed by changing the value of the internal property. Only for experimental use.
-- Automatic backup creation.
+- Backups: Create them automatically, give them optional display labels,
+  restore them, or permanently delete them after confirmation. Deletion cannot
+  be undone.
+
+## What it can not do
+
+- Mod the game (no overrides, audio, textures, or scripts).
+- Touch the game install in any way.
+- Guarantee experimental raw property edits are safe — keep your own copy of
+  important saves.
 
 ## Screenshots
 
@@ -20,11 +44,14 @@ in the [gore](../../README.md) monorepo.
 
 ## Compatibility
 
-Tested with Steam game version CL168781. Should work with all versions.
+Tested with Steam game version CL168781. Other game versions are not guaranteed:
+the bundled item and named-location catalogs come from specific game cooks and
+can become stale when a patch moves, renames or changes game data. Keep backups
+and use a Save Editor build qualified for the updated game version.
 
 ## Installation & Updates
 
-Download `GoresaveSetup-<version>.exe` from the
+Download `gore-save-editor-<version>-setup.exe` from the
 [latest release](https://github.com/dh0er/gore/releases/latest) and run it.
 The app checks for updates on startup and prompts you when a new version is
 available.
@@ -65,7 +92,7 @@ Build a Windows release bundle (native DLL + Flutter release + packaged zip)
 via the monorepo build script, from the repository root:
 
 ```powershell
-python build.py gore-save dist
+python build.py gore-save-editor dist
 ```
 
 Add `installer` instead of `dist` to also compile the Inno Setup installer.

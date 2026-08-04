@@ -9,9 +9,7 @@ use serde_json::{Value, json};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 4 {
-        eprintln!(
-            "usage: try_add_item <save.sav> <item_path> <count> [add|remove]"
-        );
+        eprintln!("usage: try_add_item <save.sav> <item_path> <count> [add|remove]");
         std::process::exit(2);
     }
     let count: i64 = args[3].parse().expect("count");
@@ -38,6 +36,9 @@ fn main() {
         "WRITE ok={} editsApplied={} bytesChanged={}",
         wv["ok"], wv["data"]["editsApplied"], wv["data"]["bytesChanged"]
     );
+    if wv["ok"] != Value::Bool(true) {
+        eprintln!("WRITE error: {}", wv["error"]);
+    }
 
     let inspect = json!({
         "command": "inspect_save",

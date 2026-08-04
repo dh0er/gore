@@ -17,6 +17,32 @@ class SidebarTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// The label, ellipsized to one line, wrapped in a [Tooltip] ONLY when it
+  /// actually does not fit. A tooltip that repeats text the user can already
+  /// read in full is noise, so the row is measured against its own width first
+  /// (`TextPainter.didExceedMaxLines`) with the same style, scale and direction
+  /// the `Text` will use — otherwise the measurement and the render disagree.
+  Widget _label(BuildContext context, TextStyle? style) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final text = Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        );
+        final painter = TextPainter(
+          text: TextSpan(text: label, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+        )..layout(maxWidth: constraints.maxWidth);
+        if (!painter.didExceedMaxLines) return text;
+        return Tooltip(message: label, child: text);
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -39,11 +65,9 @@ class SidebarTile extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  child: _label(
+                    context,
+                    Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: selected ? scheme.primary : scheme.onSurface,
                       fontWeight: selected ? FontWeight.w600 : null,
                     ),

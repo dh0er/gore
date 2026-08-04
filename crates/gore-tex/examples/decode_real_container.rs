@@ -23,7 +23,9 @@ const DEFAULT_UTOC: &str =
     "D:/SteamLibrary/steamapps/common/Gothic 1 Remake/G1R/Content/Paks/G1R-Windows.utoc";
 
 fn main() -> Result<()> {
-    let utoc = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_UTOC.to_string());
+    let utoc = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_UTOC.to_string());
     println!("opening container: {utoc}");
 
     let store = iostore::open(&utoc, Arc::new(Config::default()))

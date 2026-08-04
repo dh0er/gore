@@ -1,12 +1,12 @@
 # Changelog
 
-All notable changes to gore-mod are documented here. The release workflow
-publishes the section matching the released version as the GitHub release
-notes, so every release needs an entry.
+All notable development changes to the unreleased Mod Studio are documented
+here. Once releases begin, the release workflow will publish the matching
+version section as the GitHub release notes.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] - 2026-06-19
+## [Unreleased]
 
-- Initial release: Gothic 1 Remake no-code modding GUI.
-- Windows installer with in-app auto-updates (WinSparkle).
+- Development baseline for the Gothic 1 Remake no-code modding GUI.
+- Windows installer and in-app update infrastructure are under development.

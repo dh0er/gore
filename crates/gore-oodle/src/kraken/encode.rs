@@ -77,7 +77,11 @@ pub(crate) fn compress(src: &[u8], level: Level) -> Result<Vec<u8>> {
     let blocks = src.len().div_ceil(QUANTUM_LEN).max(1);
     let worst = src
         .len()
-        .checked_add(274usize.checked_mul(blocks).ok_or(Error::OutputTooLarge(src.len()))?)
+        .checked_add(
+            274usize
+                .checked_mul(blocks)
+                .ok_or(Error::OutputTooLarge(src.len()))?,
+        )
         .ok_or(Error::OutputTooLarge(src.len()))?;
 
     // Pre-reserve the worst case with a *fallible* allocation (the size is bounded by
@@ -131,7 +135,11 @@ fn encode_quantum(
         // Compressed framing = 3-byte quantum header + payload.
         // Stored framing = (partial) 3-byte header + out_len, or (full) 0-byte header.
         let compressed_total = 3 + payload.len();
-        let stored_total = if out_len == QUANTUM_LEN { out_len } else { 3 + out_len };
+        let stored_total = if out_len == QUANTUM_LEN {
+            out_len
+        } else {
+            3 + out_len
+        };
         if payload.len() <= MAX_QUANTUM_PAYLOAD && compressed_total < stored_total {
             write_stream_header(dst, CODEC_KRAKEN, false, keyframe, false);
             write_compressed_header(dst, payload.len());
@@ -204,8 +212,10 @@ fn try_compress_quantum(
     // The full entropy array (huffman/tANS/RLE/raw) is only oracle-safe as the *sole* chunk of
     // a quantum; a multi-chunk quantum that can't be all-LZ falls through to stored framing.
     if single_chunk {
-        candidates
-            .push(encode_entropy_chunk(&whole[quantum_origin..quantum_origin + out_len], level)?);
+        candidates.push(encode_entropy_chunk(
+            &whole[quantum_origin..quantum_origin + out_len],
+            level,
+        )?);
     }
 
     // Keep the smallest candidate that fits the size budget and actually shrinks.
@@ -688,7 +698,11 @@ mod lz {
     }
     impl BitWriter64Fwd {
         fn new() -> Self {
-            BitWriter64Fwd { bits: 0, pos: 63, ptr: 0 }
+            BitWriter64Fwd {
+                bits: 0,
+                pos: 63,
+                ptr: 0,
+            }
         }
         fn write(&mut self, bits: u32, n: u32, buf: &mut [u8]) {
             debug_assert!(n as i32 <= self.pos);
@@ -724,7 +738,11 @@ mod lz {
     }
     impl BitWriter64Bwd {
         fn new(end: usize) -> Self {
-            BitWriter64Bwd { bits: 0, pos: 63, ptr: end }
+            BitWriter64Bwd {
+                bits: 0,
+                pos: 63,
+                ptr: end,
+            }
         }
         fn write(&mut self, bits: u32, n: u32, buf: &mut [u8]) {
             debug_assert!(n as i32 <= self.pos);
@@ -755,7 +773,11 @@ mod lz {
     }
     /// BSR that treats 0 as 0 (only >=1 is used here, but guard anyway).
     fn bsr32_z(x: u32) -> u32 {
-        if x == 0 { 0 } else { 31 - x.leading_zeros() }
+        if x == 0 {
+            0
+        } else {
+            31 - x.leading_zeros()
+        }
     }
 }
 
@@ -769,7 +791,12 @@ mod tests {
         let comp = compress(src, level).expect("compress");
         let back = crate::decompress(&comp, src.len())
             .unwrap_or_else(|e| panic!("decode failed (len {}, {level:?}): {e:?}", src.len()));
-        assert_eq!(back, src, "roundtrip mismatch (len {}, {level:?})", src.len());
+        assert_eq!(
+            back,
+            src,
+            "roundtrip mismatch (len {}, {level:?})",
+            src.len()
+        );
     }
 
     fn both_levels(src: &[u8]) {
@@ -806,7 +833,13 @@ mod tests {
         for _ in 0..40_000 {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             let r = (seed >> 24) as u8;
-            data.push(if r < 200 { b'a' } else if r < 240 { b' ' } else { b'a' + (r % 26) });
+            data.push(if r < 200 {
+                b'a'
+            } else if r < 240 {
+                b' '
+            } else {
+                b'a' + (r % 26)
+            });
         }
         both_levels(&data);
     }
@@ -822,14 +855,21 @@ mod tests {
                 .map(|_| {
                     s = s.wrapping_mul(1664525).wrapping_add(1013904223);
                     let r = (s >> 24) as u8;
-                    if r < 220 { 0u8 } else { r }
+                    if r < 220 {
+                        0u8
+                    } else {
+                        r
+                    }
                 })
                 .collect();
             for level in [Level::Fastest, Level::Default] {
                 let comp = compress(&data, level).expect("compress");
                 let back = crate::decompress(&comp, n).expect("decode");
                 let first = (0..n).find(|&i| back.get(i) != data.get(i));
-                assert!(first.is_none(), "n={n:#x} {level:?} first_mismatch={first:?}");
+                assert!(
+                    first.is_none(),
+                    "n={n:#x} {level:?} first_mismatch={first:?}"
+                );
             }
         }
     }
@@ -845,12 +885,17 @@ mod tests {
                 .map(|_| {
                     s = s.wrapping_mul(1664525).wrapping_add(1013904223);
                     let r = (s >> 24) as u8;
-                    if r < 220 { 0u8 } else { r }
+                    if r < 220 {
+                        0u8
+                    } else {
+                        r
+                    }
                 })
                 .collect();
             let toks = crate::lz::find_tokens(&data, Level::Fastest);
             let index = super::lz::TokenIndex::new(&toks);
-            let Some(chunk) = super::lz::encode_lz_chunk(&data, &index, 0, n, Level::Fastest) else {
+            let Some(chunk) = super::lz::encode_lz_chunk(&data, &index, 0, n, Level::Fastest)
+            else {
                 continue; // LZ declined for this size; nothing to check here
             };
             // Wrap: stream header (keyframe, compressed) + compressed quantum header + chunk.
@@ -861,7 +906,10 @@ mod tests {
             let stream = w.into_vec();
             let back = crate::decompress(&stream, n).expect("decode");
             let first = (0..n).find(|&i| back.get(i) != data.get(i));
-            assert!(first.is_none(), "n={n:#x} LZ block first_mismatch={first:?}");
+            assert!(
+                first.is_none(),
+                "n={n:#x} LZ block first_mismatch={first:?}"
+            );
         }
     }
 
@@ -876,7 +924,11 @@ mod tests {
             .map(|_| {
                 s = s.wrapping_mul(1664525).wrapping_add(1013904223);
                 let r = (s >> 24) as u8;
-                if r < 220 { 0u8 } else { r }
+                if r < 220 {
+                    0u8
+                } else {
+                    r
+                }
             })
             .collect();
         data.extend((0..0x10000).map(|i| (i % 50) as u8)); // LZ-able chunk2
@@ -1000,7 +1052,10 @@ mod tests {
                     chunk_len = n;
                     lz_chunks += 1;
                 }
-                LzEvent::Match { match_start, match_end } => {
+                LzEvent::Match {
+                    match_start,
+                    match_end,
+                } => {
                     matches += 1;
                     assert!(
                         match_start + 16 <= chunk_len,
@@ -1017,7 +1072,10 @@ mod tests {
                 }
             })
             .unwrap_or_else(|e| panic!("{name} len={len:#x} {level:?}: decode failed: {e:?}"));
-            assert_eq!(back, data, "{name} len={len:#x} {level:?}: roundtrip mismatch");
+            assert_eq!(
+                back, data,
+                "{name} len={len:#x} {level:?}: roundtrip mismatch"
+            );
         }
         (lz_chunks, matches)
     }
@@ -1091,6 +1149,9 @@ mod tests {
         // were ever disabled (`EMIT_LZ_CHUNKS`) or stopped firing, this test would
         // otherwise pass while guarding nothing.
         assert!(lz_chunks > 0, "guard-zone battery produced no LZ chunks");
-        assert!(lz_matches > 0, "guard-zone battery produced no LZ match commands");
+        assert!(
+            lz_matches > 0,
+            "guard-zone battery produced no LZ match commands"
+        );
     }
 }

@@ -54,10 +54,29 @@ fn is_armor_item_class(name: &str) -> bool {
     }
     // Non-item families that contain "Armor"/"Armory"/"SuperArmor".
     const NON_ITEM_PREFIXES: &[&str] = &[
-        "GE_", "GA_", "GC_", "GVL_", "CS_", "Choice", "Document", "Conversation",
-        "DailyRoutine", "Module_", "AIAgent", "CharacterDefinition",
-        "CharacterVisuals", "AllArmors", "Quest", "Memory", "Spawner",
-        "Glossary", "Gothic", "Hit_", "SpawnAIAgent", "SpawnMeshes", "OC_",
+        "GE_",
+        "GA_",
+        "GC_",
+        "GVL_",
+        "CS_",
+        "Choice",
+        "Document",
+        "Conversation",
+        "DailyRoutine",
+        "Module_",
+        "AIAgent",
+        "CharacterDefinition",
+        "CharacterVisuals",
+        "AllArmors",
+        "Quest",
+        "Memory",
+        "Spawner",
+        "Glossary",
+        "Gothic",
+        "Hit_",
+        "SpawnAIAgent",
+        "SpawnMeshes",
+        "OC_",
     ];
     if NON_ITEM_PREFIXES.iter().any(|p| name.starts_with(p)) {
         return false;
@@ -260,13 +279,19 @@ pub fn build_npc_catalog(lines: &[&str]) -> (Vec<NpcEntry>, Vec<String>) {
 
 /// One knowledge catalog entry.
 ///
-/// Field order: `category` < `id` (alphabetical, sort_keys=True).
+/// Field order is alphabetical to preserve the generator's `sort_keys=True`
+/// output. Cache-derived fields are optional so catalogs generated without a
+/// script cache remain byte-compatible with the original two-field format.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
     pub category: String,
     pub id: String,
-    // Future: #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    // pub names: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loc_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
 }
 
 /// Build the knowledge catalog from raw dump lines.
@@ -292,10 +317,11 @@ pub fn build_knowledge_catalog(lines: &[&str]) -> Vec<KnowledgeEntry> {
                 "topic"
             } else if name.starts_with("Info_") {
                 "info"
-            } else if name
-                .strip_prefix("Choice")
-                .is_some_and(|r| r.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'))
-            {
+            } else if name.strip_prefix("Choice").is_some_and(|r| {
+                r.chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            }) {
                 // Python pattern was `Choice[A-Za-z0-9_]+`: a bare abstract
                 // `Choice` class (no trailing word char) is NOT a token.
                 "choice"
@@ -310,11 +336,38 @@ pub fn build_knowledge_catalog(lines: &[&str]) -> Vec<KnowledgeEntry> {
     // BTreeMap iterates in sorted key order — matches Python's `sorted(found.items())`
     let mut entries: Vec<KnowledgeEntry> = found
         .into_iter()
-        .map(|(id, category)| KnowledgeEntry { category, id })
+        .map(|(id, category)| KnowledgeEntry {
+            caption: None,
+            category,
+            id,
+            loc_key: None,
+            module: None,
+        })
         .collect();
     // Python: entries.sort(key=lambda e: e["id"]) — already sorted from BTreeMap
     entries.sort_by(|a, b| a.id.cmp(&b.id));
     entries
+}
+
+/// Join exact cache-derived `(id, caption, loc_key, module)` metadata into an existing
+/// knowledge catalog. Unknown cache classes are ignored and catalog entries
+/// missing from the inspected cache retain their portable two-field form.
+pub fn enrich_knowledge_catalog(
+    entries: &mut [KnowledgeEntry],
+    metadata: impl IntoIterator<Item = (String, Option<String>, Option<String>, String)>,
+) {
+    let by_id: std::collections::BTreeMap<String, (Option<String>, Option<String>, String)> =
+        metadata
+            .into_iter()
+            .map(|(id, caption, loc_key, module)| (id, (caption, loc_key, module)))
+            .collect();
+    for entry in entries {
+        if let Some((caption, loc_key, module)) = by_id.get(&entry.id) {
+            entry.caption = caption.clone();
+            entry.loc_key = loc_key.clone();
+            entry.module = Some(module.clone());
+        }
+    }
 }
 
 // ─── JSON serialization helpers ──────────────────────────────────────────────
@@ -359,7 +412,10 @@ mod tests {
         let by_id: std::collections::HashMap<&str, &ItemEntry> =
             entries.iter().map(|e| (e.id.as_str(), e)).collect();
         assert_eq!(by_id["ItMi_Orenugget"].category, "misc");
-        assert_eq!(by_id["ItMi_Orenugget"].path, "/Script/Angelscript.ItMi_Orenugget");
+        assert_eq!(
+            by_id["ItMi_Orenugget"].path,
+            "/Script/Angelscript.ItMi_Orenugget"
+        );
         assert_eq!(by_id["ItAr_Rune_FireBall"].category, "rune");
         assert_eq!(by_id["ItAr_Scroll_Charm"].category, "scroll");
         assert_eq!(by_id["ItKeyDefault"].category, "key");
@@ -398,7 +454,10 @@ mod tests {
         let by_id: std::collections::HashMap<&str, &NpcEntry> =
             entries.iter().map(|e| (e.id.as_str(), e)).collect();
         assert_eq!(by_id["OC_STT_Diego"].category, "human");
-        assert_eq!(by_id["OC_STT_Diego"].class, "CharacterDefinition_Human_OC_STT_Diego");
+        assert_eq!(
+            by_id["OC_STT_Diego"].class,
+            "CharacterDefinition_Human_OC_STT_Diego"
+        );
     }
 
     #[test]
@@ -445,8 +504,13 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted);
-        assert_eq!(ids.iter().filter(|&&id| id == "Topic_Diego_209799").count(), 1);
-        assert!(!ids.iter().any(|id| id.contains("Sword") || id.contains("CharacterDefinition")));
+        assert_eq!(
+            ids.iter().filter(|&&id| id == "Topic_Diego_209799").count(),
+            1
+        );
+        assert!(!ids
+            .iter()
+            .any(|id| id.contains("Sword") || id.contains("CharacterDefinition")));
     }
 
     #[test]
@@ -458,7 +522,60 @@ mod tests {
         let entries = build_knowledge_catalog(&lines);
         let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"ChoiceDiegoStart"), "got: {ids:?}");
-        assert!(!ids.contains(&"Choice"), "bare Choice must be excluded: {ids:?}");
+        assert!(
+            !ids.contains(&"Choice"),
+            "bare Choice must be excluded: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn knowledge_metadata_enrichment_is_exact_and_optional() {
+        let mut entries = build_knowledge_catalog(KNOWLEDGE_FIXTURE);
+        enrich_knowledge_catalog(
+            &mut entries,
+            [
+                (
+                    "Topic_Diego_209799".to_string(),
+                    None,
+                    Some("INFO_DIEGO_OTHERCAMPS_15_00".to_string()),
+                    "Story.Conversation_Diego".to_string(),
+                ),
+                (
+                    "Info_FMORGAreyouok".to_string(),
+                    Some("[Forced Conversation]".to_string()),
+                    None,
+                    "Story.Conversation_Forced".to_string(),
+                ),
+                (
+                    "Topic_NotInDump".to_string(),
+                    None,
+                    Some("INFO_UNUSED".to_string()),
+                    "Story.Unused".to_string(),
+                ),
+            ],
+        );
+        let by_id: std::collections::HashMap<&str, &KnowledgeEntry> = entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect();
+        assert_eq!(
+            by_id["Topic_Diego_209799"].loc_key.as_deref(),
+            Some("INFO_DIEGO_OTHERCAMPS_15_00")
+        );
+        assert_eq!(
+            by_id["Topic_Diego_209799"].module.as_deref(),
+            Some("Story.Conversation_Diego")
+        );
+        assert_eq!(
+            by_id["Info_FMORGAreyouok"].caption.as_deref(),
+            Some("[Forced Conversation]")
+        );
+        assert!(by_id["Info_FMORGAreyouok"].loc_key.is_none());
+
+        let json = to_catalog_json(&entries).unwrap();
+        assert!(json.contains("\"loc_key\": \"INFO_DIEGO_OTHERCAMPS_15_00\""));
+        assert!(json.contains("\"caption\": \"[Forced Conversation]\""));
+        assert!(!json.contains("Topic_NotInDump"));
     }
 
     #[test]
@@ -475,7 +592,9 @@ mod tests {
 
         // Visual-definition companions and bases -> rejected.
         assert!(!is_armor_item_class("Ore_Armor_H_VisualsDefinition"));
-        assert!(!is_armor_item_class("Armor_OC_EBR_Gomez_100_VisualDefinition"));
+        assert!(!is_armor_item_class(
+            "Armor_OC_EBR_Gomez_100_VisualDefinition"
+        ));
         assert!(!is_armor_item_class("BaseArmorDefinition"));
         assert!(!is_armor_item_class("ArmorVisualsDefinition_Human"));
 
@@ -487,10 +606,10 @@ mod tests {
         assert!(!is_armor_item_class("GE_Crw_Armor_H"));
         assert!(!is_armor_item_class("GothicAchievement_Armor_01"));
         assert!(!is_armor_item_class("OC_Armory_Door"));
-    // An "Armory" segment (room/building) is not an armor item, even with a
-    // short prefix not covered by NON_ITEM_PREFIXES.
-    assert!(!is_armor_item_class("NC_Armory_Door"));
-    assert!(!is_armor_item_class("Vlk_Armory"));
+        // An "Armory" segment (room/building) is not an armor item, even with a
+        // short prefix not covered by NON_ITEM_PREFIXES.
+        assert!(!is_armor_item_class("NC_Armory_Door"));
+        assert!(!is_armor_item_class("Vlk_Armory"));
         assert!(!is_armor_item_class("Spawner_OC_Castle_Armory_Misc_01"));
         assert!(!is_armor_item_class("Hit_SuperArmor_Player"));
         assert!(!is_armor_item_class("CharacterVisualsDefinition_OreArmor"));

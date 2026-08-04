@@ -1,0 +1,22 @@
+[package]
+name = "gore-authoring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gore-asset = { path = "../gore-asset" }
+gore-tex = { path = "../gore-tex" }
+gore-vo = { path = "../gore-vo" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+thiserror = "2"
+zip = { version = "2", default-features = false }
+cap-std = "4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_Storage_FileSystem", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

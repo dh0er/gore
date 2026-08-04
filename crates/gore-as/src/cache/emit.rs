@@ -24,7 +24,12 @@ fn force_stub_set() -> &'static HashSet<String> {
         std::env::var("GORE_AS_STUBLIST")
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
@@ -83,11 +88,67 @@ use super::structure::{body_statements_ctor, CONSTSTORE, RVODEF};
 use super::types::token_keyword;
 use super::walk_modules::FuncCode;
 
+/// Exact number of source functions for which [`emit_module`] writes a body.
+///
+/// This deliberately follows the same generated-accessor, generated-default,
+/// delegate-wrapper, and duplicate-signature filters as the emitter. Counting
+/// raw cache records would overstate the denominator because those records are
+/// not represented by editable function bodies in the emitted source.
+pub(crate) fn emitted_body_count(m: &Module, refs: &RefResolver) -> usize {
+    let class_names: HashSet<&str> = m.classes.iter().map(|c| c.name.as_str()).collect();
+    let class_members: HashMap<&str, HashSet<&str>> = m
+        .classes
+        .iter()
+        .map(|c| {
+            let members = c
+                .methods
+                .iter()
+                .chain(c.ctors.iter())
+                .map(|f| f.name.as_str())
+                .collect();
+            (c.name.as_str(), members)
+        })
+        .collect();
+
+    let mut total = 0usize;
+    for class in &m.classes {
+        // A generated delegate wrapper is reconstructed as one declaration with
+        // no source body; none of its cached implementation methods are emitted.
+        if delegate_wrapper_decl(class, refs).is_some() {
+            continue;
+        }
+        total += class.ctors.len();
+        let mut seen = HashSet::new();
+        total += class
+            .methods
+            .iter()
+            .filter(|method| !method.name.starts_with("__"))
+            .filter(|method| seen.insert(format!("{}({})", method.name, param_sig(method, refs))))
+            .count();
+    }
+
+    let mut seen_free = HashSet::new();
+    total
+        + m.functions
+            .iter()
+            .filter(|function| {
+                !is_generated(function, &class_names, &class_members)
+                    && !is_generated_spawn(function, refs)
+            })
+            .filter(|function| {
+                seen_free.insert(format!("{}({})", function.name, param_sig(function, refs)))
+            })
+            .count()
+}
+
 /// Emit a whole module as recompilable AngelScript.
 pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "// gore-as decompiled module: {} ({})", m.name, m.file);
-    let _ = writeln!(s, "// NOTE: local names + string literals are not stored in the cache.\n");
+    let _ = writeln!(
+        s,
+        "// NOTE: local names + string literals are not stored in the cache.\n"
+    );
 
     for e in &m.enums {
         let _ = writeln!(s, "enum {}", e.name);
@@ -184,7 +245,7 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
 /// declaration itself collides). Skip the exact generated shapes:
 ///   - actor:     `<Actor> Spawn(const FVector&, const FRotator&, const FName&, bool, ULevel)`
 ///   - component: `<Comp> Get|GetOrCreate|Create(const AActor, const FName&)`
-fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
+pub(crate) fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
     if !f.ret.is_object_handle {
         return false;
     }
@@ -239,9 +300,7 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
         return None;
     }
     let (kw, carrier) = match field.ty.base_name(refs).as_str() {
-        "_FMulticastScriptDelegate" => {
-            ("event", c.methods.iter().find(|f| f.name == "Broadcast")?)
-        }
+        "_FMulticastScriptDelegate" => ("event", c.methods.iter().find(|f| f.name == "Broadcast")?),
         "_FScriptDelegate" => (
             "delegate",
             // prefer `Execute` (carries a RetVal delegate's return type); `ExecuteIfBound`
@@ -253,8 +312,16 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
         ),
         _ => return None,
     };
-    let ret = carrier.ret.render(refs).trim_start_matches("const ").to_string();
-    Some(format!("{kw} {ret} {}({});\n\n", c.name, render_params(carrier, refs)))
+    let ret = carrier
+        .ret
+        .render(refs)
+        .trim_start_matches("const ")
+        .to_string();
+    Some(format!(
+        "{kw} {ret} {}({});\n\n",
+        c.name,
+        render_params(carrier, refs)
+    ))
 }
 
 fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
@@ -271,7 +338,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     // compiler generates the const&in opAssign, matching the native-struct behaviour) and
     // is the byte-faithful vanilla keyword. Value types here never carry a super class,
     // and delegate/event wrappers (also VALUE-flagged) take the one-liner path above.
-    let kw = if c.flags & 0x2 != 0 { "struct" } else { "class" };
+    let kw = if c.flags & 0x2 != 0 {
+        "struct"
+    } else {
+        "class"
+    };
     match &c.super_class {
         Some(sup) if !sup.is_empty() => {
             let _ = writeln!(s, "{kw} {} : {}", c.name, sup);
@@ -296,8 +367,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     }
     let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
     // field name -> base type name, so the decompiler can cast `this.field = <int>` assignments.
-    let mut field_types: HashMap<String, String> =
-        c.fields.iter().map(|f| (f.name.clone(), f.ty.base_name(refs))).collect();
+    let mut field_types: HashMap<String, String> = c
+        .fields
+        .iter()
+        .map(|f| (f.name.clone(), f.ty.base_name(refs)))
+        .collect();
     // Batch-21 Class B residue: fold in INHERITED fields by walking the script hierarchy —
     // the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(<int>)` (field declared
     // on the super class) untyped, so the container-subtype enum-key wrap never fired. Own
@@ -313,7 +387,17 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         cur = refs.class_super_of(&sup).map(|s| s.to_string());
     }
     for ctor in &c.ctors {
-        emit_function_ctor(s, ctor, refs, true, true, 1, super_name, Some(&field_types), Some(&c.name));
+        emit_function_ctor(
+            s,
+            ctor,
+            refs,
+            true,
+            true,
+            1,
+            super_name,
+            Some(&field_types),
+            Some(&c.name),
+        );
     }
     // Dedup methods by name+parameters: the cache can carry two entries that render to the same
     // signature (e.g. a const- and non-const-return overload that collapse once the meaningless
@@ -331,17 +415,44 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
         if !seen_sigs.insert(format!("{}({})", m.name, param_sig(m, refs))) {
             continue; // duplicate signature
         }
-        emit_function_ctor(s, m, refs, true, false, 1, None, Some(&field_types), Some(&c.name));
+        emit_function_ctor(
+            s,
+            m,
+            refs,
+            true,
+            false,
+            1,
+            None,
+            Some(&field_types),
+            Some(&c.name),
+        );
     }
     let _ = writeln!(s, "}}\n");
 }
 
-fn emit_function(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize) {
+fn emit_function(
+    s: &mut String,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+    is_ctor: bool,
+    depth: usize,
+) {
     emit_function_ctor(s, f, refs, is_method, is_ctor, depth, None, None, None);
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: bool, is_ctor: bool, depth: usize, super_ctor: Option<&str>, fields: Option<&HashMap<String, String>>, class_name: Option<&str>) {
+fn emit_function_ctor(
+    s: &mut String,
+    f: &Func,
+    refs: &RefResolver,
+    is_method: bool,
+    is_ctor: bool,
+    depth: usize,
+    super_ctor: Option<&str>,
+    fields: Option<&HashMap<String, String>>,
+    class_name: Option<&str>,
+) {
     let ind = "    ".repeat(depth);
     // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
     // AngelScript, and the cache sets the const flag inconsistently between a base method and its
@@ -361,10 +472,20 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     };
     let param_types: Vec<String> = f.params.iter().map(|p| p.ty.base_name(refs)).collect();
     // object-local slot -> type name, so the decompiler can insert downcasts on stores.
-    let mut local_types: HashMap<i32, String> = f.obj_locals.iter().map(|(slot, tinfo)| {
-        let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
-        (*slot, ty)
-    }).collect();
+    let mut local_types: HashMap<i32, String> = f
+        .obj_locals
+        .iter()
+        .map(|(slot, tinfo)| {
+            let ty = super::types::DataType {
+                token: 5,
+                type_info: *tinfo,
+                is_object_handle: true,
+                ..Default::default()
+            }
+            .base_name(refs);
+            (*slot, ty)
+        })
+        .collect();
     // batch-30a (C6c): snapshot the cache's own (vanilla) object-local types before any
     // override mutates the map — the member-override gate below compares against these.
     let vanilla_obj_types = local_types.clone();
@@ -383,17 +504,20 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // not, correctly rejecting the AActor widen (AInvulnerableVisual::SetUpCollisions,
     // ARagdollFallingActor::Initialize, UGA_Death_Meatbug — `.CapsuleComponent` off AActor).
     let member_widen_below = |slot: &i32, cand: &String| {
-        let Some(lb) = member_overrides.get(slot) else { return false };
-        let Some(vanilla) = vanilla_obj_types.get(slot) else { return false };
-        cand != lb
-            && refs.is_subclass(vanilla, lb)
-            && !refs.is_subclass(cand, lb)
+        let Some(lb) = member_overrides.get(slot) else {
+            return false;
+        };
+        let Some(vanilla) = vanilla_obj_types.get(slot) else {
+            return false;
+        };
+        cand != lb && refs.is_subclass(vanilla, lb) && !refs.is_subclass(cand, lb)
     };
     // consumer-side override: never-written arg slots get the type their callee expects (fixes
     // mis-typed default/optional-arg slots — FName->UAIState_DailyRoutine, TSubclassOf<X>->X).
     // outref_overrides: PSF slots feeding float-family REFERENCE params (declaration-only, below).
     // float_args/keep_ints (batch-25g): numeric BY-VALUE arg slots — see structure::ArgSlotHints.
-    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) = infer_slot_types(f, refs);
+    let (slot_overrides, outref_overrides, float_args, keep_ints, int_refs, small_args) =
+        infer_slot_types(f, refs);
     // batch-28 (specs/batch27-floatwarnings.md §2): unified numeric-kind dataflow pass.
     // Anti-seed imports: slots value-pushed into int-family params (keep_ints), PSF-bound to
     // int-family reference params (int_refs), or bool&-bound (outref "bool") hold int/bool
@@ -411,7 +535,45 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 .map(|(s, _)| *s),
         )
         .collect();
-    let numkinds = infer_float_flow(f, &fc, refs, fields, &float_args, &outref_overrides, &num_anti);
+    let numkinds = infer_float_flow(
+        f,
+        &fc,
+        refs,
+        fields,
+        &float_args,
+        &outref_overrides,
+        &num_anti,
+    );
+    let mut enum_overrides = infer_enum_flow(f, refs);
+    enum_overrides.retain(|slot, ty| {
+        !numkinds.contains_key(slot)
+            && !float_args.contains_key(slot)
+            && !keep_ints.contains(slot)
+            && !int_refs.contains(slot)
+            && !small_args.contains_key(slot)
+            && outref_overrides.get(slot).is_none_or(|other| other == ty)
+            && slot_overrides.get(slot).is_none_or(|other| other == ty)
+    });
+    // Keep the bool refinement scoped to the same proven enum state-machine slice. This is the
+    // only place it is required for semantic lowering, and avoids changing unrelated constructor
+    // scratch solely because it happens to initialize a bool field.
+    let mut bool_overrides = if enum_overrides.is_empty() {
+        HashSet::new()
+    } else {
+        infer_bool_field_slots(f, refs, fields)
+    };
+    bool_overrides.retain(|slot| {
+        !enum_overrides.contains_key(slot)
+            && !numkinds.contains_key(slot)
+            && !float_args.contains_key(slot)
+            && !keep_ints.contains(slot)
+            && !int_refs.contains(slot)
+            && !small_args.contains_key(slot)
+            && outref_overrides
+                .get(slot)
+                .is_none_or(|other| other == "bool")
+            && slot_overrides.get(slot).is_none_or(|other| other == "bool")
+    });
     for (slot, ty) in &slot_overrides {
         // batch-29c (C2, specs/batch29-errortail.md §2): never let an ARGLESS template head
         // (the $beh0 construct OWNER / a copy-ctor param whose DataType carries no SubTypes —
@@ -497,6 +659,26 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     for (slot, ty) in &float_args {
         local_types.entry(*slot).or_insert_with(|| ty.clone());
     }
+    // Exact enum-call + same-enum-return evidence, with a separately proven raw-copy chain.
+    // Override only primitive guesses; object/struct/cache types remain authoritative.
+    for (slot, ty) in &enum_overrides {
+        if local_types
+            .get(slot)
+            .map(|known| is_primitive(known) || known == ty)
+            .unwrap_or(true)
+        {
+            local_types.insert(*slot, ty.clone());
+        }
+    }
+    for slot in &bool_overrides {
+        if local_types
+            .get(slot)
+            .map(|known| is_primitive(known))
+            .unwrap_or(true)
+        {
+            local_types.insert(*slot, "bool".into());
+        }
+    }
     // member-access-derived types (`member_overrides`, computed above as the type lower-bound):
     // the field's declaring class is the strongest signal for a slot used as a member-access
     // base; apply AFTER (overriding) the call-arg guess.
@@ -559,11 +741,27 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         float_slots: float_args
             .keys()
             .copied()
-            .chain(numkinds.iter().filter(|(_, k)| !matches!(k, NumKind::I64)).map(|(s, _)| *s))
+            .chain(
+                numkinds
+                    .iter()
+                    .filter(|(_, k)| !matches!(k, NumKind::I64))
+                    .map(|(s, _)| *s),
+            )
             .collect(),
         keep_ints,
     };
-    let body = body_statements_ctor(&fc, refs, depth + 1, super_ctor, Some(&f.ret), fields, Some(&param_types), class_name, Some(&local_types), Some(&hints));
+    let body = body_statements_ctor(
+        &fc,
+        refs,
+        depth + 1,
+        super_ctor,
+        Some(&f.ret),
+        fields,
+        Some(&param_types),
+        class_name,
+        Some(&local_types),
+        Some(&hints),
+    );
     // batch-30c (C9 accessor-ambiguity, specs/batch29-errortail.md §9): the recovered ctor
     // default-writes `this.WalkSpeed = ...;` collide with the class's inherited SetWalkSpeed
     // property accessor ("Assigned property also has a SetWalkSpeed accessor declared. Write
@@ -573,7 +771,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // corpus-proven compiling form (`this.SetWalkSpeed(...)` call sites). Exact-keyed to the
     // two captured ctors — a per-site fix, not a mechanism.
     let body = if is_ctor
-        && matches!(class_name, Some("UAIState_Warning" | "UAIState_Warning_Crime"))
+        && matches!(
+            class_name,
+            Some("UAIState_Warning" | "UAIState_Warning_Crime")
+        )
         && body.contains("this.WalkSpeed = ")
     {
         body.lines()
@@ -619,11 +820,17 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
             let mut grew = false;
             for l in body.lines() {
                 let t = l.trim();
-                let Some(rest) = t.strip_suffix(';') else { continue };
-                let Some((lhs, rhs)) = rest.split_once(" = ") else { continue };
+                let Some(rest) = t.strip_suffix(';') else {
+                    continue;
+                };
+                let Some((lhs, rhs)) = rest.split_once(" = ") else {
+                    continue;
+                };
                 let (Some(m), Some(n)) = (
-                    lhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
-                    rhs.strip_prefix("local_").and_then(|d| d.parse::<i32>().ok()),
+                    lhs.strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok()),
+                    rhs.strip_prefix("local_")
+                        .and_then(|d| d.parse::<i32>().ok()),
                 ) else {
                     continue;
                 };
@@ -678,11 +885,41 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         const_slots = keep;
     }
     let const_slots = const_slots;
+    // The structurer names VM value slots uniformly, including expression temporaries that the
+    // source compiler never declared. In a proven enum state-machine slice, remove a primitive /
+    // enum scratch only when EVERY source reference can be folded through an immediately-adjacent
+    // producer -> single consumer pair. The whole-slot gate is important: a partial rewrite could
+    // move a value across a branch or leave a declaration whose eager default initializer changes
+    // the regenerated bytecode. Object/value-struct locals are never candidates.
+    let inferred_locals = infer_locals(f, refs);
+    let body = if enum_overrides.is_empty() {
+        body
+    } else {
+        let candidates: HashSet<i32> = used_locals(&body)
+            .into_iter()
+            .filter(|slot| {
+                let typed_state =
+                    enum_overrides.contains_key(slot) || bool_overrides.contains(slot);
+                let primitive_scratch = inferred_locals
+                    .get(slot)
+                    .map(|ty| is_primitive(ty))
+                    .unwrap_or_else(|| !f.obj_locals.iter().any(|(obj_slot, _)| obj_slot == slot));
+                // Preserve a compiler-reused primitive carrier with multiple definition/use
+                // segments. Folding each adjacent segment is source-semantically valid, but it
+                // can split one VM live range into several compiler temporaries and defeat the
+                // byte-faithfulness oracle. Proven enum/bool state slots remain eligible because
+                // their concrete type is the purpose of this pass; ordinary primitive scratch is
+                // eliminated only when it has a single producer assignment in the whole body.
+                adjacent_value_slot_is_candidate(&body, *slot, typed_state, primitive_scratch)
+            })
+            .collect();
+        rewrite_adjacent_value_temporaries(&body, &candidates).0
+    };
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
     let used = used_locals(&body);
-    let mut locals = infer_locals(f, refs);
+    let mut locals = inferred_locals;
     // batch-28: unified numeric-kind dataflow (C1/C2/C3/C4c/C4d) — overrides ONLY the
     // width-guessed primitive keywords; farg/outref/member/callret overrides still apply
     // after and keep their precedence. `Some("float")` IS overridable: that is exactly the
@@ -698,6 +935,24 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
                 locals.insert(*slot, kw.to_string());
             }
             _ => {} // opCast/object/ret-retype float32 entries win
+        }
+    }
+    for (slot, ty) in &enum_overrides {
+        if locals
+            .get(slot)
+            .map(|known| is_primitive(known) || known == ty)
+            .unwrap_or(true)
+        {
+            locals.insert(*slot, ty.clone());
+        }
+    }
+    for slot in &bool_overrides {
+        if locals
+            .get(slot)
+            .map(|known| is_primitive(known))
+            .unwrap_or(true)
+        {
+            locals.insert(*slot, "bool".into());
         }
     }
     for &n in &used {
@@ -808,8 +1063,10 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // arg slots the bytecode reads beyond the declared parameter list (the signature parse
     // undercounts some value-type / defaulted params). Declare them as `int` locals so the
     // body compiles instead of stubbing wholesale; a wrong type the in-game loop force-stubs.
-    let mut oor_args: Vec<i32> =
-        used_idents(&body, "arg").into_iter().filter(|&n| n as usize >= f.params.len()).collect();
+    let mut oor_args: Vec<i32> = used_idents(&body, "arg")
+        .into_iter()
+        .filter(|&n| n as usize >= f.params.len())
+        .collect();
     oor_args.sort_unstable();
     // §3.3 safety net: an unmapped `argN` (signature undercount / RVO-return slot) declared as
     // `int` breaks any member/operator use on it ("Illegal operation on 'int'"). Type it from
@@ -844,12 +1101,15 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
     // dozens of caller stubs). Keep the `&` signature and return a typed non-temporary:
     // `return OnSensedOther(<PerceptionParam>);` — semantically degenerate (like every stub)
     // but signature-faithful, so callers compile.
-    let percep_stub_param = (ref_ret
-        && f.ret.base_name(refs) == "FPerceptionHandler")
+    let percep_stub_param = (ref_ret && f.ret.base_name(refs) == "FPerceptionHandler")
         .then(|| {
             f.params.iter().enumerate().find_map(|(i, p)| {
                 (p.ty.base_name(refs) == "UCharacterPerceptionComponent").then(|| {
-                    if p.name.is_empty() { format!("arg{i}") } else { p.name.clone() }
+                    if p.name.is_empty() {
+                        format!("arg{i}")
+                    } else {
+                        p.name.clone()
+                    }
                 })
             })
         })
@@ -922,13 +1182,36 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
-        // hoist local declarations; primitives must be initialized (AngelScript errors on
-        // "may not be initialized"), objects/structs/handles default-construct themselves.
+        // Hoist local declarations. A primitive may stay bare only when its first source-level
+        // reference is a top-level write-only assignment; this is the same definite-assignment
+        // proof used for inferred enums. Everything else gets an explicit default initializer so
+        // the game's warnings-as-errors policy cannot reject a branch-only first write.
         for (slot, ty) in &locals {
-            if suppressed.contains(slot) || na_suppressed.contains(slot) || iter_suppressed.contains(slot) {
+            if suppressed.contains(slot)
+                || na_suppressed.contains(slot)
+                || iter_suppressed.contains(slot)
+            {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
-            if is_primitive(ty) {
+            if enum_overrides
+                .get(slot)
+                .is_some_and(|enum_ty| enum_ty == ty)
+                && !first_top_level_assignment_before_read(&body, *slot)
+            {
+                // A hoisted enum local is not definitely initialized merely because the enum
+                // itself is a value type. Keep the vanilla-like bare declaration only when its
+                // first source-level reference is a whole-function-scope, write-only assignment;
+                // otherwise initialize it to the underlying zero value so branch-only writes do
+                // not trip warnings-as-errors in the game compiler.
+                let _ = writeln!(s, "{ind}    {ty} local_{slot} = {ty}(0);");
+            } else if is_primitive(ty)
+                && (first_top_level_assignment_before_read(&body, *slot)
+                    || (!enum_overrides.is_empty()
+                        && local_assignment_count(&body, *slot) > 1
+                        && all_reads_lexically_dominated_by_assignment(&body, *slot)))
+            {
+                let _ = writeln!(s, "{ind}    {ty} local_{slot};");
+            } else if is_primitive(ty) {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot} = {};", default_for(ty));
             } else if const_slots.contains(slot) {
                 // batch-21 Class C: at least one store is a const handle of this exact type;
@@ -986,7 +1269,11 @@ fn emit_function_ctor(s: &mut String, f: &Func, refs: &RefResolver, is_method: b
         }
     } else {
         // stub fallback so the module still compiles (reason recorded for aggregation)
-        let _ = writeln!(s, "{ind}    // body not fully recovered — stub [{}]", reason.unwrap());
+        let _ = writeln!(
+            s,
+            "{ind}    // body not fully recovered — stub [{}]",
+            reason.unwrap()
+        );
         // constructors must NOT return a value; everything else returns a default. An object
         // handle return defaults to `nullptr` (no default-constructor for engine object types;
         // `nullptr` is this build's null-handle literal — `null` parses as undeclared).
@@ -1045,7 +1332,11 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
             } else {
                 ""
             };
-            let nm = if p.name.is_empty() { format!("arg{i}") } else { p.name.clone() };
+            let nm = if p.name.is_empty() {
+                format!("arg{i}")
+            } else {
+                p.name.clone()
+            };
             format!("{ty} {amp}{nm}")
         })
         .collect::<Vec<_>>()
@@ -1088,11 +1379,22 @@ fn strip_const_store_markers(body: &str) -> (String, HashSet<i32>) {
 /// error that aborts the module's parse, so such a function falls back to a clean stub.
 /// Returns `None` if the body is recoverable, else `Some(reason)` for the first gap found —
 /// the reason string is emitted in the stub comment so the stub causes can be aggregated.
-fn stub_reason(body: &str, locals: &BTreeMap<i32, String>, param_count: usize, ret_is_void: bool) -> Option<String> {
+fn stub_reason(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    param_count: usize,
+    ret_is_void: bool,
+) -> Option<String> {
     // an ARGMISMATCH sentinel (\u{2}<code>) — extract its cause code for aggregation.
     if let Some(i) = body.find('\u{2}') {
-        let code: String = body[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        return Some(format!("argmismatch:{}", if code.is_empty() { "?" } else { &code }));
+        let code: String = body[i + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        return Some(format!(
+            "argmismatch:{}",
+            if code.is_empty() { "?" } else { &code }
+        ));
     }
     for l in body.lines() {
         let t = l.trim_start();
@@ -1132,15 +1434,18 @@ fn used_idents(body: &str, prefix: &str) -> HashSet<i32> {
     let is_ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let mut i = 0;
     while i + pl < b.len() {
-        if &b[i..i + pl] == prefix.as_bytes()
-            && (i == 0 || !is_ident(b[i - 1]))
-        {
+        if &b[i..i + pl] == prefix.as_bytes() && (i == 0 || !is_ident(b[i - 1])) {
             let mut j = i + pl;
             let start = j;
-            while j < b.len() && b[j].is_ascii_digit() { j += 1; }
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
             if j > start && (j >= b.len() || !is_ident(b[j])) {
-                if let Ok(n) = body[start..j].parse::<i32>() { out.insert(n); }
-                i = j; continue;
+                if let Ok(n) = body[start..j].parse::<i32>() {
+                    out.insert(n);
+                }
+                i = j;
+                continue;
             }
         }
         i += 1;
@@ -1184,7 +1489,10 @@ fn used_locals(body: &str) -> HashSet<i32> {
 /// out-slot (`F*` engine struct, `T*` template value like TSubclassOf). Enums/primitives/objects
 /// return in a register, not an out-slot, so they are excluded.
 fn ret_is_struct(ty: &str) -> bool {
-    matches!(ty.split('<').next().unwrap_or(ty).bytes().next(), Some(b'F') | Some(b'T'))
+    matches!(
+        ty.split('<').next().unwrap_or(ty).bytes().next(),
+        Some(b'F') | Some(b'T')
+    )
 }
 
 /// Returns (consumer-typed object-slot overrides, out-ref primitive DECLARATION overrides).
@@ -1201,21 +1509,47 @@ fn ret_is_struct(ty: &str) -> bool {
 fn infer_slot_types(
     f: &Func,
     refs: &RefResolver,
-) -> (HashMap<i32, String>, HashMap<i32, String>, HashMap<i32, String>, HashSet<i32>, HashSet<i32>, HashMap<i32, String>) {
+) -> (
+    HashMap<i32, String>,
+    HashMap<i32, String>,
+    HashMap<i32, String>,
+    HashSet<i32>,
+    HashSet<i32>,
+    HashMap<i32, String>,
+) {
     let instrs = match disassemble(&f.bytecode) {
         Ok(i) => i,
         Err(_) => {
-            return (HashMap::new(), HashMap::new(), HashMap::new(), HashSet::new(), HashSet::new(), HashMap::new())
+            return (
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashSet::new(),
+                HashSet::new(),
+                HashMap::new(),
+            );
         }
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32);
     let writes = |op: &str| {
-        op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("CpyRtoV")
-            || op.starts_with("RDR") || op.contains("TO") || op == "STOREOBJ" || op == "PopRPtr"
-            || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
-            || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
-            || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT"
-            || op.starts_with("B") || op == "ALLOC"
+        op.starts_with("SetV")
+            || op.starts_with("CpyVtoV")
+            || op.starts_with("CpyRtoV")
+            || op.starts_with("RDR")
+            || op.contains("TO")
+            || op == "STOREOBJ"
+            || op == "PopRPtr"
+            || op.starts_with("ADD")
+            || op.starts_with("SUB")
+            || op.starts_with("MUL")
+            || op.starts_with("DIV")
+            || op.starts_with("MOD")
+            || op.starts_with("NEG")
+            || op.starts_with("Inc")
+            || op.starts_with("Dec")
+            || op == "NOT"
+            || op.starts_with("B")
+            || op == "ALLOC"
     };
     let mut written: HashSet<i32> = HashSet::new();
     for ins in &instrs {
@@ -1232,11 +1566,11 @@ fn infer_slot_types(
     let mut ostack: Vec<Option<(i32, bool)>> = Vec::new();
     let mut cand: HashMap<i32, Option<String>> = HashMap::new(); // slot -> Some(type) | None(conflict)
     let mut outref: HashMap<i32, Option<String>> = HashMap::new(); // PSF slot -> float-ref param type
-    // batch-25g: numeric BY-VALUE argument slots (see structure::ArgSlotHints). A slot
-    // VALUE-pushed (never PSF) into a float-family param is float-typed in the VM — the
-    // compiler inserts the int->float conversion BEFORE the push, so any direct PshV4 into a
-    // float param proves the slot holds float bits. Int-family pairs only earn the retain
-    // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
+                                                                   // batch-25g: numeric BY-VALUE argument slots (see structure::ArgSlotHints). A slot
+                                                                   // VALUE-pushed (never PSF) into a float-family param is float-typed in the VM — the
+                                                                   // compiler inserts the int->float conversion BEFORE the push, so any direct PshV4 into a
+                                                                   // float param proves the slot holds float bits. Int-family pairs only earn the retain
+                                                                   // keep flag (no retype). Conflicts (differing float kws, or float+int for one slot) drop.
     let mut farg: HashMap<i32, Option<String>> = HashMap::new();
     let mut ikeep: HashSet<i32> = HashSet::new();
     // batch-28: PSF slots bound to an INT-family reference param — int lvalues; anti-seeds
@@ -1250,13 +1584,21 @@ fn infer_slot_types(
     let mut sarg: HashMap<i32, Option<String>> = HashMap::new();
     // shared numeric BY-VALUE channel (used by both ordinary-call pairing and the $beh0
     // ctor-arg pairing): float params -> farg, int-family params -> ikeep (+ sarg small-ints).
-    let val_arg = |s: i32, pt: &super::types::DataType, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
+    let val_arg = |s: i32,
+                   pt: &super::types::DataType,
+                   farg: &mut HashMap<i32, Option<String>>,
+                   ikeep: &mut HashSet<i32>,
+                   sarg: &mut HashMap<i32, Option<String>>| {
         match pt.token {
             0x50 | 0x51 | 0x5E => {
                 let kw = super::types::token_keyword(pt.token).to_string();
                 match farg.get(&s) {
-                    None => { farg.insert(s, Some(kw)); }
-                    Some(Some(prev)) if *prev != kw => { farg.insert(s, None); }
+                    None => {
+                        farg.insert(s, Some(kw));
+                    }
+                    Some(Some(prev)) if *prev != kw => {
+                        farg.insert(s, None);
+                    }
                     _ => {}
                 }
             }
@@ -1264,8 +1606,12 @@ fn infer_slot_types(
                 ikeep.insert(s);
                 let kw = super::types::token_keyword(pt.token).to_string();
                 match sarg.get(&s) {
-                    None => { sarg.insert(s, Some(kw)); }
-                    Some(Some(prev)) if *prev != kw => { sarg.insert(s, None); }
+                    None => {
+                        sarg.insert(s, Some(kw));
+                    }
+                    Some(Some(prev)) if *prev != kw => {
+                        sarg.insert(s, None);
+                    }
                     _ => {}
                 }
             }
@@ -1298,8 +1644,20 @@ fn infer_slot_types(
             _ => {}
         }
     };
-    let pair = |ostack: &mut Vec<Option<(i32, bool)>>, params: Option<&[super::types::DataType]>, is_method: bool, ret_struct: bool, cand: &mut HashMap<i32, Option<String>>, outref: &mut HashMap<i32, Option<String>>, farg: &mut HashMap<i32, Option<String>>, ikeep: &mut HashSet<i32>, iref: &mut HashSet<i32>, sarg: &mut HashMap<i32, Option<String>>| {
-        let Some(params) = params else { ostack.clear(); return; };
+    let pair = |ostack: &mut Vec<Option<(i32, bool)>>,
+                params: Option<&[super::types::DataType]>,
+                is_method: bool,
+                ret_struct: bool,
+                cand: &mut HashMap<i32, Option<String>>,
+                outref: &mut HashMap<i32, Option<String>>,
+                farg: &mut HashMap<i32, Option<String>>,
+                ikeep: &mut HashSet<i32>,
+                iref: &mut HashSet<i32>,
+                sarg: &mut HashMap<i32, Option<String>>| {
+        let Some(params) = params else {
+            ostack.clear();
+            return;
+        };
         // A method returning a struct BY VALUE (F/T/E) carries a hidden RVO out-slot pushed as the
         // last user arg (just before the receiver); count it so it is consumed, but exclude it from
         // pairing (it is NOT params[last] — pairing it would shift every real arg one param over and
@@ -1311,7 +1669,11 @@ fn infer_slot_types(
         // obj_locals type (FInGameTime) and blinding build_call's free-RVO probe ("Can't
         // implicitly convert from 'UObject' to 'FInGameTime'" x144 in-game).
         let rvo = ret_struct as usize;
-        let total = if is_method { params.len() + 1 + rvo } else { params.len() + rvo };
+        let total = if is_method {
+            params.len() + 1 + rvo
+        } else {
+            params.len() + rvo
+        };
         let take = total.min(ostack.len());
         let popped = ostack.split_off(ostack.len() - take);
         // method: top popped entry is the receiver -> drop it (plus the RVO out-slot just below);
@@ -1360,8 +1722,12 @@ fn infer_slot_types(
                     }
                     let ty = pt.base_name(refs);
                     match cand.get(s) {
-                        None => { cand.insert(*s, Some(ty)); }
-                        Some(Some(prev)) if *prev != ty => { cand.insert(*s, None); }
+                        None => {
+                            cand.insert(*s, Some(ty));
+                        }
+                        Some(Some(prev)) if *prev != ty => {
+                            cand.insert(*s, None);
+                        }
                         _ => {}
                     }
                     // out-ref float pass: a PSF'd (address-pushed) slot feeding a float-family
@@ -1372,8 +1738,12 @@ fn infer_slot_types(
                     if *is_psf && pt.is_reference && matches!(pt.token, 0x41 | 0x50 | 0x51 | 0x5E) {
                         let kw = super::types::token_keyword(pt.token).to_string();
                         match outref.get(s) {
-                            None => { outref.insert(*s, Some(kw)); }
-                            Some(Some(prev)) if *prev != kw => { outref.insert(*s, None); }
+                            None => {
+                                outref.insert(*s, Some(kw));
+                            }
+                            Some(Some(prev)) if *prev != kw => {
+                                outref.insert(*s, None);
+                            }
                             _ => {}
                         }
                     }
@@ -1398,8 +1768,12 @@ fn infer_slot_types(
                             && ty.as_bytes().get(1).is_some_and(|c| c.is_ascii_uppercase());
                         if super::structure::is_enum_name(&ty) || f_struct {
                             match outref.get(s) {
-                                None => { outref.insert(*s, Some(ty)); }
-                                Some(Some(prev)) if *prev != ty => { outref.insert(*s, None); }
+                                None => {
+                                    outref.insert(*s, Some(ty));
+                                }
+                                Some(Some(prev)) if *prev != ty => {
+                                    outref.insert(*s, None);
+                                }
                                 _ => {}
                             }
                         }
@@ -1407,7 +1781,10 @@ fn infer_slot_types(
                     // batch-28: int-family reference binding — see `iref` above.
                     if *is_psf
                         && pt.is_reference
-                        && matches!(pt.token, 0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E)
+                        && matches!(
+                            pt.token,
+                            0x44 | 0x45 | 0x46 | 0x47 | 0x4B | 0x4C | 0x4D | 0x4E
+                        )
                     {
                         iref.insert(*s);
                     }
@@ -1428,7 +1805,11 @@ fn infer_slot_types(
                 // batch-31c (N1): param slots (negative offsets) enter the model too — the
                 // pair() body routes them into the keep-only channel. Slot 0 (`this`) stays
                 // opaque.
-                ostack.push(if s != 0 { Some((s, ins.op.name == "PSF")) } else { None });
+                ostack.push(if s != 0 {
+                    Some((s, ins.op.name == "PSF"))
+                } else {
+                    None
+                });
             }
             "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4" | "PshRPtr" | "STR"
             | "TYPEID" | "OBJTYPE" | "PshListElmnt" => ostack.push(None),
@@ -1455,8 +1836,22 @@ fn infer_slot_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_id(id), refs.is_method_by_id(id), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                pair(
+                    &mut ostack,
+                    refs.func_params_by_id(id),
+                    refs.is_method_by_id(id),
+                    rs,
+                    &mut cand,
+                    &mut outref,
+                    &mut farg,
+                    &mut ikeep,
+                    &mut iref,
+                    &mut sarg,
+                );
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1474,8 +1869,12 @@ fn infer_slot_types(
                         if let Some(ty) = owner.filter(|_| rslot > 0) {
                             if !ty.is_empty() {
                                 match cand.get(&rslot) {
-                                    None => { cand.insert(rslot, Some(ty)); }
-                                    Some(Some(prev)) if *prev != ty => { cand.insert(rslot, None); }
+                                    None => {
+                                        cand.insert(rslot, Some(ty));
+                                    }
+                                    Some(Some(prev)) if *prev != ty => {
+                                        cand.insert(rslot, None);
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1490,7 +1889,8 @@ fn infer_slot_types(
                     if let Some(params) = refs.func_params_by_ptr(ptr) {
                         let args_end = ostack.len().saturating_sub(1); // receiver on top
                         let take = params.len().min(args_end);
-                        for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate() {
+                        for (i, slot) in ostack[args_end - take..args_end].iter().rev().enumerate()
+                        {
                             if let (Some((s, is_psf)), Some(pt)) = (slot, params.get(i)) {
                                 // batch-31c: locals only — negative (param) slots must not
                                 // reach the farg/sarg retype maps.
@@ -1519,21 +1919,44 @@ fn infer_slot_types(
                     ostack.truncate(ostack.len() - drop_n);
                     continue;
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                pair(&mut ostack, refs.func_params_by_ptr(ptr), refs.is_method_by_ptr(ptr), rs, &mut cand, &mut outref, &mut farg, &mut ikeep, &mut iref, &mut sarg);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                pair(
+                    &mut ostack,
+                    refs.func_params_by_ptr(ptr),
+                    refs.is_method_by_ptr(ptr),
+                    rs,
+                    &mut cand,
+                    &mut outref,
+                    &mut farg,
+                    &mut ikeep,
+                    &mut iref,
+                    &mut sarg,
+                );
             }
             _ => {}
         }
     }
-    let obj = cand.into_iter()
+    let obj = cand
+        .into_iter()
         .filter_map(|(slot, ty)| match ty {
-            Some(t) if !written.contains(&slot) && !is_primitive(t.trim_end_matches('@')) && t != "void" && !t.is_empty() => Some((slot, t)),
+            Some(t)
+                if !written.contains(&slot)
+                    && !is_primitive(t.trim_end_matches('@'))
+                    && t != "void"
+                    && !t.is_empty() =>
+            {
+                Some((slot, t))
+            }
             _ => None,
         })
         .collect();
     // out-ref float slots ARE written (the callee's whole point is to write them; typically a
     // `SetV4 slot, 0` init precedes) — no never-written filter. Conflicts already dropped.
-    let outref = outref.into_iter()
+    let outref = outref
+        .into_iter()
         .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
         .collect();
     // batch-25g: resolve the numeric value-arg candidates. A slot paired with BOTH an
@@ -1542,7 +1965,11 @@ fn infer_slot_types(
         .into_iter()
         .filter_map(|(slot, ty)| ty.map(|t| (slot, t)))
         .collect();
-    let both: Vec<i32> = float_args.keys().copied().filter(|s| ikeep.contains(s)).collect();
+    let both: Vec<i32> = float_args
+        .keys()
+        .copied()
+        .filter(|s| ikeep.contains(s))
+        .collect();
     for s in both {
         float_args.remove(&s);
         ikeep.remove(&s);
@@ -1576,7 +2003,9 @@ fn infer_slot_types(
             let n = ins.op.name;
             for (wi, &wd) in ins.words.iter().enumerate() {
                 let s = wd as i16 as i32;
-                let Some(kw) = small_args.get(&s) else { continue };
+                let Some(kw) = small_args.get(&s) else {
+                    continue;
+                };
                 let ok = match n {
                     "SetV1" | "SetV2" | "SetV4" => {
                         wi == 0 && fits(kw, ins.dwords.first().copied().unwrap_or(0))
@@ -1633,7 +2062,10 @@ fn infer_slot_types_from_members(
                 cand.insert(slot, Some(ty));
             }
             Some(Some(prev)) if *prev != ty => {
-                let (ph, nh) = (prev.split('<').next().unwrap_or(prev), ty.split('<').next().unwrap_or(&ty));
+                let (ph, nh) = (
+                    prev.split('<').next().unwrap_or(prev),
+                    ty.split('<').next().unwrap_or(&ty),
+                );
                 let merged = if ph == nh {
                     match (prev.contains('<'), ty.contains('<')) {
                         (true, false) => Some(prev.clone()),
@@ -1723,7 +2155,9 @@ fn infer_slot_types_from_members(
             _ => {}
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 /// A1 (illegal-op-round2.md): subtype inference for iterator locals. An `Iterator()` call
@@ -1760,7 +2194,13 @@ fn infer_iterator_types(
         .obj_locals
         .iter()
         .map(|(slot, tinfo)| {
-            let ty = super::types::DataType { token: 5, type_info: *tinfo, is_object_handle: true, ..Default::default() }.base_name(refs);
+            let ty = super::types::DataType {
+                token: 5,
+                type_info: *tinfo,
+                is_object_handle: true,
+                ..Default::default()
+            }
+            .base_name(refs);
             (*slot, ty)
         })
         .collect();
@@ -1795,16 +2235,23 @@ fn infer_iterator_types(
     let mut cand: HashMap<i32, Option<String>> = HashMap::new();
     // per-call consumption, mirroring `infer_slot_types::pair`: params + receiver + RVO
     // out-slot for methods; unknown param info -> clear (conservative: drop pending slots).
-    let consume = |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
-        let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
-        stack.truncate(stack.len() - total.min(stack.len()));
-    };
+    let consume =
+        |stack: &mut Vec<Ent>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+            let Some(n) = params else {
+                stack.clear();
+                return;
+            };
+            let rvo = (ret_struct && is_method) as usize;
+            let total = if is_method { n + 1 + rvo } else { n };
+            stack.truncate(stack.len() - total.min(stack.len()));
+        };
     for ins in &instrs {
         match ins.op.name {
             "PshVPtr" | "PSF" => {
-                stack.push(Ent::Slot { slot: w0(ins), psf: ins.op.name == "PSF" });
+                stack.push(Ent::Slot {
+                    slot: w0(ins),
+                    psf: ins.op.name == "PSF",
+                });
             }
             "PshV4" | "PshV8" | "PshC4" | "PshC8" | "PshNull" | "PGA" | "PshGPtr" | "PshG4"
             | "PshRPtr" | "STR" | "TYPEID" | "OBJTYPE" | "PshListElmnt" => stack.push(Ent::Other),
@@ -1828,8 +2275,16 @@ fn infer_iterator_types(
             }
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut stack, refs.func_params_by_id(id).map(|p| p.len()), refs.is_method_by_id(id), rs);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut stack,
+                    refs.func_params_by_id(id).map(|p| p.len()),
+                    refs.is_method_by_id(id),
+                    rs,
+                );
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
@@ -1849,17 +2304,31 @@ fn infer_iterator_types(
                         Ent::Member(c) => c.clone(),
                         Ent::Other => None,
                     };
-                    if let Ent::Slot { slot: out_slot, psf: true } = *out {
+                    if let Ent::Slot {
+                        slot: out_slot,
+                        psf: true,
+                    } = *out
+                    {
                         record_iterator_candidate(refs, known, &mut cand, out_slot, ptr, container);
                     }
                 }
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut stack, refs.func_params_by_ptr(ptr).map(|p| p.len()), refs.is_method_by_ptr(ptr), rs);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut stack,
+                    refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                    refs.is_method_by_ptr(ptr),
+                    rs,
+                );
             }
             _ => {}
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 /// Compose + record one iterator out-slot candidate (see [`infer_iterator_types`]).
@@ -1881,7 +2350,9 @@ fn record_iterator_candidate(
     // head = the Iterator() return type. Iterator INSTANCES usually serialize BARE (then the
     // container's `<...>` subtype list is appended), but some (TMap) compose fully — use
     // those directly, no container needed.
-    let Some(head) = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs)) else { return };
+    let Some(head) = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs)) else {
+        return;
+    };
     if !head.starts_with('T') || !head.contains("Iterator") {
         return;
     }
@@ -1890,7 +2361,9 @@ fn record_iterator_candidate(
     } else {
         // the container must itself be a subtyped template (`TArray<AGothicCharacter>`).
         let Some(c) = container else { return };
-        let (Some(lt), Some(gt)) = (c.find('<'), c.rfind('>')) else { return };
+        let (Some(lt), Some(gt)) = (c.find('<'), c.rfind('>')) else {
+            return;
+        };
         if gt <= lt + 1 {
             return;
         }
@@ -1954,11 +2427,15 @@ fn infer_sole_call_store_types(f: &Func, refs: &RefResolver) -> HashMap<i32, Str
             .and_then(|prev| match prev.op.name {
                 "CALL" | "CALLINTF" | "CALLBND" => {
                     let id = prev.dwords.first().copied().unwrap_or(0) as i32;
-                    refs.func_ret_by_id(id).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                    refs.func_ret_by_id(id)
+                        .filter(|d| d.token == 5)
+                        .map(|d| d.base_name(refs))
                 }
                 "CALLSYS" | "Thiscall1" => {
                     let ptr = prev.qwords.first().copied().unwrap_or(0) as i64;
-                    refs.func_ret_by_ptr(ptr).filter(|d| d.token == 5).map(|d| d.base_name(refs))
+                    refs.func_ret_by_ptr(ptr)
+                        .filter(|d| d.token == 5)
+                        .map(|d| d.base_name(refs))
                 }
                 _ => None,
             });
@@ -1972,7 +2449,9 @@ fn infer_sole_call_store_types(f: &Func, refs: &RefResolver) -> HashMap<i32, Str
             }
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
 }
 
 fn infer_call_result_types(
@@ -1989,11 +2468,20 @@ fn infer_call_result_types(
     // adopt an object type for them. ADDSi is excluded: its first word is a member OFFSET.
     let writes_other = |op: &str| {
         op != "ADDSi"
-            && (op.starts_with("SetV") || op.starts_with("CpyVtoV") || op.starts_with("RDR")
-                || op.contains("TO") || op == "PopRPtr"
-                || op.starts_with("ADD") || op.starts_with("SUB") || op.starts_with("MUL")
-                || op.starts_with("DIV") || op.starts_with("MOD") || op.starts_with("NEG")
-                || op.starts_with("Inc") || op.starts_with("Dec") || op == "NOT")
+            && (op.starts_with("SetV")
+                || op.starts_with("CpyVtoV")
+                || op.starts_with("RDR")
+                || op.contains("TO")
+                || op == "PopRPtr"
+                || op.starts_with("ADD")
+                || op.starts_with("SUB")
+                || op.starts_with("MUL")
+                || op.starts_with("DIV")
+                || op.starts_with("MOD")
+                || op.starts_with("NEG")
+                || op.starts_with("Inc")
+                || op.starts_with("Dec")
+                || op == "NOT")
     };
     let mut disq: HashSet<i32> = HashSet::new();
     for ins in &instrs {
@@ -2006,12 +2494,16 @@ fn infer_call_result_types(
     }
     let obj: HashSet<i32> = f.obj_locals.iter().map(|(s, _)| *s).collect();
     // per-call operand-stack consumption, mirroring `infer_slot_types`.
-    let consume = |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
-        let Some(n) = params else { stack.clear(); return; };
-        let rvo = (ret_struct && is_method) as usize;
-        let total = if is_method { n + 1 + rvo } else { n };
-        stack.truncate(stack.len() - total.min(stack.len()));
-    };
+    let consume =
+        |stack: &mut Vec<Option<i32>>, params: Option<usize>, is_method: bool, ret_struct: bool| {
+            let Some(n) = params else {
+                stack.clear();
+                return;
+            };
+            let rvo = (ret_struct && is_method) as usize;
+            let total = if is_method { n + 1 + rvo } else { n };
+            stack.truncate(stack.len() - total.min(stack.len()));
+        };
     // rendered return type + receiver slot of the just-completed call (None once anything
     // non-benign executes, so a later CpyRtoV can't adopt a stale type).
     let mut last: Option<(String, Option<i32>)> = None;
@@ -2071,10 +2563,22 @@ fn infer_call_result_types(
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
                 let is_m = refs.is_method_by_id(id);
-                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let recv = if is_m {
+                    ostack.last().copied().flatten()
+                } else {
+                    None
+                };
                 let ret = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
-                let rs = refs.func_ret_by_id(id).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut ostack, refs.func_params_by_id(id).map(|p| p.len()), is_m, rs);
+                let rs = refs
+                    .func_ret_by_id(id)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut ostack,
+                    refs.func_params_by_id(id).map(|p| p.len()),
+                    is_m,
+                    rs,
+                );
                 last = ret.map(|t| (t, recv));
             }
             "CALLSYS" | "Thiscall1" => {
@@ -2088,10 +2592,22 @@ fn infer_call_result_types(
                     continue;
                 }
                 let is_m = refs.is_method_by_ptr(ptr);
-                let recv = if is_m { ostack.last().copied().flatten() } else { None };
+                let recv = if is_m {
+                    ostack.last().copied().flatten()
+                } else {
+                    None
+                };
                 let ret = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
-                let rs = refs.func_ret_by_ptr(ptr).map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs))).unwrap_or(false);
-                consume(&mut ostack, refs.func_params_by_ptr(ptr).map(|p| p.len()), is_m, rs);
+                let rs = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| !d.is_reference && ret_is_struct(&d.base_name(refs)))
+                    .unwrap_or(false);
+                consume(
+                    &mut ostack,
+                    refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                    is_m,
+                    rs,
+                );
                 last = ret.map(|t| (t, recv));
             }
             "CpyRtoV4" | "CpyRtoV8" => {
@@ -2122,7 +2638,250 @@ fn infer_call_result_types(
             }
         }
     }
-    cand.into_iter().filter_map(|(s, t)| t.map(|t| (s, t))).collect()
+    cand.into_iter()
+        .filter_map(|(s, t)| t.map(|t| (s, t)))
+        .collect()
+}
+
+/// Propagate one proven enum type through raw four-byte local copies, but only along paths that
+/// end in an enum-underlying-width conversion. A raw `CpyVtoV4` alone is ambiguous (it may be an
+/// enum-to-int assignment), while `CpyVtoV4 dst, enum_src; sbTOi/ubTOi int_dst, dst` proves that
+/// `dst` still carries the enum-width value. Every participating slot must have an enum-compatible
+/// opcode profile; arithmetic, bool, float, address, or unrelated uses reject that slot.
+fn propagate_proven_enum_slots(
+    instrs: &[super::disasm::Instr],
+    seeds: Vec<(i32, String)>,
+) -> HashMap<i32, String> {
+    let mut edges = Vec::new(); // (destination, source)
+    let mut narrow_reads = HashSet::new();
+    for ins in instrs {
+        match ins.op.name {
+            "CpyVtoV4" => {
+                if let (Some(&dst), Some(&src)) = (ins.words.first(), ins.words.get(1)) {
+                    edges.push((dst as i16 as i32, src as i16 as i32));
+                }
+            }
+            "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => {
+                if let Some(&src) = ins.words.get(1) {
+                    narrow_reads.insert(src as i16 as i32);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let profile_ok = |slot: i32| {
+        instrs.iter().all(|ins| {
+            ins.words.iter().enumerate().all(|(wi, &word)| {
+                if word as i16 as i32 != slot {
+                    return true;
+                }
+                match ins.op.name {
+                    "SetV1" | "SetV2" | "SetV4" | "CpyRtoV4" | "CpyVtoR4" | "PshV4" => wi == 0,
+                    "CpyVtoV4" => wi < 2,
+                    "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => wi == 1,
+                    _ => false,
+                }
+            })
+        })
+    };
+
+    // Only copy destinations that eventually feed a width conversion are type-preserving enough
+    // to inherit the enum. Work backwards so an arbitrary number of compiler copy temporaries is
+    // allowed without retyping a dead or generic enum-to-int copy.
+    let mut relevant = narrow_reads;
+    loop {
+        let mut changed = false;
+        for &(dst, src) in &edges {
+            if relevant.contains(&dst) {
+                changed |= relevant.insert(src);
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut types: HashMap<i32, Option<String>> = HashMap::new();
+    for (slot, ty) in seeds {
+        if slot <= 0 || !profile_ok(slot) {
+            continue;
+        }
+        match types.get(&slot) {
+            None => {
+                types.insert(slot, Some(ty));
+            }
+            Some(Some(prev)) if *prev != ty => {
+                types.insert(slot, None);
+            }
+            _ => {}
+        }
+    }
+    loop {
+        let mut changed = false;
+        for &(dst, src) in &edges {
+            if !relevant.contains(&dst) || !profile_ok(dst) {
+                continue;
+            }
+            let Some(Some(src_ty)) = types.get(&src).cloned() else {
+                continue;
+            };
+            match types.get(&dst) {
+                None => {
+                    types.insert(dst, Some(src_ty));
+                    changed = true;
+                }
+                Some(Some(prev)) if *prev != src_ty => {
+                    types.insert(dst, None);
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    types
+        .into_iter()
+        .filter_map(|(slot, ty)| ty.map(|ty| (slot, ty)))
+        .collect()
+}
+
+/// Enum local inference for enum-returning state-machine functions. The seed requires the exact
+/// same enum type from a resolved call result, copied into a local that is also used as a return
+/// payload of this enum-returning function. That double witness prevents a coincidental raw V4
+/// scratch from becoming an enum. [`propagate_proven_enum_slots`] supplies the separately-gated
+/// copy-chain extension used by loop status variables.
+fn infer_enum_flow(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    if f.ret.token != 5 || f.ret.is_reference {
+        return HashMap::new();
+    }
+    let ret_enum = f.ret.base_name(refs);
+    if !is_enum(&ret_enum) {
+        return HashMap::new();
+    }
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(instrs) => instrs,
+        Err(_) => return HashMap::new(),
+    };
+    let return_slots: HashSet<i32> = instrs
+        .iter()
+        .filter(|ins| ins.op.name == "CpyVtoR4")
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .collect();
+    let mut last_ret: Option<String> = None;
+    let mut seeds = Vec::new();
+    for ins in &instrs {
+        match ins.op.name {
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                last_ret = refs
+                    .func_ret_by_id(id)
+                    .filter(|ty| !ty.is_reference && ty.token == 5)
+                    .map(|ty| ty.base_name(refs))
+                    .filter(|ty| ty == &ret_enum);
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                last_ret = refs
+                    .func_ret_by_ptr(ptr)
+                    .filter(|ty| !ty.is_reference && ty.token == 5)
+                    .map(|ty| ty.base_name(refs))
+                    .filter(|ty| ty == &ret_enum);
+            }
+            "CpyRtoV4" => {
+                let slot = ins.words.first().map(|word| *word as i16 as i32);
+                if let (Some(ty), Some(slot)) = (last_ret.take(), slot) {
+                    if slot > 0 && return_slots.contains(&slot) {
+                        seeds.push((slot, ty));
+                    }
+                }
+            }
+            "SUSPEND" => {}
+            _ => last_ret = None,
+        }
+    }
+    propagate_proven_enum_slots(&instrs, seeds)
+}
+
+fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool {
+    instrs.iter().enumerate().all(|(index, ins)| {
+        ins.words.iter().enumerate().all(|(wi, &word)| {
+            if word as i16 as i32 != slot {
+                return true;
+            }
+            match ins.op.name {
+                "SetV1" => wi == 0 && ins.dwords.first().copied().unwrap_or(2) <= 1,
+                "RDR1" | "WRTV1" | "NOT" | "CpyVtoR1" => wi == 0,
+                // A T* result is canonical 0/1 in the full value register. Reject an arbitrary
+                // call/arithmetic register copy into the bool slot.
+                "CpyRtoV4" => {
+                    wi == 0
+                        && index.checked_sub(1).is_some_and(|prev| {
+                            matches!(
+                                instrs[prev].op.name,
+                                "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP"
+                            )
+                        })
+                }
+                // Propagating a proven bool OUT is harmless; accepting an unproved source INTO
+                // the candidate would change integer truthiness into a bool conversion.
+                "CpyVtoV4" => wi == 1,
+                _ => false,
+            }
+        })
+    })
+}
+
+/// Infer a primitive bool local from exact own-field byte reads/writes. A candidate needs a
+/// resolved `bool` field witness, no unresolved/non-bool byte-field access on the same slot, and a
+/// whole-function bool-only opcode profile. This turns compiler bool temporaries back into bools
+/// without treating arbitrary SetV1/int8 scratch as boolean.
+fn infer_bool_field_slots(
+    f: &Func,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+) -> HashSet<i32> {
+    let Some(fields) = fields else {
+        return HashSet::new();
+    };
+    let instrs = match disassemble(&f.bytecode) {
+        Ok(instrs) => instrs,
+        Err(_) => return HashSet::new(),
+    };
+    let mut ref_is_bool: Option<bool> = None;
+    let mut proven = HashSet::new();
+    let mut conflict = HashSet::new();
+    for ins in &instrs {
+        match ins.op.name {
+            "LoadThisR" => {
+                let off = ins.words.first().map(|word| *word as i16 as i32);
+                let tid = ins.dwords.first().copied().map(|id| id as i32);
+                ref_is_bool = off
+                    .zip(tid)
+                    .and_then(|(off, tid)| refs.member(tid, off))
+                    .and_then(|field| fields.get(field))
+                    .map(|ty| ty == "bool");
+            }
+            "CHKREF" | "ChkRefS" | "ChkNullV" | "SUSPEND" => {}
+            "RDR1" | "WRTV1" => {
+                if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+                    if slot > 0 {
+                        if ref_is_bool == Some(true) {
+                            proven.insert(slot);
+                        } else {
+                            conflict.insert(slot);
+                        }
+                    }
+                }
+                ref_is_bool = None;
+            }
+            _ => ref_is_bool = None,
+        }
+    }
+    proven.retain(|slot| !conflict.contains(slot) && bool_slot_profile_is_safe(&instrs, *slot));
+    proven
 }
 
 /// Filter/compose one A3 return-type candidate (see [`infer_call_result_types`]):
@@ -2130,11 +2889,18 @@ fn infer_call_result_types(
 /// template head (`TMapIteratorPair` with no `<...>` in its T1 entry) is composed from the
 /// receiver iterator's inferred instantiation, or rejected when that isn't available either.
 fn usable_ret_type(ty: String, recv: Option<i32>, known: &HashMap<i32, String>) -> Option<String> {
-    if ty.is_empty() || ty == "void" || ty == "?" || ty == "auto" || is_primitive(&ty) || is_enum(&ty) {
+    if ty.is_empty()
+        || ty == "void"
+        || ty == "?"
+        || ty == "auto"
+        || is_primitive(&ty)
+        || is_enum(&ty)
+    {
         return None;
     }
     let b = ty.as_bytes();
-    let bare_template = !ty.contains('<') && b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase();
+    let bare_template =
+        !ty.contains('<') && b.len() >= 2 && b[0] == b'T' && b[1].is_ascii_uppercase();
     if !bare_template {
         return Some(ty);
     }
@@ -2199,6 +2965,35 @@ fn nk_apply(
     }
 }
 
+/// Recover the numeric value behind the VM's explicit local-address dereference idiom:
+/// `PshVPtr slot; PopRPtr; RDRx value` reads `slot` into `value`, while the corresponding
+/// `WRTVx value` writes it back. The address itself may previously have travelled through a
+/// `CpyRtoV8` (iterator `Proceed()` returning `T&`), so the ordinary width-copy pass sees only
+/// an opaque 8-byte pointer and otherwise declares the pointee slot as `int`.
+///
+/// Requiring the exact adjacent three-op shape is the safety gate: a pushed pointer used as a
+/// call argument/member base is not numeric evidence. The resulting edge is symmetric because
+/// RDR/WRTV both prove that the local and the value-register slot have the same pointee kind;
+/// the existing anti-seed/width-conflict propagation still poisons reused or contradictory slots.
+fn indirect_numeric_edges(instrs: &[super::disasm::Instr]) -> Vec<(i32, i32, bool)> {
+    instrs
+        .windows(3)
+        .filter_map(|w| {
+            if w[0].op.name != "PshVPtr" || w[1].op.name != "PopRPtr" {
+                return None;
+            }
+            let is8 = match w[2].op.name {
+                "RDR4" | "WRTV4" => false,
+                "RDR8" | "WRTV8" => true,
+                _ => return None,
+            };
+            let addr = w[0].words.first().map(|v| *v as i16 as i32).unwrap_or(0);
+            let value = w[2].words.first().map(|v| *v as i16 as i32).unwrap_or(0);
+            Some((addr, value, is8))
+        })
+        .collect()
+}
+
 /// batch-28: unified numeric-kind dataflow (spec §2.3). The VM never converts implicitly —
 /// every numeric conversion is an explicit `*TO*` opcode and `SetV*`/`CpyVtoV*`/`CpyRtoV*`/
 /// `RDR*`/`WRTV*` are TYPELESS width copies — so a slot's numeric kind is statically
@@ -2228,7 +3023,8 @@ fn nk_apply(
 /// conversions, CMPi/CMPu(64)/CMPIi/CMPIu operands, NOT slots, TZ/TNZ-tested register
 /// payloads, plus the imported `anti` set (int-family value args / `int&` / `bool&` bindings).
 ///
-/// Propagation to fixed point over CpyVtoV edges: 8-byte edges carry {F64, I64} (an F32
+/// Propagation to fixed point over CpyVtoV edges and exact local-address RDR/WRTV edges:
+/// 8-byte edges carry {F64, I64} (an F32
 /// endpoint is a width conflict -> poison both); 4-byte edges carry {F32} (an F64 endpoint ->
 /// poison both). A poisoned endpoint poisons its copy partner — the copy pair must agree, or
 /// the retype would CREATE a new float->int warning on the copy line (batch-9 class).
@@ -2253,13 +3049,15 @@ fn infer_float_flow(
     let mut anti: HashSet<i32> = anti_imports.clone();
     let mut poison: HashSet<i32> = HashSet::new();
     let mut seeds: Vec<(i32, NumKind)> = Vec::new();
-    let mut edges: Vec<(i32, i32, bool)> = Vec::new(); // (dst, src, is_8_byte)
+    let mut edges = indirect_numeric_edges(&instrs); // (dst, src, is_8_byte)
 
     // (e) by-value param slots: float tokens seed, int-family tokens anti-seed (params are
     // never declared by us — they matter as propagation sources across CpyVtoV copies).
     let (param_offs, _rvo) = super::decompile::build_param_off_map_rvo(fc, &instrs, refs);
     for (off, idx) in &param_offs {
-        let Some(pt) = fc.param_types.get(*idx) else { continue };
+        let Some(pt) = fc.param_types.get(*idx) else {
+            continue;
+        };
         if pt.is_reference {
             continue; // the frame offset holds a pointer, not the value
         }
@@ -2306,9 +3104,14 @@ fn infer_float_flow(
             "RDR4" | "RDR8" | "WRTV4" | "WRTV8" => {
                 if let Some((tid, moff, own)) = ref_field {
                     let fty = refs.member(tid, moff).and_then(|name| {
-                        let own_ty = if own { fields.and_then(|m| m.get(name)) } else { None };
+                        let own_ty = if own {
+                            fields.and_then(|m| m.get(name))
+                        } else {
+                            None
+                        };
                         own_ty.map(String::as_str).or_else(|| {
-                            refs.type_by_id(tid).and_then(|cls| refs.field_type_by_class(cls, name))
+                            refs.type_by_id(tid)
+                                .and_then(|cls| refs.field_type_by_class(cls, name))
                         })
                     });
                     let is8 = n.ends_with('8');
@@ -2412,24 +3215,34 @@ fn infer_float_flow(
         last_ret = match n {
             "CALL" | "CALLINTF" | "CALLBND" => {
                 let id = ins.dwords.first().copied().unwrap_or(0) as i32;
-                refs.func_ret_by_id(id).filter(|d| !d.is_reference).map(|d| d.token)
+                refs.func_ret_by_id(id)
+                    .filter(|d| !d.is_reference)
+                    .map(|d| d.token)
             }
             "CALLSYS" | "Thiscall1" => {
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 if refs.func_by_ptr(ptr) == Some("$beh0") {
                     None
                 } else {
-                    refs.func_ret_by_ptr(ptr).filter(|d| !d.is_reference).map(|d| d.token)
+                    refs.func_ret_by_ptr(ptr)
+                        .filter(|d| !d.is_reference)
+                        .map(|d| d.token)
                 }
             }
             "SUSPEND" => last_ret,
             _ => None,
         };
         ref_field = match n {
-            "LoadThisR" => Some((ins.dwords.first().copied().unwrap_or(0) as i32, w0(ins), true)),
-            "LoadRObjR" | "LoadVObjR" => {
-                Some((ins.dwords.first().copied().unwrap_or(0) as i32, w1(ins), false))
-            }
+            "LoadThisR" => Some((
+                ins.dwords.first().copied().unwrap_or(0) as i32,
+                w0(ins),
+                true,
+            )),
+            "LoadRObjR" | "LoadVObjR" => Some((
+                ins.dwords.first().copied().unwrap_or(0) as i32,
+                w1(ins),
+                false,
+            )),
             "CHKREF" | "ChkRefS" | "ChkNullV" | "SUSPEND" => ref_field,
             _ => None,
         };
@@ -2527,14 +3340,20 @@ fn infer_oor_arg_types(
         let t = line.trim();
         let t = t.strip_prefix("return ").unwrap_or(t);
         // parse `argN = RHS;`
-        let Some(rest) = t.strip_prefix("arg") else { continue };
+        let Some(rest) = t.strip_prefix("arg") else {
+            continue;
+        };
         let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        let Ok(n) = digits.parse::<i32>() else { continue };
+        let Ok(n) = digits.parse::<i32>() else {
+            continue;
+        };
         if !oor_args.contains(&n) {
             continue;
         }
         let after = rest[digits.len()..].trim_start();
-        let Some(rhs) = after.strip_prefix("= ") else { continue };
+        let Some(rhs) = after.strip_prefix("= ") else {
+            continue;
+        };
         let rhs = rhs.trim().trim_end_matches(';').trim();
         // `this.<field>` (single member hop) -> the field's type.
         if let Some(field) = rhs.strip_prefix("this.") {
@@ -2577,7 +3396,10 @@ fn infer_oor_arg_types(
 /// sites of the same type. Any future site with reads keeps the hoist (status-quo error,
 /// never a wrong rewrite).
 fn has_no_default_ctor(ty: &str) -> bool {
-    matches!(ty, "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext")
+    matches!(
+        ty,
+        "FStatID" | "FScopeCycleCounter" | "FAngelscriptGameThreadScopeWorldContext"
+    )
 }
 
 /// batch-25i: net brace delta of an emitted body line. The structurer/emitter only produce
@@ -2590,6 +3412,81 @@ fn brace_net(line: &str) -> i32 {
         "}" => -1,
         _ => 0,
     }
+}
+
+/// A hoisted inferred-enum local can keep a bare declaration only if its first body reference is
+/// an unconditional, write-only assignment at function scope. This is deliberately a textual
+/// proof over the already-structured body: any read, self-reference, branch/loop-local first
+/// write, malformed brace nesting, or ambiguous statement fails closed and asks the declaration
+/// emitter for an explicit enum-zero initializer.
+fn first_top_level_assignment_before_read(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let assignment_prefix = format!("{ident} = ");
+    let mut depth = 0i32;
+
+    for line in body.lines() {
+        if count_ident(line, &ident) != 0 {
+            let trimmed = line.trim();
+            return depth == 0
+                && trimmed.starts_with(&assignment_prefix)
+                && trimmed.ends_with(';')
+                && count_ident(line, &ident) == 1;
+        }
+
+        depth += brace_net(line);
+        if depth < 0 {
+            return false;
+        }
+    }
+
+    false
+}
+
+/// Prove definite assignment for a compiler-reused primitive carrier in structured emitted source.
+/// Every read must be preceded by a write-only assignment in the same lexical block or an ancestor
+/// block. Assignments made inside a child block are discarded when leaving it, so a conditional or
+/// sibling write can never justify a later read. This intentionally accepts loop/case-local carrier
+/// reuse while rejecting read-before-write, self-assignment, malformed braces, and branch leakage.
+fn all_reads_lexically_dominated_by_assignment(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let mut assigned = vec![false];
+    let mut saw_assignment = false;
+    let mut saw_read = false;
+
+    for line in body.lines() {
+        match line.trim() {
+            "{" => {
+                assigned.push(*assigned.last().unwrap_or(&false));
+                continue;
+            }
+            "}" => {
+                if assigned.len() == 1 {
+                    return false;
+                }
+                assigned.pop();
+                continue;
+            }
+            _ => {}
+        }
+
+        if count_ident(line, &ident) == 0 {
+            continue;
+        }
+        if assignment_rhs_for(line, &ident).is_some() {
+            let Some(current) = assigned.last_mut() else {
+                return false;
+            };
+            *current = true;
+            saw_assignment = true;
+        } else {
+            saw_read = true;
+            if !assigned.last().copied().unwrap_or(false) {
+                return false;
+            }
+        }
+    }
+
+    assigned.len() == 1 && saw_assignment && saw_read
 }
 
 /// batch-25i: the innermost brace-block span containing line `i`: returns `(start, end)` line
@@ -2658,6 +3555,244 @@ fn count_ident(line: &str, ident: &str) -> usize {
         }
     }
     n
+}
+
+/// Conservative purity predicate used only by the adjacent value-temporary folder. These forms
+/// cannot mutate state while a read is moved from the preceding statement into its sole consumer.
+fn is_simple_pure_expr(expr: &str) -> bool {
+    let expr = expr.trim();
+    if expr.is_empty() {
+        return false;
+    }
+    if expr.starts_with('(') && expr.ends_with(')') {
+        let mut depth = 0i32;
+        let mut wraps_whole = true;
+        for (i, b) in expr.bytes().enumerate() {
+            match b {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth < 0 || (depth == 0 && i + 1 != expr.len()) {
+                wraps_whole = false;
+                break;
+            }
+        }
+        if wraps_whole && depth == 0 {
+            return is_simple_pure_expr(&expr[1..expr.len() - 1]);
+        }
+    }
+    if let Some(rest) = expr.strip_prefix('!') {
+        return is_simple_pure_expr(rest.trim());
+    }
+    if expr == "true" || expr == "false" || expr == "nullptr" {
+        return true;
+    }
+    if expr
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'+'))
+        && !expr.contains("..")
+    {
+        return true;
+    }
+    // Primitive and enum conversion syntax is value-only. Calls on objects / namespaces are not
+    // admitted here: even a zero-argument getter may mutate state.
+    let Some(open) = expr.find('(') else {
+        return false;
+    };
+    if !expr.ends_with(')') || expr[open + 1..expr.len() - 1].contains(['(', ')', ',']) {
+        return false;
+    }
+    let head = expr[..open].trim();
+    let inner = &expr[open + 1..expr.len() - 1];
+    (is_primitive(head) || is_enum(head)) && is_simple_pure_expr(inner)
+}
+
+fn leading_indent(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    &line[..line.len() - trimmed.len()]
+}
+
+fn assignment_rhs_for<'a>(line: &'a str, ident: &str) -> Option<&'a str> {
+    let trimmed = line.trim();
+    let prefix = format!("{ident} = ");
+    let rhs = trimmed.strip_prefix(&prefix)?.strip_suffix(';')?.trim();
+    (!rhs.is_empty() && count_ident(line, ident) == 1).then_some(rhs)
+}
+
+fn local_assignment_count(body: &str, slot: i32) -> usize {
+    let ident = format!("local_{slot}");
+    body.lines()
+        .filter(|line| assignment_rhs_for(line, &ident).is_some())
+        .count()
+}
+
+fn adjacent_value_slot_is_candidate(
+    body: &str,
+    slot: i32,
+    typed_state: bool,
+    primitive_scratch: bool,
+) -> bool {
+    typed_state || (primitive_scratch && local_assignment_count(body, slot) <= 1)
+}
+
+fn is_zero_arg_member_chain(suffix: &str) -> bool {
+    let mut rest = suffix;
+    while !rest.is_empty() {
+        let Some(after_dot) = rest.strip_prefix('.') else {
+            return false;
+        };
+        let Some(paren) = after_dot.find("()") else {
+            return false;
+        };
+        let name = &after_dot[..paren];
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return false;
+        }
+        rest = &after_dot[paren + 2..];
+    }
+    true
+}
+
+/// Replace the sole use of an immediately preceding local assignment. The accepted consumers are
+/// intentionally tiny and evaluation-order explicit: whole-value assignment/return/control tests;
+/// a comparison against one pure operand; unary bool inversion; or a pure value inserted as the
+/// sole argument of one member call followed only by zero-argument member calls.
+fn fold_adjacent_consumer(line: &str, ident: &str, rhs: &str) -> Option<String> {
+    let indent = leading_indent(line);
+    let trimmed = line.trim();
+
+    if trimmed == format!("return {ident};") {
+        return Some(format!("{indent}return {rhs};"));
+    }
+    for keyword in ["if", "while", "switch"] {
+        if trimmed == format!("{keyword} ({ident})") {
+            return Some(format!("{indent}{keyword} ({rhs})"));
+        }
+    }
+    if trimmed == format!("{ident} = !{ident};") && is_simple_pure_expr(rhs) {
+        return Some(format!("{indent}{ident} = !({rhs});"));
+    }
+
+    if let Some(rest) = trimmed
+        .strip_prefix("if (")
+        .and_then(|s| s.strip_suffix(')'))
+    {
+        for op in [" <= ", " >= ", " == ", " != ", " < ", " > "] {
+            let Some((left, right)) = rest.split_once(op) else {
+                continue;
+            };
+            // An impure producer may only remain on the LEFT: the original producer statement
+            // ran before both comparison operands, and left-to-right evaluation preserves that.
+            // Moving it to the right of even a non-mutating field read could observe a different
+            // pre-mutation field value. A pure producer is safe on either side.
+            let preserves_order = (left.trim() == ident && is_simple_pure_expr(right))
+                || (right.trim() == ident && is_simple_pure_expr(left) && is_simple_pure_expr(rhs));
+            if preserves_order && count_ident(rest, ident) == 1 {
+                let replaced = rename_ident(rest, ident, &format!("({rhs})"));
+                return Some(format!("{indent}if ({replaced})"));
+            }
+        }
+    }
+
+    let statement = trimmed.strip_suffix(';')?;
+    let (lhs, consumer_rhs) = statement.split_once(" = ")?;
+    if count_ident(lhs, ident) != 0 {
+        return None;
+    }
+    if consumer_rhs.trim() == ident {
+        return Some(format!("{indent}{lhs} = {rhs};"));
+    }
+    if !is_simple_pure_expr(rhs) || count_ident(consumer_rhs, ident) != 1 {
+        return None;
+    }
+
+    // `receiver.Member(local_N).ZeroArgCall()` only: the receiver path is pure, the folded value
+    // is the call's sole argument, and no sibling argument can reorder evaluation.
+    let marker = format!("({ident})");
+    let (prefix, suffix) = consumer_rhs.split_once(&marker)?;
+    if prefix.is_empty()
+        || !prefix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+        || !prefix.contains('.')
+        || !is_zero_arg_member_chain(suffix)
+    {
+        return None;
+    }
+    let replaced = consumer_rhs.replacen(&marker, &format!("({rhs})"), 1);
+    Some(format!("{indent}{lhs} = {replaced};"))
+}
+
+fn try_eliminate_adjacent_value_slot(body: &str, slot: i32) -> Option<String> {
+    let ident = format!("local_{slot}");
+    if !body.lines().any(|line| count_ident(line, &ident) != 0) {
+        return None;
+    }
+    let trailing_newline = body.ends_with('\n');
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut i = 0usize;
+        while i + 1 < lines.len() {
+            let Some(rhs) = assignment_rhs_for(&lines[i], &ident).map(str::to_owned) else {
+                i += 1;
+                continue;
+            };
+            if leading_indent(&lines[i]) != leading_indent(&lines[i + 1]) {
+                i += 1;
+                continue;
+            }
+            let Some(folded) = fold_adjacent_consumer(&lines[i + 1], &ident, &rhs) else {
+                i += 1;
+                continue;
+            };
+            lines[i + 1] = folded;
+            lines.remove(i);
+            changed = true;
+            i = i.saturating_sub(1);
+        }
+    }
+    if lines.iter().any(|line| count_ident(line, &ident) != 0) {
+        return None;
+    }
+    let mut out = lines.join("\n");
+    if trailing_newline {
+        out.push('\n');
+    }
+    Some(out)
+}
+
+/// Fixed-point whole-slot elimination. A candidate is committed only when every reference to it
+/// disappears; otherwise its trial rewrite is discarded atomically. Descending slot order plus the
+/// fixed point lets an inner temporary disappear before its producer becomes adjacent to a second
+/// temporary, without relying on target-specific slot numbers.
+fn rewrite_adjacent_value_temporaries(
+    body: &str,
+    candidates: &HashSet<i32>,
+) -> (String, HashSet<i32>) {
+    let mut ordered: Vec<i32> = candidates.iter().copied().collect();
+    ordered.sort_unstable_by(|a, b| b.cmp(a));
+    let mut out = body.to_owned();
+    let mut eliminated = HashSet::new();
+    loop {
+        let mut progress = false;
+        for &slot in &ordered {
+            if eliminated.contains(&slot) {
+                continue;
+            }
+            if let Some(next) = try_eliminate_adjacent_value_slot(&out, slot) {
+                out = next;
+                eliminated.insert(slot);
+                progress = true;
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+    (out, eliminated)
 }
 
 /// Class A (emission-classes.md): for a hoisted local whose type has no default ctor AND no
@@ -2896,11 +4031,21 @@ fn rewrite_no_assign_residual_assigns(
 /// initialized (the original per-case iterators). ANY reference that doesn't fit this shape
 /// (read before assign, a bare read outside every assign's block) keeps the hoisted
 /// declaration — the status-quo error, never a broken reference.
-fn rewrite_iterator_decl_init(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+fn rewrite_iterator_decl_init(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+) -> (String, HashSet<i32>) {
     let is_iter = |ty: &str| {
         let h = ty.split('<').next().unwrap_or(ty);
-        matches!(h, "TArrayIterator" | "TArrayConstIterator" | "TSetIterator" | "TSetConstIterator"
-            | "TMapIterator" | "TMapConstIterator")
+        matches!(
+            h,
+            "TArrayIterator"
+                | "TArrayConstIterator"
+                | "TSetIterator"
+                | "TSetConstIterator"
+                | "TMapIterator"
+                | "TMapConstIterator"
+        )
     };
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
@@ -3100,7 +4245,9 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
                 if ins.op.name != op {
                     continue;
                 }
-                let Some(dst) = ins.words.first().map(|w| *w as i16 as i32) else { continue };
+                let Some(dst) = ins.words.first().map(|w| *w as i16 as i32) else {
+                    continue;
+                };
                 if dst <= 0 {
                     continue;
                 }
@@ -3121,28 +4268,40 @@ fn infer_locals(f: &Func, refs: &RefResolver) -> BTreeMap<i32, String> {
 }
 
 fn writes_int(n: &str) -> bool {
-    matches!(n, "SetV4" | "SetV1" | "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi"
+    matches!(
+        n,
+        "SetV4" | "SetV1" | "ADDi" | "SUBi" | "MULi" | "DIVi" | "MODi" | "IncVi" | "DecVi"
         | "NEGi" | "BAND" | "BOR" | "BXOR" | "BSLL" | "BSRA" | "ADDIi" | "SUBIi" | "MULIi"
         | "CpyVtoR4" | "RDR4" | "CpyRtoV4"
         // conversions whose RESULT is a 32-bit int/uint (*TO i/u/b/w)
         | "fTOi" | "fTOu" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" | "dTOi" | "dTOu"
-        | "iTOb" | "iTOw" | "i64TOi")
+        | "iTOb" | "iTOw" | "i64TOi"
+    )
 }
 fn writes_float(n: &str) -> bool {
-    matches!(n, "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
+    matches!(
+        n,
+        "ADDf" | "SUBf" | "MULf" | "DIVf" | "MODf" | "NEGf" | "IncVf" | "DecVf"
         | "ADDIf" | "SUBIf" | "MULIf"
         // conversions whose RESULT is float (*TO f)
-        | "iTOf" | "uTOf" | "dTOf" | "i64TOf" | "u64TOf")
+        | "iTOf" | "uTOf" | "dTOf" | "i64TOf" | "u64TOf"
+    )
 }
 fn writes_double(n: &str) -> bool {
-    matches!(n, "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd"
+    matches!(
+        n,
+        "ADDd" | "SUBd" | "MULd" | "DIVd" | "MODd" | "NEGd"
         // conversions whose RESULT is double (*TO d)
-        | "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd")
+        | "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd"
+    )
 }
 fn writes_int64(n: &str) -> bool {
-    matches!(n, "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64"
+    matches!(
+        n,
+        "SetV8" | "ADDi64" | "SUBi64" | "MULi64" | "DIVi64"
         // conversions whose RESULT is a 64-bit int/uint (*TO i64/u64)
-        | "uTOi64" | "iTOi64" | "fTOi64" | "dTOi64" | "fTOu64" | "dTOu64")
+        | "uTOi64" | "iTOi64" | "fTOi64" | "dTOi64" | "fTOu64" | "dTOu64"
+    )
 }
 
 /// Heuristic: a UE enum type name (`E` + uppercase), which is int-castable like a primitive.
@@ -3153,9 +4312,21 @@ fn is_enum(ty: &str) -> bool {
 
 /// True for AngelScript primitive scalar types (need an explicit initializer).
 fn is_primitive(ty: &str) -> bool {
-    matches!(ty,
-        "bool" | "int" | "int8" | "int16" | "int64" | "uint" | "uint8" | "uint16" | "uint64"
-        | "float" | "float32" | "double")
+    matches!(
+        ty,
+        "bool"
+            | "int"
+            | "int8"
+            | "int16"
+            | "int64"
+            | "uint"
+            | "uint8"
+            | "uint16"
+            | "uint64"
+            | "float"
+            | "float32"
+            | "double"
+    )
 }
 
 /// A default initializer literal for a base type.
@@ -3179,7 +4350,13 @@ fn render_const(ty: &str, v: u64) -> String {
         // Matches structure.rs's `fmt_float` (no suffix for 64-bit).
         "float" | "double" => format!("{}", f64::from_bits(v)),
         "float32" => format!("{}f", f32::from_bits(v as u32)),
-        "bool" => if v != 0 { "true".into() } else { "false".into() },
+        "bool" => {
+            if v != 0 {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         // Render integers per their actual width AND signedness: an unsigned type must not be
         // emitted negative (e.g. uint64 0xffff…ffff as -1), and signed types sign-extend from
         // their own width (the value lives in the low bits of the stored u64).
@@ -3210,4 +4387,303 @@ fn is_generated(
     class_members
         .get(f.namespace.as_str())
         .is_some_and(|members| members.contains(f.name.as_str()))
+}
+
+#[cfg(test)]
+mod indirect_numeric_edge_tests {
+    use super::{
+        adjacent_value_slot_is_candidate, all_reads_lexically_dominated_by_assignment,
+        bool_slot_profile_is_safe, first_top_level_assignment_before_read, indirect_numeric_edges,
+        local_assignment_count, propagate_proven_enum_slots, rewrite_adjacent_value_temporaries,
+    };
+    use crate::cache::disasm::{disassemble, Instr};
+    use std::collections::HashSet;
+
+    fn word_op(opcode: u8, slot: u16) -> i32 {
+        ((slot as u32) << 16 | opcode as u32) as i32
+    }
+
+    fn ins(name: &'static str, words: &[u16]) -> Instr {
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == name)
+            .expect("test opcode");
+        Instr {
+            offset_dw: 0,
+            op,
+            words: words.to_vec(),
+            dwords: Vec::new(),
+            qwords: Vec::new(),
+        }
+    }
+
+    fn ins_imm(name: &'static str, words: &[u16], immediate: u32) -> Instr {
+        let mut instruction = ins(name, words);
+        instruction.dwords.push(immediate);
+        instruction
+    }
+
+    #[test]
+    fn exact_local_address_reads_and_writes_form_width_typed_edges() {
+        let read = disassemble(&[
+            word_op(48, 20), // PshVPtr w20
+            58,              // PopRPtr
+            word_op(94, 2),  // RDR4 w2
+        ])
+        .expect("read shape");
+        assert_eq!(indirect_numeric_edges(&read), vec![(20, 2, false)]);
+
+        let write = disassemble(&[
+            word_op(48, 24), // PshVPtr w24
+            58,              // PopRPtr
+            word_op(91, 6),  // WRTV8 w6
+        ])
+        .expect("write shape");
+        assert_eq!(indirect_numeric_edges(&write), vec![(24, 6, true)]);
+    }
+
+    #[test]
+    fn non_adjacent_or_non_local_pointer_shapes_do_not_form_edges() {
+        let interrupted = disassemble(&[
+            word_op(48, 20), // PshVPtr w20
+            49,              // RDSPtr: no exact local-address transfer
+            58,              // PopRPtr
+            word_op(94, 2),  // RDR4 w2
+        ])
+        .expect("interrupted shape");
+        assert!(indirect_numeric_edges(&interrupted).is_empty());
+
+        let no_transfer = disassemble(&[
+            word_op(48, 20), // ordinary pointer push
+            word_op(94, 2),  // no PopRPtr
+        ])
+        .expect("non-transfer shape");
+        assert!(indirect_numeric_edges(&no_transfer).is_empty());
+    }
+
+    #[test]
+    fn proven_enum_call_return_propagates_only_to_narrow_read_copy_chain() {
+        let instrs = vec![
+            ins("CpyRtoV4", &[5]),
+            ins("SetV1", &[5]),
+            ins("CpyVtoV4", &[4, 5]),
+            ins("sbTOi", &[2, 4]),
+            ins("CpyVtoR4", &[5]),
+            // A generic copy without a downstream enum-width read must stay untyped.
+            ins("CpyVtoV4", &[3, 5]),
+        ];
+        let types = propagate_proven_enum_slots(&instrs, vec![(5, "EResult".into())]);
+        assert_eq!(types.get(&5).map(String::as_str), Some("EResult"));
+        assert_eq!(types.get(&4).map(String::as_str), Some("EResult"));
+        assert!(!types.contains_key(&3));
+    }
+
+    #[test]
+    fn enum_copy_propagation_fails_closed_on_arithmetic_or_type_conflict() {
+        let arithmetic = vec![
+            ins("CpyRtoV4", &[5]),
+            ins("CpyVtoV4", &[4, 5]),
+            ins("sbTOi", &[2, 4]),
+            ins("ADDIi", &[4, 4]),
+            ins("CpyVtoR4", &[5]),
+        ];
+        let types = propagate_proven_enum_slots(&arithmetic, vec![(5, "EResult".into())]);
+        assert_eq!(types.get(&5).map(String::as_str), Some("EResult"));
+        assert!(!types.contains_key(&4));
+
+        let conflict = vec![
+            ins("CpyVtoV4", &[4, 5]),
+            ins("CpyVtoV4", &[4, 6]),
+            ins("sbTOi", &[2, 4]),
+        ];
+        let types = propagate_proven_enum_slots(
+            &conflict,
+            vec![(5, "EFirst".into()), (6, "ESecond".into())],
+        );
+        assert!(!types.contains_key(&4));
+    }
+
+    #[test]
+    fn bool_field_slot_profile_accepts_only_canonical_boolean_writes() {
+        let safe = vec![
+            ins("TZ", &[]),
+            ins("CpyRtoV4", &[8]),
+            ins("CpyVtoV4", &[7, 8]),
+            ins_imm("SetV1", &[8], 1),
+            ins("WRTV1", &[8]),
+            ins("RDR1", &[8]),
+            ins("NOT", &[8]),
+            ins("CpyVtoR1", &[8]),
+        ];
+        assert!(bool_slot_profile_is_safe(&safe, 8));
+
+        let mut non_bool_constant = safe.clone();
+        non_bool_constant.push(ins_imm("SetV1", &[8], 2));
+        assert!(!bool_slot_profile_is_safe(&non_bool_constant, 8));
+
+        let arbitrary_register_copy = vec![ins_imm("SetV4", &[1], 7), ins("CpyRtoV4", &[8])];
+        assert!(!bool_slot_profile_is_safe(&arbitrary_register_copy, 8));
+    }
+
+    #[test]
+    fn enum_bare_declaration_requires_first_unconditional_write_only_assignment() {
+        assert!(first_top_level_assignment_before_read(
+            "local_4 = local_5;\nreturn local_4;\n",
+            4
+        ));
+        assert!(first_top_level_assignment_before_read(
+            "if (ready)\n{\n    Work();\n}\nlocal_4 = local_5;\n",
+            4
+        ));
+
+        assert!(!first_top_level_assignment_before_read(
+            "Use(local_4);\nlocal_4 = local_5;\n",
+            4
+        ));
+        assert!(!first_top_level_assignment_before_read(
+            "local_4 = local_4;\n",
+            4
+        ));
+        assert!(!first_top_level_assignment_before_read(
+            "if (ready)\n{\n    local_4 = local_5;\n}\nreturn local_4;\n",
+            4
+        ));
+    }
+
+    #[test]
+    fn lexical_assignment_proof_accepts_local_reuse_but_rejects_branch_leakage() {
+        let loop_local = concat!(
+            "while (ready)\n",
+            "{\n",
+            "    local_2 = this.Index;\n",
+            "    Use(local_2);\n",
+            "    local_2 = this.Items.Num();\n",
+            "    if (local_2 > 0)\n",
+            "    {\n",
+            "        UseAgain(local_2);\n",
+            "    }\n",
+            "}\n",
+        );
+        assert!(all_reads_lexically_dominated_by_assignment(loop_local, 2));
+
+        let sibling_cases = concat!(
+            "switch (kind)\n",
+            "{\n",
+            "case 0:\n",
+            "{\n",
+            "    local_6 = 0;\n",
+            "    Use(local_6);\n",
+            "}\n",
+            "case 1:\n",
+            "{\n",
+            "    local_6 = 1;\n",
+            "    Use(local_6);\n",
+            "}\n",
+            "}\n",
+        );
+        assert!(all_reads_lexically_dominated_by_assignment(
+            sibling_cases,
+            6
+        ));
+
+        for rejected in [
+            "Use(local_2);\nlocal_2 = 1;\n",
+            "local_2 = local_2;\n",
+            "if (ready)\n{\n    local_2 = 1;\n}\nUse(local_2);\n",
+            "{\nlocal_2 = 1;\n",
+        ] {
+            assert!(
+                !all_reads_lexically_dominated_by_assignment(rejected, 2),
+                "unexpectedly accepted:\n{rejected}"
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_value_temporaries_fold_only_when_the_whole_slot_disappears() {
+        let body = concat!(
+            "local_5 = EResult(0);\n",
+            "local_4 = local_5;\n",
+            "while (local_4)\n",
+            "{\n",
+            "    local_2 = this.Index;\n",
+            "    local_5 = this.Nodes.opIndex(local_2).Tick();\n",
+            "    local_4 = local_5;\n",
+            "    local_2 = int(local_4);\n",
+            "    switch (local_2)\n",
+            "    {\n",
+            "    }\n",
+            "    local_8 = true;\n",
+            "    this.Flag = local_8;\n",
+            "    local_2 = this.Nodes.Num();\n",
+            "    local_6 = this.Index;\n",
+            "    if (local_2 <= local_6)\n",
+            "    {\n",
+            "        local_6 = 0;\n",
+            "        this.Index = local_6;\n",
+            "        local_8 = this.Flag;\n",
+            "        local_8 = !local_8;\n",
+            "        if (local_8)\n",
+            "        {\n",
+            "            local_5 = EResult(1);\n",
+            "            return local_5;\n",
+            "        }\n",
+            "    }\n",
+            "}\n",
+        );
+        let candidates = HashSet::from([2, 4, 5, 6, 8]);
+        let (folded, eliminated) = rewrite_adjacent_value_temporaries(body, &candidates);
+
+        assert_eq!(eliminated, HashSet::from([2, 5, 6, 8]), "{folded}");
+        assert!(folded.contains("local_4 = EResult(0);"), "{folded}");
+        assert!(
+            folded.contains("local_4 = this.Nodes.opIndex(this.Index).Tick();"),
+            "{folded}"
+        );
+        assert!(folded.contains("this.Flag = true;"), "{folded}");
+        assert!(
+            folded.contains("if ((this.Nodes.Num()) <= (this.Index))"),
+            "{folded}"
+        );
+        assert!(folded.contains("if (!(this.Flag))"), "{folded}");
+        assert!(folded.contains("return EResult(1);"), "{folded}");
+        for eliminated_ident in ["local_2", "local_5", "local_6", "local_8"] {
+            assert!(!folded.contains(eliminated_ident), "{folded}");
+        }
+        assert!(
+            folded.contains("local_4"),
+            "live state local was lost:\n{folded}"
+        );
+    }
+
+    #[test]
+    fn primitive_value_carriers_with_multiple_definitions_are_not_fold_candidates() {
+        let body = "local_2 = First();\nUse(local_2);\nlocal_2 = Second();\nUse(local_2);\n";
+        assert_eq!(local_assignment_count(body, 2), 2);
+        assert!(!adjacent_value_slot_is_candidate(body, 2, false, true));
+        assert!(adjacent_value_slot_is_candidate(
+            "local_2 = Once();\nUse(local_2);\n",
+            2,
+            false,
+            true
+        ));
+        assert!(adjacent_value_slot_is_candidate(body, 2, true, true));
+        assert!(!adjacent_value_slot_is_candidate(body, 2, false, false));
+    }
+
+    #[test]
+    fn adjacent_value_temporary_rejects_gaps_multiuse_and_unsafe_call_order() {
+        for body in [
+            "local_2 = SideEffect();\nOther();\nreturn local_2;\n",
+            "local_2 = 1;\nUse(local_2, local_2);\n",
+            "local_2 = this.Value;\nout = Mutate().Use(local_2);\n",
+            "local_2 = Mutate();\nif (this.Value <= local_2)\n{\n}\n",
+            "local_2 = 1;\nif (ready)\n{\n    return local_2;\n}\n",
+        ] {
+            let (folded, eliminated) =
+                rewrite_adjacent_value_temporaries(body, &HashSet::from([2]));
+            assert_eq!(folded, body);
+            assert!(eliminated.is_empty());
+        }
+    }
 }

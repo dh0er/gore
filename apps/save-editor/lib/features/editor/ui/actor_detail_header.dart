@@ -9,15 +9,15 @@ import 'package:goresave/loc/game_lang.dart';
 /// the Attribute and Inventory tab detail areas so both tabs make the selection
 /// obvious above the sidebar/content.
 ///
-/// - NPC selected → the localized display name (prominent) plus the FULL
-///   GlobalId, fully visible (wraps to multiple lines if long, selectable) so
-///   the user can copy/read the whole id — never ellipsized.
+/// - NPC selected → the localized display name (prominent) and the FULL
+///   GlobalId. The id is always selectable and wraps so the user can copy/read
+///   the whole value — never ellipsized and independent of [showObjectIds].
 /// - Player selected → the localized "Player" label, no GlobalId (the player
 ///   has none).
 /// - Orphan selected (knowledge-only, `orphan:<uniqueName>` id sentinel) → the
 ///   name resolved from its uniqueName (same loc-catalog key the list's orphan
-///   tiles use) and NO id line — the sentinel is not a GlobalId and must never
-///   be shown as one.
+///   tiles use). Optional technical display uses the real uniqueName, never the
+///   synthetic sentinel.
 ///
 /// The NPC name is resolved with the SAME [localizedNpcName] (loc catalog +
 /// prettify fallback) the actor list tiles use, so the header and the list
@@ -28,6 +28,7 @@ class ActorDetailHeader extends StatelessWidget {
     required this.actor,
     required this.locCatalog,
     required this.lang,
+    this.showObjectIds = false,
   });
 
   /// The currently selected actor (player or NPC).
@@ -40,6 +41,12 @@ class ActorDetailHeader extends StatelessWidget {
   /// The current game language, driving which loc set the name resolves from.
   final GameLang lang;
 
+  /// Whether a knowledge-only orphan's technical key is rendered below its
+  /// player-facing name. Regular NPC GlobalIds are always shown. Orphans expose
+  /// their real [Actor.uniqueName], never the synthetic `orphan:` selection
+  /// sentinel.
+  final bool showObjectIds;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -49,6 +56,12 @@ class ActorDetailHeader extends StatelessWidget {
     final isPlayer = actor.isPlayer;
     final isOrphan = actor.isOrphan;
     final id = actor.id;
+    final technicalId = isOrphan ? actor.uniqueName : id;
+    final showTechnicalId =
+        !isPlayer &&
+        technicalId != null &&
+        technicalId.isNotEmpty &&
+        (!isOrphan || showObjectIds);
     // Orphans resolve by uniqueName (their loc-catalog key — the `orphan:` id
     // sentinel would prettify into nonsense); NPCs resolve by GlobalId.
     final name = isPlayer
@@ -82,15 +95,14 @@ class ActorDetailHeader extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                // NPCs carry a long GlobalId; show it IN FULL (wrapping,
-                // selectable) so it is always readable. The player has none,
-                // and an orphan's `orphan:` sentinel is not a GlobalId —
-                // suppress the id line for both.
-                if (!isPlayer && !isOrphan && id != null && id.isNotEmpty)
+                // NPC GlobalIds are always visible and wrap in full. Optional
+                // orphan ids expose the real knowledge key, not the synthetic
+                // `orphan:` selection sentinel.
+                if (showTechnicalId)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: SelectableText(
-                      id,
+                      technicalId,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                         fontFamily: 'Consolas',

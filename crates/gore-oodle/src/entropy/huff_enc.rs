@@ -277,8 +277,8 @@ fn write_data_double_ended(
 ) -> Vec<u8> {
     let mut bw1 = BitWriterLsb::new(); // forward stream (decoder src)
     let mut bw3 = BitWriterLsb::new(); // mid stream (decoder src_mid)
-    // backward stream: LSB-first writer whose bytes are reversed so the backward reader (which
-    // consumes the highest address first, byteswapped) reproduces the emission order.
+                                       // backward stream: LSB-first writer whose bytes are reversed so the backward reader (which
+                                       // consumes the highest address first, byteswapped) reproduces the emission order.
     let mut bw2 = BackwardBitWriter::new();
 
     let n = src.len();
@@ -354,7 +354,7 @@ fn write_table_old(
 
     if num_symbols > 4 {
         bits.write(1, 1); // dense
-        // Choose the rice parameter k that minimizes the zigzag length stream size.
+                          // Choose the rice parameter k that minimizes the zigzag length stream size.
         let mut lencount = [0u32; 32];
         let mut avg_x4 = 32i32;
         for i in 0..=highest_sym {
@@ -502,12 +502,13 @@ mod tests {
     fn huff_roundtrip_small_odd_lengths() {
         use super::super::array;
         for &n in &[17usize, 33, 34, 35, 64, 90, 100, 257, 1000] {
-            let data: Vec<u8> = (0..n).map(|i| if i % 2 == 0 { 7u8 } else { 200u8 }).collect();
-            let arr = encode_huff_array(&data)
-                .unwrap_or_else(|| panic!("huff should apply at n={n}"));
+            let data: Vec<u8> = (0..n)
+                .map(|i| if i % 2 == 0 { 7u8 } else { 200u8 })
+                .collect();
+            let arr =
+                encode_huff_array(&data).unwrap_or_else(|| panic!("huff should apply at n={n}"));
             let mut out = std::vec![0u8; n];
-            array::decode_array(&arr, &mut out)
-                .unwrap_or_else(|e| panic!("decode n={n}: {e:?}"));
+            array::decode_array(&arr, &mut out).unwrap_or_else(|e| panic!("decode n={n}: {e:?}"));
             assert_eq!(out, data, "huff roundtrip mismatch at n={n}");
         }
     }

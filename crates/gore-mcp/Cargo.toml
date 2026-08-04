@@ -1,0 +1,16 @@
+[package]
+name = "gore-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Model Context Protocol (stdio JSON-RPC 2.0) server exposing the gore CLI to AI agents."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

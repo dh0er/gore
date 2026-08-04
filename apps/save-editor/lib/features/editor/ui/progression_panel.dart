@@ -9,6 +9,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -16,10 +17,17 @@ import 'package:goresave/loc/progression_loc.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
+import '../domain/glossary_npc_catalog.dart';
+import '../domain/glossary_segment_text_catalog.dart';
+import '../domain/item_catalog.dart';
 import '../domain/knowledge_catalog.dart';
+import '../domain/memory_event_presentation.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
+import '../domain/quest_journal.dart';
 import 'add_knowledge_entry_dialog.dart';
+import 'memory_event_card.dart';
+import 'npc_relationship_editor.dart';
 
 /// All five EQuestState values, in dropdown order.
 const questStates = <String>[
@@ -81,11 +89,13 @@ class _GroupTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.icon,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -93,6 +103,7 @@ class _GroupTile extends StatelessWidget {
     return ListTile(
       dense: true,
       selected: selected,
+      leading: icon == null ? null : Icon(icon, size: 18),
       title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       selectedTileColor: scheme.primaryContainer,
       selectedColor: scheme.primary,
@@ -242,7 +253,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   String _query = '';
   int _offset = 0;
   String? _stateFilter;
-  String? _groupFilter;
+  QuestJournalSection? _sectionFilter;
   // The core clamps a query's `limit` to 1000, so the full quest list must be
   // pulled page-by-page rather than in one oversized request.
   static const _fetchPageLimit = 1000;
@@ -262,7 +273,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       _query = '';
       _offset = 0;
       _stateFilter = null;
-      _groupFilter = null;
+      _sectionFilter = null;
       _loadAllQuests();
     }
   }
@@ -345,63 +356,78 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   String _questLabel(ProgressionQuest e) =>
       e.currentState == null ? 'unknown' : shortStateLabel(e.currentState!);
 
-  /// Builds the filtered + faceted + paginated quest view from [_allQuests].
-  /// Faceting mirrors the core: stateCounts ignore the state filter and
-  /// groupCounts ignore the group filter, while the query (id OR localized
-  /// name) and the other filter apply to both.
-  ProgressionQuestPage _computeView(
+  /// Projects the save's flat quest rows into the five sections and recursive
+  /// parent/child hierarchy used by the in-game journal. Pagination always
+  /// operates on root quests, so an objective can never be separated from its
+  /// parent just because a page boundary was crossed.
+  _QuestJournalView _computeView(
     Map<String, Map<String, String>> catalog,
     GameLang lang,
   ) {
-    final q = _query;
-    bool matchesQuery(ProgressionQuest e) {
-      if (q.isEmpty) return true;
-      if (e.questClass.toLowerCase().contains(q)) return true;
-      final name = localizedQuestName(catalog, lang, e.id);
-      return name != null && name.toLowerCase().contains(q);
-    }
+    final hasCatalog = catalog.isNotEmpty;
+    String? descriptionFor(ProgressionQuest quest) =>
+        localizedQuestDescription(catalog, lang, quest.id);
+    final journal = buildQuestJournal(
+      _allQuests,
+      localizedLabel: (quest) => localizedQuestName(catalog, lang, quest.id),
+      localizedDescription: descriptionFor,
+      isJournalQuest: hasCatalog
+          ? (quest) => descriptionFor(quest) != null
+          : null,
+      rawFallbackLabel: (quest) => readableQuestEntry(
+        quest.name.isEmpty ? quest.id : quest.name,
+        AppLocalizations.of(context),
+      ),
+      // Tests and installations without an extracted localization catalog can
+      // still show conservative root rows. With a catalog, descriptions give
+      // us the exact same journal/main-quest distinction as the game.
+      allowRawFallback: !hasCatalog,
+    );
 
-    bool matchesState(ProgressionQuest e) {
+    bool matchesState(QuestJournalNode node) {
       final sf = _stateFilter;
       if (sf == null) return true;
       final lf = sf.toLowerCase();
-      return _questLabel(e).toLowerCase() == lf ||
-          (e.currentState?.toLowerCase() ?? '') == lf;
+      final quest = node.quest;
+      return _questLabel(quest).toLowerCase() == lf ||
+          (quest.currentState?.toLowerCase() ?? '') == lf;
     }
 
-    bool matchesGroup(ProgressionQuest e) {
-      final gf = _groupFilter;
-      return gf == null || e.group.toLowerCase() == gf.toLowerCase();
-    }
+    bool matchesQuery(QuestJournalNode node) => node.matchesQuery(_query);
 
     final stateCounts = <String, int>{};
-    final groupCounts = <String, int>{};
-    for (final e in _allQuests) {
-      if (!matchesQuery(e)) continue;
-      if (matchesGroup(e)) {
-        final l = _questLabel(e);
+    final rootsForStateFacet = _sectionFilter == null
+        ? journal.roots.all
+        : journal.roots.forSection(_sectionFilter!);
+    for (final node in rootsForStateFacet) {
+      if (matchesQuery(node)) {
+        final l = _questLabel(node.quest);
         stateCounts[l] = (stateCounts[l] ?? 0) + 1;
-      }
-      if (matchesState(e)) {
-        groupCounts[e.group] = (groupCounts[e.group] ?? 0) + 1;
       }
     }
 
-    final filtered =
-        _allQuests
-            .where((e) => matchesQuery(e) && matchesState(e) && matchesGroup(e))
-            .toList()
-          ..sort((a, b) => a.questClass.compareTo(b.questClass));
+    final sectionCounts = <QuestJournalSection, int>{
+      for (final section in QuestJournalSection.values)
+        section: journal.roots
+            .forSection(section)
+            .where((node) => matchesQuery(node) && matchesState(node))
+            .length,
+    };
+
+    final sectionRoots = _sectionFilter == null
+        ? journal.roots.all
+        : journal.roots.forSection(_sectionFilter!);
+    final filtered = sectionRoots
+        .where((node) => matchesQuery(node) && matchesState(node))
+        .toList(growable: false);
     final total = filtered.length;
     final offset = _offset < total ? _offset : 0;
-    final pageQuests = filtered.skip(offset).take(_pageSize).toList();
-    return ProgressionQuestPage(
-      quests: pageQuests,
+    return _QuestJournalView(
+      roots: filtered.skip(offset).take(_pageSize).toList(growable: false),
       stateCounts: stateCounts,
-      groupCounts: groupCounts,
+      sectionCounts: sectionCounts,
       total: total,
       offset: offset,
-      limit: _pageSize,
     );
   }
 
@@ -410,17 +436,18 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     final scheme = widget.theme.colorScheme;
     final page = _computeView(locCatalog, lang);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        // Two-pane row: group picker left, quest content right.
+        // Two-pane row: localized in-game journal sections on the left and
+        // the selected quest tree on the right.
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Left pane: scrollable group picker.
-            SizedBox(width: 190, child: _buildGroupPicker(l10n, page)),
+            SizedBox(width: 210, child: _buildSectionPicker(l10n, page)),
             const SizedBox(width: 12),
             const VerticalDivider(width: 1),
             const SizedBox(width: 12),
@@ -471,11 +498,18 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                     const SizedBox(height: 8),
                     Text(_fetchError!, style: TextStyle(color: scheme.error)),
                   ],
+                  const SizedBox(height: 6),
+                  Text(
+                    l10n.questJournalHint,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                   const SizedBox(height: 8),
-                  // Filter row: status chips only (group selection lives in the
-                  // left pane now).
+                  // Status chips only; journal-section selection lives in the
+                  // left pane.
                   _QuestFilterRow(
-                    page: page,
+                    stateCounts: page.stateCounts,
                     stateFilter: _stateFilter,
                     busy: _loading,
                     onStateChanged: (label) {
@@ -488,7 +522,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                   const SizedBox(height: 4),
                   _PaginationBar(
                     offset: page.offset,
-                    count: page.quests.length,
+                    count: page.roots.length,
                     total: page.total,
                     pageSize: _pageSize,
                     busy: _loading,
@@ -501,67 +535,21 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                   const SizedBox(height: 4),
                   // Quest list — the only scrollable, fills remaining height
                   Expanded(
-                    child: _loading && page.quests.isEmpty
+                    child: _loading && page.roots.isEmpty
                         ? const Center(child: CircularProgressIndicator())
+                        : page.roots.isEmpty
+                        ? Center(child: Text(l10n.questJournalNoEntries))
                         : ListView.separated(
-                            itemCount: page.quests.length,
+                            itemCount: page.roots.length,
                             separatorBuilder: (_, _) =>
                                 const Divider(height: 1),
-                            itemBuilder: (context, index) {
-                              final quest = page.quests[index];
-                              final pendingState =
-                                  _pending[quest.questClass]?.state;
-                              final effectiveState =
-                                  pendingState ?? quest.currentState;
-                              final inKnownStates =
-                                  effectiveState != null &&
-                                  questStates.contains(effectiveState);
-                              return ListTile(
-                                dense: true,
-                                leading: const Icon(Icons.flag_outlined),
-                                title: SelectableText(
-                                  localizedQuestName(
-                                        locCatalog,
-                                        lang,
-                                        quest.id,
-                                      ) ??
-                                      (quest.name.isEmpty
-                                          ? quest.id
-                                          : quest.name),
-                                  maxLines: 1,
-                                ),
-                                subtitle: SelectableText(
-                                  '${quest.group} / ${quest.id}',
-                                  maxLines: 1,
-                                ),
-                                trailing:
-                                    widget.editable &&
-                                        quest.writable &&
-                                        inKnownStates
-                                    ? DropdownButton<String>(
-                                        value: effectiveState,
-                                        underline: const SizedBox.shrink(),
-                                        items: questStates
-                                            .map(
-                                              (s) => DropdownMenuItem(
-                                                value: s,
-                                                child: Text(
-                                                  _localizedState(l10n, s),
-                                                ),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (s) =>
-                                            _setQuestState(quest, s),
-                                      )
-                                    : Text(
-                                        _localizedState(
-                                          l10n,
-                                          quest.currentState,
-                                        ),
-                                      ),
-                              );
-                            },
+                            itemBuilder: (context, index) => _buildQuestNode(
+                              context,
+                              l10n,
+                              page.roots[index],
+                              depth: 0,
+                              showObjectIds: showObjectIds,
+                            ),
                           ),
                   ),
                 ],
@@ -573,39 +561,38 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     );
   }
 
-  /// Left-pane group picker: "All groups" entry plus one tile per group from
-  /// [page.groupCounts], sorted alphabetically. The selected group is kept
-  /// visible (count 0) even if it drops out of the latest counts. Tapping sets
-  /// [_groupFilter] and re-filters client-side.
-  Widget _buildGroupPicker(AppLocalizations l10n, ProgressionQuestPage page) {
-    final sortedGroups = page.groupCounts.keys.toList()..sort();
-    // Keep the selected group present even when its count is now 0.
-    final selected = _groupFilter;
-    if (selected != null && !page.groupCounts.containsKey(selected)) {
-      sortedGroups.add(selected);
-    }
+  /// Localized journal sections matching the five icons/categories in-game.
+  /// Counts represent main quests only; objectives never inflate them.
+  Widget _buildSectionPicker(AppLocalizations l10n, _QuestJournalView page) {
+    final selected = _sectionFilter;
+    final allCount = page.sectionCounts.values.fold<int>(0, (a, b) => a + b);
     return ListView(
       padding: EdgeInsets.zero,
       children: [
         _GroupTile(
-          label: l10n.allGroups,
+          label: l10n.groupWithCount(l10n.questJournalAll, allCount),
+          icon: Icons.menu_book_outlined,
           selected: selected == null,
           onTap: () {
             if (selected == null) return;
             setState(() {
-              _groupFilter = null;
+              _sectionFilter = null;
               _offset = 0;
             });
           },
         ),
-        for (final g in sortedGroups)
+        for (final section in QuestJournalSection.values)
           _GroupTile(
-            label: l10n.groupWithCount(g, page.groupCounts[g] ?? 0),
-            selected: selected == g,
+            label: l10n.groupWithCount(
+              _sectionLabel(l10n, section),
+              page.sectionCounts[section] ?? 0,
+            ),
+            icon: _sectionIcon(section),
+            selected: selected == section,
             onTap: () {
-              if (selected == g) return;
+              if (selected == section) return;
               setState(() {
-                _groupFilter = g;
+                _sectionFilter = section;
                 _offset = 0;
               });
             },
@@ -613,6 +600,131 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       ],
     );
   }
+
+  String _sectionLabel(AppLocalizations l10n, QuestJournalSection section) =>
+      switch (section) {
+        QuestJournalSection.oldCamp => l10n.questJournalOldCamp,
+        QuestJournalSection.newCamp => l10n.questJournalNewCamp,
+        QuestJournalSection.swampCamp => l10n.questJournalSwampCamp,
+        QuestJournalSection.colony => l10n.questJournalColony,
+        QuestJournalSection.completed => l10n.questJournalCompleted,
+      };
+
+  IconData _sectionIcon(QuestJournalSection section) => switch (section) {
+    QuestJournalSection.oldCamp => Icons.fort_outlined,
+    QuestJournalSection.newCamp => Icons.landscape_outlined,
+    QuestJournalSection.swampCamp => Icons.grass_outlined,
+    QuestJournalSection.colony => Icons.person_pin_circle_outlined,
+    QuestJournalSection.completed => Icons.task_alt_outlined,
+  };
+
+  Widget _buildQuestNode(
+    BuildContext context,
+    AppLocalizations l10n,
+    QuestJournalNode node, {
+    required int depth,
+    required bool showObjectIds,
+  }) {
+    final trailing = _buildQuestStateControl(l10n, node.quest);
+    final title = SelectableText(node.label, maxLines: 1);
+    final subtitle = _buildQuestSubtitle(context, node, showObjectIds);
+    if (node.children.isEmpty) {
+      return ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.only(left: 16 + depth * 24, right: 8),
+        leading: Icon(
+          depth == 0 ? Icons.flag_outlined : Icons.subdirectory_arrow_right,
+          size: 20,
+        ),
+        title: title,
+        subtitle: subtitle,
+        trailing: trailing,
+      );
+    }
+
+    return ExpansionTile(
+      key: ValueKey('quest-tree:${node.quest.questClass}:$_query'),
+      initiallyExpanded: _query.isNotEmpty,
+      controlAffinity: ListTileControlAffinity.leading,
+      tilePadding: EdgeInsets.only(left: 8 + depth * 24, right: 8),
+      childrenPadding: EdgeInsets.zero,
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
+      children: [
+        for (final child in node.children)
+          _buildQuestNode(
+            context,
+            l10n,
+            child,
+            depth: depth + 1,
+            showObjectIds: showObjectIds,
+          ),
+      ],
+    );
+  }
+
+  Widget? _buildQuestSubtitle(
+    BuildContext context,
+    QuestJournalNode node,
+    bool showObjectIds,
+  ) {
+    if (node.description == null && !showObjectIds) return null;
+    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (node.description case final description?)
+          Text(description, maxLines: 2, overflow: TextOverflow.ellipsis),
+        if (showObjectIds)
+          SelectableText(node.quest.id, maxLines: 1, style: muted),
+      ],
+    );
+  }
+
+  Widget _buildQuestStateControl(
+    AppLocalizations l10n,
+    ProgressionQuest quest,
+  ) {
+    final pendingState = _pending[quest.questClass]?.state;
+    final effectiveState = pendingState ?? quest.currentState;
+    final inKnownStates =
+        effectiveState != null && questStates.contains(effectiveState);
+    if (widget.editable && quest.writable && inKnownStates) {
+      return DropdownButton<String>(
+        value: effectiveState,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final state in questStates)
+            DropdownMenuItem(
+              value: state,
+              child: Text(_localizedState(l10n, state)),
+            ),
+        ],
+        onChanged: (state) => _setQuestState(quest, state),
+      );
+    }
+    return Text(_localizedState(l10n, effectiveState));
+  }
+}
+
+class _QuestJournalView {
+  const _QuestJournalView({
+    required this.roots,
+    required this.stateCounts,
+    required this.sectionCounts,
+    required this.total,
+    required this.offset,
+  });
+
+  final List<QuestJournalNode> roots;
+  final Map<String, int> stateCounts;
+  final Map<QuestJournalSection, int> sectionCounts;
+  final int total;
+  final int offset;
 }
 
 // ---------------------------------------------------------------------------
@@ -659,15 +771,6 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
   bool _loadingEntries = false;
   // Epoch guards the entries loader so a stale load never clobbers a newer one.
   int _entriesEpoch = 0;
-  // Armed by _ensureCharacterEntry right before its applyAddKnowledgeCharacter
-  // write refreshes the inspection. That refresh is SELF-INFLICTED: the
-  // in-flight first-add flow reloads entries itself and queues its pending
-  // edit against the fresh inspection AFTER didUpdateWidget fires for it —
-  // so didUpdateWidget must treat exactly that one reloadKey change as "ours"
-  // (no _pending.clear(), no re-select) instead of as staleness, or the
-  // user's typed entry is silently dropped next to a freshly created EMPTY
-  // knowledge set. Consumed by the first reloadKey change after arming.
-  bool _expectSelfRefresh = false;
   int _entryPageSize = _defaultPageSize;
   // Used during the cross-page duplicate check in _addEntry.
   bool _checkingDuplicate = false;
@@ -722,22 +825,12 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     super.didUpdateWidget(oldWidget);
     final reloaded = widget.reloadKey != oldWidget.reloadKey;
     final selectionChanged = widget.uniqueName != oldWidget.uniqueName;
-    // A reload caused by _ensureCharacterEntry's own write (the first-add
-    // flow) is NOT staleness: that flow reloads entries itself and queues the
-    // pending add afterwards. Clearing _pending or re-selecting (which bumps
-    // _entriesEpoch and resets _entries) here would drop the in-flight add.
-    final selfRefresh = reloaded && _expectSelfRefresh;
     if (reloaded) {
-      _expectSelfRefresh = false;
-      if (!selfRefresh) {
-        // Pending edits belong to the old inspection — clear them.
-        _pending.clear();
-      }
+      // A completed save or external reload re-seeds the inspection; local
+      // optimistic rows must follow the central pending registry.
+      _pending.clear();
     }
-    // Reload the selected character's entries when either the shared selection
-    // changed or a fresh EXTERNAL inspection arrived (post-save reload / new
-    // file). The self-refresh reload happens inside _ensureCharacterEntry.
-    if ((reloaded && !selfRefresh) || selectionChanged) {
+    if (reloaded || selectionChanged) {
       _selectCharacter(widget.uniqueName);
     }
   }
@@ -823,74 +916,20 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       '$character\t${entry.toLowerCase()}';
 
   void _removeEntry(String entry) {
-    // Same guard as _addEntry: never queue an edit with an unloaded path.
-    if (_entries.setPath.isEmpty) return;
-    final key = _pendingKey(_selectedCharacter!, entry);
+    final character = _selectedCharacter;
+    if (character == null) return;
+    final key = _pendingKey(character, entry);
     setState(() {
       if (_pending.containsKey(key)) {
         _pending.remove(key);
       } else {
         _pending[key] = KnowledgeEntryEdit.remove(
-          setPath: _entries.setPath,
+          character: character,
           entry: entry,
         );
       }
     });
     _pushPending();
-  }
-
-  /// Creates the character's CharacterKnowledgeByUniqueName entry when it does
-  /// not exist yet, then reloads entries so [_entries.setPath] is populated.
-  /// This is the "no knowledge yet" first-add path that replaces the old
-  /// "Add NPC" dialog: instead of adding an NPC to a list, the already-selected
-  /// character gets its (empty) knowledge set created on demand.
-  ///
-  /// Returns true when [_entries.setPath] is ready to receive an add (either it
-  /// was already populated, or the create+reload succeeded). Returns false and
-  /// leaves [_addError] / notifier error set on any failure so the caller must
-  /// not fall through to a pending add.
-  Future<bool> _ensureCharacterEntry(String character) async {
-    // Already has a knowledge set → nothing to create.
-    if (_entries.setPath.isNotEmpty) return true;
-    // Only the benign "no knowledge yet" state may auto-create. An empty
-    // setPath from any other cause (still loading, real error) must not write.
-    if (!_noKnowledgeYet) return false;
-    // The write below refreshes the inspection (reloadKey changes). Arm the
-    // self-refresh marker BEFORE the write so didUpdateWidget — which can fire
-    // on any frame between here and the end of _addEntry — treats that one
-    // refresh as ours instead of clearing _pending / re-selecting the same
-    // character mid-flight.
-    _expectSelfRefresh = true;
-    final ok = await widget.notifier.applyAddKnowledgeCharacter(character);
-    // A failed write never refreshed anything — disarm the marker so the NEXT
-    // (genuinely external) reload is not mistaken for a self-refresh.
-    if (!ok) _expectSelfRefresh = false;
-    // The notifier sets state.error on failure; also guard unmount/reselect.
-    if (!mounted || _selectedCharacter != character) return false;
-    if (!ok) return false;
-    // applyAddKnowledgeCharacter refreshed the inspection; reload here so the
-    // populated setPath is available synchronously for the add below rather
-    // than depending on the parent rebuild's timing. Bump the epoch so any
-    // OLDER in-flight load can't clobber this fresh page — but do NOT compare
-    // against it below: a same-character refresh-driven reload bumping the
-    // epoch is not staleness for this flow. Only a real character switch or
-    // unmount (both covered by the guard) may abort the add.
-    ++_entriesEpoch;
-    final page = await widget.notifier.loadKnowledgeEntries(
-      character,
-      offset: 0,
-      limit: _entryPageSize,
-    );
-    if (!mounted || _selectedCharacter != character) {
-      return false;
-    }
-    setState(() {
-      _loadingEntries = false;
-      _noKnowledgeYet = false;
-      _entries = page;
-    });
-    // If the entry still has no setPath the create did not take — do not queue.
-    return _entries.setPath.isNotEmpty;
   }
 
   Future<void> _addEntry(String entry) async {
@@ -899,15 +938,9 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     if (character == null) return;
     final trimmed = entry.trim();
     if (trimmed.isEmpty) return;
-    // No-knowledge-yet path: create the character's (empty) knowledge set first
-    // so setPath becomes known, then fall through to the normal add. When the
-    // set already exists this is a no-op.
-    if (_entries.setPath.isEmpty) {
-      final ready = await _ensureCharacterEntry(character);
-      if (!ready) return;
-    }
-    // Issue C: defense-in-depth guard — setPath not loaded → reject.
-    if (_entries.setPath.isEmpty) return;
+    // The value-addressed core edit creates a missing character knowledge-map
+    // entry atomically with this add when Save is pressed. No preparatory file
+    // write (and no setPath) is needed here.
     // Fast path: already on the current page.
     // UE Names compare case-insensitively, so case-variants are duplicates.
     final trimmedLower = trimmed.toLowerCase();
@@ -923,46 +956,45 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       return;
     }
 
-    // Issue B: cross-page duplicate check via a server query. The stale
-    // guards below check unmount and character switch ONLY — deliberately
-    // not the entries epoch: the first-add flow's own inspection refresh may
-    // reload the same character's entries mid-check, and that must not drop
-    // the add (see _expectSelfRefresh).
+    // Cross-page duplicate check via a server query. A character with no
+    // knowledge-map entry is known to have an empty set, so the first add can
+    // be queued without deliberately triggering the benign query error.
     final checkCharacter = character;
-    setState(() {
-      _checkingDuplicate = true;
-      _addError = null;
-    });
-    // The core query is a lowercase-contains filter, so an exact match can
-    // sit on any page of the match set — page through ALL matches.
     var exists = false;
     String? checkError;
-    try {
-      var offset = 0;
-      while (true) {
-        final checkPage = await widget.notifier.loadKnowledgeEntries(
-          checkCharacter,
-          query: trimmed,
-          limit: 200,
-          offset: offset,
-        );
-        if (!mounted || _selectedCharacter != checkCharacter) {
-          return;
+    if (!_noKnowledgeYet) {
+      setState(() {
+        _checkingDuplicate = true;
+        _addError = null;
+      });
+      // The core query is a lowercase-contains filter, so an exact match can
+      // sit on any page of the match set — page through ALL matches.
+      try {
+        var offset = 0;
+        while (true) {
+          final checkPage = await widget.notifier.loadKnowledgeEntries(
+            checkCharacter,
+            query: trimmed,
+            limit: 200,
+            offset: offset,
+          );
+          if (!mounted || _selectedCharacter != checkCharacter) {
+            return;
+          }
+          if (checkPage.error != null) {
+            checkError = checkPage.error;
+            break;
+          }
+          if (checkPage.entries.any((e) => e.toLowerCase() == trimmedLower)) {
+            exists = true;
+            break;
+          }
+          offset += checkPage.entries.length;
+          if (checkPage.entries.isEmpty || offset >= checkPage.total) break;
         }
-        if (checkPage.error != null) {
-          checkError = checkPage.error;
-          break;
-        }
-        if (checkPage.entries.any((e) => e.toLowerCase() == trimmedLower)) {
-          exists = true;
-          break;
-        }
-        offset += checkPage.entries.length;
-        if (checkPage.entries.isEmpty || offset >= checkPage.total) break;
+      } finally {
+        if (mounted) setState(() => _checkingDuplicate = false);
       }
-    } finally {
-      // Clear the lock on every exit path (unmount, stale, error).
-      if (mounted) setState(() => _checkingDuplicate = false);
     }
     if (!mounted || _selectedCharacter != checkCharacter) {
       return;
@@ -979,15 +1011,11 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
       return;
     }
 
-    // Re-read the setPath AFTER all awaits above: on the first-add path
-    // _entries was replaced with the post-refresh page, so the queued edit
-    // addresses the FRESH inspection. If an interleaved reload left it empty
-    // (transient reset), do not queue a pathless edit — mirrors the Issue C
-    // guard above.
-    final setPath = _entries.setPath;
-    if (setPath.isEmpty) return;
     setState(() {
-      _pending[key] = KnowledgeEntryEdit.add(setPath: setPath, entry: trimmed);
+      _pending[key] = KnowledgeEntryEdit.add(
+        character: character,
+        entry: trimmed,
+      );
       _addController.clear();
       _addError = null;
     });
@@ -1005,6 +1033,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
 
@@ -1047,17 +1076,13 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                     ),
                   if (character != null) ...[
                     if (widget.editable) ...[
-                      // Issue C: disabled while entries are loading or a
-                      // duplicate check is in flight. An empty setPath
-                      // normally disables the field, EXCEPT in the
-                      // no-knowledge-yet state: there the first add is
-                      // allowed and creates the character's knowledge set
-                      // on demand (see _ensureCharacterEntry).
+                      // Missing knowledge is not an error: the semantic edit
+                      // creates that character entry atomically on Save.
                       Builder(
                         builder: (context) {
                           final addDisabled =
                               _loadingEntries ||
-                              (_entries.setPath.isEmpty && !_noKnowledgeYet) ||
+                              _entries.error != null ||
                               _checkingDuplicate;
                           return Row(
                             children: [
@@ -1170,25 +1195,32 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                       for (final entry in addedEntries)
                         Builder(
                           builder: (context) {
+                            final meta = _knowledgeCatalog?.entryById(entry);
                             final text = localizedKnowledgeEntry(
                               locCatalog,
                               lang,
                               entry,
+                              locKey: meta?.locKey,
+                              caption: meta?.caption,
+                              l10n: l10n,
                             );
+                            final title =
+                                text ?? readableKnowledgeEntry(entry, l10n);
                             return ListTile(
                               dense: true,
                               tileColor: scheme.tertiaryContainer.withValues(
                                 alpha: 0.4,
                               ),
-                              title: Text(
-                                text ?? entry,
-                                style: TextStyle(
+                              title: _KnowledgeEntryTitle(
+                                entry: entry,
+                                catalogCategory: meta?.category,
+                                title: title,
+                                titleStyle: TextStyle(
                                   color: scheme.onTertiaryContainer,
                                 ),
                               ),
-                              subtitle: text == null
-                                  ? null
-                                  : Text(
+                              subtitle: showObjectIds
+                                  ? Text(
                                       entry,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -1196,7 +1228,8 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                         color: scheme.onSurfaceVariant,
                                         fontSize: 11,
                                       ),
-                                    ),
+                                    )
+                                  : null,
                               trailing: widget.editable
                                   ? IconButton(
                                       icon: const Icon(Icons.undo, size: 18),
@@ -1223,27 +1256,36 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                 final isRemoved = removedEntries.contains(
                                   entry.toLowerCase(),
                                 );
+                                final meta = _knowledgeCatalog?.entryById(
+                                  entry,
+                                );
                                 final text = localizedKnowledgeEntry(
                                   locCatalog,
                                   lang,
                                   entry,
+                                  locKey: meta?.locKey,
+                                  caption: meta?.caption,
+                                  l10n: l10n,
                                 );
+                                final title =
+                                    text ?? readableKnowledgeEntry(entry, l10n);
                                 return ListTile(
                                   dense: true,
-                                  title: Text(
-                                    text ?? entry,
-                                    style: isRemoved
+                                  title: _KnowledgeEntryTitle(
+                                    entry: entry,
+                                    catalogCategory: meta?.category,
+                                    title: title,
+                                    titleStyle: isRemoved
                                         ? const TextStyle(
                                             decoration:
                                                 TextDecoration.lineThrough,
                                           )
                                         : null,
                                   ),
-                                  // Raw entry id beneath the resolved
-                                  // dialog line, when one was found.
-                                  subtitle: text == null
-                                      ? null
-                                      : Text(
+                                  // Raw entry id is opt-in through Advanced
+                                  // settings, independent of text resolution.
+                                  subtitle: showObjectIds
+                                      ? Text(
                                           entry,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -1254,7 +1296,8 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                                 ? TextDecoration.lineThrough
                                                 : null,
                                           ),
-                                        ),
+                                        )
+                                      : null,
                                   trailing: widget.editable
                                       ? IconButton(
                                           icon: Icon(
@@ -1293,6 +1336,118 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
   }
 }
 
+/// Keeps the entry kind visible even when technical object ids are disabled.
+/// The badge deliberately sits before the localized dialog text so it remains
+/// easy to scan in long knowledge lists.
+class _KnowledgeEntryTitle extends StatelessWidget {
+  const _KnowledgeEntryTitle({
+    required this.entry,
+    required this.title,
+    this.catalogCategory,
+    this.titleStyle,
+  });
+
+  final String entry;
+  final String title;
+  final String? catalogCategory;
+  final TextStyle? titleStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = knowledgeEntryType(entry, catalogCategory: catalogCategory);
+    return Row(
+      children: [
+        _KnowledgeEntryTypeBadge(entry: entry, type: type),
+        const SizedBox(width: 8),
+        Expanded(child: Text(title, style: titleStyle)),
+      ],
+    );
+  }
+}
+
+class _KnowledgeEntryTypeBadge extends StatelessWidget {
+  const _KnowledgeEntryTypeBadge({required this.entry, required this.type});
+
+  final String entry;
+  final KnowledgeEntryType type;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final label = knowledgeEntryTypeLabel(l10n, type);
+    final labelStyle = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600);
+    final textDirection = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final widestLabel = KnowledgeEntryType.values
+        .map((candidate) => knowledgeEntryTypeLabel(l10n, candidate))
+        .map((candidate) {
+          final painter = TextPainter(
+            text: TextSpan(text: candidate, style: labelStyle),
+            textDirection: textDirection,
+            textScaler: textScaler,
+            maxLines: 1,
+          )..layout();
+          return painter.width;
+        })
+        .reduce((widest, width) => width > widest ? width : widest);
+    // Every type uses the widest localized label. This keeps the badge column
+    // aligned without clipping longer translations or larger text scales.
+    final badgeWidth = 14 + 13 + 4 + widestLabel;
+    final (background, foreground, icon) = switch (type) {
+      KnowledgeEntryType.choice => (
+        scheme.secondaryContainer,
+        scheme.onSecondaryContainer,
+        Icons.call_split,
+      ),
+      KnowledgeEntryType.info => (
+        scheme.tertiaryContainer,
+        scheme.onTertiaryContainer,
+        Icons.info_outline,
+      ),
+      KnowledgeEntryType.voiceLine => (
+        scheme.surfaceContainerHighest,
+        scheme.onSurface,
+        Icons.record_voice_over_outlined,
+      ),
+      KnowledgeEntryType.topic => (
+        scheme.primaryContainer,
+        scheme.onPrimaryContainer,
+        Icons.topic_outlined,
+      ),
+      KnowledgeEntryType.other => (
+        scheme.surfaceContainerLow,
+        scheme.onSurfaceVariant,
+        Icons.help_outline,
+      ),
+    };
+
+    return Semantics(
+      label: label,
+      excludeSemantics: true,
+      child: Container(
+        key: ValueKey('knowledge-type-${type.name}-$entry'),
+        width: badgeWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: foreground),
+            const SizedBox(width: 4),
+            Text(label, style: labelStyle?.copyWith(color: foreground)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Events detail — events for a single, externally-selected character
 // ---------------------------------------------------------------------------
@@ -1309,6 +1464,8 @@ class EventsDetail extends ConsumerStatefulWidget {
     required this.editable,
     required this.reloadKey,
     required this.theme,
+    this.relationshipNpcId,
+    this.relationshipEditable = false,
   });
 
   /// GlobalId of the selected character, or null when nothing is selected.
@@ -1319,6 +1476,14 @@ class EventsDetail extends ConsumerStatefulWidget {
   final SaveInspection reloadKey;
   final ThemeData theme;
 
+  /// NPC whose saved relationship is edited above the event pagination.
+  /// Null for the player and for non-actor selections.
+  final String? relationshipNpcId;
+
+  /// Uses the Attribute tab's former write gate so moving the control does not
+  /// silently change which saves may edit this value.
+  final bool relationshipEditable;
+
   @override
   ConsumerState<EventsDetail> createState() => _EventsDetailState();
 }
@@ -1328,10 +1493,14 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
 
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
+  Map<int, MemoryEventEdit> _pendingEvents = {};
   bool _loadingEvents = false;
   // Epoch guards the events loader so a stale load never clobbers a newer one.
   int _eventsEpoch = 0;
   int _eventPageSize = _defaultPageSize;
+  ItemCatalog? _eventItemCatalog;
+  List<NpcGlossaryCatalogEntry> _eventNpcCatalog = const [];
+  GlossarySegmentTextCatalog _eventSegmentTextCatalog = const {};
   // True when the selected character has no LongTermMemoryByGlobalId entry yet
   // (the common case for an NPC the hero never interacted with). The core
   // reports this via a benign "has no memory entry" error; we treat it as
@@ -1349,7 +1518,39 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
   @override
   void initState() {
     super.initState();
+    _loadEventPresentationCatalogs();
     _selectCharacter(widget.globalId);
+  }
+
+  /// The presentation layer can already fall back to readable class/tag names,
+  /// so catalog failures must never make the events list unavailable. Load the
+  /// bundled item and glossary indexes opportunistically and rebuild once to
+  /// upgrade raw references to their in-game names and segment labels.
+  Future<void> _loadEventPresentationCatalogs() async {
+    ItemCatalog? items;
+    List<NpcGlossaryCatalogEntry> npcs = const [];
+    GlossarySegmentTextCatalog segmentTexts = const {};
+    try {
+      items = await ItemCatalog.loadBundled();
+    } catch (_) {
+      // A missing optional catalog only reduces the quality of the fallback.
+    }
+    try {
+      npcs = await loadGlossaryNpcCatalog();
+    } catch (_) {
+      // Keep rendering events from their save identifiers.
+    }
+    try {
+      segmentTexts = await loadGlossarySegmentTextCatalog();
+    } catch (_) {
+      // Segment prose is optional; class and catalog labels still work.
+    }
+    if (!mounted) return;
+    setState(() {
+      _eventItemCatalog = items;
+      _eventNpcCatalog = npcs;
+      _eventSegmentTextCatalog = segmentTexts;
+    });
   }
 
   @override
@@ -1369,6 +1570,12 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     final epoch = ++_eventsEpoch;
     setState(() {
       _selectedCharacter = id;
+      _pendingEvents = id == null
+          ? {}
+          : {
+              for (final edit in widget.notifier.pendingMemoryEventEdits(id))
+                edit.index: edit,
+            };
       _loadingEvents = id != null;
       _events = const MemoryEventsPage(); // clear stale page immediately
       _noEventsYet = false;
@@ -1413,7 +1620,14 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     _loadEvents(offset: 0);
   }
 
-  Future<void> _confirmAndApply(
+  void _queueEvent(MemoryEventEdit edit) {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    if (!widget.notifier.setPendingMemoryEventEdit(character, edit)) return;
+    setState(() => _pendingEvents[edit.index] = edit);
+  }
+
+  Future<void> _confirmAndQueueDuplicate(
     BuildContext context,
     MemoryEventEdit edit,
     String title,
@@ -1439,9 +1653,21 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     );
     if (confirmed != true) return;
     if (!mounted) return;
-    await widget.notifier.applyMemoryEventEdit(edit);
-    // On success the notifier refreshes inspection → reloadKey changes →
-    // didUpdateWidget fires and reloads this detail automatically.
+    _queueEvent(edit);
+  }
+
+  void _clearPendingEvent(int index) {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    setState(() => _pendingEvents.remove(index));
+    widget.notifier.clearPendingMemoryEventEdit(character, index: index);
+  }
+
+  void _clearAllPendingEvents() {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    setState(() => _pendingEvents.clear());
+    widget.notifier.clearPendingMemoryEventEdit(character);
   }
 
   @override
@@ -1449,6 +1675,20 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     final l10n = AppLocalizations.of(context);
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
+    final showObjectIds = ref.watch(showObjectIdsProvider);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final eventPresenter = MemoryEventPresenter(
+      l10n: l10n,
+      lang: lang,
+      locCatalog: locCatalog,
+      itemCatalog: _eventItemCatalog,
+      npcGlossaryCatalog: _eventNpcCatalog,
+      segmentTextCatalog: _eventSegmentTextCatalog,
+    );
+    final pendingEvent = _pendingEvents.isEmpty
+        ? null
+        : _pendingEvents.values.first;
 
     return Card(
       child: Padding(
@@ -1480,6 +1720,54 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                           style: TextStyle(color: scheme.error),
                         ),
                       ),
+                    if (widget.relationshipNpcId != null) ...[
+                      NpcRelationshipEditor(
+                        npcId: widget.relationshipNpcId!,
+                        notifier: widget.notifier,
+                        editable: widget.relationshipEditable,
+                        reloadKey: widget.reloadKey,
+                      ),
+                      const Divider(height: 12),
+                    ],
+                    if (pendingEvent != null) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: scheme.secondaryContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              pendingEvent.isRemove
+                                  ? Icons.delete_outline
+                                  : Icons.copy_outlined,
+                              size: 18,
+                              color: scheme.onSecondaryContainer,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${pendingEvent.isRemove ? l10n.memoryEventRemovalQueued : l10n.memoryEventDuplicationQueued}'
+                                '${_pendingEvents.length > 1 ? ' (${_pendingEvents.length})' : ''}',
+                                style: TextStyle(
+                                  color: scheme.onSecondaryContainer,
+                                ),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _clearAllPendingEvents,
+                              icon: const Icon(Icons.undo, size: 18),
+                              label: Text(l10n.cancel),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     _PaginationBar(
                       offset: _events.offset,
                       count: _events.events.length,
@@ -1508,67 +1796,51 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                           ? const Center(child: CircularProgressIndicator())
                           : ListView.separated(
                               itemCount: _events.events.length,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
                               separatorBuilder: (_, _) =>
-                                  const Divider(height: 1),
+                                  const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final event = _events.events[index];
-                                final tagLabel = event.tags.isEmpty
-                                    ? l10n.noTags
-                                    : event.tags.join(', ');
-                                final timeStr = event.timeSeconds != null
-                                    ? event.timeSeconds!.toStringAsFixed(0)
-                                    : '?';
-                                final affected = event.affected ?? '';
-                                return ListTile(
-                                  dense: true,
-                                  title: SelectableText(tagLabel, maxLines: 1),
-                                  subtitle: SelectableText(
-                                    l10n.eventSubtitle(timeStr, affected),
-                                    maxLines: 1,
-                                  ),
-                                  trailing: widget.editable
-                                      ? Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              icon: const Icon(
-                                                Icons.delete_outline,
-                                                size: 20,
-                                              ),
-                                              tooltip: l10n.removeEvent,
-                                              onPressed: _loadingEvents
-                                                  ? null
-                                                  : () => _confirmAndApply(
-                                                      context,
-                                                      MemoryEventEdit.remove(
-                                                        arrayPath:
-                                                            _events.arrayPath,
-                                                        index: event.index,
-                                                      ),
-                                                      l10n.removeMemoryEventTitle,
-                                                      l10n.removeMemoryEventBody,
-                                                    ),
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(
-                                                Icons.copy_outlined,
-                                                size: 20,
-                                              ),
-                                              tooltip: l10n.duplicateEvent,
-                                              onPressed: _loadingEvents
-                                                  ? null
-                                                  : () => _confirmAndApply(
-                                                      context,
-                                                      MemoryEventEdit.duplicate(
-                                                        arrayPath:
-                                                            _events.arrayPath,
-                                                        index: event.index,
-                                                      ),
-                                                      l10n.duplicateMemoryEventTitle,
-                                                      l10n.duplicateMemoryEventBody,
-                                                    ),
-                                            ),
-                                          ],
+                                final pendingEventForRow =
+                                    _pendingEvents[event.index];
+                                final isPendingEvent =
+                                    pendingEventForRow != null;
+                                return MemoryEventCard(
+                                  event: event,
+                                  presentation: eventPresenter.present(event),
+                                  editable: widget.editable,
+                                  showObjectIds: showObjectIds,
+                                  pendingRemoval:
+                                      pendingEventForRow?.isRemove ?? false,
+                                  onUndo: widget.editable && isPendingEvent
+                                      ? () => _clearPendingEvent(event.index)
+                                      : null,
+                                  onRemove:
+                                      widget.editable &&
+                                          !isPendingEvent &&
+                                          !_loadingEvents &&
+                                          (pendingEvent == null ||
+                                              pendingEvent.isRemove)
+                                      ? () => _queueEvent(
+                                          MemoryEventEdit.remove(
+                                            arrayPath: _events.arrayPath,
+                                            index: event.index,
+                                          ),
+                                        )
+                                      : null,
+                                  onDuplicate:
+                                      widget.editable &&
+                                          !isPendingEvent &&
+                                          !_loadingEvents &&
+                                          _pendingEvents.isEmpty
+                                      ? () => _confirmAndQueueDuplicate(
+                                          context,
+                                          MemoryEventEdit.duplicate(
+                                            arrayPath: _events.arrayPath,
+                                            index: event.index,
+                                          ),
+                                          l10n.duplicateMemoryEventTitle,
+                                          l10n.duplicateMemoryEventBody,
                                         )
                                       : null,
                                 );
@@ -1782,14 +2054,15 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                                 : Icons.verified_user_outlined,
                             color: isHostile ? scheme.error : Colors.green,
                           ),
-                          title: Text(
-                            _localizedGuildLabel(l10n, g.guild, g.label),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          title: Row(
                             children: [
-                              const SizedBox(height: 4),
-                              // Prominent hostile/friendly status badge.
+                              Flexible(
+                                child: Text(
+                                  _localizedGuildLabel(l10n, g.guild, g.label),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
                               _StatusBadge(
                                 label: isPending
                                     ? l10n.factionsForgiveQueued
@@ -1800,9 +2073,10 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                                     ? scheme.primary
                                     : (isHostile ? scheme.error : Colors.green),
                               ),
-                              // Compact un-forgiven crime-type breakdown.
-                              if (!isPending && breakdown.isNotEmpty)
-                                Padding(
+                            ],
+                          ),
+                          subtitle: !isPending && breakdown.isNotEmpty
+                              ? Padding(
                                   padding: const EdgeInsets.only(top: 4),
                                   child: Text(
                                     breakdown,
@@ -1811,10 +2085,8 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
                                           color: scheme.onSurfaceVariant,
                                         ),
                                   ),
-                                ),
-                            ],
-                          ),
-                          isThreeLine: true,
+                                )
+                              : null,
                           trailing: widget.editable
                               ? FilledButton.tonal(
                                   onPressed: canForgive
@@ -1840,13 +2112,13 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
 
 class _QuestFilterRow extends StatelessWidget {
   const _QuestFilterRow({
-    required this.page,
+    required this.stateCounts,
     required this.stateFilter,
     required this.busy,
     required this.onStateChanged,
   });
 
-  final ProgressionQuestPage page;
+  final Map<String, int> stateCounts;
   final String? stateFilter;
   final bool busy;
   final void Function(String label) onStateChanged;
@@ -1858,14 +2130,14 @@ class _QuestFilterRow extends StatelessWidget {
     // (so a selected chip whose count dropped to 0 stays visible for deselect).
     final chips = [
       for (final label in _filterStateLabels)
-        if ((page.stateCounts[label] ?? 0) > 0 || stateFilter == label)
+        if ((stateCounts[label] ?? 0) > 0 || stateFilter == label)
           FilterChip(
             label: Text(
               l10n.stateLabelWithCount(
                 _localizedShortLabel(l10n, label),
-                stateFilter == label && (page.stateCounts[label] ?? 0) == 0
+                stateFilter == label && (stateCounts[label] ?? 0) == 0
                     ? 0
-                    : page.stateCounts[label] ?? 0,
+                    : stateCounts[label] ?? 0,
               ),
             ),
             selected: stateFilter == label,

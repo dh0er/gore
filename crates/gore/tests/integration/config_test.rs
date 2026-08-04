@@ -46,8 +46,14 @@ fn config_path_prints_config_json_under_gore() {
 #[test]
 fn unset_clears_the_value() {
     let tmp = TempDir::new().unwrap();
-    gore(tmp.path()).args(["config", "set", "game-path", "X"]).assert().success();
-    gore(tmp.path()).args(["config", "unset", "game-path"]).assert().success();
+    gore(tmp.path())
+        .args(["config", "set", "game-path", "X"])
+        .assert()
+        .success();
+    gore(tmp.path())
+        .args(["config", "unset", "game-path"])
+        .assert()
+        .success();
     gore(tmp.path())
         .args(["config", "get", "game-path"])
         .assert()
@@ -99,6 +105,35 @@ fn loc_extract_honors_disabled_autodetect() {
         .stderr(predicates::str::contains(
             "no AlkimiaLocalization .lcache found",
         ));
+}
+
+#[test]
+fn loc_export_and_import_find_the_lcache_the_way_loc_extract_does() {
+    // Before this, `--lcache` was required on export and import and optional only on extract.
+    // A session that reached for `export` therefore had to know that the cache is called
+    // `AlkimiaLocalization_00000000.lcache` and lives under `G1R\Story\Cache` — a path no
+    // command prints and the guide spelled wrong. It cost three calls to find by hand.
+    //
+    // With autodetect disabled and no configured game path there is nothing to find, so the
+    // proof that the flag is optional is WHICH failure comes back: the resolver's, not clap's
+    // "the following required arguments were not provided".
+    let tmp = TempDir::new().unwrap();
+    let edits = tmp.path().join("edits.json");
+    std::fs::write(&edits, b"{}").unwrap();
+
+    for args in [
+        vec!["loc", "export", "-o", "loc.json"],
+        vec!["loc", "import", "--edits", edits.to_str().unwrap()],
+    ] {
+        gore(tmp.path())
+            .current_dir(tmp.path())
+            .args(&args)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(
+                "no AlkimiaLocalization .lcache found",
+            ));
+    }
 }
 
 #[test]

@@ -6,8 +6,12 @@ import 'grouped_attribute_sidebar.dart';
 
 /// Describes one entry in the player-tab sidebar. Entries appear in enum
 /// declaration order in the sidebar: core, combat, resistances, thieving,
-/// transform (when present), advanced.
-enum _SidebarEntry { core, combat, resistances, thieving, transform, advanced }
+/// advanced.
+///
+/// The player's transform used to be a sixth entry here. It now lives in the
+/// Charaktere → Position sub-tab (PositionDetail), its ONLY home: two mounted
+/// copies would both drive the single 'transform' pending key.
+enum _SidebarEntry { core, combat, resistances, thieving, advanced }
 
 /// Grouped editors for every hero gameplay attribute. Data arrives through
 /// [load] (typed property search) and leaves through [onPendingChanged]
@@ -16,12 +20,10 @@ enum _SidebarEntry { core, combat, resistances, thieving, transform, advanced }
 /// pending edits are dropped and the card reloads.
 ///
 /// Renders a master-detail layout: a slim left sidebar for navigation and a
-/// right detail area showing the selected group's attribute rows. Pass
-/// [transformCard] to inject the hero-transform editor as the first sidebar
-/// entry.
+/// right detail area showing the selected group's attribute rows.
 ///
 /// Fallback behaviour (typed parse failed or no attributes): renders [fallback]
-/// (and [transformCard] when provided) in the legacy stacked layout.
+/// in the legacy stacked layout.
 class HeroStatsCard extends StatefulWidget {
   const HeroStatsCard({
     super.key,
@@ -31,8 +33,8 @@ class HeroStatsCard extends StatefulWidget {
     required this.reloadKey,
     this.initialPending,
     this.fallback,
-    this.transformCard,
     this.skillsSection,
+    this.attributeLabel,
   });
 
   final Future<HeroAttributesResult> Function() load;
@@ -59,15 +61,15 @@ class HeroStatsCard extends StatefulWidget {
   /// or zero attributes, so callers can keep a legacy editing surface available.
   final Widget? fallback;
 
-  /// When provided, a "Hero transform" entry is prepended to the sidebar and
-  /// this widget is shown in the detail area for that entry.
-  final Widget? transformCard;
-
   /// When provided, the learned-skills editor is appended to the "Talente"
   /// (thieving) group's detail — the hero's GameplayEffect skills rendered in
   /// the same row style as attributes. Makes the Talente entry appear even when
   /// the save has no thieving attribute rows.
   final Widget? skillsSection;
+
+  /// Resolves raw save ids to player-facing names. The editor remains usable
+  /// without a localization catalog via [heroAttributeLabel].
+  final AttributeLabelResolver? attributeLabel;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -146,12 +148,8 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     }
     // Fall back to first available entry in sidebar order.
     for (final entry in _SidebarEntry.values) {
-      if (entry == _SidebarEntry.transform) {
-        if (widget.transformCard != null) return entry;
-      } else {
-        final group = _entryToGroup(entry);
-        if (group != null && byGroup[group]?.isNotEmpty == true) return entry;
-      }
+      final group = _entryToGroup(entry);
+      if (group != null && byGroup[group]?.isNotEmpty == true) return entry;
     }
     return null;
   }
@@ -193,14 +191,17 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
         if (text == null) continue;
         // A cleared field is almost certainly an accident.
         if (text.trim().isEmpty) {
-          final errMsg = l10n.attributeEmpty(attribute.id);
+          final errMsg = l10n.attributeEmpty(_displayLabel(attribute));
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
         }
         final value = double.tryParse(text.trim());
         if (value == null) {
-          final errMsg = l10n.attributeInvalidNumber(attribute.id, text);
+          final errMsg = l10n.attributeInvalidNumber(
+            _displayLabel(attribute),
+            text,
+          );
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
@@ -245,10 +246,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
               ),
             // Same order as the legacy stacked path: attributes first.
             widget.fallback!,
-            if (widget.transformCard != null) ...[
-              const SizedBox(height: 16),
-              widget.transformCard!,
-            ],
             // Skills load independently of the typed attribute search, so keep
             // them visible even when attributes fell back to the legacy editor.
             if (widget.skillsSection != null) ...[
@@ -260,10 +257,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       );
     }
 
-    if ((_loadFailed || _attributes.isEmpty) &&
-        (widget.transformCard != null || widget.skillsSection != null)) {
-      // No stats and no fallback — just show transform and/or skills (which
-      // load independently of the typed attribute search).
+    if ((_loadFailed || _attributes.isEmpty) && widget.skillsSection != null) {
+      // No stats and no fallback — just show the skills editor (which loads
+      // independently of the typed attribute search).
       return SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -276,11 +272,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
                   style: TextStyle(color: theme.colorScheme.error),
                 ),
               ),
-            if (widget.transformCard != null) widget.transformCard!,
-            if (widget.skillsSection != null) ...[
-              if (widget.transformCard != null) const SizedBox(height: 16),
-              widget.skillsSection!,
-            ],
+            if (widget.skillsSection != null) widget.skillsSection!,
           ],
         ),
       );
@@ -290,12 +282,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final byGroup = _byGroup(_attributes);
 
     // Build sidebar entries in display order (enum declaration order).
-    // transform is included between thieving and advanced when provided.
     final sidebarEntries = <_SidebarEntry>[];
     for (final entry in _SidebarEntry.values) {
-      if (entry == _SidebarEntry.transform) {
-        if (widget.transformCard != null) sidebarEntries.add(entry);
-      } else if (entry == _SidebarEntry.thieving) {
+      if (entry == _SidebarEntry.thieving) {
         // "Talente": show whenever there are thieving attributes OR a skills
         // editor to host, so a hero with no thieving attribute rows still gets
         // the skills entry.
@@ -338,12 +327,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
     // Build the detail content for one entry.
     Widget detailFor(_SidebarEntry entry) {
-      if (entry == _SidebarEntry.transform) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [?errorRow, widget.transformCard!],
-        );
-      }
       // The rows render bare — the tab body already provides the single main
       // card, and the selected sidebar tile already names the group (no inner
       // card, no duplicate group title).
@@ -357,19 +340,15 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       final skills = isSkillsPane ? widget.skillsSection : null;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ?errorRow,
-          for (final a in attributes) _row(a),
-          ?skills,
-        ],
+        children: [?errorRow, for (final a in attributes) _row(a), ?skills],
       );
     }
 
     // Delegate the master-detail shell to the shared GroupedAttributeSidebar.
     // Each sidebar entry becomes a pane keyed by the _SidebarEntry enum value;
-    // panes stay mounted (Offstage) inside the shell so the transform editor's
-    // unsaved field drafts — which back a registered pending edit — survive
-    // switching entries.
+    // panes stay mounted (Offstage) inside the shell so a pane's unsaved field
+    // drafts — which back a registered pending edit — survive switching
+    // entries.
     return GroupedAttributeSidebar(
       selected: effectiveSelected,
       onSelect: (id) {
@@ -395,13 +374,15 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.resistances => HeroAttributeGroup.resistances,
       _SidebarEntry.thieving => HeroAttributeGroup.thieving,
       _SidebarEntry.advanced => HeroAttributeGroup.advanced,
-      _SidebarEntry.transform => null,
     };
   }
 
+  String _displayLabel(HeroAttribute attribute) =>
+      widget.attributeLabel?.call(attribute.id, attribute.setClass) ??
+      heroAttributeLabel(attribute.id);
+
   String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
-      _SidebarEntry.transform => l10n.heroEntryHeroTransform,
       _SidebarEntry.core => l10n.heroGroupMainStats,
       _SidebarEntry.combat => l10n.heroGroupCombatSkills,
       _SidebarEntry.resistances => l10n.heroGroupResistances,
@@ -412,7 +393,6 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
   IconData _entryIcon(_SidebarEntry entry) {
     return switch (entry) {
-      _SidebarEntry.transform => Icons.explore_outlined,
       _SidebarEntry.core => Icons.favorite_border,
       _SidebarEntry.combat => Icons.shield_outlined,
       _SidebarEntry.resistances => Icons.security_outlined,
@@ -423,6 +403,11 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
   Widget _row(HeroAttribute attribute) {
     final duplicate = _attributes.where((a) => a.id == attribute.id).length > 1;
+    var label = _displayLabel(attribute);
+    if (duplicate) {
+      final setName = attribute.setClass.split('.').last;
+      label = '$label ($setName)';
+    }
     return _HeroAttributeRow(
       // Record key compares reloadKey by its own equality (identity for
       // SaveInspection, which has no == override), not by toString(), so a
@@ -430,7 +415,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // rather than reusing stale field state from the previous load.
       key: ValueKey((widget.reloadKey, attribute.setClass, attribute.id)),
       attribute: attribute,
-      duplicate: duplicate,
+      label: label,
       editable: widget.editable,
       // Seed from pending text so edits made in other groups survive the
       // sidebar switch and are visible again when returning to this group.
@@ -450,7 +435,7 @@ class _HeroAttributeRow extends StatefulWidget {
   const _HeroAttributeRow({
     super.key,
     required this.attribute,
-    required this.duplicate,
+    required this.label,
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -459,7 +444,7 @@ class _HeroAttributeRow extends StatefulWidget {
   });
 
   final HeroAttribute attribute;
-  final bool duplicate;
+  final String label;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -499,13 +484,6 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
     super.dispose();
   }
 
-  String get _label {
-    final label = heroAttributeLabel(widget.attribute.id);
-    if (!widget.duplicate) return label;
-    final setName = widget.attribute.setClass.split('.').last;
-    return '$label ($setName)';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -514,6 +492,10 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 620;
           final baseField = TextField(
+            key: ValueKey(
+              'hero-attribute:${widget.attribute.setClass}:'
+              '${widget.attribute.id}:base',
+            ),
             controller: _baseController,
             enabled: widget.editable && widget.attribute.basePath != null,
             onChanged: widget.onBaseChanged,
@@ -522,10 +504,14 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeBase(_label),
+              labelText: AppLocalizations.of(context).attributeBaseValue,
             ),
           );
           final currentField = TextField(
+            key: ValueKey(
+              'hero-attribute:${widget.attribute.setClass}:'
+              '${widget.attribute.id}:current',
+            ),
             controller: _currentController,
             enabled: widget.editable && widget.attribute.currentPath != null,
             onChanged: widget.onCurrentChanged,
@@ -534,11 +520,11 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeCurrent(_label),
+              labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
           final rowLabel = Text(
-            _label,
+            widget.label,
             style: Theme.of(context).textTheme.labelLarge,
           );
           if (compact) {

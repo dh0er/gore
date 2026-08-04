@@ -10,14 +10,18 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
-/// Stable URL: releases/latest/download/ redirects to the newest GitHub
-/// release's assets, where CI uploads the signed appcast.
+/// Stable URL: CI keeps a fixed `gore-save-editor-appcast` release whose single
+/// asset it overwrites on every release, so this feed is independent of which
+/// product happens to hold the repo's "latest" pointer.
 const _appcastUrl =
-    'https://github.com/dh0er/gore/releases/latest/download/appcast-windows.xml';
+    'https://github.com/dh0er/gore/releases/download/gore-save-editor-appcast/appcast-windows.xml';
 
-/// Where the portable build sends users to grab the new build. The latest
-/// release page lists both the installer and the portable zip.
-const _releasesPageUrl = 'https://github.com/dh0er/gore/releases/latest';
+/// Where the portable build sends users to grab the new build. Pinned to the
+/// advertised version's own release, which lists both the installer and the
+/// portable zip — `releases/latest` would send them to whichever product
+/// released most recently.
+String _releasePageUrl(String version) =>
+    'https://github.com/dh0er/gore/releases/tag/gore-save-editor-v$version';
 
 const _checkIntervalSeconds = 3600;
 
@@ -222,7 +226,7 @@ Future<void> _showUpdateAvailableDialog(
             Navigator.of(context).pop();
             unawaited(
               launchUrl(
-                Uri.parse(_releasesPageUrl),
+                Uri.parse(_releasePageUrl(version)),
                 mode: LaunchMode.externalApplication,
               ),
             );

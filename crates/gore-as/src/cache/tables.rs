@@ -76,19 +76,21 @@ fn read_property_reference(c: &mut Cursor) -> Result<(), WireError> {
 fn read_i64_map(
     c: &mut Cursor,
     field: &'static str,
+    minimum_value_bytes: usize,
     mut read_value: impl FnMut(&mut Cursor) -> Result<(), WireError>,
 ) -> Result<TableSpan, WireError> {
-    let count = c.read_count(field)? as u32;
+    let count = c.read_count(field)?;
+    c.ensure_minimum_remaining(count, 8 + minimum_value_bytes, field)?;
     let entries_start = c.pos();
-    let mut keys = Vec::with_capacity(count as usize);
-    let mut entry_starts = Vec::with_capacity(count as usize);
+    let mut keys = Vec::new();
+    let mut entry_starts = Vec::new();
     for _ in 0..count {
         entry_starts.push(c.pos());
         keys.push(c.read_i64()?);
         read_value(c)?;
     }
     Ok(TableSpan {
-        count,
+        count: count as u32,
         entries_start,
         entries_end: c.pos(),
         keys,
@@ -98,17 +100,18 @@ fn read_i64_map(
 
 /// Read a `TMap<int32,int64>` (id -> ptr).
 fn read_id_ptr_map(c: &mut Cursor, field: &'static str) -> Result<TableSpan, WireError> {
-    let count = c.read_count(field)? as u32;
+    let count = c.read_count(field)?;
+    c.ensure_minimum_remaining(count, 12, field)?;
     let entries_start = c.pos();
-    let mut keys = Vec::with_capacity(count as usize);
-    let mut entry_starts = Vec::with_capacity(count as usize);
+    let mut keys = Vec::new();
+    let mut entry_starts = Vec::new();
     for _ in 0..count {
         entry_starts.push(c.pos());
         keys.push(c.read_i32()? as i64);
         c.skip(8)?; // value (int64 ptr)
     }
     Ok(TableSpan {
-        count,
+        count: count as u32,
         entries_start,
         entries_end: c.pos(),
         keys,
@@ -118,13 +121,14 @@ fn read_id_ptr_map(c: &mut Cursor, field: &'static str) -> Result<TableSpan, Wir
 
 /// Read `StaticNames TArray<FStringInArchive>`.
 fn read_static_names(c: &mut Cursor) -> Result<TableSpan, WireError> {
-    let count = c.read_count("StaticNames")? as u32;
+    let count = c.read_count("StaticNames")?;
+    c.ensure_minimum_remaining(count, 4, "StaticNames")?;
     let entries_start = c.pos();
     for _ in 0..count {
         c.read_sia()?;
     }
     Ok(TableSpan {
-        count,
+        count: count as u32,
         entries_start,
         entries_end: c.pos(),
         keys: Vec::new(),
@@ -136,13 +140,33 @@ fn read_static_names(c: &mut Cursor) -> Result<TableSpan, WireError> {
 pub fn parse_tail_tables(bytes: &[u8], start: usize) -> Result<TailTables, WireError> {
     let mut c = Cursor::at(bytes, start);
     let mut tables = Vec::with_capacity(N_TABLES);
-    tables.push(read_i64_map(&mut c, "TypeReferences", read_type_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "TypeReferences",
+        16,
+        read_type_reference,
+    )?);
     tables.push(read_id_ptr_map(&mut c, "TypeIdReferenceToPointer")?);
-    tables.push(read_i64_map(&mut c, "FunctionReferences", read_function_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "FunctionReferences",
+        72,
+        read_function_reference,
+    )?);
     tables.push(read_id_ptr_map(&mut c, "FunctionIdReferenceToPointer")?);
-    tables.push(read_i64_map(&mut c, "GlobalReferences", read_global_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "GlobalReferences",
+        16,
+        read_global_reference,
+    )?);
     tables.push(read_static_names(&mut c)?);
-    tables.push(read_i64_map(&mut c, "PropertyReferences", read_property_reference)?);
+    tables.push(read_i64_map(
+        &mut c,
+        "PropertyReferences",
+        8,
+        read_property_reference,
+    )?);
     Ok(TailTables {
         start,
         end: c.pos(),

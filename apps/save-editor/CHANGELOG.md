@@ -6,6 +6,85 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-08-03
+
+### Added
+
+- Backups can be given a name and deleted. The name heads the entry; the file
+  name stays visible below it and is never changed.
+- Added a "Position" tab to Characters. The hero's position moved there from the
+  Attributes tab and can be picked from a list of 10,075 named locations from
+  the game, grouped by region, instead of typing coordinates. Applying a
+  location's facing is optional and off by default.
+- An NPC's position and spawn position are shown but cannot be changed: the
+  game restores an NPC's placement from the level, not from the savegame.
+- A savegame damaged by an earlier version is now recognised on load: the
+  overview and the inventory show a warning with the number of affected slots
+  and a repair button, applied with the next save. Repairing can be taken back
+  until then.
+
+### Fixed
+
+- Renaming a savegame could make the game drop it from the load list. The name
+  is now written so the game can still read the save's metadata, and a rename
+  that would leave it unreadable is refused instead of written.
+- Items added to an inventory could not be dropped in the game afterwards, and
+  dropping one made a different item vanish instead. Added items now go into a
+  free inventory slot, and removing an item frees its slot instead of deleting
+  it — the way the game does it. Adding or removing an item also repairs a
+  savegame an earlier version left in that state.
+- Large inventories were cut off at 200 entries, so a newly added item was
+  missing from the list while the picker already refused to offer it again.
+- Queued additions and removals now show the item's localized name.
+
+## [1.2.0] - 2026-07-15
+
+### Added
+
+- Added an "Other saves" view for persistent management of profileless and
+  external savegames.
+- Savegames can now be assigned or removed from a profile.
+- Added a searchable and filterable "Story state" section to the World tab. It
+  combines values stored in the save with the complete catalog of persistent
+  fields declared by the shipped game scripts, including fields that are not
+  yet set.
+- Story-state entries can be set, edited, removed, and undone before saving.
+  Source-backed classifications and value suggestions, structured day/time
+  editing, elapsed-time context, and exact Glossary matches help explain known
+  values; unknown IDs from mods or newer game versions remain available as raw
+  signed integers.
+
+### Changed
+
+- Reworked "All data" into a source-aware GSAV browser for metadata and the
+  complete typed PUBLIC and PRIVATE property trees.
+- Memory events now use localized, categorized cards with readable actions and
+  subjects. Expandable details retain timing, participants, positions, payload
+  fields, tags, and technical IDs, and multiple removals can be queued and
+  individually undone before saving.
+- Improved the quest layout and hierarchy.
+- Moved tutorials to the Glossary.
+- Almost all dialog knowledge IDs are now replaced with localized texts.
+- Improved UI consistency and translations across the editor.
+
+## [1.1.0] - 2026-07-14
+
+### Added
+
+- Added a dedicated Glossary section to the World tab for NPCs, creatures, and
+  locations. NPCs are grouped by camp and can be filtered by traders, teachers,
+  armorers, hostile relationships, or death entries.
+- Glossary entries can be added or removed individually, including NPC
+  discovery and portrait visibility. Entry text follows the selected game
+  language and can be viewed in full from truncated rows.
+- The stored NPC-to-player relationship can now be set to friend, neutral, or
+  enemy from the Events tab.
+
+### Fixed
+
+- NPC status, relationship, and glossary controls no longer briefly revert to
+  stale values while a saved game is refreshed.
+
 ## [1.0.0] - 2026-07-08
 
 ### Added

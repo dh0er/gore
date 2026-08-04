@@ -188,23 +188,37 @@ class MemoryEvent {
     this.affected,
     this.optionalClass1,
     this.optionalClass2,
+    this.position,
+    this.payload,
   });
 
   factory MemoryEvent.fromJson(Map<String, Object?> json) {
     return MemoryEvent(
       index: (json['index'] as num?)?.toInt() ?? 0,
       tags:
-          (json['tags'] as List?)?.whereType<String>().toList(
-            growable: false,
-          ) ??
+          (json['tags'] as List?)
+              ?.whereType<String>()
+              .map(_normalizedMemoryName)
+              .whereType<String>()
+              .toList(growable: false) ??
           const [],
-      magnitude: (json['magnitude'] as num?)?.toDouble(),
-      timeSeconds: (json['timeSeconds'] as num?)?.toDouble(),
-      durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
-      instigator: json['instigator'] as String?,
-      affected: json['affected'] as String?,
-      optionalClass1: json['optionalClass1'] as String?,
-      optionalClass2: json['optionalClass2'] as String?,
+      magnitude: _normalizedMemoryNumber(json['magnitude']),
+      timeSeconds: _normalizedMemoryNumber(json['timeSeconds']),
+      durationSeconds: _normalizedMemoryNumber(json['durationSeconds']),
+      instigator: _normalizedMemoryName(json['instigator']),
+      affected: _normalizedMemoryName(json['affected']),
+      optionalClass1: _normalizedMemoryName(json['optionalClass1']),
+      optionalClass2: _normalizedMemoryName(json['optionalClass2']),
+      position: json['position'] is Map
+          ? MemoryEventPosition.fromJson(
+              (json['position'] as Map).cast<String, Object?>(),
+            )
+          : null,
+      payload: json['payload'] is Map
+          ? MemoryEventPayload.fromJson(
+              (json['payload'] as Map).cast<String, Object?>(),
+            )
+          : null,
     );
   }
 
@@ -217,6 +231,107 @@ class MemoryEvent {
   final String? affected;
   final String? optionalClass1;
   final String? optionalClass2;
+  final MemoryEventPosition? position;
+  final MemoryEventPayload? payload;
+}
+
+class MemoryEventPosition {
+  const MemoryEventPosition({
+    required this.x,
+    required this.y,
+    required this.z,
+  });
+
+  factory MemoryEventPosition.fromJson(Map<String, Object?> json) {
+    return MemoryEventPosition(
+      x: (json['x'] as num?)?.toDouble() ?? 0,
+      y: (json['y'] as num?)?.toDouble() ?? 0,
+      z: (json['z'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  final double x;
+  final double y;
+  final double z;
+}
+
+/// Bounded, display-oriented view of an event's dynamic FInstancedStruct
+/// payload. The core deliberately limits recursion/items, so even the one
+/// known item-inspection payload with hundreds of map entries stays cheap.
+class MemoryEventPayload {
+  const MemoryEventPayload({
+    this.type,
+    this.fieldCount = 0,
+    this.fields = const [],
+    this.truncated = false,
+  });
+
+  factory MemoryEventPayload.fromJson(Map<String, Object?> json) {
+    return MemoryEventPayload(
+      type: _normalizedMemoryName(json['type']),
+      fieldCount: (json['fieldCount'] as num?)?.toInt() ?? 0,
+      fields:
+          (json['fields'] as List?)
+              ?.whereType<Map>()
+              .map(
+                (field) => MemoryEventPayloadField.fromJson(
+                  field.cast<String, Object?>(),
+                ),
+              )
+              .toList(growable: false) ??
+          const [],
+      truncated: json['truncated'] as bool? ?? false,
+    );
+  }
+
+  final String? type;
+  final int fieldCount;
+  final List<MemoryEventPayloadField> fields;
+  final bool truncated;
+
+  Object? valueFor(String name) {
+    final lower = name.toLowerCase();
+    for (final field in fields) {
+      if (field.name.toLowerCase() == lower) return field.value;
+    }
+    return null;
+  }
+}
+
+class MemoryEventPayloadField {
+  const MemoryEventPayloadField({
+    required this.name,
+    required this.type,
+    this.value,
+  });
+
+  factory MemoryEventPayloadField.fromJson(Map<String, Object?> json) {
+    return MemoryEventPayloadField(
+      name: json['name'] as String? ?? '',
+      type: json['type'] as String? ?? '',
+      value: json['value'],
+    );
+  }
+
+  final String name;
+  final String type;
+  final Object? value;
+}
+
+/// Unreal uses `-DBL_MAX` for unset event timestamps and the FName `None` for
+/// absent object references. Keep those serialization details out of the UI.
+double? _normalizedMemoryNumber(Object? raw) {
+  if (raw is! num) return null;
+  final value = raw.toDouble();
+  if (!value.isFinite || value.abs() > 1e300) return null;
+  return value;
+}
+
+String? _normalizedMemoryName(Object? raw) {
+  if (raw is! String) return null;
+  final value = raw.trim();
+  if (value.isEmpty || value.toLowerCase() == 'none') return null;
+  return value;
 }
 
 class MemoryEventsPage {
@@ -295,8 +410,7 @@ class CrimeBreakdown {
   final int threat;
   final int other;
 
-  int get total =>
-      murder + assault + theft + trespassing + threat + other;
+  int get total => murder + assault + theft + trespassing + threat + other;
 }
 
 /// One guild's crime tally for the player, from `private.factions.list`.
@@ -381,28 +495,34 @@ class QuestStateChange {
   }
 }
 
-/// Pending knowledge add/remove → `private.typed.setAdd` / `setRemove`.
+/// Pending, value-addressed knowledge add/remove. The core resolves the
+/// character's knowledge set at save time and creates the map entry on the
+/// first add when necessary, so this never needs an immediate preparatory
+/// write just to discover a typed path.
 class KnowledgeEntryEdit {
-  const KnowledgeEntryEdit.add({required this.setPath, required this.entry})
+  const KnowledgeEntryEdit.add({required this.character, required this.entry})
     : isAdd = true;
-  const KnowledgeEntryEdit.remove({required this.setPath, required this.entry})
-    : isAdd = false;
+  const KnowledgeEntryEdit.remove({
+    required this.character,
+    required this.entry,
+  }) : isAdd = false;
 
-  final List<String> setPath;
+  final String character;
   final String entry;
   final bool isAdd;
 
   Map<String, Object?> toEditJson() {
     return {
-      'path': isAdd ? 'private.typed.setAdd' : 'private.typed.setRemove',
-      'value': {'path': setPath, 'value': entry},
+      'path': 'private.knowledge.setEntry',
+      'value': {'character': character, 'entry': entry, 'present': isAdd},
     };
   }
 }
 
-/// Structural memory-event edit → `private.typed.arrayRemove` /
-/// `arrayDuplicate`. Index-addressed, so the UI applies at most one per save
-/// round (indices shift after each structural change).
+/// Pending structural memory-event edit → `private.typed.arrayRemove` /
+/// `arrayDuplicate`. Removes keep their original on-disk index while pending;
+/// the save orchestrator applies multiple removes for one array from the
+/// highest index down so earlier writes cannot retarget later ones.
 class MemoryEventEdit {
   const MemoryEventEdit.remove({required this.arrayPath, required this.index})
     : isRemove = true;
@@ -414,6 +534,24 @@ class MemoryEventEdit {
   final List<String> arrayPath;
   final int index;
   final bool isRemove;
+
+  static MemoryEventEdit? fromEditJson(Map<String, Object?> json) {
+    final op = json['path'];
+    if (op != 'private.typed.arrayRemove' &&
+        op != 'private.typed.arrayDuplicate') {
+      return null;
+    }
+    final value = json['value'];
+    if (value is! Map) return null;
+    final rawPath = value['path'];
+    final index = value['index'];
+    if (rawPath is! List || index is! num) return null;
+    final path = rawPath.whereType<String>().toList();
+    if (path.length != rawPath.length) return null;
+    return op == 'private.typed.arrayRemove'
+        ? MemoryEventEdit.remove(arrayPath: path, index: index.toInt())
+        : MemoryEventEdit.duplicate(arrayPath: path, index: index.toInt());
+  }
 
   Map<String, Object?> toEditJson() {
     return {

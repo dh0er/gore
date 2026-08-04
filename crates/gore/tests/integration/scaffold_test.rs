@@ -7,13 +7,21 @@ fn scaffold_creates_mod_structure() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["scaffold", "MyBalanceMod", "-o", tmp.path().to_str().unwrap()])
+        .args([
+            "scaffold",
+            "MyBalanceMod",
+            "-o",
+            tmp.path().to_str().unwrap(),
+        ])
         .assert()
         .success();
 
     let mod_dir = tmp.path().join("MyBalanceMod");
     assert!(mod_dir.is_dir(), "mod directory must exist");
-    assert!(mod_dir.join("enabled.txt").exists(), "enabled.txt must exist");
+    assert!(
+        mod_dir.join("enabled.txt").exists(),
+        "enabled.txt must exist"
+    );
 
     let scripts_dir = mod_dir.join("Scripts");
     assert!(scripts_dir.is_dir(), "Scripts/ dir must exist");
@@ -22,8 +30,14 @@ fn scaffold_creates_mod_structure() {
     assert!(main_lua.exists(), "main.lua must exist");
 
     let content = std::fs::read_to_string(&main_lua).unwrap();
-    assert!(content.contains("StaticFindObject"), "must include CDO pattern comment");
-    assert!(content.contains("Default__"), "must mention Default__ prefix");
+    assert!(
+        content.contains("StaticFindObject"),
+        "must include CDO pattern comment"
+    );
+    assert!(
+        content.contains("Default__"),
+        "must mention Default__ prefix"
+    );
     assert!(content.contains("MyBalanceMod"), "must include mod name");
 }
 

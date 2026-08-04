@@ -48,7 +48,9 @@ pub fn run(src: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
     // reliably against the canonicalized source), then reject a destination strictly INSIDE
     // the source: the sibling staging dir would land under src and copy_dir would recurse into
     // it. dest == src is fine — staging is a sibling of src, so the in-place refresh is safe.
-    let dest_real = dest_root.canonicalize().unwrap_or_else(|_| dest_root.clone());
+    let dest_real = dest_root
+        .canonicalize()
+        .unwrap_or_else(|_| dest_root.clone());
     if dest_real != src && dest_real.starts_with(&src) {
         bail!(
             "destination '{}' is inside source '{}' — would copy into itself",
@@ -74,7 +76,10 @@ pub fn run(src: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
         let dst = dest_root.join(&name);
         // Refuse to clobber a symlinked destination entry (would write outside Mods).
         if fs::symlink_metadata(&dst).is_ok_and(|m| m.file_type().is_symlink()) {
-            bail!("destination '{}' is a symlink; refusing to replace it", dst.display());
+            bail!(
+                "destination '{}' is a symlink; refusing to replace it",
+                dst.display()
+            );
         }
         if dst.is_dir() {
             fs::remove_dir_all(&dst).with_context(|| format!("clearing {}", dst.display()))?;
@@ -96,7 +101,10 @@ fn resolve_default_src() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("locating gore-cli executable")?;
     let exe_dir = exe.parent().unwrap_or(Path::new("."));
     // Packaged layouts: shared/ beside the binary.
-    for c in [exe_dir.join("shared"), exe_dir.join("gore-lua").join("shared")] {
+    for c in [
+        exe_dir.join("shared"),
+        exe_dir.join("gore-lua").join("shared"),
+    ] {
         if c.is_dir() {
             return Ok(c);
         }
@@ -135,7 +143,9 @@ fn copy_dir(src: &Path, dest: &Path) -> Result<usize> {
         let entry = entry?;
         // Use the entry's own type (does NOT follow symlinks, unlike `Path::is_dir`) and
         // skip symlinks entirely so a linked dir can't loop or escape the source tree.
-        let ft = entry.file_type().with_context(|| format!("stat {}", entry.path().display()))?;
+        let ft = entry
+            .file_type()
+            .with_context(|| format!("stat {}", entry.path().display()))?;
         if ft.is_symlink() {
             continue;
         }

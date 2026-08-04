@@ -29,6 +29,9 @@ fn deploy_shared_copies_tree_into_mods_shared() {
         .success();
 
     let dest = mods.join("shared/gore-lua/gore-lua.lua");
-    assert!(dest.exists(), "gore-lua.lua should be copied to Mods/shared/");
+    assert!(
+        dest.exists(),
+        "gore-lua.lua should be copied to Mods/shared/"
+    );
     assert_eq!(fs::read_to_string(dest).unwrap(), "return {}\n");
 }

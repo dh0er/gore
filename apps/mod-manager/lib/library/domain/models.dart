@@ -126,7 +126,8 @@ class ComponentView {
   /// which uses [rawFileTarget] instead.
   final List<String> targets;
 
-  /// `ue4ss_lua` only: true when the script body wasn't parseable.
+  /// `ue4ss_lua` only: true when [targets] is a known subset rather than the
+  /// component's complete conflict-analysis footprint.
   final bool opaque;
 
   /// Destination descriptor, `raw_file` components only.
@@ -267,6 +268,7 @@ sealed class ManagerStatusView {
   factory ManagerStatusView.fromJson(Map<String, Object?> json) {
     return switch (json['state']) {
       'nothing_deployed' => ManagerStatusNothingDeployed(json),
+      'recovery_required' => ManagerStatusRecoveryRequired(json),
       'studio_deploy_active' => ManagerStatusStudioDeployActive(json),
       'in_sync' => ManagerStatusInSync(json),
       'changes_pending' => ManagerStatusChangesPending(json),
@@ -288,6 +290,15 @@ class ManagerStatusNothingDeployed extends ManagerStatusView {
 
   @override
   String get state => 'nothing_deployed';
+}
+
+/// An interrupted deployment must be recovered through undeploy before any new
+/// deployment is safe.
+class ManagerStatusRecoveryRequired extends ManagerStatusView {
+  const ManagerStatusRecoveryRequired(super.raw);
+
+  @override
+  String get state => 'recovery_required';
 }
 
 /// mod-studio's own single-mod deployment is active; the manager must not

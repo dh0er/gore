@@ -467,7 +467,9 @@ fn global_crime_facts(blob: &[Property]) -> BTreeMap<i32, GlobalCrimeFacts> {
             continue;
         };
         let by_hero = member(props, "CriminalGlobalID")
-            .map(|p| matches!(&p.value, PropertyValue::Name(s) | PropertyValue::Str(s) if s == HERO))
+            .map(
+                |p| matches!(&p.value, PropertyValue::Name(s) | PropertyValue::Str(s) if s == HERO),
+            )
             .unwrap_or(false);
         out.insert(
             id,
@@ -484,7 +486,11 @@ fn global_crime_facts(blob: &[Property]) -> BTreeMap<i32, GlobalCrimeFacts> {
 /// The accumulated age-decayed severity of the player's crimes that `witness`
 /// (a relative-crime entry's `RelativeCrimes` list) currently holds against the
 /// player, using `facts` (global crimes by id) and the game clock `now`.
-fn witness_anger(rel_crimes: &[PropertyValue], facts: &BTreeMap<i32, GlobalCrimeFacts>, now: f64) -> f64 {
+fn witness_anger(
+    rel_crimes: &[PropertyValue],
+    facts: &BTreeMap<i32, GlobalCrimeFacts>,
+    now: f64,
+) -> f64 {
     let mut accum = 0.0_f64;
     for rel in rel_crimes {
         let Some(rprops) = element_props(rel) else {
@@ -814,7 +820,6 @@ pub fn apply_forgive(payload: &mut Vec<u8>, target: &str) -> Result<(), CoreErro
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,7 +953,14 @@ mod tests {
         victim_guilds: &[&str],
         victim_ids: &[&str],
     ) -> Vec<u8> {
-        global_entry_typed(id, forgiven, criminal, victim_guilds, victim_ids, "Crime.Theft")
+        global_entry_typed(
+            id,
+            forgiven,
+            criminal,
+            victim_guilds,
+            victim_ids,
+            "Crime.Theft",
+        )
     }
 
     /// Like [`global_entry`] but with an explicit `CrimeType` tag.
@@ -1158,11 +1170,7 @@ mod tests {
 
     /// Build a full private payload with the crime blob AND a `GameTime` clock —
     /// for the hostility model (needs `now` to age-decay crimes).
-    fn crime_payload_h(
-        global: &[Vec<u8>],
-        relative: &[(&str, Vec<u8>)],
-        now_secs: f64,
-    ) -> Vec<u8> {
+    fn crime_payload_h(global: &[Vec<u8>], relative: &[(&str, Vec<u8>)], now_secs: f64) -> Vec<u8> {
         payload_from_generic(&[
             (CRIME_BLOB_KEY, crime_blob_instanced(global, relative)),
             ("GameTime", gametime_instanced(now_secs)),
@@ -1183,7 +1191,10 @@ mod tests {
                 "OC_STT_Diego",
                 witness_value(&[relative_entry(100, false), relative_entry(200, false)]),
             ),
-            ("OC_GRD_Guard14", witness_value(&[relative_entry(500, false)])),
+            (
+                "OC_GRD_Guard14",
+                witness_value(&[relative_entry(500, false)]),
+            ),
         ];
         crime_payload(&global, &relative)
     }
@@ -1196,8 +1207,7 @@ mod tests {
         let root = parse_private_root(&payload).unwrap();
         assert_eq!(root.consumed, payload.len(), "fixture parses byte-clean");
         let rows = list_guild_crimes(&root);
-        let by: BTreeMap<&str, &GuildCrimes> =
-            rows.iter().map(|r| (r.guild.as_str(), r)).collect();
+        let by: BTreeMap<&str, &GuildCrimes> = rows.iter().map(|r| (r.guild.as_str(), r)).collect();
 
         // OldCamp: ids 100 (unf), 400 (forgiven), 500 (unf via victim prefix).
         let oc = by["Guild.Human.OldCamp"];
@@ -1276,10 +1286,7 @@ mod tests {
     }
 
     /// Assemble a hostility payload from several [`angry_members`] groups.
-    fn hostility_payload(
-        groups: Vec<(Vec<Vec<u8>>, Vec<(String, Vec<u8>)>)>,
-        now: f64,
-    ) -> Vec<u8> {
+    fn hostility_payload(groups: Vec<(Vec<Vec<u8>>, Vec<(String, Vec<u8>)>)>, now: f64) -> Vec<u8> {
         let mut globals = Vec::new();
         let mut owned: Vec<(String, Vec<u8>)> = Vec::new();
         for (g, w) in groups {
@@ -1318,8 +1325,7 @@ mod tests {
         assert!(!hostile.contains(sc), "old/decayed → friendly");
 
         let rows = list_guild_crimes(&root);
-        let by: BTreeMap<&str, &GuildCrimes> =
-            rows.iter().map(|r| (r.guild.as_str(), r)).collect();
+        let by: BTreeMap<&str, &GuildCrimes> = rows.iter().map(|r| (r.guild.as_str(), r)).collect();
         assert!(by[oc].is_hostile);
         assert!(!by[nc].is_hostile);
         assert!(!by[sc].is_hostile);
@@ -1334,7 +1340,17 @@ mod tests {
         let oc = "Guild.Human.OldCamp";
         let fresh = hours_ago(2.0);
         let payload = hostility_payload(
-            vec![angry_members(oc, "OC_GRD_Guard", 2, 3, 3.0, false, false, fresh, 1)],
+            vec![angry_members(
+                oc,
+                "OC_GRD_Guard",
+                2,
+                3,
+                3.0,
+                false,
+                false,
+                fresh,
+                1,
+            )],
             NOW,
         );
         let root = parse_private_root(&payload).unwrap();
@@ -1351,7 +1367,17 @@ mod tests {
         let oc = "Guild.Human.OldCamp";
         let fresh = hours_ago(1.0);
         let payload = hostility_payload(
-            vec![angry_members(oc, "OC_GRD_Guard", 6, 1, 3.0, false, false, fresh, 1)],
+            vec![angry_members(
+                oc,
+                "OC_GRD_Guard",
+                6,
+                1,
+                3.0,
+                false,
+                false,
+                fresh,
+                1,
+            )],
             NOW,
         );
         let root = parse_private_root(&payload).unwrap();
@@ -1368,7 +1394,17 @@ mod tests {
         let oc = "Guild.Human.OldCamp";
         let fresh = hours_ago(1.0);
         let payload = hostility_payload(
-            vec![angry_members(oc, "OC_GRD_Guard", 6, 3, 3.0, false, true, fresh, 1)],
+            vec![angry_members(
+                oc,
+                "OC_GRD_Guard",
+                6,
+                3,
+                3.0,
+                false,
+                true,
+                fresh,
+                1,
+            )],
             NOW,
         );
         let root = parse_private_root(&payload).unwrap();
@@ -1384,7 +1420,17 @@ mod tests {
         let oc = "Guild.Human.OldCamp";
         let fresh = hours_ago(2.0);
         let mut payload = hostility_payload(
-            vec![angry_members(oc, "OC_GRD_Guard", 6, 3, 3.0, false, false, fresh, 1)],
+            vec![angry_members(
+                oc,
+                "OC_GRD_Guard",
+                6,
+                3,
+                3.0,
+                false,
+                false,
+                fresh,
+                1,
+            )],
             NOW,
         );
         let root = parse_private_root(&payload).unwrap();
@@ -1392,7 +1438,11 @@ mod tests {
 
         apply_forgive(&mut payload, oc).unwrap();
         let root2 = parse_private_root(&payload).unwrap();
-        assert_eq!(root2.consumed, payload.len(), "forgive re-parses byte-clean");
+        assert_eq!(
+            root2.consumed,
+            payload.len(),
+            "forgive re-parses byte-clean"
+        );
         assert!(
             !compute_hostile_guilds(&root2).contains(oc),
             "all crimes forgiven → friendly"
@@ -1442,11 +1492,17 @@ mod tests {
         assert_eq!(root.consumed, payload.len(), "re-parses byte-clean");
 
         let rows = list_guild_crimes(&root);
-        let oc = rows.iter().find(|r| r.guild == "Guild.Human.OldCamp").unwrap();
+        let oc = rows
+            .iter()
+            .find(|r| r.guild == "Guild.Human.OldCamp")
+            .unwrap();
         assert_eq!(oc.unforgiven, 0, "all OldCamp Hero crimes forgiven");
         assert_eq!(oc.total, 3);
 
-        let nc = rows.iter().find(|r| r.guild == "Guild.Human.NewCamp").unwrap();
+        let nc = rows
+            .iter()
+            .find(|r| r.guild == "Guild.Human.NewCamp")
+            .unwrap();
         assert_eq!(nc.unforgiven, 1, "NewCamp untouched");
 
         let (_, blob) = find_crime_blob(&root).unwrap();
@@ -1470,7 +1526,10 @@ mod tests {
         let suppressed = relative_suppressed_ids(&root);
         assert!(suppressed.contains(&100), "rel 100 suppressed");
         assert!(suppressed.contains(&500), "rel 500 suppressed");
-        assert!(!suppressed.contains(&200), "rel 200 (NewCamp) NOT suppressed");
+        assert!(
+            !suppressed.contains(&200),
+            "rel 200 (NewCamp) NOT suppressed"
+        );
     }
 
     #[test]
@@ -1479,7 +1538,10 @@ mod tests {
         apply_forgive(&mut payload, "Guild.Human.OldCamp").unwrap();
         let snapshot = payload.clone();
         apply_forgive(&mut payload, "Guild.Human.OldCamp").unwrap();
-        assert_eq!(payload, snapshot, "second forgive is a byte-identical no-op");
+        assert_eq!(
+            payload, snapshot,
+            "second forgive is a byte-identical no-op"
+        );
     }
 
     #[test]
@@ -1574,9 +1636,18 @@ mod tests {
         assert_eq!(oc2.unforgiven, 0, "OldCamp unforgiven drops to 0");
         assert_eq!(oc2.total, oc.total, "total unchanged");
 
-        let nc_before = rows.iter().find(|r| r.guild == "Guild.Human.NewCamp").unwrap();
-        let nc_after = rows2.iter().find(|r| r.guild == "Guild.Human.NewCamp").unwrap();
-        assert_eq!(nc_before.unforgiven, nc_after.unforgiven, "NewCamp untouched");
+        let nc_before = rows
+            .iter()
+            .find(|r| r.guild == "Guild.Human.NewCamp")
+            .unwrap();
+        let nc_after = rows2
+            .iter()
+            .find(|r| r.guild == "Guild.Human.NewCamp")
+            .unwrap();
+        assert_eq!(
+            nc_before.unforgiven, nc_after.unforgiven,
+            "NewCamp untouched"
+        );
 
         let snap = payload.clone();
         apply_forgive(&mut payload, "Guild.Human.OldCamp").unwrap();
@@ -1618,15 +1689,33 @@ mod tests {
             let tmp = std::env::temp_dir();
             std::fs::write(tmp.join("g_public.bin"), public).unwrap();
             std::fs::write(tmp.join("g_payload.bin"), &payload).unwrap();
-            eprintln!("dumped public({}) + payload({}) to {:?}", public.len(), payload.len(), tmp);
+            eprintln!(
+                "dumped public({}) + payload({}) to {:?}",
+                public.len(),
+                payload.len(),
+                tmp
+            );
         }
         let pb = load("GORESAVE_BAK");
         let pc = load("GORESAVE_COR");
-        let fnv = |v: &[u8]| v.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
+        let fnv = |v: &[u8]| {
+            v.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
+                (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
         eprintln!("BAK decode fnv={:016x} len={}", fnv(&pb), pb.len());
         eprintln!("COR decode fnv={:016x} len={}", fnv(&pc), pc.len());
-        eprintln!("payload sizes: bak={} cor={} (delta {})", pb.len(), pc.len(), pc.len() as i64 - pb.len() as i64);
-        eprintln!("parse bak={} cor={}", parse_private_root(&pb).is_ok(), parse_private_root(&pc).is_ok());
+        eprintln!(
+            "payload sizes: bak={} cor={} (delta {})",
+            pb.len(),
+            pc.len(),
+            pc.len() as i64 - pb.len() as i64
+        );
+        eprintln!(
+            "parse bak={} cor={}",
+            parse_private_root(&pb).is_ok(),
+            parse_private_root(&pc).is_ok()
+        );
 
         // Where do they diverge? Count differing regions up to the size delta.
         let n = pb.len().min(pc.len());
@@ -1642,7 +1731,9 @@ mod tests {
                 diffs += 1;
             }
         }
-        eprintln!("common-prefix diff: first={first:?} last={last} differing_bytes={diffs} common_len={n}");
+        eprintln!(
+            "common-prefix diff: first={first:?} last={last} differing_bytes={diffs} common_len={n}"
+        );
         if let Some(f) = first {
             let lo = f.saturating_sub(8);
             eprintln!("bak[{lo}..+48]={:02x?}", &pb[lo..(lo + 48).min(pb.len())]);
@@ -1670,7 +1761,10 @@ mod tests {
                 while suf < pc.len() - f && pc[pc.len() - 1 - suf] == pb[pb.len() - 1 - suf] {
                     suf += 1;
                 }
-                eprintln!("clean common suffix under shift: {suf} bytes (delete region ~[{f}..{}])", pb.len() - suf);
+                eprintln!(
+                    "clean common suffix under shift: {suf} bytes (delete region ~[{f}..{}])",
+                    pb.len() - suf
+                );
             }
         }
     }
@@ -1746,7 +1840,10 @@ mod tests {
         let friendly_root = parse_private_root(&load_sav_payload(&friendly_path)).unwrap();
         let f = compute_hostile_guilds(&friendly_root);
         eprintln!("friendly save → hostile guilds: {f:?}");
-        assert!(f.is_empty(), "pacified save must have NO hostile guild, got {f:?}");
+        assert!(
+            f.is_empty(),
+            "pacified save must have NO hostile guild, got {f:?}"
+        );
 
         // Optional: G1R-001 — only ONE Old-Mine NPC is angry (isolated incident,
         // the user confirmed no NPC attacks). Must NOT be reported hostile.

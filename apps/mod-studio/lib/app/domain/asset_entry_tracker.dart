@@ -1,10 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// The install-bound asset data shared by two display surfaces each: the
-/// standalone Textures/Scripts main tab and the Changes tab's embedded
-/// Textures/Scripts section, both watching the same `autoDispose` provider
-/// (`textureIndexProvider` / `scriptModulesProvider`).
-enum AssetKind { textureIndex, scriptModules }
+/// The install-bound script module data shared by the standalone Scripts tab
+/// and the Changes tab's embedded Scripts section. Both watch the same
+/// `autoDispose` provider (`scriptModulesProvider`).
+enum AssetKind { scriptModules }
 
 /// Session-wide record of which shared asset kinds have been displayed on
 /// ANY surface, deciding whether entering a surface must refresh the backing

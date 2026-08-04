@@ -1,0 +1,1020 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_project_dashboard.dart';
+
+import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_voice_content_fixture.dart';
+
+const _projectRootA = r'C:\managed\dashboard-a';
+const _projectRootB = r'C:\managed\dashboard-b';
+const _headA = '{"checkpoint":"dashboard-a"}';
+const _headB = '{"checkpoint":"dashboard-b"}';
+const _npcId = '77777777777777777777777777777777';
+const _npcModuleId = '7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f';
+const _questId = '88888888888888888888888888888888';
+const _questModuleId = '99999999999999999999999999999999';
+const _itemId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _extraLocalizationA = '10101010101010101010101010101010';
+const _extraLocalizationB = '11111111111111111111111111111110';
+const _extraVoiceTakeA = '56565656565656565656565656565656';
+const _extraVoiceTakeB = '57575757575757575757575757575757';
+const _technicalVoiceSlotId = '66666666666666666666666666666665';
+const _selectedVoiceTakeId = '55000000000000000000000000000000';
+const _assetSha =
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const _otherAssetSha =
+    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+const _stageManifestSha =
+    'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+const _questCollisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
+const _stageManifestMediaType =
+    'application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1';
+const _targetExecutableSha =
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+const _copy = Revision3ProjectDashboardCopy(
+  untitledProjectLabel: 'Untitled fixture project',
+  draftStatusLabel: 'Draft workspace',
+  projectVersionLabel: 'Project version',
+  projectAuthorLabel: 'Project author',
+  notProvidedLabel: 'Not provided',
+  contentCountsHeading: 'My mod / Changes',
+  changesDescription: 'Exact current authoring content.',
+  npcDraftCountLabel: 'NPC drafts',
+  questDraftCountLabel: 'Quest drafts',
+  dialogLineCountLabel: 'Dialog lines',
+  voiceTakeCountLabel: 'Voice',
+  assetCountLabel: 'DataAssets',
+  itemPatchLabel: 'Item edits',
+  localizationEntryLabel: 'Text',
+  voiceSlotLabel: 'Voice slot',
+  generatedScriptLabel: 'Generated script',
+  selectedVoiceTakeLabel: 'Selected take',
+  technicalContentLabel: 'Technical content',
+  technicalContentDescription: 'Generated helpers needing exact ownership.',
+  emptyChangesTitle: 'No authored changes yet',
+  emptyChangesDescription: 'Create Story, text, items, or DataAsset changes.',
+  emptyCreateLabel: 'Create',
+  openChangeLabel: 'Open exact change',
+  changeActionFailedMessage: 'The exact change could not be opened.',
+  unresolvedReferenceCountLabel: 'Unresolved references',
+  missingGameTitle: 'Game installation not configured',
+  missingGameDescription: 'Configure it for game-bound read-only evidence.',
+  loadingSemanticsLabel: 'Loading exact project overview',
+  loadErrorSemanticsLabel: 'Project overview unavailable',
+  loadErrorTitle: 'Overview could not be opened',
+  loadErrorDescription: 'Retry the exact current project.',
+  retryLabel: 'Retry overview',
+);
+
+void main() {
+  testWidgets(
+    'shows semantic author groups in stable order with collapsed Technical',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1280, 1600));
+      final index = _fixture(
+        existingSlotHasSelectedTake: true,
+        technicalSlotHasProblem: true,
+      );
+      final stages = _matchingDataAssetStages(index);
+      await _pumpDashboard(
+        tester,
+        load: () async => index,
+        loadDataAssetStages: () async => stages,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dashboard fixture'), findsOneWidget);
+      expect(find.text('1.2.3'), findsOneWidget);
+      expect(find.text('Dashboard author'), findsOneWidget);
+      expect(find.text(_copy.draftStatusLabel), findsOneWidget);
+
+      final orderedGroups = <Finder>[
+        _group('quests'),
+        _group('npcs'),
+        _group('items'),
+        _group('dataAssets'),
+        _group('dialog'),
+        _group('text'),
+        _group('voice'),
+        find.byKey(const Key('revision3-project-dashboard-technical')),
+      ];
+      for (final group in orderedGroups) {
+        expect(group, findsOneWidget);
+      }
+      for (var index = 1; index < orderedGroups.length; index++) {
+        expect(
+          tester.getTopLeft(orderedGroups[index - 1]).dy,
+          lessThan(tester.getTopLeft(orderedGroups[index]).dy),
+        );
+      }
+
+      expect(_change(_questId), findsOneWidget);
+      expect(_change(_npcId), findsOneWidget);
+      expect(_change(_itemId), findsOneWidget);
+      expect(_change(revision3VoiceContentLineId), findsOneWidget);
+      expect(_change(_extraLocalizationA), findsOneWidget);
+      expect(_change(_extraLocalizationB), findsOneWidget);
+      expect(_change(_extraVoiceTakeA), findsOneWidget);
+      expect(_change(_extraVoiceTakeB), findsOneWidget);
+
+      expect(
+        tester.getTopLeft(_change(_extraLocalizationB)).dy,
+        lessThan(tester.getTopLeft(_change(_extraLocalizationA)).dy),
+      );
+      expect(
+        tester.getTopLeft(_change(_extraVoiceTakeB)).dy,
+        lessThan(tester.getTopLeft(_change(_extraVoiceTakeA)).dy),
+      );
+
+      final dataAssetRow = _change(stages.single.targetPath);
+      expect(dataAssetRow, findsOneWidget);
+      expect(
+        tester.getSemantics(dataAssetRow).label,
+        '${stages.single.targetPath.split('/').last}. '
+        '${_copy.assetCountLabel}. ${stages.single.targetPath}',
+      );
+      expect(
+        find.descendant(
+          of: _group('dataAssets'),
+          matching: find.byType(ListTile),
+        ),
+        findsOneWidget,
+      );
+      expect(_change(_stageManifestSha), findsNothing);
+      expect(
+        tester.getSemantics(_change(_selectedVoiceTakeId)).label,
+        contains(_copy.selectedVoiceTakeLabel),
+      );
+
+      await tester.ensureVisible(
+        find.byKey(
+          const Key('revision3-project-dashboard-technical-expansion'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final technicalExpansion = tester.widget<ExpansionTile>(
+        find.byKey(
+          const Key('revision3-project-dashboard-technical-expansion'),
+        ),
+      );
+      expect(
+        (technicalExpansion.title as Text).data,
+        '${_copy.technicalContentLabel} (1)',
+      );
+      expect(_change(_technicalVoiceSlotId), findsNothing);
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-project-dashboard-technical-expansion'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_change(_technicalVoiceSlotId), findsOneWidget);
+      expect(
+        tester.getSemantics(_change(_technicalVoiceSlotId)).label,
+        contains('1 ${_copy.unresolvedReferenceCountLabel}'),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-project-dashboard-missing-game')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'places changes after the header and keeps settings in missing-game banner',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 1100));
+      var settingsCalls = 0;
+      final settings = Revision3ProjectDashboardSettingsAction(
+        icon: Icons.settings_outlined,
+        title: 'Open settings',
+        description: 'Configure the game installation.',
+        onPressed: () => settingsCalls++,
+      );
+
+      await _pumpDashboard(
+        tester,
+        load: () async => _fixture(),
+        gameConfigured: false,
+        settingsAction: settings,
+      );
+      await tester.pumpAndSettle();
+
+      final header = find.byKey(
+        const Key('revision3-project-dashboard-header'),
+      );
+      final banner = find.byKey(
+        const Key('revision3-project-dashboard-missing-game'),
+      );
+      final changes = find.byKey(
+        const Key('revision3-project-dashboard-changes'),
+      );
+      expect(header, findsOneWidget);
+      expect(banner, findsOneWidget);
+      expect(changes, findsOneWidget);
+      expect(
+        tester.getTopLeft(header).dy,
+        lessThan(tester.getTopLeft(banner).dy),
+      );
+      expect(
+        tester.getTopLeft(banner).dy,
+        lessThan(tester.getTopLeft(changes).dy),
+      );
+      final settingsFinder = find.byKey(
+        const Key('revision3-project-dashboard-settings-action'),
+      );
+      await tester.ensureVisible(settingsFinder);
+      expect(
+        tester.getSemantics(settingsFinder),
+        matchesSemantics(
+          label: 'Open settings',
+          hint: 'Configure the game installation.',
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ),
+      );
+      await tester.tap(settingsFinder);
+      expect(settingsCalls, 1);
+
+      await _pumpDashboard(
+        tester,
+        load: () async => _fixture(),
+        settingsAction: settings,
+      );
+      await tester.pumpAndSettle();
+      expect(banner, findsNothing);
+      expect(settingsFinder, findsNothing);
+      expect(changes, findsOneWidget);
+    },
+  );
+
+  testWidgets('routes exact entity, ItemPatch, and DataAsset action objects', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1280, 1600));
+    final index = _fixture();
+    final stages = _matchingDataAssetStages(index);
+    Revision3ContentEntity? openedEntity;
+    String? openedVanillaClass;
+    AuthoringRevision3DataAssetStage? openedStage;
+
+    await _pumpDashboard(
+      tester,
+      load: () async => index,
+      loadDataAssetStages: () async => stages,
+      changeActions: Revision3ProjectDashboardChangeActions(
+        openEntity: (entity) {
+          if (entity.id == _technicalVoiceSlotId) {
+            throw StateError(r'C:\private\technical-helper.json');
+          }
+          openedEntity = entity;
+        },
+        openItemPatch: (vanillaClass) {
+          openedVanillaClass = vanillaClass;
+        },
+        openDataAsset: (stage) {
+          openedStage = stage;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(_change(_questId));
+    await tester.tap(_change(_questId));
+    await tester.pumpAndSettle();
+    expect(openedEntity, same(index.entityById(_questId)));
+
+    await tester.ensureVisible(_change(_itemId));
+    await tester.tap(_change(_itemId));
+    await tester.pumpAndSettle();
+    expect(openedVanillaClass, 'UItemDefinition_Apple');
+
+    await tester.ensureVisible(_change(stages.single.targetPath));
+    await tester.tap(_change(stages.single.targetPath));
+    await tester.pumpAndSettle();
+    expect(openedStage, same(stages.single));
+
+    await tester.ensureVisible(
+      find.byKey(const Key('revision3-project-dashboard-technical-expansion')),
+    );
+    await tester.tap(
+      find.byKey(const Key('revision3-project-dashboard-technical-expansion')),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(_change(_technicalVoiceSlotId));
+    await tester.tap(_change(_technicalVoiceSlotId));
+    await tester.pumpAndSettle();
+    expect(find.text(_copy.changeActionFailedMessage), findsOneWidget);
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining('technical-helper'), findsNothing);
+  });
+
+  testWidgets('shows a deliberate empty state for an exact empty project', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(360, 640));
+    var createCalls = 0;
+    await _pumpDashboard(
+      tester,
+      load: () async => _emptyFixture(),
+      createFirstChange: () => createCalls++,
+      textScaler: const TextScaler.linear(2),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-dashboard-changes-empty')),
+      findsOneWidget,
+    );
+    expect(find.text(_copy.emptyChangesTitle), findsOneWidget);
+    expect(find.text(_copy.emptyChangesDescription), findsOneWidget);
+    final create = find.byKey(
+      const Key('revision3-project-dashboard-changes-empty-create'),
+    );
+    expect(create, findsOneWidget);
+    await tester.ensureVisible(create);
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSemantics(find.text(_copy.emptyChangesTitle)),
+      matchesSemantics(label: _copy.emptyChangesTitle, isHeader: true),
+    );
+    await tester.tap(create);
+    expect(createCalls, 1);
+    expect(tester.takeException(), isNull);
+    for (final group in const <String>[
+      'quests',
+      'npcs',
+      'items',
+      'dataAssets',
+      'dialog',
+      'text',
+      'voice',
+    ]) {
+      expect(_group(group), findsNothing);
+    }
+    expect(
+      find.byKey(const Key('revision3-project-dashboard-technical')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('sanitizes failed exact sources and retries both loaders', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(900, 700));
+    var contentCalls = 0;
+    var dataAssetCalls = 0;
+    await _pumpDashboard(
+      tester,
+      load: () async {
+        contentCalls++;
+        if (contentCalls == 1) {
+          return _fixture(
+            revision: 8,
+            projectName: r'C:\private\wrong-project',
+          );
+        }
+        return _fixture();
+      },
+      loadDataAssetStages: () async {
+        dataAssetCalls++;
+        if (dataAssetCalls == 1) {
+          throw StateError(r'C:\private\stage-receipt.json');
+        }
+        return const <AuthoringRevision3DataAssetStage>[];
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-dashboard-error')),
+      findsOneWidget,
+    );
+    expect(find.text(_copy.loadErrorTitle), findsOneWidget);
+    expect(find.text(_copy.loadErrorDescription), findsOneWidget);
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining('revision 8'), findsNothing);
+    expect(find.textContaining('stage-receipt'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const Key('revision3-project-dashboard-retry')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(contentCalls, 2);
+    expect(dataAssetCalls, 2);
+    expect(
+      find.byKey(const Key('revision3-project-dashboard-error')),
+      findsNothing,
+    );
+    expect(find.text('Dashboard fixture'), findsOneWidget);
+  });
+
+  for (final changedField in const <String>['head', 'root']) {
+    testWidgets(
+      'reloads the same revision for changed $changedField and ignores stale async completion',
+      (tester) async {
+        await _setSurfaceSize(tester, const Size(900, 700));
+        final contentLoads = <Completer<Revision3ContentIndex>>[
+          Completer<Revision3ContentIndex>(),
+          Completer<Revision3ContentIndex>(),
+        ];
+        final dataAssetLoads =
+            <Completer<List<AuthoringRevision3DataAssetStage>>>[
+              Completer<List<AuthoringRevision3DataAssetStage>>(),
+              Completer<List<AuthoringRevision3DataAssetStage>>(),
+            ];
+        var contentCalls = 0;
+        var dataAssetCalls = 0;
+        var projectRoot = _projectRootA;
+        var projectHead = _headA;
+        late StateSetter rebuild;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Scaffold(
+                  body: Revision3ProjectDashboard(
+                    projectRoot: projectRoot,
+                    projectId: revision3VoiceContentProjectId,
+                    projectRevision: 7,
+                    projectHeadCanonicalJson: projectHead,
+                    load: () => contentLoads[contentCalls++].future,
+                    loadDataAssetStages: () =>
+                        dataAssetLoads[dataAssetCalls++].future,
+                    gameConfigured: true,
+                    copy: _copy,
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(
+          find.byKey(const Key('revision3-project-dashboard-loading')),
+          findsOneWidget,
+        );
+
+        rebuild(() {
+          if (changedField == 'head') {
+            projectHead = _headB;
+          } else {
+            projectRoot = _projectRootB;
+          }
+        });
+        await tester.pump();
+        expect(contentCalls, 2);
+        expect(dataAssetCalls, 2);
+
+        contentLoads[1].complete(_fixture(projectName: 'Newest checkpoint'));
+        dataAssetLoads[1].complete(const <AuthoringRevision3DataAssetStage>[]);
+        await tester.pumpAndSettle();
+        expect(find.text('Newest checkpoint'), findsOneWidget);
+
+        contentLoads[0].complete(_fixture(projectName: 'Stale checkpoint'));
+        dataAssetLoads[0].complete(const <AuthoringRevision3DataAssetStage>[]);
+        await tester.pumpAndSettle();
+        expect(find.text('Newest checkpoint'), findsOneWidget);
+        expect(find.text('Stale checkpoint'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('does not overflow at 360x640 with a 2.0 text scaler', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(360, 640));
+
+    await _pumpDashboard(
+      tester,
+      load: () async => _fixture(),
+      gameConfigured: false,
+      textScaler: const TextScaler.linear(2),
+      settingsAction: const Revision3ProjectDashboardSettingsAction(
+        icon: Icons.settings_outlined,
+        title: 'Open settings',
+        description: 'Configure the game installation.',
+        onPressed: null,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    final scroll = find.byKey(const Key('revision3-project-dashboard-scroll'));
+    final changes = find.byKey(
+      const Key('revision3-project-dashboard-changes'),
+    );
+    await tester.scrollUntilVisible(
+      changes,
+      300,
+      scrollable: find.descendant(
+        of: scroll,
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(changes, findsOneWidget);
+    expect(tester.getSize(changes).width, lessThanOrEqualTo(360 - 24));
+    await tester.drag(scroll, const Offset(0, -1800));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+}
+
+Future<void> _pumpDashboard(
+  WidgetTester tester, {
+  required Revision3ProjectDashboardLoader load,
+  Revision3ProjectDashboardDataAssetLoader? loadDataAssetStages,
+  String projectRoot = _projectRootA,
+  String projectHeadCanonicalJson = _headA,
+  bool gameConfigured = true,
+  Revision3ProjectDashboardChangeActions changeActions =
+      const Revision3ProjectDashboardChangeActions(),
+  VoidCallback? createFirstChange,
+  Revision3ProjectDashboardSettingsAction? settingsAction,
+  TextScaler? textScaler,
+}) {
+  final dashboard = Scaffold(
+    body: Revision3ProjectDashboard(
+      projectRoot: projectRoot,
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      projectHeadCanonicalJson: projectHeadCanonicalJson,
+      load: load,
+      loadDataAssetStages:
+          loadDataAssetStages ??
+          () async => const <AuthoringRevision3DataAssetStage>[],
+      gameConfigured: gameConfigured,
+      copy: _copy,
+      changeActions: changeActions,
+      createFirstChange: createFirstChange,
+      settingsAction: settingsAction,
+    ),
+  );
+  return tester.pumpWidget(
+    MaterialApp(
+      builder: textScaler == null
+          ? null
+          : (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+              child: child!,
+            ),
+      home: dashboard,
+    ),
+  );
+}
+
+Finder _group(String name) =>
+    find.byKey(Key('revision3-project-dashboard-change-group-$name'));
+
+Finder _change(String stableId) =>
+    find.byKey(Key('revision3-project-dashboard-change-$stableId'));
+
+Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
+  await tester.binding.setSurfaceSize(size);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+}
+
+Map<String, Object?> _ownerReference({
+  required String role,
+  required String ownerId,
+  required String ownerKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': null,
+  'target': <String, Object?>{
+    'project_id': revision3VoiceContentProjectId,
+    'entity_id': ownerId,
+    'expected_kind': ownerKind,
+  },
+  'resolution': 'resolved',
+};
+
+Revision3ContentIndex _fixture({
+  int revision = 7,
+  String projectName = 'Dashboard fixture',
+  bool includeStoryDrafts = true,
+  bool existingSlotHasSelectedTake = false,
+  bool technicalSlotHasProblem = false,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingSlotCandidateCount: 2,
+    existingSlotHasSelectedTake: existingSlotHasSelectedTake,
+  );
+  json['project_name'] = projectName;
+  json['project_version'] = '1.2.3';
+  json['project_author'] = 'Dashboard author';
+
+  final entities = List<Object?>.from(json['entities']! as List<Object?>);
+  if (includeStoryDrafts) {
+    entities.addAll(<Object?>[
+      <String, Object?>{
+        'id': _npcId,
+        'kind': 'npc_draft',
+        'display_name': 'Fixture guard',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'FIXTURE_GUARD',
+        },
+        'summary': <String, Object?>{
+          'kind': 'npc_draft',
+          'data': <String, Object?>{
+            'unique_name': 'FIXTURE_GUARD',
+            'module_namespace': 'PROJECT.NPCS.FIXTURE_GUARD',
+            'parent_character_definition': 'UCharacterDefinition_Asghan',
+            'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
+            'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+            'greeting_count': 0,
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': revision3VoiceContentProjectId,
+              'entity_id': _npcModuleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+      <String, Object?>{
+        'id': _npcModuleId,
+        'kind': 'script_module',
+        'display_name': 'Fixture guard source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': <String, Object?>{
+            'project_id': revision3VoiceContentProjectId,
+            'entity_id': _npcId,
+            'expected_kind': 'npc_draft',
+          },
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'gore-authoring.logical-npc-clone-draft',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.NPCS.FIXTURE_GUARD',
+            'module_relative_path': 'Project/Npcs/FixtureGuard.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[
+          _ownerReference(
+            role: 'origin_owner',
+            ownerId: _npcId,
+            ownerKind: 'npc_draft',
+          ),
+          _ownerReference(
+            role: 'script_owner',
+            ownerId: _npcId,
+            ownerKind: 'npc_draft',
+          ),
+        ],
+        'asset_references': <Object?>[],
+      },
+      <String, Object?>{
+        'id': _questId,
+        'kind': 'quest_draft',
+        'display_name': 'Fixture quest',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'FIXTURE_QUEST',
+        },
+        'summary': <String, Object?>{
+          'kind': 'quest_draft',
+          'data': <String, Object?>{
+            'technical_id': 'FIXTURE_QUEST',
+            'title': 'Fixture quest',
+            'objective_title': 'Inspect the fixture',
+            'additional_objective_titles': <String>['Report the fixture'],
+            'objective_slots': <Object?>[1, 2],
+            'transcript_count': 0,
+            'module_namespace': 'PROJECT.QUESTS.FIXTURE_QUEST',
+            'parent_runtime_class': 'B_Quest_FindHomer_C',
+            'giver_runtime_unique_name': 'ASGHAN',
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': revision3VoiceContentProjectId,
+              'entity_id': _questModuleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[
+          <String, Object?>{
+            'role': 'quest_collision_artifact',
+            'sha256': _otherAssetSha,
+            'byte_len': 200,
+            'logical_name': null,
+            'expected_media_type': _questCollisionMediaType,
+            'resolution': 'resolved',
+          },
+        ],
+      },
+      <String, Object?>{
+        'id': _questModuleId,
+        'kind': 'script_module',
+        'display_name': 'Fixture quest source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': 'gore-authoring.draft-quest-skeleton',
+          'generator_version': 4,
+          'owner': <String, Object?>{
+            'project_id': revision3VoiceContentProjectId,
+            'entity_id': _questId,
+            'expected_kind': 'quest_draft',
+          },
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'gore-authoring.draft-quest-skeleton',
+            'generator_version': 4,
+            'module_namespace': 'PROJECT.QUESTS.FIXTURE_QUEST',
+            'module_relative_path': 'Project/Quests/FixtureQuest.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[
+          _ownerReference(
+            role: 'origin_owner',
+            ownerId: _questId,
+            ownerKind: 'quest_draft',
+          ),
+          _ownerReference(
+            role: 'script_owner',
+            ownerId: _questId,
+            ownerKind: 'quest_draft',
+          ),
+        ],
+        'asset_references': <Object?>[],
+      },
+    ]);
+  }
+  entities.addAll(<Object?>[
+    _localizationEntity(
+      id: _extraLocalizationA,
+      displayName: 'Zulu text',
+      locId: 'DIA_ZULU_TEXT',
+    ),
+    _localizationEntity(
+      id: _extraLocalizationB,
+      displayName: 'alpha text',
+      locId: 'DIA_ALPHA_TEXT',
+    ),
+    _voiceTakeEntity(id: _extraVoiceTakeA, displayName: 'Zulu take'),
+    _voiceTakeEntity(id: _extraVoiceTakeB, displayName: 'alpha take'),
+    _technicalVoiceSlotEntity(hasProblem: technicalSlotHasProblem),
+    _itemPatchEntity(),
+  ]);
+  entities.sort(
+    (left, right) => ((left! as Map<String, Object?>)['id']! as String)
+        .compareTo((right! as Map<String, Object?>)['id']! as String),
+  );
+  json['entities'] = entities;
+  json['entity_counts'] = <String, Object?>{
+    'localization_entry': 3,
+    'dialog_line': 1,
+    'voice_slot': 2,
+    'voice_take': 4,
+    if (includeStoryDrafts) 'npc_draft': 1,
+    if (includeStoryDrafts) 'quest_draft': 1,
+    if (includeStoryDrafts) 'script_module': 2,
+    'item_patch': 1,
+  };
+  json['assets'] = <Object?>[
+    <String, Object?>{
+      'sha256': _assetSha,
+      'byte_len': 100,
+      'media_type': 'audio/ogg',
+      'class': 'voice_audio',
+    },
+    <String, Object?>{
+      'sha256': _otherAssetSha,
+      'byte_len': 200,
+      'media_type': _questCollisionMediaType,
+      'class': 'quest_collision_artifact',
+    },
+    <String, Object?>{
+      'sha256': _stageManifestSha,
+      'byte_len': 300,
+      'media_type': _stageManifestMediaType,
+      'class': 'data_asset_stage_manifest',
+    },
+  ];
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Map<String, Object?> _localizationEntity({
+  required String id,
+  required String displayName,
+  required String locId,
+}) => <String, Object?>{
+  'id': id,
+  'kind': 'localization_entry',
+  'display_name': displayName,
+  'revision': 0,
+  'origin': <String, Object?>{'type': 'new', 'authored_runtime_id': locId},
+  'summary': <String, Object?>{
+    'kind': 'localization_entry',
+    'data': <String, Object?>{'loc_id': locId, 'locales': <Object?>[]},
+  },
+  'references': <Object?>[],
+  'asset_references': <Object?>[],
+};
+
+Map<String, Object?> _voiceTakeEntity({
+  required String id,
+  required String displayName,
+}) => <String, Object?>{
+  'id': id,
+  'kind': 'voice_take',
+  'display_name': displayName,
+  'revision': 0,
+  'origin': <String, Object?>{'type': 'new', 'authored_runtime_id': 'TAKE_$id'},
+  'summary': <String, Object?>{
+    'kind': 'voice_take',
+    'data': <String, Object?>{
+      'locale': 'de',
+      'status': 'recorded',
+      'codec': 'vorbis',
+      'channels': 1,
+      'sample_rate': 48000,
+    },
+  },
+  'references': <Object?>[],
+  'asset_references': <Object?>[],
+};
+
+Map<String, Object?> _technicalVoiceSlotEntity({bool hasProblem = false}) =>
+    <String, Object?>{
+      'id': _technicalVoiceSlotId,
+      'kind': 'voice_slot',
+      'display_name': 'Detached generated helper',
+      'revision': 0,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.voice-slot',
+        'generator_version': 1,
+        'owner': <String, Object?>{
+          'project_id': revision3VoiceContentProjectId,
+          'entity_id': revision3VoiceContentLineId,
+          'expected_kind': 'dialog_line',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'voice_slot',
+        'data': <String, Object?>{
+          'locale': 'en',
+          'target_resolution': 'unresolved',
+          'candidate_count': hasProblem ? 1 : 0,
+          'has_selected_take': false,
+        },
+      },
+      'references': <Object?>[
+        _ownerReference(
+          role: 'origin_owner',
+          ownerId: revision3VoiceContentLineId,
+          ownerKind: 'dialog_line',
+        ),
+        if (hasProblem)
+          <String, Object?>{
+            'role': 'voice_candidate',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': revision3VoiceContentProjectId,
+              'entity_id': 'ffffffffffffffffffffffffffffffff',
+              'expected_kind': 'voice_take',
+            },
+            'resolution': 'missing_entity',
+          },
+      ],
+      'asset_references': <Object?>[],
+    };
+
+Map<String, Object?> _itemPatchEntity() => <String, Object?>{
+  'id': _itemId,
+  'kind': 'item_patch',
+  'display_name': 'Fixture apple',
+  'revision': 1,
+  'origin': <String, Object?>{
+    'type': 'vanilla',
+    'generation': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 171698176,
+        'sha256': _targetExecutableSha,
+      },
+    },
+    'catalog_layer': 'base-game.g1r.items.v1',
+    'canonical_selector': 'UItemDefinition_Apple',
+    'source_seal': <String, Object?>{
+      'byte_len': 456,
+      'sha256':
+          'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    },
+  },
+  'summary': <String, Object?>{
+    'kind': 'item_patch',
+    'data': <String, Object?>{
+      'vanilla_class': 'UItemDefinition_Apple',
+      'field_count': 1,
+      'field_types': <String, Object?>{'m_Value': 'integer'},
+      'fields': <String, Object?>{
+        'm_Value': <String, Object?>{'type': 'integer', 'data': 5},
+      },
+    },
+  },
+  'references': <Object?>[],
+  'asset_references': <Object?>[],
+};
+
+Revision3ContentIndex _emptyFixture() =>
+    Revision3ContentIndex.fromJsonObject(<String, Object?>{
+      'schema_revision': 1,
+      'project_id': revision3VoiceContentProjectId,
+      'project_revision': 7,
+      'project_name': 'Empty dashboard fixture',
+      'project_version': '1.0.0',
+      'project_author': 'Dashboard author',
+      'target': <String, Object?>{
+        'executable': <String, Object?>{
+          'byte_len': 171698176,
+          'sha256': _targetExecutableSha,
+        },
+      },
+      'authoring_locales': <Object?>[],
+      'entity_counts': <String, Object?>{},
+      'entities': <Object?>[],
+      'assets': <Object?>[],
+    });
+
+List<AuthoringRevision3DataAssetStage> _matchingDataAssetStages(
+  Revision3ContentIndex index,
+) {
+  final basisProjectJson = jsonEncode(<String, Object?>{
+    'format': 2,
+    'schema_revision': 3,
+    'project_id': index.projectId,
+    'revision': index.projectRevision - 1,
+    'meta': <String, Object?>{
+      'name': index.projectName,
+      'version': index.projectVersion,
+      'author': index.projectAuthor,
+    },
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': index.targetExecutableByteLength,
+        'sha256': index.targetExecutableSha256,
+      },
+    },
+    'authoring_locales': index.authoringLocales,
+    'entities': <String, Object?>{},
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  });
+  final fixture = Revision3DataAssetFixture.fromBasis(
+    basisHead: revision3DataAssetHeadForProject(basisProjectJson),
+    basisProjectJson: basisProjectJson,
+  );
+  return AuthoringRevision3DataAssetStageListResult.fromJson(
+    fixture.listResponse(),
+    expectedHead: fixture.stagedHead,
+  ).stages;
+}

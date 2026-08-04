@@ -37,7 +37,7 @@ void main() {
                     if (index == 1 &&
                         ref
                             .read(assetEntryTrackerProvider)
-                            .shouldInvalidateOnEntry(AssetKind.textureIndex)) {
+                            .shouldInvalidateOnEntry(AssetKind.scriptModules)) {
                       ref.invalidate(countingProvider);
                     }
                   },

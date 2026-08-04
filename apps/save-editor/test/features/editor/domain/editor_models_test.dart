@@ -342,7 +342,10 @@ void main() {
       'count': 1,
       'equipped': true,
       'upgrades': [
-        {'key': 'm_CurrentUpperBodyUpgrade', 'value': 'm_UpperBody_Heavy02_ArmorUpgrade'},
+        {
+          'key': 'm_CurrentUpperBodyUpgrade',
+          'value': 'm_UpperBody_Heavy02_ArmorUpgrade',
+        },
       ],
     });
     expect(item.upgrades.length, 1);
@@ -389,6 +392,40 @@ void main() {
     );
   });
 
+  test('SaveInspection reads per-save NPC relationship capability', () {
+    final supported = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-001.sav',
+      'size': 1024,
+      'sha1': 'abc',
+      'private': {
+        'status': 'decoded',
+        'npc': {
+          'hasNpcs': true,
+          'writable': ['private.npc.revive', 'private.npc.setRelationship'],
+        },
+      },
+    });
+    final unsupported = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-002.sav',
+      'size': 1024,
+      'sha1': 'def',
+      'private': {
+        'status': 'decoded',
+        'npc': {
+          'hasNpcs': true,
+          'writable': ['private.npc.revive'],
+        },
+      },
+    });
+
+    expect(supported.privateNpc.hasNpcs, isTrue);
+    expect(supported.privateNpc.canSetRelationship, isTrue);
+    expect(unsupported.privateNpc.hasNpcs, isTrue);
+    expect(unsupported.privateNpc.canSetRelationship, isFalse);
+  });
+
   test('SaveInspection treats decoded preview as usable private data', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',
@@ -410,20 +447,26 @@ void main() {
     expect(inspection.privateTotalChunkCount, 541);
   });
 
-  test('SaveInspection treats decoded_preview status as preview without flag', () {
-    final inspection = SaveInspection.fromJson({
-      'format': 'GSAV',
-      'path': r'C:\saves\G1R-001.sav',
-      'size': 1024,
-      'sha1': 'abc',
-      // status says preview but the explicit preview flag is absent.
-      'private': {'status': 'decoded_preview', 'strings': ['Hero']},
-    });
+  test(
+    'SaveInspection treats decoded_preview status as preview without flag',
+    () {
+      final inspection = SaveInspection.fromJson({
+        'format': 'GSAV',
+        'path': r'C:\saves\G1R-001.sav',
+        'size': 1024,
+        'sha1': 'abc',
+        // status says preview but the explicit preview flag is absent.
+        'private': {
+          'status': 'decoded_preview',
+          'strings': ['Hero'],
+        },
+      });
 
-    expect(inspection.privateDecoded, isTrue);
-    expect(inspection.privatePreview, isTrue);
-    expect(inspection.privateEditable, isFalse);
-  });
+      expect(inspection.privateDecoded, isTrue);
+      expect(inspection.privatePreview, isTrue);
+      expect(inspection.privateEditable, isFalse);
+    },
+  );
 
   test('CodecStatus exposes the in-process adapter from details', () {
     final codec = CodecStatus.fromJson({
@@ -485,12 +528,15 @@ void main() {
   });
 
   test('InventoryReset.toEditJson emits path + level, omits null actorId', () {
+    expect(const InventoryReset(resourcesLevel: 'Gothic').toEditJson(), {
+      'path': 'private.inventory.reset',
+      'value': {'resourcesLevel': 'Gothic'},
+    });
     expect(
-      const InventoryReset(resourcesLevel: 'Gothic').toEditJson(),
-      {'path': 'private.inventory.reset', 'value': {'resourcesLevel': 'Gothic'}},
-    );
-    expect(
-      const InventoryReset(resourcesLevel: 'Hard', actorId: 'Char_1').toEditJson(),
+      const InventoryReset(
+        resourcesLevel: 'Hard',
+        actorId: 'Char_1',
+      ).toEditJson(),
       {
         'path': 'private.inventory.reset',
         'value': {'resourcesLevel': 'Hard', 'actorId': 'Char_1'},
@@ -529,5 +575,55 @@ void main() {
       'scope': 'persistent_data_list',
     });
     expect(backup.canRestore, isFalse);
+  });
+
+  test('TypedSearchResult reads exhaustive node metadata and facets', () {
+    final result = TypedSearchResult.fromJson({
+      'source': 'all',
+      'offset': 50,
+      'limit': 50,
+      'total': 120,
+      'warnings': ['PRIVATE parse failed'],
+      'summary': {
+        'sources': {'metadata': 20, 'public': 30, 'private': 70},
+        'kinds': {'scalar': 80, 'nativeStruct': 12},
+        'types': {'FloatProperty': 15, 'StructProperty': 20},
+        'editable': 42,
+        'readOnly': 78,
+        'typedSources': ['public', 'private'],
+      },
+      'results': [
+        {
+          'id': 'private:77',
+          'source': 'private',
+          'path': ['Transform', 'Location'],
+          'display': 'Transform › Location',
+          'type': 'StructProperty',
+          'structType': 'Vector',
+          'kind': 'nativeStruct',
+          'value': 'x: 1, y: 2, z: 3',
+          'editValue': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+          'editable': true,
+          'childCount': 0,
+          'depth': 1,
+        },
+      ],
+    });
+
+    expect(result.source, 'all');
+    expect(result.pageIndex, 1);
+    expect(result.pageCount, 3);
+    expect(result.warnings, ['PRIVATE parse failed']);
+    expect(result.summary.sources['private'], 70);
+    expect(result.summary.editable, 42);
+    expect(result.summary.typedSources, ['public', 'private']);
+    final hit = result.results.single;
+    expect(hit.stableId, 'private:77');
+    expect(hit.source, 'private');
+    expect(hit.kind, 'nativeStruct');
+    expect(hit.structType, 'Vector');
+    expect(hit.isNativeStruct, isTrue);
+    expect(hit.editValue, {'x': 1.0, 'y': 2.0, 'z': 3.0});
+    expect(hit.depth, 1);
   });
 }

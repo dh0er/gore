@@ -30,7 +30,10 @@ enum ItemCategory {
 /// Returns the localized display label for [category]. The English
 /// [ItemCategory.label] is kept as a stable identifier / fallback; this is what
 /// should be shown to the user.
-String localizedItemCategoryLabel(AppLocalizations l10n, ItemCategory category) {
+String localizedItemCategoryLabel(
+  AppLocalizations l10n,
+  ItemCategory category,
+) {
   switch (category) {
     case ItemCategory.meleeWeapon:
       return l10n.itemCategoryMeleeWeapon;
@@ -91,18 +94,79 @@ ItemCategory itemCategoryFromId(String id) {
 
 /// Human-readable name derived from the class id; never reads game
 /// localization data (legal posture: identifiers only).
-String itemDisplayNameFromId(String id) {
-  const prefixes = ['ItMw_', 'ItRw_', 'ItAr_', 'ItFo_', 'ItMi_', 'ItAt_',
-      'ItWr_', 'ItMs_', 'ItKe_', 'ItAm_'];
+String itemDisplayNameFromId(String id, {String fallback = 'Item'}) {
+  const prefixes = [
+    'ItMw_',
+    'ItRw_',
+    'ItAr_',
+    'ItFo_',
+    'ItMi_',
+    'ItAt_',
+    'ItWr_',
+    'ItMs_',
+    'ItKe_',
+    'ItAm_',
+  ];
   var name = id;
+  var genericItemPrefix = false;
   for (final prefix in prefixes) {
     if (name.startsWith(prefix)) {
       name = name.substring(prefix.length);
       break;
     }
   }
-  final cleaned = name.replaceAll('_', ' ').trim();
-  return cleaned.isEmpty ? id : cleaned;
+  // Some game item families do not use the underscore category form
+  // (`ItChestKey01`, `ItFocusStoneBridgeItem`, ...). Strip only their generic
+  // `It` marker, then split camel-case and number boundaries so the normal UI
+  // never has to fall back to echoing the exact technical id.
+  if (identical(name, id) &&
+      name.length > 2 &&
+      name.startsWith('It') &&
+      _isAsciiUpper(name.codeUnitAt(2))) {
+    name = name.substring(2);
+    genericItemPrefix = true;
+  }
+  final cleaned = genericItemPrefix
+      ? _humanizeItemToken(name)
+      : name.replaceAll('_', ' ').trim();
+  return cleaned.isEmpty ? fallback : cleaned;
+}
+
+bool _isAsciiUpper(int codeUnit) => codeUnit >= 0x41 && codeUnit <= 0x5a;
+
+String _humanizeItemToken(String value) {
+  final out = StringBuffer();
+  for (var i = 0; i < value.length; i++) {
+    final current = value.codeUnitAt(i);
+    final previous = i == 0 ? null : value.codeUnitAt(i - 1);
+    final next = i + 1 < value.length ? value.codeUnitAt(i + 1) : null;
+    final separator = current == 0x5f || current == 0x2d;
+    if (separator) {
+      if (out.isNotEmpty && !out.toString().endsWith(' ')) out.write(' ');
+      continue;
+    }
+    final currentUpper = _isAsciiUpper(current);
+    final currentDigit = current >= 0x30 && current <= 0x39;
+    final previousUpper = previous != null && _isAsciiUpper(previous);
+    final previousLower =
+        previous != null && previous >= 0x61 && previous <= 0x7a;
+    final previousDigit =
+        previous != null && previous >= 0x30 && previous <= 0x39;
+    final nextLower = next != null && next >= 0x61 && next <= 0x7a;
+    final boundary =
+        i > 0 &&
+        previous != 0x5f &&
+        previous != 0x2d &&
+        ((currentUpper && (previousLower || previousDigit)) ||
+            (currentUpper && previousUpper && nextLower) ||
+            (currentDigit && !previousDigit) ||
+            (!currentDigit && previousDigit));
+    if (boundary && out.isNotEmpty && !out.toString().endsWith(' ')) {
+      out.write(' ');
+    }
+    out.writeCharCode(current);
+  }
+  return out.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
 class InventoryItemGroup {
@@ -128,9 +192,9 @@ List<InventoryItemGroup> groupInventoryItems(
   }
   int compare(PrivateInventoryItem a, PrivateInventoryItem b) {
     if (displayNameOf != null) {
-      final byName = displayNameOf(a).toLowerCase().compareTo(
-        displayNameOf(b).toLowerCase(),
-      );
+      final byName = displayNameOf(
+        a,
+      ).toLowerCase().compareTo(displayNameOf(b).toLowerCase());
       if (byName != 0) return byName;
     }
     return a.id.compareTo(b.id);

@@ -29,7 +29,14 @@ fn write_loc_spec(dir: &Path, name: &str, loc_id: &str, value: &str) -> PathBuf 
 fn build_bundle(out: &Path, name: &str, spec: &Path) -> PathBuf {
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mod", "build", "--spec", spec.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args([
+            "mod",
+            "build",
+            "--spec",
+            spec.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .assert()
         .success();
     out.join(name)
@@ -56,8 +63,14 @@ fn import(library: &Path, loadout: &Path, bundle: &Path) -> String {
         .clone();
     let text = String::from_utf8(out).unwrap();
     // Line shape: "imported <id> (<name>) [<Kind>]".
-    let line = text.lines().find(|l| l.starts_with("imported ")).expect("import line");
-    line.split_whitespace().nth(1).expect("id token").to_string()
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("imported "))
+        .expect("import line");
+    line.split_whitespace()
+        .nth(1)
+        .expect("id token")
+        .to_string()
 }
 
 /// The whole loadout lifecycle with NO real game deploy. This is the always-run gate.
@@ -82,7 +95,12 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "list", "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "list",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -104,7 +122,14 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     // list now shows an enabled marker.
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "list", "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "list",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains("[x]"));
@@ -113,7 +138,12 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "analyze", "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "analyze",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -125,7 +155,13 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     // disable one → analyze reports no conflict (only one editor left).
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "disable", &id_b, "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "disable",
+            &id_b,
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains("disabled"));
@@ -133,7 +169,12 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "analyze", "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "analyze",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -142,7 +183,14 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     // order: move id_b to position 0; the reported order lists it first.
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "order", &id_b, "0", "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "order",
+            &id_b,
+            "0",
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains(&id_b))
@@ -153,7 +201,14 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     std::fs::create_dir_all(&game).unwrap();
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "status", "--game", game.to_str().unwrap(), "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "status",
+            "--game",
+            game.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains("nothing deployed"));
@@ -170,7 +225,13 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "remove", &id_a, "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "remove",
+            &id_a,
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -179,7 +240,14 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "list", "--library", lib.to_str().unwrap(), "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "list",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success()
         .stdout(predicates::str::contains(&id_b))
@@ -193,7 +261,13 @@ fn mgr_enable_unknown_id_errors() {
     let loadout = tmp.path().join("loadout.json");
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "enable", "does-not-exist", "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "enable",
+            "does-not-exist",
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .failure()
         .stderr(predicates::str::contains("does-not-exist"));
@@ -237,7 +311,7 @@ fn mgr_apply_on_temp_game() {
             plain.extend_from_slice(&0i32.to_le_bytes()); // no pairs
         }
         let pad = (16 - (plain.len() % 16)) % 16;
-        plain.extend(std::iter::repeat(0u8).take(pad));
+        plain.extend(std::iter::repeat_n(0u8, pad));
         let cipher = Aes256::new(GenericArray::from_slice(KEY));
         let mut ct = plain;
         for chunk in ct.chunks_mut(16) {
@@ -263,7 +337,11 @@ fn mgr_apply_on_temp_game() {
         std::fs::create_dir_all(game.join(p)).unwrap();
     }
     let lcache = game.join("G1R/Story/Cache/AlkimiaLocalization_0.lcache");
-    std::fs::write(&lcache, build_lcache(&[("itfo_cheese", "Cheese"), ("itfo_apple", "Apple")])).unwrap();
+    std::fs::write(
+        &lcache,
+        build_lcache(&[("itfo_cheese", "Cheese"), ("itfo_apple", "Apple")]),
+    )
+    .unwrap();
 
     // One loc-editing bundle → import → enable.
     let spec = write_loc_spec(tmp.path(), "PatchMod", "itfo_cheese", "Gouda");
@@ -279,10 +357,14 @@ fn mgr_apply_on_temp_game() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "apply",
-            "--game", game.to_str().unwrap(),
-            "--library", lib.to_str().unwrap(),
-            "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "apply",
+            "--game",
+            game.to_str().unwrap(),
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -292,7 +374,10 @@ fn mgr_apply_on_temp_game() {
     let live = std::fs::read(&lcache).unwrap();
     let lc = gore_loc::loc::Lcache::decode(&live).unwrap();
     assert_eq!(
-        lc.export(false).get("itfo_cheese").and_then(|m| m.get("german")).map(String::as_str),
+        lc.export(false)
+            .get("itfo_cheese")
+            .and_then(|m| m.get("german"))
+            .map(String::as_str),
         Some("Gouda"),
         "apply must patch the loc value"
     );
@@ -302,10 +387,14 @@ fn mgr_apply_on_temp_game() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "mgr", "status",
-            "--game", game.to_str().unwrap(),
-            "--library", lib.to_str().unwrap(),
-            "--loadout", loadout.to_str().unwrap(),
+            "mgr",
+            "status",
+            "--game",
+            game.to_str().unwrap(),
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
         ])
         .assert()
         .success()
@@ -321,7 +410,10 @@ fn mgr_apply_on_temp_game() {
     let restored = std::fs::read(&lcache).unwrap();
     let lc2 = gore_loc::loc::Lcache::decode(&restored).unwrap();
     assert_eq!(
-        lc2.export(false).get("itfo_cheese").and_then(|m| m.get("german")).map(String::as_str),
+        lc2.export(false)
+            .get("itfo_cheese")
+            .and_then(|m| m.get("german"))
+            .map(String::as_str),
         Some("Cheese"),
         "reset must restore the pristine value"
     );

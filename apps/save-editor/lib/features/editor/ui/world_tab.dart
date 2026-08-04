@@ -3,18 +3,22 @@ import 'package:goresave/l10n/app_localizations.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
+import 'glossary_panel.dart';
 import 'progression_panel.dart' show QuestsDetail, FactionsDetail;
+import 'story_state_panel.dart';
 
 /// Sidebar section entries for the World tab. Knowledge and Events are
 /// deliberately absent: they moved to detail-only panels (KnowledgeDetail /
 /// EventsDetail) keyed by a shared character selection and are mounted from
 /// the Characters tab, not from this sidebar.
-enum _WorldSection { quests, factions }
+enum _WorldSection { quests, glossary, factions, storyState }
 
-/// World tab: structured quests + faction crime records. Full-height sidebar
-/// layout (no outer scroll). The reload key passed to the details is the
-/// [SaveInspection] instance itself; identity comparison means every fresh
-/// inspection clears local pending state and reloads.
+/// World tab: structured quests, glossary, source-aware story state, and
+/// faction crime records.
+/// Full-height sidebar layout (no outer scroll). The reload key passed to the
+/// details is the [SaveInspection] instance itself; identity comparison makes
+/// every fresh inspection reload, while each detail decides which same-save
+/// optimistic state must remain visible until its new snapshot arrives.
 class WorldTab extends StatefulWidget {
   const WorldTab({
     super.key,
@@ -35,6 +39,13 @@ class _WorldTabState extends State<WorldTab> {
   // Keep selected section across save-triggered reloads (identity comparison
   // on reloadKey, not path comparison, so same pattern as hero_stats_card).
   _WorldSection _selected = _WorldSection.quests;
+  // Glossary hydration joins several full-save datasets plus a bundled static
+  // catalog. Defer that work until the section is opened for the first time;
+  // once mounted it stays mounted so its pending switches survive navigation.
+  bool _glossaryMounted = false;
+  // Story state parses a large private map and joins optional glossary
+  // context. Like the glossary, do that work only after its first selection.
+  bool _storyStateMounted = false;
 
   @override
   Widget build(BuildContext context) {
@@ -82,11 +93,29 @@ class _WorldTabState extends State<WorldTab> {
                           setState(() => _selected = _WorldSection.quests),
                     ),
                     _SidebarTile(
+                      icon: Icons.menu_book_outlined,
+                      label: l10n.sectionGlossary,
+                      selected: _selected == _WorldSection.glossary,
+                      onTap: () => setState(() {
+                        _glossaryMounted = true;
+                        _selected = _WorldSection.glossary;
+                      }),
+                    ),
+                    _SidebarTile(
                       icon: Icons.gavel_outlined,
                       label: l10n.factionsSidebar,
                       selected: _selected == _WorldSection.factions,
                       onTap: () =>
                           setState(() => _selected = _WorldSection.factions),
+                    ),
+                    _SidebarTile(
+                      icon: Icons.account_tree_outlined,
+                      label: l10n.storyStateSidebar,
+                      selected: _selected == _WorldSection.storyState,
+                      onTap: () => setState(() {
+                        _storyStateMounted = true;
+                        _selected = _WorldSection.storyState;
+                      }),
                     ),
                   ],
                 ),
@@ -115,6 +144,17 @@ class _WorldTabState extends State<WorldTab> {
                     theme: theme,
                   ),
                 ),
+                if (_glossaryMounted)
+                  Offstage(
+                    offstage: _selected != _WorldSection.glossary,
+                    child: GlossaryDetail(
+                      key: const ValueKey('glossary'),
+                      notifier: widget.notifier,
+                      editable: widget.editable,
+                      reloadKey: reloadKey,
+                      theme: theme,
+                    ),
+                  ),
                 Offstage(
                   offstage: _selected != _WorldSection.factions,
                   child: FactionsDetail(
@@ -125,6 +165,17 @@ class _WorldTabState extends State<WorldTab> {
                     theme: theme,
                   ),
                 ),
+                if (_storyStateMounted)
+                  Offstage(
+                    offstage: _selected != _WorldSection.storyState,
+                    child: StoryStateDetail(
+                      key: const ValueKey('story-state'),
+                      notifier: widget.notifier,
+                      editable: widget.editable,
+                      reloadKey: reloadKey,
+                      theme: theme,
+                    ),
+                  ),
               ],
             ),
           ),

@@ -9,10 +9,7 @@ import '../../loc/domain/loc_notifier.dart';
 import '../../loc/game_lang.dart';
 import '../../loc/ui/loc_extract_flow.dart';
 
-/// The Settings tab: scrollable, centred column of Material sections for the
-/// game-data source, localized-text extraction, the game executable path, and
-/// the app/game language. Holds no local state — everything is wired to
-/// Riverpod providers so the panel can be rebuilt freely on tab switches.
+/// Compact app settings and explicit game-data utilities.
 class SettingsTab extends ConsumerWidget {
   const SettingsTab({super.key});
 
@@ -28,14 +25,12 @@ class SettingsTab extends ConsumerWidget {
     final currentLang = gameLangByCode(ref.watch(localeProvider)).code;
 
     Widget sectionTitle(String text) => Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-          child: Text(
-            text,
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: scheme.primary,
-            ),
-          ),
-        );
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+      child: Text(
+        text,
+        style: theme.textTheme.titleSmall?.copyWith(color: scheme.primary),
+      ),
+    );
 
     return Align(
       alignment: Alignment.topCenter,
@@ -44,16 +39,13 @@ class SettingsTab extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            // --- Game data source ---------------------------------------
             sectionTitle(l10n.settingsDataSourceSection),
             Card(
               child: Column(
                 children: [
                   ListTile(
                     leading: Icon(
-                      dumpPath != null
-                          ? Icons.dataset
-                          : Icons.dataset_outlined,
+                      dumpPath != null ? Icons.dataset : Icons.dataset_outlined,
                       color: dumpPath != null ? scheme.primary : null,
                     ),
                     title: Text(l10n.loadGameDataDump),
@@ -68,8 +60,7 @@ class SettingsTab extends ConsumerWidget {
                         label: l10n.gameDataFileGroupLabel,
                         extensions: const ['json'],
                       );
-                      final file =
-                          await openFile(acceptedTypeGroups: [group]);
+                      final file = await openFile(acceptedTypeGroups: [group]);
                       if (file != null) {
                         ref.read(dumpPathProvider.notifier).set(file.path);
                       }
@@ -92,8 +83,6 @@ class SettingsTab extends ConsumerWidget {
                 ],
               ),
             ),
-
-            // --- Localized text -----------------------------------------
             sectionTitle(l10n.settingsLocalizationSection),
             Card(
               child: ListTile(
@@ -108,8 +97,7 @@ class SettingsTab extends ConsumerWidget {
                 ),
               ),
             ),
-
-            // --- Game executable ----------------------------------------
+            sectionTitle(l10n.gameExecutable),
             Card(
               child: ListTile(
                 leading: const Icon(Icons.videogame_asset_outlined),
@@ -135,12 +123,11 @@ class SettingsTab extends ConsumerWidget {
                           label: l10n.gameExecutable,
                           extensions: const ['exe'],
                         );
-                        final file =
-                            await openFile(acceptedTypeGroups: [group]);
+                        final file = await openFile(
+                          acceptedTypeGroups: [group],
+                        );
                         if (file != null) {
-                          ref
-                              .read(gameExePathProvider.notifier)
-                              .set(file.path);
+                          ref.read(gameExePathProvider.notifier).set(file.path);
                         }
                       },
                       child: Text(l10n.chooseGameExecutable),

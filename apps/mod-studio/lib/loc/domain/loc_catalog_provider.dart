@@ -58,4 +58,3 @@ String displayNameForItem(
       resolveGameText(catalog, locIdForCatalogId(item.id), lang);
   return localized ?? item.displayName;
 }
-

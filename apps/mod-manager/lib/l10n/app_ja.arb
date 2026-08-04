@@ -1,5 +1,8 @@
 {
   "@@locale": "ja",
+  "recoveryAction": "復旧",
+  "recoveryRequiredConfirm": "中断されたデプロイを復旧し、部分的にデプロイされたファイルを削除しますか？",
+  "statusRecoveryRequired": "復旧が必要",
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mod",
   "tabSettings": "設定",

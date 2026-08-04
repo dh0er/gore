@@ -7,6 +7,7 @@ import '../../loc/domain/loc_catalog_provider.dart';
 /// `itfo_`) is excluded.
 const Set<String> _kConversationPrefixes = {'info', 'dia'};
 const Set<String> _kBarkPrefixes = {'gvl', 'svm'};
+final RegExp _digitsOnly = RegExp(r'^\d+$');
 
 /// One row in the flattened dialog list: either a speaker group header or a
 /// single dialog line under it.
@@ -84,12 +85,34 @@ String _leadingToken(String id) {
 bool isDialogLocId(String id) {
   final token = _leadingToken(id);
   return _kConversationPrefixes.contains(token) ||
-      _kBarkPrefixes.contains(token);
+      _kBarkPrefixes.contains(token) ||
+      _isActorQualifiedDialog(id);
+}
+
+/// The remake also uses actor-qualified IDs such as
+/// `grd_263_asghan_open_info_06_02` and
+/// `stt_302_viper_greet_info_11_02`. Requiring an actor number and the two
+/// numeric voice suffixes keeps unrelated IDs such as `grd_armor_bot_h_01`
+/// out of the dialog browser.
+bool _isActorQualifiedDialog(String id) {
+  final tokens = id.split('_');
+  return tokens.length >= 6 &&
+      tokens.first.isNotEmpty &&
+      _digitsOnly.hasMatch(tokens[1]) &&
+      tokens[2].isNotEmpty &&
+      _digitsOnly.hasMatch(tokens[tokens.length - 2]) &&
+      _digitsOnly.hasMatch(tokens.last);
 }
 
 /// Second underscore token of [id], the speaker (`info_aaron_001` -> `aaron`,
 /// `gvl_g1hero_x` -> `g1hero`). Falls back to the whole id when absent.
 String _speakerToken(String id) {
+  if (_isActorQualifiedDialog(id)) {
+    final tokens = id.split('_');
+    // A small set of historic mission IDs keeps the `psi` guild marker
+    // between the actor number and the actual speaker name.
+    return tokens[2] == 'psi' && tokens.length >= 7 ? tokens[3] : tokens[2];
+  }
   final first = id.indexOf('_');
   if (first < 0) return id;
   final second = id.indexOf('_', first + 1);
@@ -102,25 +125,34 @@ String _speakerToken(String id) {
 /// then bark groups, each alphabetical by speaker. Lines within a group are
 /// sorted by id.
 ///
-/// When [onlyIds] is non-null, only catalog entries whose (lowercased) id is
-/// in the set are considered — the restriction happens BEFORE grouping, so
-/// group membership and [DialogGroupRow.lineCount] reflect only the filtered
-/// lines. An empty set yields no rows.
+/// [additionalIds] supplies staged, newly-created loc ids that are not in the
+/// extracted catalog yet. When [onlyIds] is non-null, only ids in that set are
+/// considered — the restriction happens BEFORE grouping, so group membership
+/// and [DialogGroupRow.lineCount] reflect only the filtered lines. An empty set
+/// yields no rows.
 List<DialogRow> buildDialogRows(
   Map<String, Map<String, String>> catalog, {
   Set<String>? onlyIds,
+  Set<String> additionalIds = const {},
 }) {
-  if (catalog.isEmpty) return const [];
+  if (catalog.isEmpty && additionalIds.isEmpty) return const [];
 
   // group by (isBark, speaker)
   final groups = <String, _DialogGroup>{};
-  for (final id in catalog.keys) {
+  final ids = <String>{
+    for (final id in catalog.keys) id.toLowerCase(),
+    for (final id in additionalIds) id.toLowerCase(),
+  };
+  for (final id in ids) {
     if (onlyIds != null && !onlyIds.contains(id)) continue;
     if (!isDialogLocId(id)) continue;
     final isBark = _kBarkPrefixes.contains(_leadingToken(id));
     final speaker = _speakerToken(id);
     final key = _encodeGroupKey(isBark, speaker);
-    (groups[key] ??= _DialogGroup(speaker: speaker, isBark: isBark)).ids.add(id);
+    (groups[key] ??= _DialogGroup(
+      speaker: speaker,
+      isBark: isBark,
+    )).ids.add(id);
   }
 
   final sorted = groups.values.toList()
@@ -133,11 +165,13 @@ List<DialogRow> buildDialogRows(
   final rows = <DialogRow>[];
   for (final g in sorted) {
     g.ids.sort();
-    rows.add(DialogGroupRow(
-      speaker: g.speaker,
-      isBark: g.isBark,
-      lineCount: g.ids.length,
-    ));
+    rows.add(
+      DialogGroupRow(
+        speaker: g.speaker,
+        isBark: g.isBark,
+        lineCount: g.ids.length,
+      ),
+    );
     for (final id in g.ids) {
       rows.add(DialogLineRow(id: id, speaker: g.speaker, isBark: g.isBark));
     }
@@ -157,18 +191,27 @@ List<DialogRow> buildDialogRows(
 class DialogRowsMemo {
   Map<String, Map<String, String>>? _catalog;
   Set<String>? _onlyIds;
+  Set<String>? _additionalIds;
   List<DialogRow>? _rows;
 
-  /// Rows for ([catalog], [onlyIds]); returns the previously built list
-  /// instance when both arguments are identical to the last call's.
+  /// Rows for ([catalog], [onlyIds], [additionalIds]); returns the previously
+  /// built list instance when all arguments are identical to the last call's.
   List<DialogRow> rowsFor(
     Map<String, Map<String, String>> catalog,
-    Set<String> onlyIds,
-  ) {
-    if (!identical(catalog, _catalog) || !identical(onlyIds, _onlyIds)) {
+    Set<String>? onlyIds, {
+    Set<String> additionalIds = const {},
+  }) {
+    if (!identical(catalog, _catalog) ||
+        !identical(onlyIds, _onlyIds) ||
+        !identical(additionalIds, _additionalIds)) {
       _catalog = catalog;
       _onlyIds = onlyIds;
-      _rows = buildDialogRows(catalog, onlyIds: onlyIds);
+      _additionalIds = additionalIds;
+      _rows = buildDialogRows(
+        catalog,
+        onlyIds: onlyIds,
+        additionalIds: additionalIds,
+      );
     }
     return _rows!;
   }

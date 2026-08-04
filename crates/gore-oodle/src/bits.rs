@@ -568,6 +568,9 @@ mod tests {
                 Err(e) => panic!("unexpected error {e:?}"),
             }
         }
-        assert!(saw_truncated, "expected Truncated after exhausting overrun budget");
+        assert!(
+            saw_truncated,
+            "expected Truncated after exhausting overrun budget"
+        );
     }
 }

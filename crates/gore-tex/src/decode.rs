@@ -68,6 +68,35 @@
 
 use crate::error::{Result, TexError};
 
+/// Hard ceiling for any decoded RGBA8 preview allocation.
+///
+/// Keep this in one place so regular and virtual-texture decode paths enforce
+/// the same budget before allocating their output buffers.
+pub(crate) const MAX_DECODED_RGBA_BYTES: usize = 128 * 1024 * 1024;
+
+pub(crate) fn bounded_preview_pixel_count(
+    width: usize,
+    height: usize,
+    format: &str,
+    subject: &str,
+) -> Result<usize> {
+    let pixels = width.checked_mul(height);
+    let byte_length = pixels.and_then(|value| value.checked_mul(std::mem::size_of::<u32>()));
+    match (pixels, byte_length) {
+        (Some(pixels), Some(byte_length))
+            if pixels > 0 && byte_length <= MAX_DECODED_RGBA_BYTES =>
+        {
+            Ok(pixels)
+        }
+        _ => Err(TexError::DecodeFailed {
+            format: format.to_string(),
+            reason: format!(
+                "{subject} exceeds {MAX_DECODED_RGBA_BYTES} bytes for {width}x{height}"
+            ),
+        }),
+    }
+}
+
 /// Minimal decoded platform data needed to turn a cooked texture into pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TexInfo {
@@ -181,6 +210,10 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
         if !is_supported_format(&layer0_format) {
             return Err(TexError::UnsupportedFormat(layer0_format));
         }
+        // Reject hostile/corrupt VT dimensions and tile geometry before resolving
+        // any chunk payloads. `decode_layer0` repeats this validation at its own
+        // public boundary before allocating the stitched bitmap or tile buffer.
+        crate::vt::validate_layer0_preview(vt, &layer0_format)?;
         let mut chunk_bytes = Vec::with_capacity(vt.chunks.len());
         for ch in &vt.chunks {
             chunk_bytes.push(crate::texdata::resolve_data_resource_bytes(
@@ -219,7 +252,9 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
     let expected = mip_byte_size(&pd.format, pd.size_x, pd.size_y)
         .ok_or_else(|| corrupt("no block size for format"))?;
     if mip0_entry.data.len() as u64 != expected {
-        return Err(corrupt("mip0 length does not match format/dimension block math"));
+        return Err(corrupt(
+            "mip0 length does not match format/dimension block math",
+        ));
     }
 
     Ok(TexInfo {
@@ -256,9 +291,7 @@ pub fn parse(uasset: &[u8], uexp: &[u8], ubulk: &[u8], _usmap: &[u8]) -> Result<
 /// letting such a texture fail only later at cook.
 pub fn replace_supported(info: &TexInfo) -> bool {
     if info.is_virtual {
-        info.vt_layers == Some(1)
-            && !info.vt_legacy
-            && crate::encode::supports_format(&info.format)
+        info.vt_layers == Some(1) && !info.vt_legacy && crate::encode::supports_format(&info.format)
     } else {
         crate::encode::supports_format(&info.format)
     }
@@ -306,14 +339,25 @@ pub fn replace_supported(info: &TexInfo) -> bool {
 /// Any unrecognized `format` returns [`TexError::UnsupportedFormat`]; a decoder
 /// failure (e.g. truncated block data) returns [`TexError::DecodeFailed`].
 pub fn to_rgba8(info: &TexInfo) -> Result<Vec<u32>> {
+    let w = info.width as usize;
+    let h = info.height as usize;
+    let pixels = bounded_preview_pixel_count(w, h, &info.format, "decoded RGBA preview")?;
+
     // Pre-decoded inputs (virtual textures) carry their stitched RGBA directly.
     if let Some(rgba) = &info.decoded_rgba {
+        if rgba.len() != pixels {
+            return Err(TexError::DecodeFailed {
+                format: info.format.clone(),
+                reason: format!(
+                    "pre-decoded RGBA has {} pixels, need {pixels} for {w}x{h}",
+                    rgba.len()
+                ),
+            });
+        }
         return Ok(rgba.clone());
     }
 
-    let w = info.width as usize;
-    let h = info.height as usize;
-    let mut image = vec![0u32; w * h];
+    let mut image = vec![0u32; pixels];
 
     // Uncompressed (linear) formats: the mip0 bytes ARE the pixels — no block
     // decode. Validate the length against w*h*bpp, then repack to 0xAARRGGBB.
@@ -478,8 +522,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        let uasset_path =
-            crate::container::unpack_asset(&utoc, &usmap_path, asset, &tmp).unwrap();
+        let uasset_path = crate::container::unpack_asset(&utoc, &usmap_path, asset, &tmp).unwrap();
         let uexp_path = uasset_path.with_extension("uexp");
         let ubulk_path = uasset_path.with_extension("ubulk");
 
@@ -492,7 +535,11 @@ mod tests {
         let info = parse(&uasset, &uexp, &ubulk, &usmap).unwrap();
         eprintln!(
             "T_Water_N: {}x{} {} mip0={} bytes (ubulk={} bytes)",
-            info.width, info.height, info.format, info.mip0.len(), ubulk.len()
+            info.width,
+            info.height,
+            info.format,
+            info.mip0.len(),
+            ubulk.len()
         );
         assert_eq!(info.width, 1024);
         assert_eq!(info.height, 1024);
@@ -544,6 +591,42 @@ mod tests {
             assert_eq!(b, 0, "pixel {i}: B={b} not 0 ({p:#010x})");
             assert_eq!(a, 255, "pixel {i}: A={a} not 255 ({p:#010x})");
         }
+    }
+
+    #[test]
+    fn preview_decode_rejects_oversized_rgba_before_allocation() {
+        let info = TexInfo {
+            width: 32_768,
+            height: 32_768,
+            format: "PF_G8".into(),
+            mip0: Vec::new(),
+            is_virtual: false,
+            vt_layers: None,
+            vt_legacy: false,
+            mipmapped: false,
+            decoded_rgba: None,
+        };
+
+        let error = to_rgba8(&info).unwrap_err().to_string();
+        assert!(error.contains("exceeds 134217728 bytes"), "{error}");
+    }
+
+    #[test]
+    fn preview_decode_rejects_wrong_predecoded_pixel_count() {
+        let info = TexInfo {
+            width: 2,
+            height: 2,
+            format: "PF_DXT1".into(),
+            mip0: Vec::new(),
+            is_virtual: true,
+            vt_layers: Some(1),
+            vt_legacy: false,
+            mipmapped: false,
+            decoded_rgba: Some(vec![0; 3]),
+        };
+
+        let error = to_rgba8(&info).unwrap_err().to_string();
+        assert!(error.contains("has 3 pixels, need 4"), "{error}");
     }
 
     /// Decode the local fixture's mip0 to RGBA. Gated: skips if the fixture is
@@ -798,34 +881,45 @@ mod tests {
     #[test]
     #[ignore = "slow: unpacks from real container; needs game + cached index"]
     fn decode_real_b8g8r8a8_default_alpha_texture() {
-        let Some((info, px)) =
-            extract("/Engine/EditorLandscapeResources/DefaultAlphaTexture", "DefaultAlphaTexture")
-        else {
+        let Some((info, px)) = extract(
+            "/Engine/EditorLandscapeResources/DefaultAlphaTexture",
+            "DefaultAlphaTexture",
+        ) else {
             eprintln!("skip: game or cached index absent");
             return;
         };
         eprintln!(
             "DefaultAlphaTexture: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_B8G8R8A8");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
         assert_eq!(px.len(), (info.width * info.height) as usize);
-        assert!(is_real_image(&px), "B8G8R8A8 decoded to a flat/identical image");
+        assert!(
+            is_real_image(&px),
+            "B8G8R8A8 decoded to a flat/identical image"
+        );
     }
 
     #[test]
     #[ignore = "slow: unpacks from real container; needs game + cached index"]
     fn decode_real_g8_roboto_distance_field() {
-        let Some((info, px)) =
-            extract("/Engine/EngineFonts/RobotoDistanceField", "RobotoDistanceField")
-        else {
+        let Some((info, px)) = extract(
+            "/Engine/EngineFonts/RobotoDistanceField",
+            "RobotoDistanceField",
+        ) else {
             eprintln!("skip: game or cached index absent");
             return;
         };
         eprintln!(
             "RobotoDistanceField: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_G8");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -845,7 +939,10 @@ mod tests {
         };
         eprintln!(
             "T_MeatBug_Crushed_EyeMask: {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_BC4");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -872,11 +969,13 @@ mod tests {
         let utoc = crate::paths::main_container(&g).unwrap();
         let usmap = crate::paths::usmap(&g).unwrap();
         let leaf = asset.rsplit('/').next().unwrap_or(&asset);
-        let (info, px) =
-            crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap();
+        let (info, px) = crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf).unwrap();
         eprintln!(
             "Black_1x1_EXR_Texture_VT ({asset}): {}x{} {} px={}",
-            info.width, info.height, info.format, px.len()
+            info.width,
+            info.height,
+            info.format,
+            px.len()
         );
         assert_eq!(info.format, "PF_FloatRGBA");
         assert!(info.width >= 1 && info.height >= 1 && info.width <= 16384 && info.height <= 16384);
@@ -904,8 +1003,7 @@ mod tests {
             eprintln!("skip: game not installed");
             return;
         };
-        let Some(idx) =
-            crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()
+        let Some(idx) = crate::index::TextureIndex::load(&crate::paths::texture_index_path()).ok()
         else {
             eprintln!("skip: cached index absent");
             return;
@@ -932,15 +1030,16 @@ mod tests {
         for (asset, &pid) in candidates.into_iter().take(400) {
             scanned += 1;
             let leaf = asset.rsplit('/').next().unwrap_or(asset);
-            let Ok((info, px)) =
-                crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf)
+            let Ok((info, px)) = crate::index::extract_by_package_id(&utoc, &usmap, pid, leaf)
             else {
                 continue;
             };
             if info.format == "PF_BC6H" {
                 eprintln!(
                     "BC6H asset found after {scanned} candidates: {asset} {}x{} px={}",
-                    info.width, info.height, px.len()
+                    info.width,
+                    info.height,
+                    px.len()
                 );
                 assert_eq!(px.len(), (info.width * info.height) as usize);
                 assert!(is_real_image(&px), "BC6H decoded to a flat/identical image");

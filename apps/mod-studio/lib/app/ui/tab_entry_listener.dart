@@ -16,7 +16,7 @@ import 'keep_alive_tab.dart';
 /// Whether a given entry actually needs an invalidate is the CALLER's
 /// decision (see `AssetEntryTracker`), not this widget's: a tab's first
 /// entry is not necessarily a fresh provider build, because another surface
-/// (the Changes tab embeds the same Textures/Scripts views) may already be
+/// (the Changes tab embeds the same Scripts view) may already be
 /// keeping the shared provider alive — with a value from before a deploy,
 /// undeploy, or game patch. Only the tab the controller is on at attach
 /// never produces a callback by itself: there is no tab CHANGE to react to,

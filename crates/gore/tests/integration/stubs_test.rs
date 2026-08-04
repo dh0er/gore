@@ -4,12 +4,16 @@ use tempfile::TempDir;
 
 fn make_model_json(tmp: &TempDir) -> PathBuf {
     // Build a small model.json by running dump first
-    let sdk_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/integration/fixtures/sdk");
+    let sdk_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/integration/fixtures/sdk");
     let model_path = tmp.path().join("model.json");
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["dump", sdk_dir.to_str().unwrap(), "-o", model_path.to_str().unwrap()])
+        .args([
+            "dump",
+            sdk_dir.to_str().unwrap(),
+            "-o",
+            model_path.to_str().unwrap(),
+        ])
         .assert()
         .success();
     model_path
@@ -23,7 +27,12 @@ fn stubs_creates_lua_files() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["stubs", model.to_str().unwrap(), "-o", out_dir.to_str().unwrap()])
+        .args([
+            "stubs",
+            model.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -44,17 +53,30 @@ fn stubs_lua_file_contains_emmylua_annotations() {
 
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["stubs", model.to_str().unwrap(), "-o", out_dir.to_str().unwrap()])
+        .args([
+            "stubs",
+            model.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
     // Find UItemDefinition.lua or combined file
     let combined = out_dir.join("UItemDefinition.lua");
-    let content = std::fs::read_to_string(&combined)
-        .expect("UItemDefinition.lua must exist");
-    assert!(content.contains("---@class UItemDefinition"), "must have @class");
-    assert!(content.contains("---@field m_Value"), "must have m_Value field");
-    assert!(content.contains("---@field m_Weight"), "must have m_Weight field");
+    let content = std::fs::read_to_string(&combined).expect("UItemDefinition.lua must exist");
+    assert!(
+        content.contains("---@class UItemDefinition"),
+        "must have @class"
+    );
+    assert!(
+        content.contains("---@field m_Value"),
+        "must have m_Value field"
+    );
+    assert!(
+        content.contains("---@field m_Weight"),
+        "must have m_Weight field"
+    );
 }
 
 #[test]
@@ -66,9 +88,12 @@ fn stubs_filter_limits_output() {
     Command::cargo_bin("gore")
         .unwrap()
         .args([
-            "stubs", model.to_str().unwrap(),
-            "-o", out_dir.to_str().unwrap(),
-            "--filter", "ItFo",
+            "stubs",
+            model.to_str().unwrap(),
+            "-o",
+            out_dir.to_str().unwrap(),
+            "--filter",
+            "ItFo",
         ])
         .assert()
         .success();
@@ -79,6 +104,12 @@ fn stubs_filter_limits_output() {
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
-    assert!(files.iter().any(|f| f.starts_with("ItFo")), "ItFo class must be present");
-    assert!(!files.iter().any(|f| f.starts_with("UItem")), "UItemDefinition must be filtered out");
+    assert!(
+        files.iter().any(|f| f.starts_with("ItFo")),
+        "ItFo class must be present"
+    );
+    assert!(
+        !files.iter().any(|f| f.starts_with("UItem")),
+        "UItemDefinition must be filtered out"
+    );
 }

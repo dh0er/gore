@@ -80,6 +80,19 @@ void main() {
       );
     });
 
+    test('recovery_required -> DISABLED until recovery undeploy', () {
+      expect(
+        canApply(
+          _status('recovery_required'),
+          oneEnabled,
+          true,
+          false,
+          false,
+        ),
+        isFalse,
+      );
+    });
+
     test('studioActive flag -> DISABLED even when status is ChangesPending', () {
       // A prior apply was blocked by an active studio deploy; the status may not
       // have caught up (e.g. still changes_pending), but Apply must stay off.

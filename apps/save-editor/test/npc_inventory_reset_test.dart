@@ -52,8 +52,11 @@ void main() {
       // Sanity: the fixture's item is visible and the Reset button is enabled
       // (canReset gated open by writable + privateEditable + typedVerified +
       // canCompress).
-      expect(find.text('ItMi_Orenugget'), findsOneWidget);
-      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset inventory');
+      expect(find.text('Orenugget'), findsOneWidget);
+      final resetFinder = find.widgetWithText(
+        OutlinedButton,
+        'Reset inventory',
+      );
       expect(resetFinder, findsOneWidget);
       expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
 
@@ -77,69 +80,65 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a queued reset disables Add and hides count editors',
-    (tester) async {
-      final core = _ResettableInventoryCoreService();
-      await pumpApp(tester, core);
-      await openPlayerInventory(tester);
+  testWidgets('a queued reset disables Add and hides count editors', (
+    tester,
+  ) async {
+    final core = _ResettableInventoryCoreService();
+    await pumpApp(tester, core);
+    await openPlayerInventory(tester);
 
-      // Before reset: the count editor renders and Add is enabled.
-      expect(find.widgetWithText(TextField, 'Count'), findsOneWidget);
-      final addFinder = find.widgetWithText(FilledButton, 'Add item');
-      expect(addFinder, findsOneWidget);
-      expect(tester.widget<FilledButton>(addFinder).onPressed, isNotNull);
+    // Before reset: the count editor renders and Add is enabled.
+    expect(find.widgetWithText(TextField, 'Count'), findsOneWidget);
+    final addFinder = find.widgetWithText(FilledButton, 'Add item');
+    expect(addFinder, findsOneWidget);
+    expect(tester.widget<FilledButton>(addFinder).onPressed, isNotNull);
 
-      await tester.tap(
-        find.widgetWithText(OutlinedButton, 'Reset inventory'),
-      );
-      await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reset inventory'));
+    await tester.pumpAndSettle();
 
-      // Reset supersedes every other inventory edit: the structural-edit-gated
-      // count editor disappears (the row falls back to plain text) and Add is
-      // blocked.
-      expect(find.widgetWithText(TextField, 'Count'), findsNothing);
-      expect(
-        tester.widget<FilledButton>(addFinder).onPressed,
-        isNull,
-        reason: 'Add must be blocked while a reset is pending',
-      );
+    // Reset supersedes every other inventory edit: the structural-edit-gated
+    // count editor disappears (the row falls back to plain text) and Add is
+    // blocked.
+    expect(find.widgetWithText(TextField, 'Count'), findsNothing);
+    expect(
+      tester.widget<FilledButton>(addFinder).onPressed,
+      isNull,
+      reason: 'Add must be blocked while a reset is pending',
+    );
 
-      // The pending-reset summary row is shown in place of the item list.
-      expect(find.text('Reset to game-start inventory'), findsOneWidget);
-    },
-  );
+    // The pending-reset summary row is shown in place of the item list.
+    expect(find.text('Reset to game-start inventory'), findsOneWidget);
+  });
 
-  testWidgets(
-    'a pending count edit blocks the Reset button until cleared',
-    (tester) async {
-      final core = _ResettableInventoryCoreService();
-      await pumpApp(tester, core);
-      await openPlayerInventory(tester);
+  testWidgets('a pending count edit blocks the Reset button until cleared', (
+    tester,
+  ) async {
+    final core = _ResettableInventoryCoreService();
+    await pumpApp(tester, core);
+    await openPlayerInventory(tester);
 
-      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset inventory');
-      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+    final resetFinder = find.widgetWithText(OutlinedButton, 'Reset inventory');
+    expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
 
-      // Queue an ordinary count change on the fixture's single item.
-      await tester.enterText(find.widgetWithText(TextField, 'Count'), '99');
-      await tester.pump();
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Queue an ordinary count change on the fixture's single item.
+    await tester.enterText(find.widgetWithText(TextField, 'Count'), '99');
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-      // Reset is now blocked (mutual exclusion the other direction).
-      expect(
-        tester.widget<OutlinedButton>(resetFinder).onPressed,
-        isNull,
-        reason: 'Reset must be blocked while a count edit is pending',
-      );
+    // Reset is now blocked (mutual exclusion the other direction).
+    expect(
+      tester.widget<OutlinedButton>(resetFinder).onPressed,
+      isNull,
+      reason: 'Reset must be blocked while a count edit is pending',
+    );
 
-      // Undo the pending count edit via the header's undo action — Reset must
-      // become available again.
-      await tester.tap(find.byIcon(Icons.undo_outlined));
-      await tester.pumpAndSettle();
-      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
-      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
-    },
-  );
+    // Undo the pending count edit via the header's undo action — Reset must
+    // become available again.
+    await tester.tap(find.byIcon(Icons.undo_outlined));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+    expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+  });
 
   testWidgets(
     'an empty but resolvable inventory still renders the Reset button, '
@@ -156,13 +155,17 @@ void main() {
 
       // The card renders: the Reset button is present and enabled, and the
       // "no item stacks" message pane is NOT shown.
-      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset inventory');
+      final resetFinder = find.widgetWithText(
+        OutlinedButton,
+        'Reset inventory',
+      );
       expect(resetFinder, findsOneWidget);
       expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
       expect(
         find.text('No item stacks found in the decoded private payload.'),
         findsNothing,
-        reason: 'the empty-inventory message pane must not suppress the card '
+        reason:
+            'the empty-inventory message pane must not suppress the card '
             'when reset is available',
       );
       // The empty-inventory body text is shown inside the card instead.
@@ -231,7 +234,6 @@ class _ResettableInventoryCoreService implements GoresaveCoreService {
                 'fileSize': 914367,
                 'sha1': 'abc',
                 'status': 'ok',
-                'persistentProfileId': 0,
                 'playerSaveName': 'Save',
                 'chapterId': 1,
                 'autoSave': true,
@@ -258,11 +260,7 @@ class _ResettableInventoryCoreService implements GoresaveCoreService {
               'status': 'decoded',
               'preview': false,
               'decompressedSize': 9,
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'playerName': 'Hero',
@@ -281,9 +279,7 @@ class _ResettableInventoryCoreService implements GoresaveCoreService {
                     'containerType': 'MainContainer',
                   },
                 ],
-                'mainContainerPaths': [
-                  '/Script/Angelscript.ItMi_Orenugget',
-                ],
+                'mainContainerPaths': ['/Script/Angelscript.ItMi_Orenugget'],
                 'writable': [
                   'private.inventory.setItemCount',
                   'private.inventory.addItem',
@@ -369,7 +365,6 @@ class _EmptyResettableInventoryCoreService implements GoresaveCoreService {
                 'fileSize': 914367,
                 'sha1': 'abc',
                 'status': 'ok',
-                'persistentProfileId': 0,
                 'playerSaveName': 'Save',
                 'chapterId': 1,
                 'autoSave': true,
@@ -394,11 +389,7 @@ class _EmptyResettableInventoryCoreService implements GoresaveCoreService {
               'status': 'decoded',
               'preview': false,
               'decompressedSize': 9,
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'playerName': 'Hero',

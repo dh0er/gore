@@ -12,8 +12,11 @@ import '../../app/game_paths.dart'; // gameRootFromExe
 import '../../app/ui/path_tree.dart';
 import '../../core/mod_ffi.dart';
 import '../../core/providers.dart';
+import '../domain/script_compile_install_state_provider.dart';
+import '../domain/script_compile_report.dart';
 import '../domain/script_mods_notifier.dart';
 import '../domain/script_modules_provider.dart';
+import 'script_compile_install_state_banner.dart';
 
 /// Selected script path: a browse TREE path (tree/flat-list taps) or a staged
 /// mod's key = REAL relPath (staged-panel taps, staging). The two spaces are
@@ -132,7 +135,8 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
       byTreePath[path] = m;
       treePathByRelPath.putIfAbsent(real, () => path);
       entries.add(
-          _ModuleEntry(m, path, m.name.toLowerCase(), path.toLowerCase()));
+        _ModuleEntry(m, path, m.name.toLowerCase(), path.toLowerCase()),
+      );
     }
     _treePaths = treePaths;
     _byTreePath = byTreePath;
@@ -227,23 +231,36 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     final q = query.toLowerCase();
     if (_matchQuery == q && _matchResult != null) return _matchResult!;
     _matchQuery = q;
-    final entries =
-        widget.onlyStaged ? _stagedSearchEntries! : _searchEntries!;
-    return _matchResult = (entries
-        .where((e) => e.nameLc.contains(q) || e.pathLc.contains(q))
-        .toList()
-      ..sort((a, b) => a.pathLc.compareTo(b.pathLc)));
+    final entries = widget.onlyStaged ? _stagedSearchEntries! : _searchEntries!;
+    return _matchResult =
+        (entries
+            .where((e) => e.nameLc.contains(q) || e.pathLc.contains(q))
+            .toList()
+          ..sort((a, b) => a.pathLc.compareTo(b.pathLc)));
   }
 
   @override
   Widget build(BuildContext context) {
     final modulesAsync = ref.watch(scriptModulesProvider);
     final state = ref.watch(scriptModsProvider);
+    final installSafety = ref.watch(scriptCompileInstallSafetyProvider);
     final selectedKey = ref.watch(_selectedModuleProvider);
     final scheme = Theme.of(context).colorScheme;
 
     return Column(
       children: [
+        if (installSafety.showBlockingBanner)
+          ScriptCompileInstallStateBanner(
+            state: installSafety,
+            onRecheck: () =>
+                ref.read(scriptCompileInstallSafetyProvider.notifier).refresh(),
+            onViewRecoveryReport: installSafety.recoveryReport == null
+                ? null
+                : () => showScriptCompileReportDialog(
+                    context,
+                    installSafety.recoveryReport!,
+                  ),
+          ),
         Expanded(
           child: modulesAsync.when(
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -275,8 +292,12 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   void _select(String relPath) =>
       ref.read(_selectedModuleProvider.notifier).state = relPath;
 
-  Widget _browser(List<ScriptModuleInfo> modules, ScriptModsState staged,
-      String? selectedKey, ColorScheme scheme) {
+  Widget _browser(
+    List<ScriptModuleInfo> modules,
+    ScriptModsState staged,
+    String? selectedKey,
+    ColorScheme scheme,
+  ) {
     if (widget.onlyStaged) {
       // Changes-tab mode: browse only the staged slice of the vanilla list.
       // build watches scriptModsProvider, so un-staging refreshes this live.
@@ -312,8 +333,9 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
         ),
       );
     }
-    final matches =
-        _query.isEmpty ? const <_ModuleEntry>[] : _matchesFor(_query);
+    final matches = _query.isEmpty
+        ? const <_ModuleEntry>[]
+        : _matchesFor(_query);
     // Staged keys are REAL relPaths — map both the marker set and the selected
     // highlight into tree-path space so disambiguated leaves behave.
     final marked = _markedFor(staged);
@@ -381,8 +403,11 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     );
   }
 
-  Widget _flatList(List<_ModuleEntry> matches, Set<String> marked,
-      String? selectedTreePath) {
+  Widget _flatList(
+    List<_ModuleEntry> matches,
+    Set<String> marked,
+    String? selectedTreePath,
+  ) {
     return ListView.builder(
       itemCount: matches.length,
       itemBuilder: (c, i) {
@@ -390,10 +415,16 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
         return ListTile(
           dense: true,
           selected: e.treePath == selectedTreePath,
-          title: Text(e.module.name,
-              maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle:
-              Text(e.treePath, maxLines: 1, overflow: TextOverflow.ellipsis),
+          title: Text(
+            e.module.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            e.treePath,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           // [marked] is keyed by tree path but derived from the module's REAL
           // relPath (the staging key), so disambiguated hits mark correctly.
           trailing: marked.contains(e.treePath)
@@ -407,10 +438,16 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
 
   // -- Detail pane ----------------------------------------------------------
 
-  Widget _detail(ScriptModsState state, String? selectedKey, ColorScheme scheme) {
+  Widget _detail(
+    ScriptModsState state,
+    String? selectedKey,
+    ColorScheme scheme,
+  ) {
     final placeholder = Center(
-      child: Text('Select or add a script mod',
-          style: TextStyle(color: scheme.onSurfaceVariant)),
+      child: Text(
+        'Select or add a script mod',
+        style: TextStyle(color: scheme.onSurfaceVariant),
+      ),
     );
     if (selectedKey == null) return placeholder;
     // Resolve the selection to its tree leaf's module (null for staged 'add'
@@ -423,7 +460,8 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     // collision-disambiguated leaf ('Foo (2).as') would miss the shared staged
     // mod, claim "vanilla", and its Edit would silently overwrite the staged
     // mod with a fresh vanilla emit.
-    final staged = state.items[selectedKey] ??
+    final staged =
+        state.items[selectedKey] ??
         (module == null ? null : state.items[_moduleRelPath(module)]);
     if (staged != null) {
       // Key the detail pane to the selected mod so switching selection builds a
@@ -446,9 +484,10 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
     // changes; the detail itself works on the module's REAL relPath (identical
     // except for collision-disambiguated leaves).
     return _VanillaModuleDetail(
-        key: ValueKey(treePath),
-        module: module,
-        relPath: _moduleRelPath(module));
+      key: ValueKey(treePath),
+      module: module,
+      relPath: _moduleRelPath(module),
+    );
   }
 }
 
@@ -456,8 +495,11 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
 /// Edit action that stages a [ScriptOp.edit] mod pre-filled with the module's
 /// emitted source.
 class _VanillaModuleDetail extends ConsumerStatefulWidget {
-  const _VanillaModuleDetail(
-      {super.key, required this.module, required this.relPath});
+  const _VanillaModuleDetail({
+    super.key,
+    required this.module,
+    required this.relPath,
+  });
   final ScriptModuleInfo module;
   final String relPath;
 
@@ -475,15 +517,19 @@ class _VanillaModuleDetailState extends ConsumerState<_VanillaModuleDetail> {
     // Watched in build (not in the tap callback) so the pristine-cache path
     // tracks the configured game.
     final cache = scriptCachePath(ref);
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.module.name,
-              style: Theme.of(context).textTheme.titleMedium),
-          Text('Vanilla module — not staged',
-              style: TextStyle(color: scheme.onSurfaceVariant)),
+          Text(
+            widget.module.name,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          Text(
+            'Vanilla module — not staged',
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
           const SizedBox(height: 12),
           _kvRow('Module', widget.module.name),
           _kvRow('Path', widget.relPath),
@@ -529,7 +575,8 @@ class _VanillaModuleDetailState extends ConsumerState<_VanillaModuleDetail> {
         final safe = relPath.replaceAll(RegExp(r'[\\/]+'), '_');
         final tag = fnv1aHex(utf8.encode(relPath)).substring(0, 8);
         final f = File(
-            p.join(Directory.systemTemp.path, 'goremod_emit', '${tag}_$safe'));
+          p.join(Directory.systemTemp.path, 'goremod_emit', '${tag}_$safe'),
+        );
         await f.parent.create(recursive: true);
         await f.writeAsString(src);
         asPath = f.path;
@@ -537,16 +584,20 @@ class _VanillaModuleDetailState extends ConsumerState<_VanillaModuleDetail> {
         // Emit failed: surface it and stage NOTHING — a silently staged edit
         // with an empty source would only fail later with no hint why.
         messenger.showSnackBar(
-            SnackBar(content: Text('Could not emit ${module.name}: $e')));
+          SnackBar(content: Text('Could not emit ${module.name}: $e')),
+        );
         if (mounted) setState(() => _busy = false);
         return;
       }
     }
-    mods.setMod(ScriptMod(
+    mods.setMod(
+      ScriptMod(
         op: ScriptOp.edit,
         moduleName: module.name,
         relPath: relPath,
-        asPath: asPath));
+        asPath: asPath,
+      ),
+    );
     // Point the selection at the staged mod's key (the REAL relPath — for a
     // collision-disambiguated tree leaf this differs from the tree path).
     selection.state = relPath;
@@ -614,26 +665,35 @@ class _StagedScriptsPanel extends ConsumerWidget {
   }
 
   Widget _stagedTile(
-      WidgetRef ref, ScriptMod m, String? selectedKey, ColorScheme scheme) {
+    WidgetRef ref,
+    ScriptMod m,
+    String? selectedKey,
+    ColorScheme scheme,
+  ) {
     final fresh = scriptCompileFresh(m);
     return ListTile(
       dense: true,
       selected: m.key == selectedKey,
-      leading: Icon(m.op == ScriptOp.add
-          ? Icons.add_box_outlined
-          : Icons.edit_note_outlined),
+      leading: Icon(
+        m.op == ScriptOp.add
+            ? Icons.add_box_outlined
+            : Icons.edit_note_outlined,
+      ),
       title: Text(m.moduleName, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Text.rich(
-        TextSpan(children: [
-          TextSpan(
+        TextSpan(
+          children: [
+            TextSpan(
               text: m.relPath,
-              style: TextStyle(color: scheme.onSurfaceVariant)),
-          const TextSpan(text: '  ·  '),
-          TextSpan(
-            text: fresh ? 'compiled' : 'not compiled / edited — recompile',
-            style: TextStyle(color: fresh ? scheme.primary : scheme.error),
-          ),
-        ]),
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+            const TextSpan(text: '  ·  '),
+            TextSpan(
+              text: fresh ? 'compiled' : 'not compiled / edited — recompile',
+              style: TextStyle(color: fresh ? scheme.primary : scheme.error),
+            ),
+          ],
+        ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 12),
@@ -648,9 +708,11 @@ class _StagedScriptsPanel extends ConsumerWidget {
   }
 
   Future<void> _addNew(BuildContext context, WidgetRef ref) async {
-    final file = await openFile(acceptedTypeGroups: const [
-      XTypeGroup(label: 'AngelScript', extensions: ['as']),
-    ]);
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'AngelScript', extensions: ['as']),
+      ],
+    );
     if (file == null) return;
     final base = p.basename(file.path);
     if (!context.mounted) return;
@@ -659,13 +721,21 @@ class _StagedScriptsPanel extends ConsumerWidget {
     final entered = await _promptRelPath(context, base);
     if (entered == null) return; // cancelled: abort the add
     // Normalize backslashes and strip a leading slash; fall back to the basename if empty.
-    var relPath = entered.replaceAll('\\', '/').replaceAll(RegExp(r'^/+'), '').trim();
+    var relPath = entered
+        .replaceAll('\\', '/')
+        .replaceAll(RegExp(r'^/+'), '')
+        .trim();
     if (relPath.isEmpty) relPath = base;
     // The module name is the final segment's basename-without-extension.
     final name = p.basenameWithoutExtension(p.basename(relPath));
     // The game confirms the real module name when the mod is compiled (it may resolve a different
     // name and re-key the staged mod).
-    final mod = ScriptMod(op: ScriptOp.add, moduleName: name, relPath: relPath, asPath: file.path);
+    final mod = ScriptMod(
+      op: ScriptOp.add,
+      moduleName: name,
+      relPath: relPath,
+      asPath: file.path,
+    );
     ref.read(scriptModsProvider.notifier).setMod(mod);
     ref.read(_selectedModuleProvider.notifier).state = mod.key;
   }
@@ -686,7 +756,10 @@ class _StagedScriptsPanel extends ConsumerWidget {
           onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text),
             child: const Text('Add'),
@@ -699,12 +772,23 @@ class _StagedScriptsPanel extends ConsumerWidget {
 
 /// Key/value info row shared by the staged and vanilla detail panes.
 Widget _kvRow(String k, String v) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 90, child: Text(k, style: const TextStyle(fontWeight: FontWeight.w600))),
-        Expanded(child: Text(v, style: const TextStyle(fontFamily: 'Consolas', fontSize: 12))),
-      ]),
-    );
+  padding: const EdgeInsets.symmetric(vertical: 2),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 90,
+        child: Text(k, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ),
+      Expanded(
+        child: Text(
+          v,
+          style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
+        ),
+      ),
+    ],
+  ),
+);
 
 class _ModDetail extends ConsumerStatefulWidget {
   const _ModDetail({super.key, required this.mod});
@@ -717,26 +801,60 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
   bool _busy = false;
   String? _status;
   bool _error = false;
+  ScriptCompileReport? _compileReport;
 
   @override
   Widget build(BuildContext context) {
     final mod = widget.mod;
+    final installSafety = ref.watch(scriptCompileInstallSafetyProvider);
+    final visibleReport = installSafety.recoveryReport ?? _compileReport;
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(mod.moduleName, style: Theme.of(context).textTheme.titleMedium),
-          Text(mod.op == ScriptOp.add ? 'New module' : 'Edit existing module',
-              style: TextStyle(color: scheme.onSurfaceVariant)),
+          Text(
+            mod.op == ScriptOp.add ? 'New module' : 'Edit existing module',
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
           const SizedBox(height: 12),
           _kvRow('Module', mod.moduleName),
           _kvRow('Path', mod.relPath),
-          _kvRow('Source', mod.asPath.isEmpty ? '(none — pick a .as)' : p.basename(mod.asPath)),
-          _kvRow('Compiled', scriptCompileFresh(mod)
-              ? p.basename(mod.miniPath)
-              : (mod.compiled ? 'not compiled / edited — recompile' : 'no')),
+          _kvRow(
+            'Source',
+            mod.asPath.isEmpty ? '(none — pick a .as)' : p.basename(mod.asPath),
+          ),
+          _kvRow(
+            'Compiled',
+            scriptCompileFresh(mod)
+                ? p.basename(mod.miniPath)
+                : (mod.compiled ? 'not compiled / edited — recompile' : 'no'),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: const Text('Allow new symbols'),
+            subtitle: Text(
+              mod.op == ScriptOp.add
+                  ? 'Required for a new module; keeps only its new class/function/name rows.'
+                  : 'Enable only when this edit introduces a new class, function, global, or name.',
+            ),
+            value: mod.allowNewSymbols,
+            onChanged: _busy
+                ? null
+                : (value) {
+                    ref
+                        .read(scriptModsProvider.notifier)
+                        .setMod(mod.withAllowNewSymbols(value));
+                    setState(() {
+                      _error = false;
+                      _status = 'Symbol policy changed — compile again.';
+                      _compileReport = null;
+                    });
+                  },
+          ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -749,17 +867,39 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
               FilledButton.icon(
                 icon: const Icon(Icons.build_outlined, size: 18),
                 label: const Text('Compile'),
-                onPressed: (_busy || mod.asPath.isEmpty) ? null : _compile,
+                onPressed:
+                    (_busy ||
+                        mod.asPath.isEmpty ||
+                        !installSafety.liveMutationAllowed)
+                    ? null
+                    : _compile,
               ),
             ],
           ),
-          if (_busy) const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8), child: LinearProgressIndicator()),
+          if (_busy)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: LinearProgressIndicator(),
+            ),
           if (_status != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(_status!,
-                  style: TextStyle(color: _error ? scheme.error : scheme.onSurfaceVariant)),
+              child: Text(
+                _status!,
+                style: TextStyle(
+                  color: _error ? scheme.error : scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          if (visibleReport != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                label: const Text('Compiler report'),
+                onPressed: () =>
+                    showScriptCompileReportDialog(context, visibleReport),
+              ),
             ),
         ],
       ),
@@ -772,13 +912,22 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     // would target the wrong mod (or throw on a disposed ref).
     final mod = widget.mod;
     final notifier = ref.read(scriptModsProvider.notifier);
-    final file = await openFile(acceptedTypeGroups: const [
-      XTypeGroup(label: 'AngelScript', extensions: ['as']),
-    ]);
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'AngelScript', extensions: ['as']),
+      ],
+    );
     if (file == null) return;
     // Changing the source invalidates any prior compile (clears mini + hash). Operate on the
     // captured mod.
     notifier.setMod(mod.withSource(file.path));
+    if (mounted) {
+      setState(() {
+        _error = false;
+        _status = 'Source changed — compile again.';
+        _compileReport = null;
+      });
+    }
   }
 
   Future<void> _compile() async {
@@ -787,25 +936,78 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     // or ref afterwards would write the result to the wrong mod (or throw on the disposed ref).
     final mod = widget.mod;
     final notifier = ref.read(scriptModsProvider.notifier);
+    final installSafety = ref.read(scriptCompileInstallSafetyProvider.notifier);
     final gameRoot = gameRootFromExe(ref.read(gameExePathProvider));
     final ffi = ModFfi(ref.read(coreServiceProvider));
     if (gameRoot == null) {
-      setState(() { _error = true; _status = 'Set the game path in Settings to compile.'; });
+      setState(() {
+        _error = true;
+        _status = 'Set the game path in Settings to compile.';
+      });
       return;
     }
-    setState(() { _busy = true; _error = false; _status = 'Compiling via game…'; });
+    final confirmed = await _confirmCompile();
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _busy = true;
+      _error = false;
+      _status = 'Rechecking game installation safety…';
+      if (ref.read(scriptCompileInstallSafetyProvider).recoveryReport == null) {
+        _compileReport = null;
+      }
+    });
+    Directory? work;
     try {
-      final work = await Directory.systemTemp.createTemp('goremod_as_compile_');
-      final r = await ffi.scriptCompile(
+      final checked = await installSafety.refresh();
+      if (!checked.liveMutationAllowed ||
+          checked.gameRoot == null ||
+          !p.equals(
+            p.normalize(p.absolute(checked.gameRoot!)),
+            p.normalize(p.absolute(gameRoot)),
+          )) {
+        if (mounted) {
+          setState(() {
+            _error = true;
+            _status =
+                'Compile blocked: close the game or resolve the recovery/inspection warning, then choose Recheck.';
+          });
+        }
+        return;
+      }
+      if (mounted) setState(() => _status = 'Compiling via game…');
+      work = await Directory.systemTemp.createTemp('goremod_as_compile_');
+      final report = await ffi.scriptCompileReportV1(
         gameDir: gameRoot,
         op: scriptOpToString(mod.op),
         moduleName: mod.moduleName,
         relPath: mod.relPath,
         asPath: mod.asPath,
         workDir: work.path,
+        allowNewSymbols: mod.allowNewSymbols,
       );
-      final mini = r['mini_path'] as String;
-      final resolvedName = (r['module'] as String?) ?? mod.moduleName;
+      installSafety.recordCompileReport(report, gameRoot: gameRoot);
+      await installSafety.refresh();
+      if (!report.compiled) {
+        var cleanupWarning = '';
+        if (!report.recoveryRequired) {
+          try {
+            await work.delete(recursive: true);
+          } catch (_) {
+            cleanupWarning =
+                ' Temporary compiler workspace could not be removed: ${work.path}';
+          }
+        }
+        if (mounted) {
+          setState(() {
+            if (!report.recoveryRequired) _compileReport = report;
+            _error = true;
+            _status = '${_failedCompileSummary(report)}$cleanupWarning';
+          });
+        }
+        return;
+      }
+      final mini = report.miniPath!;
+      final resolvedName = report.module!;
       // Fingerprint the .as that was just compiled (using the CAPTURED mod) so a later edit to the
       // source reads as not-fresh. IO failure => empty hash, which scriptCompileFresh treats as
       // not-fresh (safe: blocks deploy until a clean recompile).
@@ -822,27 +1024,110 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       // notifier's protected `state` directly is intentional — `ref` is off-limits post-dispose.
       // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
       if (!notifier.state.items.containsKey(mod.key)) {
-        if (mounted) setState(() { _status = 'Compiled, but the mod was removed — discarded.'; });
+        try {
+          await work.delete(recursive: true);
+        } catch (_) {
+          // The result is intentionally discarded. A leftover temp workspace is preferable to
+          // resurrecting a removed mod or deleting any path outside the directory we created.
+        }
+        if (mounted) {
+          setState(() {
+            _status = 'Compiled, but the mod was removed — discarded.';
+          });
+        }
         return;
       }
       // The key is relPath (stable across compile); only moduleName may change as the regen
       // resolves the real name. So just update in place under the SAME key — no re-key needed.
       final updated = ScriptMod(
-        op: mod.op, moduleName: resolvedName, relPath: mod.relPath,
-        asPath: mod.asPath, miniPath: mini, compiledHash: hash);
+        op: mod.op,
+        moduleName: resolvedName,
+        relPath: mod.relPath,
+        asPath: mod.asPath,
+        allowNewSymbols: mod.allowNewSymbols,
+        miniPath: mini,
+        compiledHash: hash,
+      );
       notifier.setMod(updated);
       // Selection stores mod.key (relPath) and is unchanged by the compile, so it stays valid.
       // Be honest when fingerprinting the .as failed (hash == ''): compiledHash is empty, so
       // scriptCompileFresh is false and Build/Deploy stays disabled — don't claim "Compiled ✓".
       if (mounted) {
-        setState(() => _status = hash.isEmpty
-            ? 'Compiled, but could not fingerprint the source — re-pick or edit the .as to enable deploy.'
-            : 'Compiled ✓');
+        setState(() {
+          _compileReport = report;
+          _status = hash.isEmpty
+              ? 'Compiled, but could not fingerprint the source — re-pick or edit the .as to enable deploy.'
+              : _compiledSummary(report);
+        });
       }
     } catch (e) {
-      if (mounted) setState(() { _error = true; _status = '$e'; });
+      final checked = await installSafety.refresh();
+      if (work != null && checked.liveMutationAllowed) {
+        try {
+          await work.delete(recursive: true);
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() {
+          _error = true;
+          _status = '$e';
+        });
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<bool?> _confirmCompile() => showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Compile with the game'),
+      content: const Text(
+        'Close Gothic 1 Remake before continuing. The compiler temporarily stages a complete '
+        'AngelScript tree in the game installation, then restores every touched path. It does '
+        'not load or change a save. If exact restoration cannot be proven, Mod Studio will stop '
+        'and show recovery details.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Compile'),
+        ),
+      ],
+    ),
+  );
+
+  String _failedCompileSummary(ScriptCompileReport report) {
+    if (report.recoveryRequired) {
+      return 'Compilation stopped: exact game-install restoration could not be proven. Open the compiler report before another compile.';
+    }
+    final messages = report.diagnostics?.messages ?? const [];
+    final firstErrors = messages.where(
+      (message) => message.severity == ScriptCompilerDiagnosticSeverity.error,
+    );
+    if (firstErrors.isNotEmpty) {
+      final diagnostic = firstErrors.first;
+      return '${diagnostic.location}: ${diagnostic.message}';
+    }
+    return report.failure?.message ?? 'Compilation failed.';
+  }
+
+  String _compiledSummary(ScriptCompileReport report) {
+    final diagnostics = report.diagnostics!;
+    if (diagnostics.usedNormalFallback) {
+      return 'Compiled ✓ — diagnostics hook unavailable; normal compiler fallback used.';
+    }
+    final count = diagnostics.messages.length;
+    if (count > 0) {
+      final omitted = diagnostics.omitted == 0
+          ? ''
+          : ' (+${diagnostics.omitted} omitted)';
+      return 'Compiled ✓ — $count compiler message(s)$omitted.';
+    }
+    return 'Compiled ✓';
   }
 }

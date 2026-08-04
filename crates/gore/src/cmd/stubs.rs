@@ -5,8 +5,8 @@ use std::{fs, path::PathBuf};
 pub fn run(model_path: PathBuf, out_dir: PathBuf, filter: Option<String>) -> Result<()> {
     let json = fs::read_to_string(&model_path)
         .with_context(|| format!("reading model.json '{}'", model_path.display()))?;
-    let model: ReflectionModel = serde_json::from_str(&json)
-        .with_context(|| "parsing model.json")?;
+    let model: ReflectionModel =
+        serde_json::from_str(&json).with_context(|| "parsing model.json")?;
 
     fs::create_dir_all(&out_dir)?;
 

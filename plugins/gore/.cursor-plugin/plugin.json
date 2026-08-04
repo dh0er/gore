@@ -1,0 +1,22 @@
+{
+  "name": "gore",
+  "displayName": "GORE",
+  "description": "Mod Gothic 1 Remake: textures, localized text, dialog, audio, voice-over, item values and AngelScript, built into one bundle and deployed as a unit. Bundles the skill and MCP server configuration; needs the gore CLI on PATH.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Daniel Hoer",
+    "url": "https://github.com/dh0er"
+  },
+  "homepage": "https://github.com/dh0er/gore",
+  "repository": "https://github.com/dh0er/gore",
+  "license": "MIT",
+  "keywords": [
+    "gothic",
+    "modding",
+    "unreal",
+    "iostore",
+    "fmod",
+    "angelscript"
+  ],
+  "skills": "./skills/"
+}

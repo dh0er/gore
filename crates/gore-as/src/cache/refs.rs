@@ -16,12 +16,19 @@ use super::types::DataType;
 use super::walk_modules::module_region_end;
 use super::wire::{Cursor, WireError};
 
-const DATA_TYPE_SIZE: usize = 36;
+/// Complete serialized identity of one `TypeReferences` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeIdentity {
+    pub name: String,
+    pub module: String,
+    pub namespace: String,
+}
 
 /// Resolved-name lookup built from a cache's tail tables.
 #[derive(Debug, Default)]
 pub struct RefResolver {
     type_by_ptr: HashMap<i64, String>,
+    type_identity_by_ptr: HashMap<i64, TypeIdentity>,
     func_by_ptr: HashMap<i64, String>,
     global_by_ptr: HashMap<i64, String>,
     prop_by_key: HashMap<i64, String>,
@@ -89,30 +96,45 @@ impl RefResolver {
         let mut r = RefResolver::default();
 
         // T1 TypeReferences: int64 key + (Name, Module, Namespace, TArray<DataType>)
-        for _ in 0..c.read_count("TypeReferences")? {
+        let type_reference_count = c.read_count("TypeReferences")?;
+        c.ensure_minimum_remaining(type_reference_count, 24, "TypeReferences")?;
+        for _ in 0..type_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
-            c.read_sia()?; // Module
-            c.read_sia()?; // Namespace
+            let module = c.read_sia()?;
+            let namespace = c.read_sia()?;
             let nsub = c.read_count("TypeRef.SubTypes")?;
+            c.ensure_minimum_remaining(nsub, 36, "TypeRef.SubTypes")?;
             if nsub > 0 {
-                let mut subs = Vec::with_capacity(nsub);
+                let mut subs = Vec::new();
                 for _ in 0..nsub {
                     subs.push(DataType::read(&mut c)?);
                 }
                 r.type_subtypes.insert(key, subs);
             }
             r.type_names.insert(name.clone());
-            r.type_by_ptr.insert(key, name);
+            r.type_by_ptr.insert(key, name.clone());
+            r.type_identity_by_ptr.insert(
+                key,
+                TypeIdentity {
+                    name,
+                    module,
+                    namespace,
+                },
+            );
         }
         // T2 TypeIdReferenceToPointer: int32 id -> int64 ptr
-        for _ in 0..c.read_count("TypeIdRef")? {
+        let type_id_count = c.read_count("TypeIdRef")?;
+        c.ensure_minimum_remaining(type_id_count, 12, "TypeIdRef")?;
+        for _ in 0..type_id_count {
             let id = c.read_i32()?;
             let ptr = c.read_i64()?;
             r.typeid_to_ptr.insert(id, ptr);
         }
         // T3 FunctionReferences: int64 key + (Name, Module, Namespace, 3 bool, int64, params, ret)
-        for _ in 0..c.read_count("FunctionReferences")? {
+        let function_reference_count = c.read_count("FunctionReferences")?;
+        c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
+        for _ in 0..function_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             let module = c.read_sia()?; // Module (declaring module name, batch-25f)
@@ -122,7 +144,8 @@ impl RefResolver {
             let is_method = c.read_bool4()?;
             let objtype = c.read_i64()?; // ObjectType ptr (owning class)
             let nparams = c.read_count("FuncRef.Params")?;
-            let mut params = Vec::with_capacity(nparams);
+            c.ensure_minimum_remaining(nparams, 36, "FuncRef.Params")?;
+            let mut params = Vec::new();
             for _ in 0..nparams {
                 params.push(DataType::read(&mut c)?);
             }
@@ -151,13 +174,17 @@ impl RefResolver {
             r.func_by_ptr.insert(key, name);
         }
         // T4 FunctionIdReferenceToPointer: int32 id -> int64 ptr
-        for _ in 0..c.read_count("FuncIdRef")? {
+        let function_id_count = c.read_count("FuncIdRef")?;
+        c.ensure_minimum_remaining(function_id_count, 12, "FuncIdRef")?;
+        for _ in 0..function_id_count {
             let id = c.read_i32()?;
             let ptr = c.read_i64()?;
             r.funcid_to_ptr.insert(id, ptr);
         }
         // T5 GlobalReferences: int64 key + (Name, Module, Namespace, int32 bIsString)
-        for _ in 0..c.read_count("GlobalReferences")? {
+        let global_reference_count = c.read_count("GlobalReferences")?;
+        c.ensure_minimum_remaining(global_reference_count, 24, "GlobalReferences")?;
+        for _ in 0..global_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             c.read_sia()?; // Module
@@ -173,12 +200,14 @@ impl RefResolver {
         }
         // T6 StaticNames: TArray<SIA> — the FName-literal pool `__STATIC_NAME(Id)` indexes.
         let n_static = c.read_count("StaticNames")?;
-        r.static_names.reserve_exact(n_static);
+        c.ensure_minimum_remaining(n_static, 4, "StaticNames")?;
         for _ in 0..n_static {
             r.static_names.push(c.read_sia()?);
         }
         // T7 PropertyReferences: int64 key + (Name, int32 OldTypeId)
-        for _ in 0..c.read_count("PropertyReferences")? {
+        let property_reference_count = c.read_count("PropertyReferences")?;
+        c.ensure_minimum_remaining(property_reference_count, 16, "PropertyReferences")?;
+        for _ in 0..property_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             let old_type_id = c.read_i32()?; // OldTypeId
@@ -223,10 +252,17 @@ impl RefResolver {
     }
     /// Owning class name of a function by id.
     pub fn func_owner_by_id(&self, id: i32) -> Option<&str> {
-        self.funcid_to_ptr.get(&id).and_then(|p| self.func_owner.get(p)).map(|s| s.as_str())
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.func_owner.get(p))
+            .map(|s| s.as_str())
     }
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
+    }
+    /// Full module/namespace/name identity for an exact serialized type pointer.
+    pub fn type_identity_by_ptr(&self, ptr: i64) -> Option<&TypeIdentity> {
+        self.type_identity_by_ptr.get(&ptr)
     }
     /// True if `name` is a known type (so a call to it is a constructor, not a method).
     pub fn is_type_name(&self, name: &str) -> bool {
@@ -246,9 +282,21 @@ impl RefResolver {
     pub fn class_field_types(&self, class: &str) -> Option<&HashMap<String, String>> {
         self.class_fields.get(class)
     }
+    /// Field VALUE type declared directly on `class`, without walking its superclasses.
+    /// Mutation callers use this when the bytecode owner itself is part of the semantic identity;
+    /// inheriting a same-named base field would mislabel the declaring owner.
+    pub fn own_field_type_by_class(&self, class: &str, field: &str) -> Option<&str> {
+        self.class_fields
+            .get(class)
+            .and_then(|fields| fields.get(field))
+            .map(String::as_str)
+    }
     /// Direct super-class name of a script class (None for engine types / roots).
     pub fn class_super_of(&self, class: &str) -> Option<&str> {
-        self.class_super.get(class).map(|s| s.as_str()).filter(|s| !s.is_empty())
+        self.class_super
+            .get(class)
+            .map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
     }
     /// Field VALUE type by containing class name + field name, resolved through the injected
     /// per-class field maps (walking script supers, cycle-bounded). Correct for FOREIGN script
@@ -323,7 +371,10 @@ impl RefResolver {
             // bound the walk against cycles; on a script-map dead end, follow a known
             // native link before giving up.
             let next = self.class_super.get(cur).map(String::as_str).or_else(|| {
-                KNOWN_NATIVE_HIERARCHY.iter().find(|(c, _)| *c == cur).map(|(_, p)| *p)
+                KNOWN_NATIVE_HIERARCHY
+                    .iter()
+                    .find(|(c, _)| *c == cur)
+                    .map(|(_, p)| *p)
             });
             match next {
                 Some(s) if s == sup => return true,
@@ -346,16 +397,21 @@ impl RefResolver {
     }
     /// Namespace for a free/static native function by id, if any.
     pub fn func_ns_by_id(&self, id: i32) -> Option<&str> {
-        self.funcid_to_ptr.get(&id).and_then(|p| self.func_ns.get(p)).map(|s| s.as_str())
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.func_ns.get(p))
+            .map(|s| s.as_str())
     }
     /// Target class of a `StaticClass` call: StaticClass is a namespaced free fn whose
     /// Namespace IS the (fully-qualified) target class — the LAST `::` segment is the class
     /// name (objtype is NULL for StaticClass, so func_owner can't carry it).
     pub fn staticclass_class_by_id(&self, id: i32) -> Option<&str> {
-        self.func_ns_by_id(id).map(|ns| ns.rsplit("::").next().unwrap_or(ns))
+        self.func_ns_by_id(id)
+            .map(|ns| ns.rsplit("::").next().unwrap_or(ns))
     }
     pub fn staticclass_class_by_ptr(&self, ptr: i64) -> Option<&str> {
-        self.func_ns_by_ptr(ptr).map(|ns| ns.rsplit("::").next().unwrap_or(ns))
+        self.func_ns_by_ptr(ptr)
+            .map(|ns| ns.rsplit("::").next().unwrap_or(ns))
     }
     /// Parameter DataTypes for a function by ptr (excludes the receiver).
     pub fn func_params_by_ptr(&self, ptr: i64) -> Option<&[DataType]> {
@@ -363,7 +419,10 @@ impl RefResolver {
     }
     /// Parameter DataTypes for a function by id.
     pub fn func_params_by_id(&self, id: i32) -> Option<&[DataType]> {
-        self.funcid_to_ptr.get(&id).and_then(|p| self.func_params.get(p)).map(|v| v.as_slice())
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.func_params.get(p))
+            .map(|v| v.as_slice())
     }
     /// Return DataType for a function by ptr.
     pub fn func_ret_by_ptr(&self, ptr: i64) -> Option<&DataType> {
@@ -371,15 +430,27 @@ impl RefResolver {
     }
     /// Return DataType for a function by id.
     pub fn func_ret_by_id(&self, id: i32) -> Option<&DataType> {
-        self.funcid_to_ptr.get(&id).and_then(|p| self.func_ret.get(p))
+        self.funcid_to_ptr
+            .get(&id)
+            .and_then(|p| self.func_ret.get(p))
     }
 
     /// Attach the Binds.Cache native API (for arity fallback on native method calls).
     pub fn set_native_api(&mut self, api: super::binds::NativeApi) {
         self.native = Some(api);
     }
-    /// Best-known native arity for a call by function ptr: prefer the exact (owning class,
-    /// name) match, else the unambiguous by-name arity. None if no native data / ambiguous.
+    /// Best-known native arity for a call by function ptr. Prefer an exact `(owning class,
+    /// name)` match. For an owner-bearing VALUE/template method with no exact match, a
+    /// globally-unambiguous name may only LOWER/equal the cache parameter count (useful for
+    /// source-default args such as `TArray::Last()`); it may never exceed it and steal a deeper
+    /// enclosing operand. UObject/Actor methods deliberately do not use that class-agnostic
+    /// fallback: generated/K2 wrappers are frequently absent from the exact Binds record and
+    /// collide with unrelated methods (`AActor::GetComponent(2)` vs
+    /// `FHitResult::GetComponent(0)`, and `GetComponentsByClass(2)` vs its one-arg return-value
+    /// wrapper). Their cache FunctionReference is the only owner-specific signature evidence.
+    /// `FPerceptionHandler::AddEvent(1)` versus the unrelated Binds-only
+    /// `UTimelineComponent::AddEvent(2)` is the concrete over-count this gate prevents.
+    /// Free/static calls without an owner retain the unambiguous by-name fallback.
     pub fn native_arity_by_ptr(&self, ptr: i64, name: &str) -> Option<usize> {
         // batch-20 Class C: natives whose tail-table FunctionReferences param list UNDERCOUNTS
         // the live game API (proven by the in-game error candidates). Keyed (owner, name); the
@@ -389,19 +460,28 @@ impl RefResolver {
         const KNOWN_NATIVE_ARITY: &[(&str, &str, usize)] =
             &[("FGameplayEffectSpec", "SetByCallerMagnitude", 2)];
         if let Some(cls) = self.func_owner.get(&ptr) {
-            if let Some((_, _, a)) =
-                KNOWN_NATIVE_ARITY.iter().find(|(c, n, _)| c == cls && n == &name)
+            if let Some((_, _, a)) = KNOWN_NATIVE_ARITY
+                .iter()
+                .find(|(c, n, _)| c == cls && n == &name)
             {
                 return Some(*a);
             }
         }
         let n = self.native.as_ref()?;
-        if let Some(cls) = self.func_owner.get(&ptr) {
-            if let Some(a) = n.arity(cls, name) {
-                return Some(a);
-            }
+        match self.func_owner.get(&ptr) {
+            Some(cls) => n.arity(cls, name).or_else(|| {
+                let bytes = cls.as_bytes();
+                let object_class = matches!(bytes.first(), Some(b'U') | Some(b'A'))
+                    && bytes.get(1).is_some_and(u8::is_ascii_uppercase);
+                if object_class {
+                    return None;
+                }
+                let by_name = n.arity_by_name(name)?;
+                let cache = self.func_params.get(&ptr)?.len();
+                (by_name <= cache).then_some(by_name)
+            }),
+            None => n.arity_by_name(name),
         }
-        n.arity_by_name(name)
     }
     /// Best-known native arity for a call by function id.
     pub fn native_arity_by_id(&self, id: i32, name: &str) -> Option<usize> {
@@ -427,21 +507,73 @@ impl RefResolver {
     /// arity trim is a proven regression, batch-24b report), so a Binds-side parse alone would
     /// never fire. Every entry is verified against the shipped Binds.Cache field decls
     /// (`binds.rs` test `validate_field_types_against_real_binds_cache`) and keyed by the
-    /// exact (ADDSi type-id -> owner, member) pair observed at the failing WRTV1 sites.
+    /// exact (member-load type-id -> owner, member) pair observed at enum stores/argument pushes.
     /// The Binds field-type table (when loaded, dev runs) extends coverage as a fallback.
     pub fn native_field_type(&self, class: &str, field: &str) -> Option<&str> {
         const KNOWN_NATIVE_FIELD_TYPES: &[(&str, &str, &str)] = &[
-            ("FWidgetAlignment", "VerticalAlignment", "EVerticalAlignment"),
-            ("FWidgetAlignment", "HorizontalAlignment", "EHorizontalAlignment"),
+            (
+                "FWidgetAlignment",
+                "VerticalAlignment",
+                "EVerticalAlignment",
+            ),
+            (
+                "FWidgetAlignment",
+                "HorizontalAlignment",
+                "EHorizontalAlignment",
+            ),
             ("FPerceivedAgent", "Relationship", "ERelationship"),
             ("FPerceivedAgent", "Hostility", "ERelationshipHostility"),
-            ("FPerceivedAgent", "RelativeRank", "ERelationshipRelativeRank"),
-            ("FFXPerceptionSoundArea", "PerceptionLoudness", "EPerceptionNoiseLoudness"),
-            ("FALoadingScreenSettings", "Layout", "EAsyncLoadingScreenLayout"),
-            ("FALoadingScreenSettings", "PlaybackType", "EMoviePlaybackType"),
+            (
+                "FPerceivedAgent",
+                "RelativeRank",
+                "ERelationshipRelativeRank",
+            ),
+            (
+                "FFXPerceptionSoundArea",
+                "PerceptionLoudness",
+                "EPerceptionNoiseLoudness",
+            ),
+            (
+                "FALoadingScreenSettings",
+                "Layout",
+                "EAsyncLoadingScreenLayout",
+            ),
+            (
+                "FALoadingScreenSettings",
+                "PlaybackType",
+                "EMoviePlaybackType",
+            ),
             ("FTextAppearance", "Justification", "ETextJustify"),
-            ("FInteractionAnimTransition", "TransitionKind", "EInteractionInputKind"),
+            (
+                "FInteractionAnimTransition",
+                "TransitionKind",
+                "EInteractionInputKind",
+            ),
             ("FWeatherSaveGame", "CurrentWeather", "EWeather"),
+            // Native crime-victim handle fields read through
+            // `LoadRObjR; PshRPtr` into `TArray<Enum>::Add`. PropertyReferences exposes only
+            // the containing F-struct, so these Binds-verified value types are the cache-free
+            // witness used by the member-register argument channel.
+            (
+                "FCrimeVictimPersonHandle",
+                "RelationshipTowardsPerson",
+                "ERelationship",
+            ),
+            (
+                "FCrimeVictimPersonHandle",
+                "RelativeRankTowardsPerson",
+                "ERelationshipRelativeRank",
+            ),
+            (
+                "FCrimeVictimGuildHandle",
+                "RelationshipTowardsGuild",
+                "ERelationship",
+            ),
+            (
+                "FCrimeVictimGuildHandle",
+                "RelativeRankTowardsGuild",
+                "ERelationshipRelativeRank",
+            ),
             // batch-30b (C9 G2 rows, specs/batch29-errortail.md §9): the two Letterbox
             // enum fields rendered as bool stores (`= (local_80 != 0)`) — 5×
             // "Can't implicitly convert from 'bool' to 'EVerticalAlignment&'" in the
@@ -449,8 +581,16 @@ impl RefResolver {
             // ADDSi tid at the WRTV1 sites (0x4002a20 -> FLetterboxLayoutSettings,
             // offsets 0/1); the sibling FWidgetAlignment rows above already render
             // their EVerticalAlignment(...) casts.
-            ("FLetterboxLayoutSettings", "VerticalLoadingWidgetPosition", "EVerticalAlignment"),
-            ("FLetterboxLayoutSettings", "VerticalTipWidgetPosition", "EVerticalAlignment"),
+            (
+                "FLetterboxLayoutSettings",
+                "VerticalLoadingWidgetPosition",
+                "EVerticalAlignment",
+            ),
+            (
+                "FLetterboxLayoutSettings",
+                "VerticalTipWidgetPosition",
+                "EVerticalAlignment",
+            ),
             // batch-30c: core-math FLOAT fields — NOT in the Binds field tables (math types
             // are special-registered; probed None), so these rows are excluded from the
             // binds.rs mirror test. Evidence is the in-game diagnostic itself: reads of
@@ -479,7 +619,11 @@ impl RefResolver {
         // with-binds vs no-binds emit (the ADDSi member-store idiom sites) and confirmed against the
         // shipped Binds.Cache field decls by `binds.rs::validate_float_field_types_against_real_binds_cache`.
         const KNOWN_NATIVE_FLOAT_FIELDS: &[(&str, &str, &str)] = &[
-            ("FALoadingScreenSettings", "MinimumLoadingScreenDisplayTime", "float32"),
+            (
+                "FALoadingScreenSettings",
+                "MinimumLoadingScreenDisplayTime",
+                "float32",
+            ),
             ("FAlphaBlendArgs", "BlendTime", "float32"),
             ("FCameraBehaviour", "m_ArmLength", "float32"),
             ("FCameraBehaviour", "m_LagSpeed", "float32"),
@@ -491,16 +635,52 @@ impl RefResolver {
             ("FFreezeParams", "m_FreezeDuration", "float32"),
             ("FGameplayCueParameters", "NormalizedMagnitude", "float32"),
             ("FGameplayCueParameters", "RawMagnitude", "float32"),
-            ("FGameplayEffectContext_HitResponse", "BowStretch", "float32"),
-            ("FGameplayEffectContext_HitResponse", "MultiplierSuperArmor", "float32"),
-            ("FGothicFlyDiveSettings", "AdaptToCollisionSampleZDistance", "float32"),
-            ("FGothicFlyDiveSettings", "CharacterZDivergeOffset", "float32"),
-            ("FGothicFlyDiveSettings", "GroundedMoveBeforeGoalDistance", "float32"),
+            (
+                "FGameplayEffectContext_HitResponse",
+                "BowStretch",
+                "float32",
+            ),
+            (
+                "FGameplayEffectContext_HitResponse",
+                "MultiplierSuperArmor",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "AdaptToCollisionSampleZDistance",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "CharacterZDivergeOffset",
+                "float32",
+            ),
+            (
+                "FGothicFlyDiveSettings",
+                "GroundedMoveBeforeGoalDistance",
+                "float32",
+            ),
             ("FGothicFlyDiveSettings", "UseFlyDiveMinDistance", "float32"),
-            ("FGothicPathfollowSettings", "AgentRadiusMultiplier", "float32"),
-            ("FGothicPathfollowSettings", "CrowdAgentRadiusMultiplier", "float32"),
-            ("FGothicPathfollowSettings", "CrowdAgentSeparationWeight", "float32"),
-            ("FInteractionAnimTransition", "BlockOtherTransitionsForSeconds", "float32"),
+            (
+                "FGothicPathfollowSettings",
+                "AgentRadiusMultiplier",
+                "float32",
+            ),
+            (
+                "FGothicPathfollowSettings",
+                "CrowdAgentRadiusMultiplier",
+                "float32",
+            ),
+            (
+                "FGothicPathfollowSettings",
+                "CrowdAgentSeparationWeight",
+                "float32",
+            ),
+            (
+                "FInteractionAnimTransition",
+                "BlockOtherTransitionsForSeconds",
+                "float32",
+            ),
             ("FInteractionAnimTransition", "CooldownSeconds", "float32"),
             ("FInteractionAnimTransition", "Probability", "float32"),
             ("FInteractionAnimTransition", "Weight", "float32"),
@@ -512,10 +692,26 @@ impl RefResolver {
             ("FLightValues", "SourceHeight", "float32"),
             ("FLightValues", "SourceWidth", "float32"),
             ("FMemorizedEvent", "Magnitude", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "FastSpeedVelocityMultiplier", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "MediumRangeVelocityMultiplier", "float32"),
-            ("FPathfollowModifyAvoidVelocitySettings", "ShortRangeVelocityMultiplier", "float32"),
-            ("FPathfollowMoveFocusSettings", "FocalPointHeightMultiplier", "float32"),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "FastSpeedVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "MediumRangeVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowModifyAvoidVelocitySettings",
+                "ShortRangeVelocityMultiplier",
+                "float32",
+            ),
+            (
+                "FPathfollowMoveFocusSettings",
+                "FocalPointHeightMultiplier",
+                "float32",
+            ),
             ("FPerceptionHandler", "DelaySeconds", "float32"),
             ("FRelativeCrimeDataEntry", "BaseSeverity", "float32"),
             ("FRememberedPerception", "Magnitude", "float32"),
@@ -526,8 +722,9 @@ impl RefResolver {
             ("FTipSettings", "TipSwapTime", "float32"),
             ("FTipSettings", "TipWrapAt", "float32"),
         ];
-        if let Some((_, _, t)) =
-            KNOWN_NATIVE_FIELD_TYPES.iter().find(|(c, f, _)| *c == class && *f == field)
+        if let Some((_, _, t)) = KNOWN_NATIVE_FIELD_TYPES
+            .iter()
+            .find(|(c, f, _)| *c == class && *f == field)
         {
             return Some(t);
         }
@@ -536,12 +733,30 @@ impl RefResolver {
         // the float-family-gated `float_field_type` (WRTV float-const store + RDR8 read wraps),
         // never the enum/int cast gates. Every row is verified against the shipped Binds.Cache
         // by `binds.rs::validate_float_field_types_against_real_binds_cache`.
-        if let Some((_, _, t)) =
-            KNOWN_NATIVE_FLOAT_FIELDS.iter().find(|(c, f, _)| *c == class && *f == field)
+        if let Some((_, _, t)) = KNOWN_NATIVE_FLOAT_FIELDS
+            .iter()
+            .find(|(c, f, _)| *c == class && *f == field)
         {
             return Some(t);
         }
-        self.native.as_ref().and_then(|n| n.field_type(class, field))
+        self.native
+            .as_ref()
+            .and_then(|n| n.field_type(class, field))
+    }
+    /// Native field type admissible as a cache-mutation witness. Unlike the decompiler's
+    /// best-effort [`Self::native_field_type`], this succeeds only for a SHA-256-sealed,
+    /// independently audited Binds.Cache profile paired with its audited script-cache GUID.
+    /// Callers must pass the GUID parsed from the same cache being inspected; an unknown GUID
+    /// returns no witness without affecting [`Self::native_field_type`].
+    pub fn verified_native_default_field_type(
+        &self,
+        script_cache_guid: &[u8; 16],
+        class: &str,
+        field: &str,
+    ) -> Option<&str> {
+        self.native
+            .as_ref()
+            .and_then(|native| native.verified_default_field_type(script_cache_guid, class, field))
     }
     /// batch-32d: CONST object-handle fields of NATIVE structs — the live compiler treats a
     /// read of these as `const U*`, so a plain store into a same-typed local fails "Can't
@@ -658,11 +873,44 @@ impl RefResolver {
     /// FName-literal text for a `__STATIC_NAME(Id)` index into the StaticNames tail table.
     /// None if out of range (e.g. a mini-cache with empty tail tables).
     pub fn static_name(&self, id: i64) -> Option<&str> {
-        usize::try_from(id).ok().and_then(|i| self.static_names.get(i)).map(|s| s.as_str())
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| self.static_names.get(i))
+            .map(|s| s.as_str())
     }
     /// Number of StaticNames entries (debug aid).
     pub fn static_name_count(&self) -> usize {
         self.static_names.len()
+    }
+
+    /// Conservative bare names carried only by the Shipping cache tail tables.
+    ///
+    /// This intentionally collapses declaration scopes for the offline Quest collision inventory.
+    /// String-literal globals are excluded because their `Name` is payload text, not a symbol.
+    pub(super) fn collision_names(&self) -> impl Iterator<Item = &str> {
+        self.type_names
+            .iter()
+            .map(String::as_str)
+            .chain(self.func_by_ptr.values().map(String::as_str))
+            .chain(
+                self.global_by_ptr
+                    .iter()
+                    .filter(|(pointer, _)| !self.global_is_string.contains(pointer))
+                    .map(|(_, name)| name.as_str()),
+            )
+            .chain(self.prop_by_key.values().map(String::as_str))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
+        let mut resolver = Self::default();
+        for (index, name) in names.iter().enumerate() {
+            resolver.type_names.insert((*name).to_owned());
+            resolver
+                .type_by_ptr
+                .insert(index as i64 + 1, (*name).to_owned());
+        }
+        resolver
     }
     /// Composed CONTAINER type of a NATIVE class's field (batch-25e,
     /// specs/batch23-nomatch.md E; precedent: KNOWN_NATIVE_ARITY). The script cache stores no
@@ -697,7 +945,11 @@ impl RefResolver {
                 "NiagaraSystemPathBySurfaceType",
                 "TMap<EPhysicalSurface, TSoftObjectPtr<UNiagaraSystem>>",
             ),
-            ("FWeatherSaveGame", "WeatherModifiers", "TMap<EWeather, float32>"),
+            (
+                "FWeatherSaveGame",
+                "WeatherModifiers",
+                "TMap<EWeather, float32>",
+            ),
             ("FWeatherSaveGame", "DailyWeathers", "TArray<EWeather>"),
         ];
         KNOWN_NATIVE_FIELD_SUBTYPES
@@ -715,7 +967,9 @@ impl RefResolver {
     /// resolved via its PropertyReferences OldTypeId. Used to cast field-assignment RHS.
     pub fn member_type(&self, type_id: i32, offset: i32) -> Option<&str> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
-        self.prop_type_id.get(&key).and_then(|id| self.type_by_id(*id))
+        self.prop_type_id
+            .get(&key)
+            .and_then(|id| self.type_by_id(*id))
     }
     /// [`Self::member_type`], composed variant (declaring class INCLUDING template subtypes,
     /// e.g. `TArrayConstIterator<AGothicCharacter>` instead of the bare head). Used where the
@@ -723,6 +977,107 @@ impl RefResolver {
     /// for the head-comparing cast paths in structure.rs.
     pub fn member_type_composed(&self, type_id: i32, offset: i32) -> Option<String> {
         let key = ((type_id as i64) << 1) | ((offset as i64) << 33) | 1;
-        self.prop_type_id.get(&key).and_then(|id| self.type_by_id_composed(*id))
+        self.prop_type_id
+            .get(&key)
+            .and_then(|id| self.type_by_id_composed(*id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncated_huge_tail_count_fails_before_resolver_allocation() {
+        let mut bytes = vec![0u8; 16];
+        bytes.extend_from_slice(&super::super::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&50_000_000i32.to_le_bytes());
+        let error = RefResolver::build(&bytes).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected end of data"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn native_arity_never_borrows_a_name_match_from_an_unrelated_owner() {
+        let mut refs = RefResolver::default();
+        refs.func_owner.insert(10, "FPerceptionHandler".to_string());
+        refs.func_owner.insert(11, "FExactOwner".to_string());
+        refs.func_owner.insert(13, "TArray".to_string());
+        refs.func_owner.insert(14, "AActor".to_string());
+        refs.func_owner.insert(15, "AExactActor".to_string());
+        refs.func_params.insert(10, vec![DataType::default()]);
+        refs.func_params.insert(13, vec![DataType::default()]);
+        refs.func_params
+            .insert(14, vec![DataType::default(), DataType::default()]);
+        refs.func_params
+            .insert(15, vec![DataType::default(), DataType::default()]);
+        refs.native = Some(super::super::binds::NativeApi::from_test_arities(
+            &[
+                ("FExactOwner", "Exact", 1),
+                ("AExactActor", "ExactObject", 1),
+            ],
+            &[
+                ("AddEvent", Some(2)),
+                ("Exact", Some(3)),
+                ("Last", Some(0)),
+                ("GetComponent", Some(0)),
+                ("ExactObject", Some(0)),
+            ],
+        ));
+
+        // The only Binds AddEvent is an unrelated two-arg method. The cache declaration for
+        // the owner-known FPerceptionHandler method must remain authoritative.
+        assert_eq!(refs.native_arity_by_ptr(10, "AddEvent"), None);
+        // Exact owner/name evidence still overrides the cache declaration.
+        assert_eq!(refs.native_arity_by_ptr(11, "Exact"), Some(1));
+        // Ownerless free/static calls retain the safe globally-unambiguous fallback.
+        assert_eq!(refs.native_arity_by_ptr(12, "AddEvent"), Some(2));
+        // A by-name arity that only suppresses source-default args remains safe.
+        assert_eq!(refs.native_arity_by_ptr(13, "Last"), Some(0));
+        // A class-agnostic Binds hit for an object method is not owner evidence. Keep the
+        // two-parameter AActor cache declaration instead of borrowing FHitResult's zero args.
+        assert_eq!(refs.native_arity_by_ptr(14, "GetComponent"), None);
+        // An exact object-owner entry remains authoritative; only the name-only fallback is barred.
+        assert_eq!(refs.native_arity_by_ptr(15, "ExactObject"), Some(1));
+    }
+
+    #[test]
+    fn unknown_cache_guid_hides_mutation_fields_but_not_decompiler_fields() {
+        let refs = RefResolver {
+            native: Some(super::super::binds::NativeApi::from_test_field_types(
+                &[("UItemDefinition", "m_Value", "int")],
+                &[("UItemDefinition", "m_Value", "int")],
+                Some(gore_generation::GENERATION_ROWS[0].binds_cache.sha256),
+            )),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            refs.verified_native_default_field_type(&[0; 16], "UItemDefinition", "m_Value",),
+            None
+        );
+        assert_eq!(
+            refs.native_field_type("UItemDefinition", "m_Value"),
+            Some("int"),
+            "generic decompiler evidence must remain independent of the mutation GUID gate"
+        );
+    }
+
+    #[test]
+    fn exact_field_lookup_does_not_borrow_an_inherited_declaration() {
+        let mut refs = RefResolver::default();
+        refs.class_fields.insert(
+            "Base".into(),
+            [("Value".into(), "int".into())].into_iter().collect(),
+        );
+        refs.class_fields.insert("Mid".into(), HashMap::new());
+        refs.class_super.insert("Mid".into(), "Base".into());
+
+        assert_eq!(refs.field_type_by_class("Mid", "Value"), Some("int"));
+        assert_eq!(refs.own_field_type_by_class("Mid", "Value"), None);
+        assert_eq!(refs.own_field_type_by_class("Base", "Value"), Some("int"));
     }
 }

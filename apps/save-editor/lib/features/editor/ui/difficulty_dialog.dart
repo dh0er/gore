@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
+import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 
 /// Maps a logical preset value to its localized display label.
@@ -143,18 +144,20 @@ class ProfileDifficultyChip extends StatelessWidget {
             color: enabled ? color : theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 6),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-            style: theme.textTheme.labelLarge?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: enabled
-                  ? (known
-                        ? color.withValues(alpha: 0.95)
-                        : theme.colorScheme.onSurface)
-                  : theme.colorScheme.onSurfaceVariant,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: enabled
+                    ? (known
+                          ? color.withValues(alpha: 0.95)
+                          : theme.colorScheme.onSurface)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],
@@ -335,7 +338,11 @@ class _DifficultyDialogState extends State<DifficultyDialog> {
           Icon(Icons.local_fire_department, color: _presetColor(_preset)),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(l10n.difficultyTitle(widget.profile.displayName)),
+            child: Text(
+              l10n.difficultyTitle(
+                localizedProfileDisplayName(l10n, widget.profile),
+              ),
+            ),
           ),
         ],
       ),
