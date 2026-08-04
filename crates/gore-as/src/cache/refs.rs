@@ -1050,6 +1050,7 @@ mod tests {
             native: Some(super::super::binds::NativeApi::from_test_field_types(
                 &[("UItemDefinition", "m_Value", "int")],
                 &[("UItemDefinition", "m_Value", "int")],
+                Some(gore_generation::GENERATION_ROWS[0].binds_cache.sha256),
             )),
             ..Default::default()
         };

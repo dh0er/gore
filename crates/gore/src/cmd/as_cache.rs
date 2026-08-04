@@ -3167,6 +3167,30 @@ fn select_qualify_usmap(
     Ok(best_index)
 }
 
+/// The row this dump is sealed for when that row describes a *different* executable, or `None` when
+/// some row pairs this exact dump with the executable in front of us.
+///
+/// Asking the first row that carries the seal is not the same question, and gets it wrong on the
+/// generations that matter: two audited rows deliberately share one USMAP, because a build may move
+/// the executable and the script cache without moving the reflection layout. Matching a seal
+/// therefore proves nothing on its own. What makes a dump stale is that *every* row carrying it
+/// names another executable — so a build whose own sealed dump is sitting right there could not
+/// requalify without `--usmap`, which is the flag for asserting a reuse deliberately.
+fn stale_usmap_row(
+    usmap_sha256: &[u8; 32],
+    executable_seal: &gore_generation::FileSeal,
+) -> Option<&'static gore_generation::GenerationRow> {
+    let mut carrying = gore_generation::rows().iter().filter(|row| row.usmap.sha256 == *usmap_sha256);
+    let first = carrying.next()?;
+    if first.executable == *executable_seal {
+        return None;
+    }
+    match carrying.find(|row| row.executable == *executable_seal) {
+        Some(_) => None,
+        None => Some(first),
+    }
+}
+
 /// The curated script modules the story catalog seals, and the source each one must reproduce.
 struct QualifyCuratedRecord {
     module: String,
@@ -3298,20 +3322,15 @@ fn run_qualify(
     // seal and describes it faithfully, so nothing about the file itself is wrong. Two audited rows
     // legitimately share one dump, so this cannot be an error — but it cannot be silent either.
     if let (Ok(index), false) = (&selection, asserted_usmap) {
-        if let Some(prior) = gore_generation::rows()
-            .iter()
-            .find(|row| row.usmap.sha256 == candidates[*index].sha256)
-        {
-            if prior.executable != executable_seal {
-                selection = Err(format!(
-                    "the dump that fits is byte-for-byte the one sealed for {}, whose executable is \
-                     not this one. UE4SS generates the dump on your machine and nothing forces it to \
-                     be regenerated, so this is either a build that did not move the reflection \
-                     layout or a stale dump describing the previous game. Re-dump it and run this \
-                     again, or pass --usmap to assert the reuse deliberately",
-                    prior.id
-                ));
-            }
+        if let Some(prior) = stale_usmap_row(&candidates[*index].sha256, &executable_seal) {
+            selection = Err(format!(
+                "the dump that fits is byte-for-byte the one sealed for {}, whose executable is \
+                 not this one. UE4SS generates the dump on your machine and nothing forces it to \
+                 be regenerated, so this is either a build that did not move the reflection \
+                 layout or a stale dump describing the previous game. Re-dump it and run this \
+                 again, or pass --usmap to assert the reuse deliberately",
+                prior.id
+            ));
         }
     }
 
@@ -4223,6 +4242,43 @@ fn qualify_count(
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn a_dump_two_generations_share_is_stale_for_neither_of_them() {
+        // The guard asked the *first* row carrying the seal, and two audited rows deliberately
+        // share one USMAP — a build may move the executable and the script cache without moving
+        // the reflection layout. So the later of the two could not requalify against the very dump
+        // sealed for it: the answer came from its predecessor's row and reported a stale dump.
+        let sharing: Vec<_> = gore_generation::rows()
+            .iter()
+            .filter(|row| {
+                gore_generation::rows()
+                    .iter()
+                    .filter(|other| other.usmap.sha256 == row.usmap.sha256)
+                    .count()
+                    > 1
+            })
+            .collect();
+        assert!(
+            sharing.len() >= 2,
+            "this test is only meaningful while some dump is shared; the table has none"
+        );
+
+        // Every row that shares a dump must accept it as its own, whichever order the table is in.
+        for row in &sharing {
+            assert!(
+                stale_usmap_row(&row.usmap.sha256, &row.executable).is_none(),
+                "{} was told its own sealed dump belongs to another build",
+                row.id
+            );
+        }
+
+        // And a dump really is stale for an executable no row pairs it with.
+        let foreign = gore_generation::FileSeal { byte_len: 1, sha256: [0x5a; 32] };
+        let flagged = stale_usmap_row(&sharing[0].usmap.sha256, &foreign)
+            .expect("an executable no row carries must not pass");
+        assert_eq!(flagged.usmap.sha256, sharing[0].usmap.sha256);
+    }
 
     #[test]
     fn compile_module_cli_keeps_one_guard_across_pristine_selection() {

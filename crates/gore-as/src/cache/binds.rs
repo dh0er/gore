@@ -41,12 +41,25 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-/// Every audited `PrecompiledScript_Shipping.Cache` GUID, from the generation table. A sealed
-/// Binds file is not mutation evidence for any other script-cache build; the native-ancestry layer
-/// separately binds each GUID to its exact combined cache fingerprint, and the two layers stay
-/// separate on purpose.
-fn is_verified_default_script_cache_guid(script_cache_guid: &[u8; 16]) -> bool {
-    gore_generation::row_for_script_cache_guid(script_cache_guid).is_some()
+/// Does the generation this script-cache GUID names seal the exact `Binds.Cache` these tables were
+/// built from?
+///
+/// Existing anywhere in the table is not enough, and the comment that used to sit here asserted a
+/// property the code did not have. Generations do not all carry the same Binds file — one build
+/// moved it — and their sealed field-map digests differ accordingly. A GUID-only gate therefore
+/// handed one generation's field map to another generation's cache as mutation evidence, which is
+/// reachable in practice because the loader takes the Binds path from `GORE_AS_BINDS` or from
+/// beside the cache, and neither is required to belong to the same install as the cache itself.
+///
+/// `loaded` is `None` when the bytes these tables came from matched no sealed Binds file at all, in
+/// which case the maps are empty anyway and nothing can be admitted.
+fn is_verified_default_pairing(
+    script_cache_guid: &[u8; 16],
+    loaded: Option<&[u8; 32]>,
+) -> bool {
+    let Some(loaded) = loaded else { return false };
+    gore_generation::row_for_script_cache_guid(script_cache_guid)
+        .is_some_and(|row| row.binds_cache.sha256 == *loaded)
 }
 
 type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
@@ -77,6 +90,11 @@ pub struct NativeApi {
     /// inferred from hard-coded constants so downstream evidence IDs bind the live verified
     /// tuple that produced this instance.
     verified_default_class_profile_digests: Option<VerifiedDefaultClassProfileDigests>,
+    /// SHA-256 of the `Binds.Cache` bytes these sealed tables were admitted from, when they were.
+    /// Kept because the identity is what makes them evidence: without it, "this map is sealed" and
+    /// "this map is sealed *for the cache in front of us*" are the same sentence, and only the
+    /// second one is true.
+    verified_default_binds_sha256: Option<[u8; 32]>,
 }
 
 impl NativeApi {
@@ -98,6 +116,7 @@ impl NativeApi {
             verified_default_field_types: HashMap::new(),
             verified_default_class_paths: HashMap::new(),
             verified_default_class_profile_digests: None,
+            verified_default_binds_sha256: None,
         }
     }
 
@@ -105,6 +124,9 @@ impl NativeApi {
     pub(crate) fn from_test_field_types(
         generic: &[(&str, &str, &str)],
         verified: &[(&str, &str, &str)],
+        // The `Binds.Cache` identity the verified map is supposed to have come from. `None` builds
+        // the shape a file matching no seal produces, where nothing is admitted for any GUID.
+        sealed_for: Option<[u8; 32]>,
     ) -> NativeApi {
         let fields = |rows: &[(&str, &str, &str)]| {
             rows.iter()
@@ -123,6 +145,7 @@ impl NativeApi {
             verified_default_field_types: fields(verified),
             verified_default_class_paths: HashMap::new(),
             verified_default_class_profile_digests: None,
+            verified_default_binds_sha256: sealed_for,
         }
     }
 
@@ -141,6 +164,9 @@ impl NativeApi {
             return None;
         }
         let (by_class, field_types) = parse_records(data);
+        // The identity of the bytes, not merely the fact that they were readable. Everything sealed
+        // below is evidence only for the generation that ships exactly this file.
+        let source_sha256: [u8; 32] = Sha256::digest(data).into();
         let verified_default_field_types = verified_default_field_types(data);
         let (verified_default_class_paths, verified_default_class_profile_digests) =
             verified_default_class_paths(data);
@@ -158,6 +184,9 @@ impl NativeApi {
             by_class,
             by_name,
             field_types,
+            verified_default_binds_sha256: (!verified_default_field_types.is_empty()
+                || !verified_default_class_paths.is_empty())
+            .then_some(source_sha256),
             verified_default_field_types,
             verified_default_class_paths,
             verified_default_class_profile_digests,
@@ -203,7 +232,8 @@ impl NativeApi {
         class: &str,
         field: &str,
     ) -> Option<&str> {
-        if !is_verified_default_script_cache_guid(script_cache_guid) {
+        if !is_verified_default_pairing(script_cache_guid, self.verified_default_binds_sha256.as_ref())
+        {
             return None;
         }
         self.verified_default_field_types
@@ -218,7 +248,7 @@ impl NativeApi {
         &self,
         script_cache_guid: &[u8; 16],
     ) -> Option<&HashMap<String, String>> {
-        (is_verified_default_script_cache_guid(script_cache_guid)
+        (is_verified_default_pairing(script_cache_guid, self.verified_default_binds_sha256.as_ref())
             && !self.verified_default_class_paths.is_empty())
         .then_some(&self.verified_default_class_paths)
     }
@@ -229,7 +259,7 @@ impl NativeApi {
         &self,
         script_cache_guid: &[u8; 16],
     ) -> Option<VerifiedDefaultClassProfileDigests> {
-        (is_verified_default_script_cache_guid(script_cache_guid)
+        (is_verified_default_pairing(script_cache_guid, self.verified_default_binds_sha256.as_ref())
             && !self.verified_default_class_paths.is_empty())
         .then_some(self.verified_default_class_profile_digests)
         .flatten()
@@ -1146,15 +1176,23 @@ mod tests {
     }
 
     #[test]
-    fn mutation_fields_require_audited_script_guid_but_generic_fields_do_not() {
-        let api = NativeApi::from_test_field_types(
-            &[("UItemDefinition", "m_Value", "int")],
-            &[("UItemDefinition", "m_Value", "int")],
-        );
+    fn mutation_fields_require_the_generation_that_seals_this_binds_file() {
+        // A sealed map is evidence for the generation that ships exactly these Binds bytes, and for
+        // no other. The gate used to ask only whether the script-cache GUID appeared anywhere in
+        // the table, so pointing GORE_AS_BINDS at an archived Binds file — which the loader permits,
+        // since the path comes from the environment or from beside the cache — handed one
+        // generation's field map to another generation's cache as mutation evidence. The two do
+        // differ: their sealed field-map digests are not the same hash.
         let mut foreign_guid = gore_generation::GENERATION_ROWS[0].script_cache_guid;
         foreign_guid[15] ^= 1;
 
         for row in gore_generation::rows() {
+            let api = NativeApi::from_test_field_types(
+                &[("UItemDefinition", "m_Value", "int")],
+                &[("UItemDefinition", "m_Value", "int")],
+                Some(row.binds_cache.sha256),
+            );
+
             assert_eq!(
                 api.verified_default_field_type(
                     &row.script_cache_guid,
@@ -1162,10 +1200,34 @@ mod tests {
                     "m_Value",
                 ),
                 Some("int"),
-                "every audited generation reads the sealed field map, {} did not",
+                "{} must read the map sealed for its own Binds file",
                 row.id
             );
+
+            // Every other generation whose Binds file differs must be refused this map.
+            for other in gore_generation::rows() {
+                if other.binds_cache.sha256 == row.binds_cache.sha256 {
+                    continue;
+                }
+                assert_eq!(
+                    api.verified_default_field_type(
+                        &other.script_cache_guid,
+                        "UItemDefinition",
+                        "m_Value",
+                    ),
+                    None,
+                    "{} was handed the field map sealed for {}",
+                    other.id,
+                    row.id
+                );
+            }
         }
+
+        let api = NativeApi::from_test_field_types(
+            &[("UItemDefinition", "m_Value", "int")],
+            &[("UItemDefinition", "m_Value", "int")],
+            Some(gore_generation::GENERATION_ROWS[0].binds_cache.sha256),
+        );
         assert_eq!(
             api.verified_default_field_type(&foreign_guid, "UItemDefinition", "m_Value"),
             None,
