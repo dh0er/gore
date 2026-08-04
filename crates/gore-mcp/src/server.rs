@@ -137,6 +137,19 @@ impl Session {
     /// `Response` without a pipe or a child process in sight.
     pub fn handle(&mut self, request: &Request, peer: &mut dyn Peer) -> Option<Response> {
         let id = request.response_id();
+        // Checked before anything dispatches, because `params_object` cannot tell "no fields" from
+        // "fields we could not read": an array or a string flattens to the map an omitted member
+        // yields, and the call would then answer success having silently discarded everything the
+        // client sent. A notification is still never answered, malformed or not.
+        if !request.params_shape_ok() {
+            return (!request.is_notification()).then(|| {
+                Response::error(
+                    id,
+                    errors::INVALID_PARAMS,
+                    "`params` must be an object; MCP has no request whose parameters are anything else",
+                )
+            });
+        }
         let params = request.params_object();
 
         match request.method.as_str() {
@@ -486,8 +499,17 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
                 Err(error) => return Err(format!("the connection failed while waiting: {error}")),
             };
 
-            if let Frame::Answer { id: answered, result, error } = &frame {
+            if let Frame::Answer { id: answered, result, error, version_ok } = &frame {
                 if *answered == id {
+                    // Failed closed, before the payload is looked at. A peer that answers a "may I
+                    // change your game installation?" question in a protocol revision it did not
+                    // negotiate is not one whose "run it" this server should act on, and treating
+                    // the failure as a refusal costs nothing but a question asked again.
+                    if !version_ok {
+                        return Err("the answer declared a JSON-RPC version this server does not \
+                                    speak, so it was not read as consent"
+                            .into());
+                    }
                     if let Some(error) = error {
                         return Err(describe_error(error));
                     }
@@ -1226,6 +1248,38 @@ mod tests {
         let mut session = Session::new(options());
         initialize_with(&mut session, json!({ "elicitation": false }));
         assert_eq!(session.consent_policy(), Policy::CannotAsk, "`false` is a refusal, not a declaration");
+    }
+
+    #[test]
+    fn params_that_are_not_an_object_are_refused_rather_than_flattened() {
+        // `params_object` turns an array into the same empty map an omitted member yields, so
+        // without this the call answers success having discarded everything the client sent. On
+        // `initialize` that is the expensive one: the capabilities vanish, and a client that can
+        // show a consent dialog is recorded for the whole session as one that cannot.
+        let mut session = Session::new(options());
+        let malformed = request_with_id("initialize", json!([1, 2, 3]), json!(7));
+
+        let response = session.handle_unasked(&malformed).expect("a request is answered");
+        let error = response.error.expect("an error, not a result");
+        assert_eq!(error.code, errors::INVALID_PARAMS, "{}", error.message);
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "nothing may be negotiated out of a frame that was refused"
+        );
+
+        // Both shapes that mean "no fields" still go through.
+        for empty in [json!(null), json!({})] {
+            let mut session = Session::new(options());
+            assert!(
+                session
+                    .handle_unasked(&request_with_id("ping", empty.clone(), json!(1)))
+                    .expect("answered")
+                    .error
+                    .is_none(),
+                "{empty} means no fields, which is allowed"
+            );
+        }
     }
 
     #[test]

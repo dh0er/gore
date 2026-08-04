@@ -14,7 +14,7 @@ use std::io::{self, BufRead, Read, Write};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::message::Request;
+use super::message::{Request, JSONRPC_VERSION};
 
 /// Upper bound on a single incoming line.
 ///
@@ -47,7 +47,13 @@ pub enum Frame {
     /// Exactly one of `result` / `error` is populated by a well-behaved peer; both are carried as
     /// they arrived so the waiter decides what a malformed pair means. An answer is never replied
     /// to — JSON-RPC has no response-to-a-response — so an unsolicited one is simply dropped.
-    Answer { id: Value, result: Option<Value>, error: Option<Value> },
+    ///
+    /// `version_ok` is false when the frame carried a `jsonrpc` member that is not `"2.0"`. The
+    /// verdict rides along rather than turning the frame into an `Invalid` one, because rejecting
+    /// it there is exactly what would put a reply to a reply on the wire. The waiter fails its
+    /// question closed instead — and the only thing ever waiting on an answer is a consent
+    /// question, where failing closed is a refusal.
+    Answer { id: Value, result: Option<Value>, error: Option<Value>, version_ok: bool },
 }
 
 pub struct Transport<R: BufRead, W: Write> {
@@ -176,14 +182,19 @@ fn parse_object(value: Value) -> Frame {
     // missing `method` and report it as invalid — and replying with an error to a response is a
     // frame the peer cannot correlate to anything.
     //
-    // The `jsonrpc` member is deliberately not validated here. A wrong version would make this an
-    // `Invalid` frame, which earns an error *reply*; leaving it an answer means the worst case is
-    // that nobody is waiting for it and it is dropped.
+    // A wrong `jsonrpc` cannot make this an `Invalid` frame — that earns an error *reply*, and a
+    // reply to a reply is a frame the peer cannot correlate to anything. It must not be waved
+    // through either: the one thing ever waiting on an answer is a consent question, and a peer
+    // that changes protocol version from frame to frame is not one whose "run it" this server
+    // should act on. So the verdict travels with the frame and the waiter decides.
     if value.get("method").is_none() {
         let result = value.get("result").cloned();
         let error = value.get("error").cloned();
         if result.is_some() || error.is_some() {
-            return Frame::Answer { id, result, error };
+            let version_ok = value
+                .get("jsonrpc")
+                .map_or(true, |version| version.as_str() == Some(JSONRPC_VERSION));
+            return Frame::Answer { id, result, error, version_ok };
         }
     }
     match serde_json::from_value::<Request>(value) {
@@ -283,21 +294,46 @@ mod tests {
         // nothing to match it against.
         let ok = "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}";
         match parse_frame(ok.as_bytes()) {
-            Frame::Answer { id, result, error } => {
+            Frame::Answer { id, result, error, version_ok } => {
                 assert_eq!(id, Value::from("gore-consent-1"));
                 assert_eq!(result.unwrap()["action"], "accept");
                 assert!(error.is_none());
+                assert!(version_ok);
             }
             other => panic!("expected an answer, got {other:?}"),
         }
 
         let failed = "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":-32601,\"message\":\"no\"}}";
         match parse_frame(failed.as_bytes()) {
-            Frame::Answer { id, result, error } => {
+            Frame::Answer { id, result, error, version_ok } => {
                 assert_eq!(id, Value::from(4));
                 assert!(result.is_none());
                 assert_eq!(error.unwrap()["code"], -32601);
+                assert!(version_ok);
             }
+            other => panic!("expected an answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_answer_carries_the_verdict_on_its_own_protocol_version() {
+        // It stays an answer rather than becoming `Invalid`, because rejecting it there would put
+        // an error *reply* to a reply on the wire. The verdict travels instead, and the one place
+        // that waits on an answer — the consent question — fails closed on it.
+        let wrong = "{\"jsonrpc\":\"1.0\",\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}";
+        match parse_frame(wrong.as_bytes()) {
+            Frame::Answer { version_ok, result, .. } => {
+                assert!(!version_ok, "1.0 is not a version this server speaks");
+                assert!(result.is_some(), "and the payload still arrives, for the waiter to refuse");
+            }
+            other => panic!("expected an answer, got {other:?}"),
+        }
+
+        // Omitted is tolerated for the same reason a request may omit it: rejecting on pedantry
+        // costs interoperability, and only a *wrong* value says the peer speaks something else.
+        let absent = "{\"id\":\"gore-consent-1\",\"result\":{\"action\":\"accept\"}}";
+        match parse_frame(absent.as_bytes()) {
+            Frame::Answer { version_ok, .. } => assert!(version_ok),
             other => panic!("expected an answer, got {other:?}"),
         }
     }

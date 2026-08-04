@@ -64,8 +64,22 @@ impl Request {
         self.id.clone().unwrap_or(Value::Null)
     }
 
+    /// Whether `params` is a shape MCP allows.
+    ///
+    /// Absent and `null` are both simply "no fields", and are fine. Anything else is a request this
+    /// server cannot honour as sent — and [`Self::params_object`] flattens it to the very same empty
+    /// map an omitted member yields, so dispatching it answers *success* while every field the
+    /// client sent is discarded. An `initialize` carrying an array negotiates the default revision
+    /// and records no `elicitation` capability, which tells a client that can show a consent dialog,
+    /// for the rest of the session, that it cannot.
+    pub fn params_shape_ok(&self) -> bool {
+        matches!(self.params, Value::Null | Value::Object(_))
+    }
+
     /// `params` as an object, or an empty map when absent. MCP params are always objects, and
-    /// callers uniformly want "give me the fields" rather than "tell me it was missing".
+    /// callers uniformly want "give me the fields" rather than "tell me it was missing". Callers
+    /// that dispatch on the result check [`Self::params_shape_ok`] first, so the flattening here
+    /// only ever stands in for an absent or null member.
     pub fn params_object(&self) -> serde_json::Map<String, Value> {
         match &self.params {
             Value::Object(map) => map.clone(),
