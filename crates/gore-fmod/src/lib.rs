@@ -720,6 +720,23 @@ pub fn read_bank(bank: &[u8], key: &[u8]) -> Result<BankView, String> {
 /// granule positions are approximate (some players insert silence at page boundaries),
 /// whereas decoded PCM is exact and plays cleanly everywhere.
 pub fn extract_wav(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
+    // A replaced sample is PCM16, because that is what `replace_samples` appends — and the whole
+    // point of reading the bank the game plays is being able to read your own replacement back. A
+    // Vorbis-only path here made `audio extract` skip exactly the sample the user had just written,
+    // and report success having produced no file at all.
+    if fsb.codec == Codec::Pcm16 {
+        let s = fsb.samples.get(index).ok_or("sample index out of range")?;
+        let start = (fsb.data_section + s.data_offset) as usize;
+        let end = (start + s.size as usize).min(block.len());
+        let audio = block.get(start..end).ok_or("sample data out of range")?;
+        // Truncated rather than refused: an odd length means one dangling byte, and dropping it
+        // costs half a sample of the tail where erroring would cost the whole recording.
+        let pcm: Vec<i16> = audio
+            .chunks_exact(2)
+            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return Ok(wav_pcm16(s.freq, s.channels, &pcm));
+    }
     let ogg = extract_ogg(block, fsb, index)?;
     let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(ogg))
         .map_err(|e| format!("vorbis open: {e:?}"))?;
@@ -1220,6 +1237,28 @@ mod tests {
         let parsed = parse_fsb5(&fsb).unwrap();
         assert_eq!(parsed.samples[0].freq, 88200);
         assert_eq!(parsed.samples[0].channels, 2);
+    }
+
+    #[test]
+    fn a_pcm16_sample_reads_back_as_the_wav_it_was_built_from() {
+        // What `replace_samples` appends is PCM16, so this is the codec of every replacement — and
+        // `extract_wav` used to hand the whole job to a Vorbis-only path. `audio extract` therefore
+        // skipped precisely the sample the user had just written, and reported success having
+        // produced nothing: the one check that tells someone their replacement actually landed.
+        let rate = 22050;
+        let pcm: Vec<i16> = (0..512).map(|n| (n as i16).wrapping_mul(311)).collect();
+        let fsb_bytes = build_fsb5_pcm16("replaced", rate, 1, &pcm).unwrap();
+        let fsb = parse_fsb5(&fsb_bytes).unwrap();
+        assert_eq!(fsb.codec, Codec::Pcm16, "the fixture has to be the codec under test");
+
+        let wav = extract_wav(&fsb_bytes, &fsb, 0).expect("a PCM16 sample must extract");
+        assert_eq!(wav, wav_pcm16(rate, 1, &pcm), "the samples must survive the round trip");
+
+        // The header has to describe the audio, not the defaults: a replacement recorded at another
+        // rate would otherwise play back at the wrong speed in whatever the user opens it with.
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), rate);
+        assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 1);
     }
 
     #[test]
