@@ -124,12 +124,21 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ### Mod Studio boundary
 
-The closed Story/NPC authoring registry currently accepts exactly two reviewed
-Steam generation triples: the retained V1 seal set and Steam build `24169431`.
-Executable, deployment-aware pristine Shipping cache, and `Binds.Cache` must
-all match the same registered row; nearby hashes and cross-generation mixtures
-fail closed. This is hotfix support, not a promise that future or non-Steam
-builds are compatible without their own reviewed row.
+The central closed generation registry currently contains exactly three
+reviewed Steam generation triples: the retained Steam 1.0.3 Hotfix 1 seal set,
+Steam build `24169431`, and Steam build `24340829` from the 2026-07-31 update.
+For Story/NPC/Quest, executable, deployment-aware pristine Shipping cache, and
+`Binds.Cache` must all match the same registered row; nearby hashes and cross-
+generation mixtures fail closed. Item authoring has a separate narrower gate:
+the exact executable seal selects the row and its audited Item field matrix,
+without treating Shipping or Binds as Item evidence. The `24340829` row retains
+offline qualification with no class reparenting or property-owner moves,
+byte-identical curated modules, and an unchanged audited Item field matrix. It
+therefore admits the existing bounded project-only Story/NPC/Quest routes for
+the exact triple and the Item route for the exact executable seal. It grants no
+dialog-runtime, production-build, deployment, live-game, or DataAsset authority,
+and it is not a promise that future or non-Steam builds are compatible without
+their own reviewed row.
 
 Publication is bound to the exact project root, project ID, revision, and head.
 A changed checkpoint or a session that requires reopen locks the wizard rather
@@ -295,8 +304,12 @@ The successful workspace refresh cannot retain the removed NPC; it selects a
 deterministic remaining Story Draft or shows the empty state. There is no
 automatic retry. This operation performs no physical CAS/blob deletion,
 compiler/build/deploy work, game or save access, spawn change, or runtime
-qualification. Shared undo/history, restore, and general project deletion are
-still separate missing project fundamentals.
+qualification. The removal route itself has no local rollback, but its
+published checkpoint participates in bounded authenticated project History and
+global Undo: a retained earlier version is restored as a new revision without
+erasing later history. Whole-project backup and restore likewise exist only as
+[Snapshot V2](studio-project-archive.md). General project deletion remains a
+separate missing fundamental.
 
 ### Managed source/readiness profile
 
@@ -341,14 +354,17 @@ directory, or an output path.
 
 Native code reopens the exact project and derives the NPC revision, owned
 ScriptModule revision, namespace, relative path, persisted source, and source
-SHA-256 before acquiring the shared install-mutation guard. Under that guard it
-re-runs the closed NPC source inspection, verifies fresh game inputs, stages the
-derived source with fixed additive/new-symbol policy in an unreported native-
-private workspace, runs the game compiler, restores every touched install path,
-and neutralizes the mini-cache through the exact file handle retained from its
-create-new/no-follow write. The response contains bounded file/line/column/
-severity diagnostics and exact project/entity/module evidence, but no source,
-mini-cache, staging, or reusable artifact path.
+SHA-256 before acquiring the shared install-mutation guard. This explicitly
+invoked check is the bounded exception to Studio's normal read-only use of the
+installation. Under that guard it re-runs the closed NPC source inspection,
+verifies fresh game inputs, creates the complete validated base source tree in
+an unreported native-private workspace, overlays the derived managed module
+with fixed additive/new-symbol policy, stages that complete tree under
+`Script/`, runs the game compiler, restores every touched install path, and
+neutralizes the mini-cache through the exact file handle retained from its
+create-new/no-follow write. The response contains bounded
+file/line/column/severity diagnostics and exact project/entity/module evidence,
+but no source, mini-cache, staging, or reusable artifact path.
 
 Studio accepts the result as “exact source accepted” only when native and the
 managed session both retain the same exact head, the compiler accepted the

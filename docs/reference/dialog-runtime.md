@@ -44,13 +44,13 @@ byte-identical. The only difference was three ASCII digits in the already-known
 `/Engine/Transient.GothicScreenshotsSave_*` object name in
 `PersistentDataList.sav`; its other bytes and every slot save were unchanged.
 
-## Current version-3 requalification candidate
+## Historical version-3 requalification candidates
 
-The current production generator now emits runtime version 3. Its exact Viper
-candidate is retained under
+The production generator emitted runtime version 3 for the retained Viper
+candidate under
 `work/probe/viper-dialog-fixture/candidate-public-v3/`. It reuses the
 live-proven 3,150-byte AngelScript mini and exact Viper registration, but freezes
-the current batch-preflight runtime from repository HEAD
+the then-current batch-preflight runtime from repository HEAD
 `48f52a9928f0e373c3fa06967a0505e2539d185e`.
 
 Two public builds produced the same five files. The generated Lua is 30,519
@@ -61,8 +61,8 @@ The version-3 verifier requires the exact participant/class/sentinel row, one
 and participant, all-active-class, context, and all-topic-lookup preflights
 before the mutation loop. It rejects object scans, delayed/game-thread work,
 console/key paths, direct conversation requests, ability grant/activation,
-save/quest/knowledge/property writes, removals, and array mutation. The current
-focused runtime suite passes all 31 tests.
+save/quest/knowledge/property writes, removals, and array mutation. The
+retained qualification recorded all 31 focused runtime tests as passing.
 
 A copied-cache deployment produced the same 7,306-module combined-cache hash as
 the earlier visual proof. Undeploy restored the exact original seven-entry
@@ -71,9 +71,9 @@ sandbox tree with full-tree SHA-256
 the record, backup, loader, holder, recovery, and temporary residue were absent.
 This is an offline/sandbox qualification, not a live result.
 
-The Steam hotfix installed on 2026-07-14 is now retained separately as
-`work/probe/viper-dialog-fixture/candidate-hotfix-24169431/`. Its exact
-generation is `BuildID 24169431`, executable SHA-256
+The Steam hotfix installed on 2026-07-14 is retained separately as the now-
+historical `work/probe/viper-dialog-fixture/candidate-hotfix-24169431/`.
+Its exact generation is `BuildID 24169431`, executable SHA-256
 `B52CD0453AD03987B833F7F26D09A2075109F18D653B8D4FF95271C857139E5D`, and
 Shipping-cache SHA-256
 `757D8624F0C7480F63CC14A1BA2D7E43F461A529064B0C0CFBF523A54639E385`.
@@ -109,12 +109,13 @@ exact seven-entry copied tree with SHA-256
 `F46A1073F7B632EFF69268AA0E3863685D514BB01CC9D2F972844447E7717824` and
 leaves no record, backup, loader, holder, recovery, temporary, or transient
 build residue. The candidate-local `run-hotfix-offline-qualification.ps1`
-reproduces both closures; the focused runtime suite remains 31/31 green. This
-clears the current-hotfix offline composition prerequisite, not either live
-runtime boundary or the exact-current arbitrary-source compiler gate.
+reproduced both closures; the retained qualification records the focused
+runtime suite as 31/31 green. This cleared the then-current hotfix's offline
+composition prerequisite, not either live runtime boundary or the exact-
+current arbitrary-source compiler gate.
 
-The retained hotfix candidate now has its own copied `live-qualification.ps1`,
-resealed to the BuildID-24169431 executable, pristine cache,
+The retained `24169431` candidate has its own copied
+`live-qualification.ps1`, resealed to that executable, pristine cache,
 hotfix-identity-remapped Viper mini/runtime, deployed-cache hash, and complete
 offline closure. The pure log/parser suite accepts one exact ordered session
 and rejects twelve duplicate, reordered, stale, inconsistent, or malformed
@@ -130,12 +131,19 @@ same-length numeric change to the root `GothicScreenshotsSave_<id>` token in
 `PersistentDataList.sav`; any other difference fails. The harness never
 deploys, isolates mods, launches the game, clicks, saves, or restores files.
 Those setup and cleanup operations stay separate and visible. One natural
-Viper-menu open with no selection and no save is the only remaining in-game
-interaction needed to requalify render-only runtime v3.
-Asghan remains a separate behavioral qualification because selecting its
-fixture can change quest/save state. The offline evidence qualifies its
-hotfix-remapped build/composition only, not selection, effects, persistence, or
-save/reload.
+Viper-menu open with no selection and no save remains the only in-game
+interaction that would complete a render-only runtime-v3 requalification on
+build `24169431`; it has not been run for that exact artifact. Asghan remains a
+separate behavioral qualification because selecting its fixture can change
+quest/save state. The offline evidence qualifies its hotfix-remapped
+build/composition only, not selection, effects, persistence, or save/reload.
+
+The central generation registry now also contains Steam build `24340829`, but
+only for its separately recorded bounded offline authoring evidence. No
+dialog-runtime candidate or qualification has been retained for `24340829`,
+and none of the `24169431` runtime evidence carries forward across that
+generation boundary. Offline composition and any separately authorized live
+runtime requalification therefore remain open for the current build.
 
 ## Discovery versus insertion
 
@@ -181,11 +189,12 @@ writes a save/quest/knowledge field.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
   UE4SS 3.0.1. Both the reviewed v0.4 fixture and version 1 of the exact adapter
   emitted by the parameterized production generator completed the clean live
-  visual proof. The current generated runtime is version 3: its frozen candidate,
-  deterministic builds, batch class preflight, observer behavior, forbidden-
-  operation boundary, and exact sandbox closure are offline-qualified, but the
-  exact version-3 artifact still needs the same clean visual requalification.
-  Other game, UE4SS, and runtime combinations remain to be qualified.
+  visual proof. Runtime version 3 has a frozen offline candidate for the older
+  build `24169431`: its deterministic builds, batch class preflight, observer
+  behavior, forbidden-operation boundary, and exact sandbox closure were
+  qualified offline, but its exact artifact never completed the same clean
+  visual requalification. Build `24340829` has no dialog-runtime qualification
+  at all. Other game, UE4SS, and runtime combinations remain to be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
   selection-side save effects are not certified by the insertion proof.
 - The exact native ordering of knowledge rules, `IsVisible_Implementation`,

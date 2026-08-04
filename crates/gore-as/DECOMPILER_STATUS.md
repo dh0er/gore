@@ -1,14 +1,15 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: complete body coverage for the current hotfix, but not lossless.** The current emitter
-reconstructs every ordinary function body it writes from the shipped cache. When it cannot prove
-that a body is correct, it still keeps the declaration and emits a clearly marked,
-signature-preserving stub instead of silently inventing logic; the measured current cache has no
-such fallback body.
+**Status: complete body coverage for the measured 2026-07-12 build 24169431 baseline, but not
+lossless.** The current emitter reconstructs every ordinary function body it writes from the
+shipped cache. When it cannot prove that a body is correct, it still keeps the declaration and
+emits a clearly marked, signature-preserving stub instead of silently inventing logic; the measured
+24169431 cache has no such fallback body. This retained historical measurement is not a current-build
+qualification.
 
-## Current measured baseline
+## Retained measured baseline
 
-Measured on 2026-07-12 against the current hotfix
+Measured on 2026-07-12 against build 24169431, the then-current hotfix
 `PrecompiledScript_Shipping.Cache` (SHA-256
 `1018F1CFE6B99A650EECB33AFB96752D691D2088EAD27808971B812F04ECB4C2`), with the matching
 `Binds.Cache` loaded and **without** `GORE_AS_STUBLIST`:
@@ -56,14 +57,15 @@ estimate is needed.
 
 ## Remaining stubs
 
-None in the measured current-hotfix corpus. This is a corpus result, not a promise that arbitrary
-future bytecode shapes will recover: every unsupported or unproved construct still takes the
-visible signature-preserving stub path.
+None in the measured 24169431 corpus. This is retained historical evidence, not a measurement of a
+newer current build and not a promise that arbitrary future bytecode shapes will recover: every
+unsupported or unproved construct still takes the visible signature-preserving stub path.
 
 These are proactive stubs from the structured emitter. The old force-stub workflow and its
 thousands of name-keyed compile-failure stubs are no longer part of this baseline.
 
-The generalized `Thiscall1` stack-frame fix removed 17 fallback bodies in the current hotfix. It uses
+The generalized `Thiscall1` stack-frame fix removed 17 fallback bodies in the measured 24169431
+baseline. It uses
 the opcode's physical stack arity independently from rendered argument arity, preserving deferred
 outer `FName`/object arguments while consuming compiler-injected inner defaults. This cleared all
 repeated `SetupTransitions` delegate cases and also corrected deep arguments in already
@@ -114,7 +116,8 @@ requires reconstructing its body manually or first extending the decompiler.
    [`docs/guide/angelscript-defaults.md`](../../docs/guide/angelscript-defaults.md). A faithful
    source representation is still required before arbitrary class-default authoring can be
    claimed; new modules may continue to use explicit defaults through `--op add`.
-2. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from
+2. **Whole-tree compiler gate -- passed for the then-current installed 1.0.3 hotfix.** The shipping
+   build suppresses AngelScript diagnostics from
    stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
    callback-body fingerprint to attach to the per-error `asSMessageInfo` callback. It prints normal
    file/line/column diagnostics only when the raw signature is unique and all five message-field
@@ -142,7 +145,10 @@ requires reconstructing its body manually or first extending the decompiler.
    live-written diagnostics, preserves recovery artifacts, and never starts a fallback. Raw and
    formatted capture are capped at 8 MiB; the structured envelope permits at most 65,536 records,
    32 KiB per filename, 64 KiB per message, and 16 MiB retained diagnostic text. This is a native
-   API foundation; the managed Quest Studio route does not invoke it yet.
+   API foundation. The managed exact-current Quest and NPC compiler checks now consume this
+   structured report while compiling their derived managed source. That integration does not widen
+   executable-generation admission, callback-runtime qualification, or the managed source scope;
+   unsupported diagnostics continue through the normal fallback contract.
 
 The mixed-RVO switch in `MakeNewCrimeRegisterData` is recovered with a per-exit proof: each early
 bare-RET edge must contain exactly one resolved RVO store, and removing that store in the negative

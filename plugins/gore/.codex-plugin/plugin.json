@@ -18,10 +18,11 @@
     "angelscript"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "GORE",
     "shortDescription": "Mod Gothic 1 Remake — textures, text, audio, voice and scripts in one bundle",
-    "longDescription": "Guides an agent through modding Gothic 1 Remake with the gore CLI: choosing a target the engine actually reads, relaying the consent gate that guards the installation, and saying afterwards what a deploy did and did not prove. The facts live in the guide shipped inside gore.exe, so they never drift from the version you are running. Needs the gore CLI installed and on PATH, plus one command to register the server, because a Codex plugin carries skills and not MCP servers: codex mcp add gore -- gore mcp serve",
+    "longDescription": "Guides an agent through modding Gothic 1 Remake with the gore CLI: choosing a target the engine actually reads, relaying the consent gate that guards the installation, and saying afterwards what a deploy did and did not prove. The plugin bundles the MCP server configuration and the facts live in the guide shipped inside gore.exe, so they never drift from the version you are running. Needs only the gore CLI installed and on PATH.",
     "developerName": "Daniel Hoer",
     "category": "Coding",
     "capabilities": [

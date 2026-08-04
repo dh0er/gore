@@ -20,9 +20,13 @@ The following local, read-only fixtures were checked by
 | 1.0.3 Hotfix 1 | 171,698,176 | `f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5` | 1 | `0x467f5b0` | verified |
 | 1.0.3 Hotfix 2 | 171,704,320 | `b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d` | 1 | `0x467fcd0` | verified |
 
-The last two rows are the two audited generations, and the test reads their length and digest from
-`gore-generation`'s table rather than restating them, so this file is the only place they are
-written twice. The three older archives predate the table and carry their own seals.
+The last two rows are the first two audited generations in `gore-generation`'s now three-row
+registry, and the test reads their length and digest from that table rather than restating them, so
+this file is the only place they are written twice. The three older archives predate the table and
+carry their own seals. Generation 24340829 is not present in this callback archive matrix and has no
+archived regression evidence here; it does not inherit a callback qualification from either earlier
+row. At runtime it still receives the ordinary signature/shape probe: a verified match may enable
+capture, while a missing or invalid match safely uses the normal compiler fallback.
 
 All five callback RVAs differ. They are reported for auditing and regression only; neither scanner
 uses them for lookup.
@@ -61,3 +65,6 @@ They are deliberately **not claimed compatible in advance**. They receive the sa
 AMD64 PE32+, exact `.text` scan domain, one signature and the verified callback layout. Passing that
 probe establishes compatibility with this diagnostic callback contract only. Failure safely disables
 enhanced diagnostics and uses the normal compiler path; it must not be bypassed with a remembered RVA.
+The same probe rule applies to registered generation 24340829. Adding a qualified retained fixture to
+this matrix would establish repeatable offline regression evidence; its absence does not pre-decide the
+runtime probe result.

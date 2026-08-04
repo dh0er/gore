@@ -80,9 +80,10 @@ difference.
   file:line:column error output and publishes no cache.
 - Structural completeness and successful compilation are not semantic bytecode
   identity. Use the bytediff oracle for that separate claim.
-- The measured current-hotfix corpus emits 55,403 editable function bodies with
-  zero decompiler stubs. Unsupported or unproved future bytecode shapes still
-  fail visibly to signature-preserving stubs rather than being guessed.
+- The retained build-`24169431` corpus emits 55,403 editable function bodies
+  with zero decompiler stubs. That historical measurement does not qualify a
+  newer build; unsupported or unproved future bytecode shapes still fail
+  visibly to signature-preserving stubs rather than being guessed.
 - Generated special methods such as __InitDefaults remain a separate coverage
   gap and are not emitted as ordinary editable functions.
 

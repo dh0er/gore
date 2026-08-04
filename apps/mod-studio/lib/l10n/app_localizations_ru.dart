@@ -802,7 +802,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedStoryWorkspaceRemoveNoUndo =>
-      'This removal cannot be undone in version 1.';
+      'This dialog has no local rollback. After removal, Project History or global Undo can restore an earlier version while it remains available.';
 
   @override
   String get managedStoryWorkspaceRemoveBoundary =>

@@ -7,13 +7,31 @@ deployment and every in-game claim stay deliberately out of its hands (see
 [Current limits](#current-limits)).
 
 Three rules hold everywhere. Everything you author lands in your managed
-project; the game installation and your saves are never written, and where a
-configured Gothic 1 Remake installation is needed at all, it is read as
-evidence only. Normal surfaces never ask for or show entity IDs, LocIDs,
-hashes, or paths — advanced disclosures exist where inspection needs them. And
-every dialog is bound to the exact project state it opened on: if the project
-changes underneath it or the session must be reopened, it locks or asks for a
-refresh instead of applying stale input.
+project, saves are never written, and normal use of a configured Gothic 1
+Remake installation is read-only evidence. The separately invoked,
+evidence-only compiler check is a bounded exception: it prepares the complete
+validated base source tree with the derived managed module overlaid, stages
+that bounded tree under an installation-mutation guard, restores every touched
+path, and blocks later compiler or deployment mutation if exact recovery is
+uncertain. It grants no build, deployment, or runtime authority. Normal
+surfaces never ask for or show entity IDs, LocIDs, hashes, or paths — advanced
+disclosures exist where inspection needs them. And every dialog is bound to
+the exact project state it opened on: if the project changes underneath it or
+the session must be reopened, it locks or asks for a refresh instead of
+applying stale input.
+
+## Workspaces
+
+Every open managed Revision-3 project has exactly five primary workspaces:
+
+- **Home** for project status and common actions;
+- **Content** for finding and opening project or base-game content;
+- **Story** for the bounded NPC and Quest workbenches;
+- **Text & Voice** for project localization, dialog-line, and Voice work; and
+- **Test & Release** for the available checks and offline release actions.
+
+These destinations organize existing capabilities; they do not add runtime,
+deployment, or game-mutation authority.
 
 ## NPCs
 
@@ -36,21 +54,19 @@ on its empty **Dialog & Voice** surface — there is no hidden rollback.
 
 Selecting one of your NPC Drafts under **Content → This mod** opens the Story
 Workbench — list and detail side by side on a wide window, a scrollable detail
-sheet on a narrow one — with the tabs **Profile**, **Story**, **Routine**,
-**Inventory**, **Dialog & Voice**, **References**, and **Problems & Checks**:
+sheet on a narrow one — with exactly four tabs: **Profile**, **Dialog & Voice**,
+**References**, and **Problems & Checks**:
 
 - **Profile** shows the display name and **Edit name & archetype**, which
   changes exactly two things: the name and the archetype the character derives
   from. Existing greetings survive both kinds of edit, and closing with
   unsaved changes asks for an explicit discard.
-- **Story**, **Routine**, and **Inventory** say plainly that those
-  relationships are not yet modeled for NPC Drafts.
 - **Dialog & Voice** is a plain-language greeting editor: authored order,
   friendly line and speaker labels, language and Voice coverage, text
   previews. Attach an existing project dialog line, reorder or detach bindings
   (detaching never deletes the shared line), create a line — with localization
   and an optional empty Voice slot — at the selected position, or jump to that
-  line and language in the Localization & Voice workspace.
+  line and language in the **Text & Voice** workspace.
 - **References** lists outgoing entity and asset links plus same-project
   incoming links; its problem count means unresolved references only.
 - **Problems & Checks** owns the inspections below.
@@ -60,8 +76,11 @@ verified** as three separate states, never one merged "ready" claim.
 
 **Remove Draft...** scans every reference first; a remaining local backlink
 blocks removal and can take you to its source. The confirmation names the NPC
-and its generated script module, states that V1 has no undo, and leaves the
-game installation and saves untouched.
+and its generated script module. The V1 dialog has no action-local rollback;
+once published, however, the removal is a normal managed-project revision and
+can be revisited through bounded project **History** or global **Undo** while
+that authenticated revision remains retained. The game installation and saves
+stay untouched.
 
 **Open profile & compiler checks** (from **Profile** or **Problems & Checks**)
 shows saved-source, persisted-parent, and exact-project checks plus the
@@ -92,8 +111,10 @@ anybody in a new game.
 
 The **Create Quest** wizard captures the human-facing name, technical
 identity, parent, giver, description, and one to eight objectives, and creates
-the quest together with its generated script module in one step. Journey is
-the primary quest workspace afterwards:
+the quest together with its generated script module in one step. A selected
+Quest has exactly four Story tabs: **Overview**, **Dialog & Voice**,
+**References**, and **Problems & Checks**. **Overview** hosts Journey and its
+three editing areas:
 
 - **Outline** edits the display name, title, objective order, and objective
   titles; objectives keep their stable slots across reorders.
@@ -102,19 +123,22 @@ the primary quest workspace afterwards:
 - **Behavior** edits the transition plan: availability, start, success,
   failure, predicates, effects, and parent completion. Plans are validated
   before saving, and a save that changes nothing is rejected.
-- **Transcript** entries reference exact dialog lines and target the quest
+- **Dialog & Voice** hosts **Transcript** entries that reference exact dialog
+  lines and target the quest
   root or an active objective. Reordering or replacing entries is one
   transaction; creating a line and inserting it is atomic.
-- **Source and checks** shows the generated module without publishing anything
-  and runs the managed compiler checks for the selected quest.
+- **References** shows the selected Quest's project relationships.
+- **Problems & Checks** exposes **Source and checks**, which shows the generated
+  module without publishing anything and runs the managed compiler checks for
+  the selected quest.
 
 ## Voice
 
-With a managed project open, **Localization & Voice** is a direct production
+With a managed project open, **Text & Voice** is a direct production
 workspace: it opens on the **Work list**, with a **Project texts** switch
 beside it. Text and take work is project-only; importing audio and resolving
 installed targets need a Gothic 1 Remake installation configured in Settings,
-as does **Build Voice bundle** under **Build & Release**.
+as does **Build Voice bundle** under **Test & Release**.
 
 The **Work list** derives the next evidence-backed production decision and
 shows two kinds of rows. **Language not added** means a project authoring
@@ -136,7 +160,7 @@ existing slot, one rule picks exactly one next step:
 Draft or Recorded alternatives stay visible as optional review backlog without
 regressing a finished slot, and **Production decisions complete** deliberately
 does not mean ready, buildable, deployed, or audible in game — its action
-opens **Validate & Test** so the real checks can be reviewed. **Add language**
+opens **Test & Release** so the real checks can be reviewed. **Add language**
 rows open the matching project text with the locale prefilled; recording rows
 open the right line and language in the take dialogs. The Work list itself
 never chooses a take, approves audio, or resolves a target.
@@ -196,11 +220,23 @@ structured blockers without creating output, or writes one sealed voice-only
 bundle into a brand-new folder you select. This is an offline build; the
 dialog has no deployment action.
 
+## Project history and undo
+
+The command bar's **Undo** action restores the immediate previous retained
+project revision through the same authenticated mechanism as **History**.
+History is bounded: recording starts at an explicit revision, older entries
+can expire, and Studio never invents missing checkpoints from storage.
+Restoring an earlier entry publishes its content as a new revision, so later
+versions are not erased. An unsaved text edit, a busy action, project drift, or
+a session that requires reopen blocks the operation rather than applying a
+stale checkpoint. History and Undo change only the managed project, never the
+game installation or saves.
+
 ## Project backup and restore
 
 **Create project backup** in the Project menu writes one exact restorable
-snapshot of your project to a new `.goremod` file; only the current V2 format
-is emitted. The dialog asks for a new filename plus an existing destination
+snapshot of your project to a new `.goremod` file; only **Snapshot V2** is
+emitted. The dialog asks for a new filename plus an existing destination
 folder, and is explicit that the result is a restorable Mod Studio project
 backup — not a playable mod, build, or deployment. Game and save files are
 untouched. Backup needs no game installation and ignores build blockers; it is
@@ -213,11 +249,11 @@ state and directly on the empty landing surface; restore is currently
 Windows-only. It verifies the archive first (a read-only check you can cancel
 safely), asks for an existing parent folder plus a new project-folder name,
 materializes exactly once, and opens only a fully confirmed result — anything
-without the exact V2 format is rejected as an invalid project backup. Unsaved
-editor drafts are confirmed before you pick a source, and Studio blocks
-closing the dialog or double-submitting while a restore runs. Restore
-preserves project identity and revision: it is restore/relocate, not Clone or
-Save As.
+without the exact Snapshot V2 format is rejected as an invalid project backup.
+Unsaved editor drafts are confirmed before you pick a source, and Studio
+blocks closing the dialog or double-submitting while a restore runs. Restore
+preserves project identity, revision, and authenticated history: it is
+restore/relocate, not Clone or Save As.
 
 In the rare terminal where Studio cannot prove whether an output was
 completely written, it names the attempted destination, opens nothing, and
@@ -236,8 +272,10 @@ NPC and quest Drafts:
   production, residence, and spawn blockers standing.
 - Greeting lines are authoring metadata only — no dialog topic, player choice,
   condition, effect, or playable conversation is created.
-- Draft removal has no undo; shared undo/history, restore, and general project
-  deletion are still missing project fundamentals.
+- Draft removal has no action-local rollback. Bounded project-wide History and
+  Undo can restore a retained exact revision as a new revision, and Snapshot V2
+  can restore a complete backed-up project; general project deletion remains
+  unavailable.
 
 The Voice workflow still does not provide:
 

@@ -810,7 +810,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedStoryWorkspaceRemoveNoUndo =>
-      'Diese Aktion kann in Version 1 nicht rückgängig gemacht werden.';
+      'Dieser Dialog bietet kein lokales Zurücksetzen. Nach dem Entfernen kann der Projektverlauf oder das globale Rückgängigmachen eine frühere Version wiederherstellen, solange sie verfügbar ist.';
 
   @override
   String get managedStoryWorkspaceRemoveBoundary =>

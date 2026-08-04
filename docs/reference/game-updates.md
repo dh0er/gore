@@ -40,9 +40,11 @@ dump describing a previous executable will pass its own hash check while
 describing the wrong game. This is the one input where every seal can be green
 and the answer still wrong. Re-dump it before trusting anything downstream.
 
-## What still works, and what stops
+## What worked before and after qualification
 
-Measured on the 2026-07-31 update (build 24340829):
+The following table is the retained fail-closed snapshot measured immediately
+after the 2026-07-31 update (build `24340829`), before its generation row was
+qualified and admitted:
 
 | | |
 |---|---|
@@ -50,8 +52,22 @@ Measured on the 2026-07-31 update (build 24340829):
 | **Degraded** | `as default-sites`, `as patch-default`. They fall back to scalar-only: sites the script cache can type on its own stay editable, anything needing native ancestry does not. |
 | **Refused** | `as tag-map-sites`, `as patch-tag-map`, and Mod Studio's story, NPC, quest and item authoring. |
 
-Nothing produces a wrong answer in any of those states. Everything that cannot
-prove its evidence refuses to act on it.
+After qualification, the central registry contains exactly three reviewed
+Steam rows: Steam 1.0.3 Hotfix 1, build `24169431`, and build `24340829`. The
+new row records the update's exact executable, pristine Shipping cache, and
+`Binds.Cache` triple together with bounded offline qualification: no class was
+reparented, no property owner moved, the curated modules reproduced
+byte-for-byte, and the audited Item field matrix stayed unchanged. Mod Studio's
+Story/NPC/Quest authoring therefore recognizes that exact triple within its
+existing project-only contract. Item authoring is separately admitted by the
+row selected from the exact executable seal and its audited Item field matrix;
+it does not use Shipping or Binds as Item evidence. This admission is not
+dialog-runtime, production-build, deployment, live-game, or DataAsset
+qualification; every other consumer keeps its own independent gate.
+
+Nothing produced a wrong answer in the historical fail-closed state, and the
+admitted row does not widen its recorded proof. Anything that cannot prove the
+evidence required by its own contract still refuses to act on it.
 
 ## The checklist
 
@@ -120,8 +136,12 @@ audit had checked, and the answer is to look at what changed rather than to pass
 file. The tests make the row re-derive its own published ids from its own
 components, so a mistyped digest fails there rather than in the field.
 
-**8. Confirm on the running game.** A seal proves the evidence is the evidence,
-never that the game agrees with it. Patch one default you can see and look.
+**8. Confirm every live claim separately on the running game.** A seal proves
+the evidence is the evidence, never that the game agrees with it. Patch one
+default you can see and look before claiming that live behavior. When the
+admitted scope stops at bounded offline authoring, record that boundary instead
+of implying this step happened: build `24340829` has no dialog-runtime
+qualification from its central generation row.
 
 ## What is deliberately not automated
 

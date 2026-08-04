@@ -254,7 +254,7 @@
       "scriptName": {"type": "String"}
     }
   },
-  "managedStoryWorkspaceRemoveNoUndo": "Diese Aktion kann in Version 1 nicht rückgängig gemacht werden.",
+  "managedStoryWorkspaceRemoveNoUndo": "Dieser Dialog bietet kein lokales Zurücksetzen. Nach dem Entfernen kann der Projektverlauf oder das globale Rückgängigmachen eine frühere Version wiederherstellen, solange sie verfügbar ist.",
   "managedStoryWorkspaceRemoveBoundary": "Nur die aktuelle Projektregistrierung wird geändert. Spielinstallation und Spielstände bleiben unverändert.",
   "managedStoryWorkspaceRemoveCancel": "Abbrechen",
   "managedStoryWorkspaceRemoveConfirm": "Entwurf entfernen",

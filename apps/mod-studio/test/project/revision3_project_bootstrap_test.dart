@@ -211,7 +211,7 @@ void main() {
     },
   );
 
-  test('accepts only the exact V1 and V2 generation triples', () async {
+  test('accepts the exact V1/V2 triples and rejects hybrids', () async {
     final v1 = await _trustedGeneration(
       executableByteLength: 171698176,
       executableSha256: _v1ExecutableSha256,

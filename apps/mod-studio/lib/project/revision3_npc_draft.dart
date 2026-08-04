@@ -37,9 +37,9 @@ typedef _AuthoringRevision3NpcSelectionEvidence = ({
 });
 
 /// Exact closed projection of the native pinned Story-catalog rows shared by
-/// the supported V1 and V2 generations. A new native catalog row must be
-/// reviewed and added here before its persisted parent evidence can cross the
-/// strict response boundary.
+/// the currently registered V1, V2, and V3 generations. A new native catalog
+/// row must be reviewed and added here before its persisted parent evidence can
+/// cross the strict response boundary.
 const Map<String, _AuthoringRevision3NpcSelectionEvidence>
 _authoringRevision3NpcSelectionEvidence = {
   'g1r:npc:om_grd_asghan_263': (
@@ -90,8 +90,8 @@ _authoringRevision3NpcSelectionEvidence = {
   ),
 };
 
-// Kept for the existing source-inspection part; both supported generations use
-// this exact same curated evidence projection.
+// Kept for the existing source-inspection part; all currently registered
+// generations use this exact same curated evidence projection.
 const _authoringRevision3NpcSelectionEvidenceV1 =
     _authoringRevision3NpcSelectionEvidence;
 

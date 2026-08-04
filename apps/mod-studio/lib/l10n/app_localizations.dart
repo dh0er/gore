@@ -1448,7 +1448,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedStoryWorkspaceRemoveNoUndo.
   ///
   /// In en, this message translates to:
-  /// **'This removal cannot be undone in version 1.'**
+  /// **'This dialog has no local rollback. After removal, Project History or global Undo can restore an earlier version while it remains available.'**
   String get managedStoryWorkspaceRemoveNoUndo;
 
   /// No description provided for @managedStoryWorkspaceRemoveBoundary.

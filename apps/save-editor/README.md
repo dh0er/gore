@@ -11,18 +11,24 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 ## Features
 
 - Profile: Change difficulty settings; set the in-game time (play clock).
-- Player & NPCs: Edit stats, attributes, all talents/skills, location and much
-  more; revive a dead NPC (restore health, strip the death state).
+- Player & NPCs: Edit stats, attributes, all talents/skills and much more;
+  revive a dead NPC (restore health, strip the death state).
+- Position: Move the player to exact coordinates or a named location, with an
+  optional facing direction. NPC saved/spawn poses are shown read-only: the game
+  rebuilds NPC placement from world data when loading, so editing those save
+  records would not move the NPC in game.
 - Inventory: Change count of existing items; add new items from a bundled
-  catalog with categorized browsing; reset an inventory to a clean starting
-  state.
+  catalog with categorized browsing; remove items; detect and repair damaged
+  slot IDs; reset an inventory to a clean starting state.
 - Faction crimes: Clear an NPC's crimes to reset the hostility its guild holds
   against you.
 - Glossary: Browse and edit NPC, creature, and location entries, including
   their individual text entries and NPC discovery states.
 - Progression: Edit quest markers, NPC knowledge and events
 - Almost all data can be changed by changing the value of the internal property. Only for experimental use.
-- Automatic backup creation.
+- Backups: Create them automatically, give them optional display labels,
+  restore them, or permanently delete them after confirmation. Deletion cannot
+  be undone.
 
 ## What it can not do
 
@@ -38,7 +44,10 @@ game install. For modding, use the [`gore` CLI](../../docs/guide/README.md) or
 
 ## Compatibility
 
-Tested with Steam game version CL168781. Should work with all versions.
+Tested with Steam game version CL168781. Other game versions are not guaranteed:
+the bundled item and named-location catalogs come from specific game cooks and
+can become stale when a patch moves, renames or changes game data. Keep backups
+and use a Save Editor build qualified for the updated game version.
 
 ## Installation & Updates
 

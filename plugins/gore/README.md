@@ -22,10 +22,10 @@ claude --plugin-dir path\to\gore\plugins\gore
 
 ## `gore.exe` has to be on PATH
 
-This is the one prerequisite the plugin cannot satisfy for you. `.mcp.json`
-starts the server as `gore mcp serve` — by name, not by absolute path, because a
-plugin is shared across machines and an absolute path would be wrong on most of
-them.
+This is the one prerequisite the plugin cannot satisfy for you. Every bundled
+MCP declaration starts the server as `gore mcp serve` — by name, not by absolute
+path, because a plugin is shared across machines and an absolute path would be
+wrong on most of them.
 
 GORE is a Rust binary, not something a package manager fetches on demand, so
 install it first. Either unpack a `gore-cli-v*`
@@ -55,7 +55,7 @@ not the plugin. Fix that and restart the client.
 
 | | |
 |---|---|
-| `.mcp.json`, `mcp.json` | the server: every `gore` command, as twelve command-family tools plus `gore_guide` and `gore_help`. One configuration under the two names the three clients look for |
+| `.mcp.json`, `mcp.json` | the server: every `gore` command, as twelve command-family tools plus `gore_guide` and `gore_help`. The same server map in the direct Claude/Codex shape and Cursor's wrapped shape |
 | `skills/gore-modding/` | when to reach for which tool, the consent gate, and what a deploy does and does not prove |
 | `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` | the same plugin, described the way each client wants it |
 

@@ -55,8 +55,11 @@ their own way — so this repository carries a marketplace manifest for each:
 | Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `.mcp.json` |
 | Cursor | `.cursor-plugin/marketplace.json` | `.cursor-plugin/plugin.json` | `mcp.json` |
 
-The two MCP files are the same configuration under the two names different
-clients look for, and `scripts/check_plugin.py` keeps every one of these in step.
+The two MCP files contain the same server map in the shapes their clients
+require. `.mcp.json` is a direct server map accepted by Claude Code and required
+by Codex; `mcp.json` wraps that map in `mcpServers` for Cursor. The Codex
+manifest points to `.mcp.json` explicitly. `scripts/check_plugin.py` normalizes
+both shapes and keeps them in step.
 
 **Codex** takes a local marketplace directly, which makes it the easiest of the
 three to try from a checkout:
@@ -85,10 +88,11 @@ shape works for Codex under `~/.codex/skills/`.
 
 ### `gore.exe` has to be on `PATH`
 
-The plugin's `.mcp.json` invokes `gore` by name rather than by absolute path,
-because a plugin is shared across machines and an absolute path would be wrong on
-most of them. That leaves one prerequisite it cannot satisfy for you, since the
-binary is a Rust build rather than something a package manager fetches on demand.
+Every bundled client declaration invokes `gore` by name rather than by absolute
+path, because a plugin is shared across machines and an absolute path would be
+wrong on most of them. That leaves one prerequisite it cannot satisfy for you,
+since the binary is a Rust build rather than something a package manager fetches
+on demand.
 
 If it is missing, no `gore_*` tool appears at all: the client reports a server
 that failed to start, and it cannot say why, because nothing on that side knows
@@ -99,8 +103,8 @@ what `gore` was supposed to be. `gore --version` in a terminal is the check. A
 
 Any client with a JSON config can register the server directly, without the
 plugin. Two reasons to do it this way: the client has no plugin support, or you
-want to pass [flags](#answering-in-advance), which the plugin's `.mcp.json` does
-not carry.
+want to pass [flags](#answering-in-advance), which the bundled plugin
+declarations do not carry.
 
 ```json
 {
@@ -261,9 +265,10 @@ maps both permissions through it.
 In Claude Code you never touch a variable: the plugin declares them under
 `userConfig`, so enabling it asks you, in a dialog, whether GORE may change the
 game without confirming each time. Leave both off unless you have a reason.
-`${user_config.…}` is a Claude Code substitution; Codex and Cursor read the same
-file and pass the text through untouched, which the server reads as "not set"
-rather than as an error.
+`${user_config.…}` is a Claude Code substitution. Codex reads the direct
+`.mcp.json` map and Cursor reads the wrapped `mcp.json` map; both pass the
+placeholder text through untouched, which the server reads as "not set" rather
+than as an error.
 
 Anywhere else, set the variable in whatever your client launches from — the shell
 it inherits, or its own environment settings — and restart it, since a running

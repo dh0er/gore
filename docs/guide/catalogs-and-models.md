@@ -59,9 +59,11 @@ legitimate edit.
 then — for spots whose name carries none — by a majority vote of the five
 nearest already-labelled spots. A spot with no labelled neighbour within
 20,000 uu keeps an empty area. Areas that have a localized name carry its
-`locId`; the rest are resolved through their English `label`, so area names
-need no ARB keys:
-`locCatalog[area.locId]?[lang] ?? area.label`.
+`locId`, which the editor resolves through the game's localization catalog
+first. For the eight areas the game does not name cleanly, the editor uses an
+explicit localized UI mapping when one is present, then falls back to the
+generated English `label` as a safety net:
+`game localization ?? editor ARB mapping ?? area.label`.
 
 One quirk of these 17 `area_*` ids: their German string lives in `german`, and
 `german_new` is null. That is the **inverse** of the usual rule, where `german`

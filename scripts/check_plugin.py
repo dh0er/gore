@@ -18,8 +18,8 @@ different shapes and three different places:
     plugins/gore/.codex-plugin/plugin.json
     plugins/gore/.cursor-plugin/plugin.json
 
-    plugins/gore/.mcp.json    Claude Code and Codex read this name
-    plugins/gore/mcp.json     Cursor's documented name for the same content
+    plugins/gore/.mcp.json    Claude Code/Codex direct server map
+    plugins/gore/mcp.json     Cursor wrapped server map
 
 Every one of those hand-carries a name, and two carry a version. Nothing in any
 client checks that they agree, and a disagreement does not fail loudly — it
@@ -51,10 +51,12 @@ MANIFESTS = (
     Path(".cursor-plugin") / "plugin.json",
 )
 
-# The MCP configuration, under the two names the three clients look for. Claude
-# Code and Codex both document `.mcp.json`; Cursor's own marketplace template
-# uses `mcp.json`. Same content, so they are kept byte-identical.
-MCP_NAMES = (".mcp.json", "mcp.json")
+# Claude Code accepts the direct map that Codex requires in `.mcp.json`.
+# Cursor discovers the same map wrapped in `mcpServers` under `mcp.json`.
+MCP_CONFIGS = (
+    (".mcp.json", None, "Claude Code/Codex"),
+    ("mcp.json", "mcpServers", "Cursor"),
+)
 
 # Marketplace manifests, as (path, human name). Each client only reads its own.
 MARKETPLACES = (
@@ -69,39 +71,84 @@ def load(path: Path) -> dict:
         return json.load(handle)
 
 
+def inspect_server_map(
+    servers: object, label: str, problems: list[str]
+) -> tuple[dict | None, set[str]]:
+    """Validate one direct server map and collect its Claude placeholders."""
+    if not isinstance(servers, dict) or not servers:
+        problems.append(f"{label}: server map must be a non-empty object")
+        return None, set()
+
+    valid = True
+    used: set[str] = set()
+    for server_name, server in servers.items():
+        if (
+            not isinstance(server_name, str)
+            or not server_name
+            or not isinstance(server, dict)
+        ):
+            problems.append(f"{label}: every server must have a name and object config")
+            valid = False
+            continue
+        env = server.get("env", {})
+        if not isinstance(env, dict):
+            problems.append(f"{label}: server {server_name!r} has a non-object `env`")
+            valid = False
+            continue
+        for value in env.values():
+            if isinstance(value, str) and value.startswith("${user_config."):
+                used.add(value[len("${user_config.") :].rstrip("}"))
+
+    return (servers if valid else None), used
+
+
 def check_mcp(plugin_dir: Path, rel: str, problems: list[str]) -> set[str]:
-    """Both spellings of the MCP config agree, and say which user_config keys they use."""
-    bodies: dict[str, str] = {}
+    """Both client-specific MCP shapes contain the same server map."""
+    server_maps: dict[str, dict] = {}
     used: set[str] = set()
 
-    for name in MCP_NAMES:
+    for name, wrapper, client in MCP_CONFIGS:
         path = plugin_dir / name
         if not path.is_file():
-            problems.append(f"{rel}: missing {name} (one client looks for exactly this name)")
+            problems.append(
+                f"{rel}: missing {name} ({client} looks for exactly this name)"
+            )
             continue
-        bodies[name] = path.read_text(encoding="utf-8")
         try:
-            data = json.loads(bodies[name])
+            data = load(path)
         except json.JSONDecodeError as error:
             problems.append(f"{rel}/{name}: not valid JSON: {error}")
             continue
 
-        # The wrapper is what all three document. A bare map works in Claude Code
-        # and is not worth relying on across three clients.
-        if "mcpServers" not in data:
-            problems.append(f"{rel}/{name}: must wrap its servers in an `mcpServers` object")
+        if not isinstance(data, dict):
+            problems.append(f"{rel}/{name}: top level must be an object")
             continue
-
-        for server in data["mcpServers"].values():
-            for value in (server.get("env") or {}).values():
-                if isinstance(value, str) and value.startswith("${user_config."):
-                    used.add(value[len("${user_config.") :].rstrip("}"))
-
-    if len(bodies) == len(MCP_NAMES) and len(set(bodies.values())) > 1:
-        problems.append(
-            f"{rel}: {' and '.join(MCP_NAMES)} have drifted apart; they are the same "
-            "configuration under the two names different clients look for"
+        if wrapper is None:
+            if "mcpServers" in data or "mcp_servers" in data:
+                problems.append(
+                    f"{rel}/{name}: Codex requires a direct server map, not a wrapper"
+                )
+                continue
+            raw_servers = data
+        else:
+            if set(data) != {wrapper}:
+                problems.append(
+                    f"{rel}/{name}: must only contain the `{wrapper}` wrapper"
+                )
+            raw_servers = data.get(wrapper)
+        servers, config_used = inspect_server_map(
+            raw_servers, f"{rel}/{name}", problems
         )
+        used |= config_used
+        if servers is not None:
+            server_maps[name] = servers
+
+    if len(server_maps) == len(MCP_CONFIGS):
+        first = next(iter(server_maps.values()))
+        if any(servers != first for servers in server_maps.values()):
+            problems.append(
+                f"{rel}: .mcp.json and mcp.json contain different MCP server maps"
+            )
 
     return used
 
@@ -141,6 +188,18 @@ def check_plugin(plugin_dir: Path, problems: list[str]) -> None:
                 "which is not a directory"
             )
 
+        if manifest_rel == Path(".codex-plugin") / "plugin.json":
+            mcp_servers = data.get("mcpServers")
+            if mcp_servers != "./.mcp.json":
+                problems.append(
+                    f"{rel}/{manifest_rel.as_posix()}: `mcpServers` must point to "
+                    "'./.mcp.json' so Codex loads the bundled server"
+                )
+            elif not (plugin_dir / mcp_servers).is_file():
+                problems.append(
+                    f"{rel}/{manifest_rel.as_posix()}: `mcpServers` points at a missing file"
+                )
+
         declared_config |= set((data.get("userConfig") or {}).keys())
 
     for field, values in seen.items():
@@ -152,9 +211,10 @@ def check_plugin(plugin_dir: Path, problems: list[str]) -> None:
 
     used_config = check_mcp(plugin_dir, rel, problems)
 
-    # A `${user_config.X}` naming an option no manifest declares is never
-    # substituted. The client passes the text through verbatim, and what reads it
-    # sees a literal `${user_config.X}` rather than the setting someone expected.
+    # Claude Code substitutes `${user_config.X}` from its manifest. Codex and
+    # Cursor deliberately pass the placeholders through; the server treats those
+    # literal values as disabled. Still require every placeholder to be declared
+    # for the client that does substitute it.
     for missing in sorted(used_config - declared_config):
         problems.append(
             f"{rel}: the MCP config substitutes `${{user_config.{missing}}}`, which no "

@@ -59,7 +59,8 @@ final _copy = Revision3StoryWorkspaceCopy(
   removeDraftBlocked: (count) => '$count removal blockers.',
   removeDraftDialogTitle: 'Remove draft from project?',
   removeDraftDialogSummary: (draft, script) => 'Remove $draft and $script.',
-  removeDraftNoUndo: 'This cannot be undone in version 1.',
+  removeDraftNoUndo:
+      'This dialog has no local rollback. After removal, Project History or global Undo can restore an earlier version while it remains available.',
   removeDraftBoundary: 'Game files and save games stay unchanged.',
   removeDraftCancel: 'Cancel',
   removeDraftConfirm: 'Remove draft',
@@ -114,7 +115,8 @@ final _longGermanCopy = Revision3StoryWorkspaceCopy(
   removeDraftBlocked: (count) => '$count blockierende Referenzen.',
   removeDraftDialogTitle: 'Entwurf entfernen?',
   removeDraftDialogSummary: (draft, script) => '$draft und $script entfernen.',
-  removeDraftNoUndo: 'In Version 1 nicht rückgängig zu machen.',
+  removeDraftNoUndo:
+      'Dieser Dialog bietet kein lokales Zurücksetzen. Nach dem Entfernen kann der Projektverlauf oder das globale Rückgängigmachen eine frühere Version wiederherstellen, solange sie verfügbar ist.',
   removeDraftBoundary: 'Spiel und Spielstände bleiben unverändert.',
   removeDraftCancel: 'Abbrechen',
   removeDraftConfirm: 'Entwurf entfernen',
@@ -2141,7 +2143,12 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('This cannot be undone in version 1.'), findsOneWidget);
+      expect(
+        find.text(
+          'This dialog has no local rollback. After removal, Project History or global Undo can restore an earlier version while it remains available.',
+        ),
+        findsOneWidget,
+      );
       expect(
         find.text('Game files and save games stay unchanged.'),
         findsOneWidget,
