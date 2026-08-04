@@ -50,7 +50,7 @@ void main() {
 
       expect(plan.basisHead.canonicalJson, fixture.basisHead.canonicalJson);
       expect(store.planCalls, 1);
-      expect(store.receivedPlanRoot, root.resolveSymbolicLinksSync());
+      expect(store.receivedPlanRoot, created.root.path);
       expect(store.receivedPlanGameRoot, voiceBatchTestGameRoot);
       expect(store.receivedPlanSourceFolder, voiceBatchTestSourceFolder);
       expect(store.receivedPlanLocale, voiceBatchTestLocale);

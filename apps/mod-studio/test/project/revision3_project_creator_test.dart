@@ -32,21 +32,21 @@ void main() {
       final generation = await _trustedGeneration(gameRoot.path);
       String? preparedProjectJson;
       var recoveryCalls = 0;
-      final recovered = _CreationLease(
-        root: projectRoot,
-        projectId: _projectId,
-        projectRevision: 0,
-        canonicalProjectJson: '',
-      );
+      late final _CreationLease recovered;
       final container = _creatorContainer(
         generation: generation,
         create: ({required root, required projectJson}) async {
           preparedProjectJson = projectJson;
-          recovered.canonicalProjectJson = projectJson;
           throw StateError('injected failure after fixed-head publication');
         },
         open: (root) async {
           recoveryCalls++;
+          recovered = _CreationLease(
+            root: root,
+            projectId: _projectId,
+            projectRevision: 0,
+            canonicalProjectJson: preparedProjectJson!,
+          );
           return recovered;
         },
       );
