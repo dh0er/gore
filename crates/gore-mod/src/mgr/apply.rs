@@ -895,10 +895,16 @@ fn apply_loadout_with_limits(
                     // Additive, so no destination has to exist and nothing is shadow-checked:
                     // `meta.id` gives cross-mod uniqueness of the pak name, `pak_files_comp_idx`
                     // per-component uniqueness within a mod.
+                    //
+                    // The `gm{idx:03}` prefix is what lets the LOADOUT decide who wins a contested
+                    // path. `~mods` containers mount in filename order — the same reason
+                    // `slot_stem` prefixes foreign paks — so a name built from the mod id alone
+                    // freezes the winner by id, and reordering the loadout changes nothing on disk
+                    // while `mgr analyze` goes on naming the last enabled claimant the winner.
                     let paks = crate::prepare_pak_file_component(
                         snapshot.bundle_root(),
                         rel,
-                        &l.meta.id,
+                        &format!("gm{:03}_{}", l.idx, l.meta.id),
                         pak_files_comp_idx,
                         &gp,
                     )?;
