@@ -4,6 +4,9 @@
 *.rs   text eol=lf
 *.py   text eol=lf
 
+# Canonical wire fixture consumed byte-for-byte by Rust tests.
+crates/gore-ffi/tests/fixtures/story_catalog_v1.json text eol=lf
+
 # Flutter regenerates these with LF on every build; pin eol=lf so autocrlf
 # doesn't reintroduce a CRLF/LF-only diff each time. Match every app: the paths
 # used to name `apps/goresave` and silently stopped applying when it became
