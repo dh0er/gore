@@ -9139,8 +9139,19 @@ fn copy_dir_bounded(
 }
 
 #[cfg(test)]
+mod canonical_tempfile {
+    pub(crate) fn tempdir() -> std::io::Result<::tempfile::TempDir> {
+        // Production records use `abs_root`; mirror that when Windows exposes TEMP through an
+        // 8.3 alias.
+        let root = std::fs::canonicalize(std::env::temp_dir())?;
+        ::tempfile::tempdir_in(root)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canonical_tempfile as tempfile;
     use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
     use aes::Aes256;
     use gore_modgen::gen::OverrideValue;
@@ -10307,7 +10318,8 @@ mod tests {
     /// at all — on the shipped build the whole `G1R/Config` subtree is like that.
     #[test]
     fn pak_files_publish_one_additive_pak_that_undeploy_deletes() {
-        let dir = tempfile::tempdir().unwrap();
+        // Keep one public deploy/undeploy roundtrip on the caller's ambient path spelling.
+        let dir = ::tempfile::tempdir().unwrap();
         let game = dir.path().join("game");
         std::fs::create_dir_all(game.join("G1R").join("Content")).unwrap();
         let source = dir.path().join("Normal.PNG");
@@ -12144,8 +12156,8 @@ mod tests {
 
     #[test]
     fn undeploy_removes_recorded_texture_triplets() {
-        let game = std::env::temp_dir().join("gore-mod-undeploy-tex");
-        let _ = std::fs::remove_dir_all(&game);
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
         let mods = game.join("G1R/Content/Paks/~mods");
         std::fs::create_dir_all(&mods).unwrap();
         let files: Vec<String> = ["zzz_M_tex_P.utoc", "zzz_M_tex_P.ucas", "zzz_M_tex_P.pak"]
@@ -13547,7 +13559,8 @@ mod tests {
     /// to the SAME file are recognized as identical and the new deploy's file is NOT retired.
     #[test]
     fn retire_tolerates_noncanonical_prev_paths() {
-        let dir = tempfile::tempdir().unwrap();
+        // This test needs distinct ambient and canonical spellings of the same path.
+        let dir = ::tempfile::tempdir().unwrap();
         let paks = dir.path().join("mods");
         std::fs::create_dir_all(&paks).unwrap();
         let dst = paks.join("zzz_keep_P.pak");
@@ -13836,7 +13849,8 @@ mod tests {
 
     #[test]
     fn duplicate_detection_includes_in_place_writes_and_cross_kind_targets() {
-        let dir = tempfile::tempdir().unwrap();
+        // This test needs distinct ambient and canonical spellings of the same path.
+        let dir = ::tempfile::tempdir().unwrap();
         let target = dir.path().join("target.bin");
         std::fs::write(&target, b"old").unwrap();
         let alias = std::fs::canonicalize(&target).unwrap();

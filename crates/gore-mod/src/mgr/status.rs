@@ -242,6 +242,7 @@ fn read_library_fingerprint(library: &LibraryRoot, id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canonical_tempfile as tempfile;
     use crate::mgr::model::{ComponentInfo, ModEntryMeta, ModKind, META_FILE};
     use crate::{record_path, DeployPhase, DeployRecord};
     use std::collections::BTreeMap;
