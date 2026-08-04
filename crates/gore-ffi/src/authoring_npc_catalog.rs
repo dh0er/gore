@@ -463,17 +463,23 @@ mod tests {
         let deployed = b"deployed cache";
         fs::write(&live, deployed).unwrap();
         fs::write(&backup, pristine).unwrap();
+        // Production deploy records persist canonical paths even when the caller uses an alias.
+        let recorded_live = fs::canonicalize(&live).unwrap();
+        let recorded_backup = fs::canonicalize(&backup).unwrap();
         let record = gore_mod::DeployRecord {
             mod_name: "fixture".to_owned(),
             phase: gore_mod::DeployPhase::RecoveryRequired,
             backups: vec![(
-                live.display().to_string(),
-                backup.display().to_string(),
+                recorded_live.display().to_string(),
+                recorded_backup.display().to_string(),
                 true,
             )],
-            deployed_hashes: BTreeMap::from([(live.display().to_string(), fnv1a64_hex(deployed))]),
+            deployed_hashes: BTreeMap::from([(
+                recorded_live.display().to_string(),
+                fnv1a64_hex(deployed),
+            )]),
             backup_hashes: BTreeMap::from([(
-                backup.display().to_string(),
+                recorded_backup.display().to_string(),
                 format!("sha256:{}", hex_digest(Sha256::digest(pristine))),
             )]),
             ..Default::default()

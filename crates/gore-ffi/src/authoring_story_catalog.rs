@@ -677,19 +677,22 @@ mod tests {
 
         fs::write(&backup, pristine).unwrap();
         fs::write(&live, modded).unwrap();
+        // Production deploy records persist canonical paths even when the caller uses an alias.
+        let recorded_live = fs::canonicalize(&live).unwrap();
+        let recorded_backup = fs::canonicalize(&backup).unwrap();
         let mut record = gore_mod::DeployRecord {
             mod_name: "fixture".to_owned(),
             backups: vec![(
-                live.display().to_string(),
-                backup.display().to_string(),
+                recorded_live.display().to_string(),
+                recorded_backup.display().to_string(),
                 true,
             )],
             ..Default::default()
         };
         record.deployed_hashes =
-            BTreeMap::from([(live.display().to_string(), fnv1a64_hex(modded))]);
+            BTreeMap::from([(recorded_live.display().to_string(), fnv1a64_hex(modded))]);
         record.backup_hashes = BTreeMap::from([(
-            backup.display().to_string(),
+            recorded_backup.display().to_string(),
             format!("sha256:{}", hex_sha256(pristine)),
         )]);
         let record_path = game.join("gore-mod.deployed.json");
