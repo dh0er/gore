@@ -3,6 +3,11 @@
 //! The fingerprint is a build-membership primitive, never selector or mutation authority. It
 //! hashes the full cache exactly once after validating, sorting, overlap-checking, and zeroing the
 //! shared canonical direct-scalar ranges plus exact reference-proven GameplayTag-map ranges.
+//!
+//! [`combined_default_cache_fingerprint`] is public so that `gore as qualify` can read the three
+//! numbers a generation row seals off an installation instead of a maintainer copying them out of
+//! a test run. Reading the fingerprint admits nothing: which caches it lets act is decided by
+//! `gore_generation::row_for_script_cache`, one layer up, against the table.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -14,9 +19,7 @@ use super::default_patterns::{
     direct_default_windows, immediate_bytes, is_canonical_initializer_metadata,
     is_reachable_linear_initializer,
 };
-use super::default_tag_map::{
-    normalize_reference_proven_tag_map_operands, TagMapReferenceScanError,
-};
+use super::default_tag_map::normalize_reference_proven_tag_map_operands;
 use super::disasm::disassemble;
 use super::header::CacheHeader;
 use super::model::parse_modules;
@@ -27,14 +30,14 @@ pub const DEFAULT_CACHE_FINGERPRINT_FORMAT: &str =
     "gore-as-default-cache-fingerprint-v2-scalar-tag";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DefaultCacheFingerprint {
-    pub(crate) sha256: [u8; 32],
-    pub(crate) scalar_operand_count: usize,
-    pub(crate) tag_operand_count: usize,
+pub struct DefaultCacheFingerprint {
+    pub sha256: [u8; 32],
+    pub scalar_operand_count: usize,
+    pub tag_operand_count: usize,
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum DefaultFingerprintError {
+pub enum DefaultFingerprintError {
     #[error("invalid cache header: {0}")]
     Header(String),
     #[error("invalid cache structure: {0}")]
@@ -43,8 +46,10 @@ pub(crate) enum DefaultFingerprintError {
     TailNotAtEof { end: usize, len: usize },
     #[error("duplicate key {key:#x} in tail table {table}")]
     DuplicateTailKey { table: &'static str, key: i64 },
-    #[error(transparent)]
-    TagMap(#[from] TagMapReferenceScanError),
+    /// Rendered rather than nested: the tag-map scanner's error type stays crate-private and this
+    /// one no longer is. Every caller reads the message; none of them matches the variant.
+    #[error("reference-proven tag-map scan failed: {0}")]
+    TagMap(String),
     #[error("failed to disassemble {function}: {error}")]
     Disasm { function: String, error: String },
     #[error("default operand range overflows or is outside the cache in {function}")]
@@ -70,10 +75,11 @@ struct NormalizedRange {
     range: Range<usize>,
 }
 
-pub(crate) fn combined_default_cache_fingerprint(
+pub fn combined_default_cache_fingerprint(
     cache: &[u8],
 ) -> Result<DefaultCacheFingerprint, DefaultFingerprintError> {
-    let (mut normalized, tag_report) = normalize_reference_proven_tag_map_operands(cache)?;
+    let (mut normalized, tag_report) = normalize_reference_proven_tag_map_operands(cache)
+        .map_err(|error| DefaultFingerprintError::TagMap(error.to_string()))?;
     let scalar_ranges = scalar_default_operand_ranges(&normalized)?;
     let scalar_operand_count = scalar_ranges.len();
     let tag_operand_count = tag_report.sites.len();
@@ -263,21 +269,20 @@ mod tests {
         };
         let cache = std::fs::read(path).expect("read configured cache");
         let fingerprint = combined_default_cache_fingerprint(&cache).expect("combined fingerprint");
-        let supported_sha256 = [
-            [
-                0x01, 0xfe, 0x4e, 0x37, 0xcc, 0x3a, 0x5d, 0xee, 0x15, 0xc2, 0xbe, 0xb4, 0x9a, 0x3f,
-                0x40, 0x61, 0x10, 0x77, 0x4b, 0x5e, 0x30, 0x0f, 0x2d, 0xe4, 0xad, 0x81, 0x1d, 0x0d,
-                0xf9, 0xad, 0xdd, 0x6b,
-            ],
-            [
-                0x21, 0x21, 0x11, 0x87, 0xec, 0xa2, 0x88, 0x9f, 0x04, 0xe2, 0xba, 0xf9, 0x5d, 0xa2,
-                0x2d, 0x4e, 0x71, 0x88, 0x28, 0x73, 0x41, 0xb7, 0x6e, 0xde, 0xd1, 0x18, 0x8a, 0x1d,
-                0x08, 0x54, 0x34, 0xc5,
-            ],
-        ];
-        assert!(supported_sha256.contains(&fingerprint.sha256));
-        assert_eq!(fingerprint.scalar_operand_count, 26_339);
-        assert_eq!(fingerprint.tag_operand_count, 1_432);
+        // This used to carry its own copy of the audited fingerprints and its own copy of the two
+        // operand counts. The third generation is what made that a defect rather than duplication:
+        // the counts moved with the build, so an install the table admits was refused here, by a
+        // test whose whole subject is that the fingerprint is stable under a tag edit. The row is
+        // the list; what is asserted is that the configured cache is one of them.
+        let row = gore_generation::rows()
+            .iter()
+            .find(|row| row.script_cache_mutation_stable_sha256 == fingerprint.sha256)
+            .expect("the configured cache is an audited generation");
+        assert_eq!(fingerprint.scalar_operand_count, row.scalar_default_operand_count);
+        assert_eq!(
+            fingerprint.tag_operand_count,
+            row.gameplay_tag_float32_operand_count
+        );
 
         let report = super::super::default_tag_map::reference_proven_tag_map_sites(&cache)
             .expect("tag report");

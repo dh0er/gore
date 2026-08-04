@@ -17,6 +17,13 @@ Two ways to get `gore.exe`:
 `gore.exe`, the `shared\` Lua SDK, and this whole guide under `docs\` — so the
 documentation is available offline, right next to the binary.
 
+To read it offline, open `docs\guide.html`: one browsable file with every page,
+a collapsible sidebar and a filter box. The `docs\*.md` files next to it are the
+same content in Markdown, for `grep`. The [MCP server](mcp.md) serves that guide
+too, but from a copy compiled into `gore.exe` rather than from these files —
+editing them changes what you read, not what an assistant is told. You can
+regenerate the HTML at any time with `gore guide html`.
+
 **Build it yourself.** Requires a stable Rust toolchain:
 
 ```powershell
@@ -24,7 +31,7 @@ cargo build --release -p gore
 # → target\release\gore.exe
 ```
 
-See [Building](building.md) for the full toolchain requirements and the
+See [Building](../development.md) for the full toolchain requirements and the
 `build.py` orchestrator that also builds the GUI apps.
 
 GORE is Windows-only. Every example in this documentation is PowerShell, assumes
@@ -66,7 +73,7 @@ apps read too, so the install is configured in exactly one place.
 | You want to… | Use |
 |---|---|
 | change values, text, audio, textures or scripts of the game | the `gore` CLI (this guide) |
-| do the same without a terminal, for one mod | [Mod Studio](../../apps/mod-studio/README.md) |
+| do the same without a terminal, for one mod | [Mod Studio](mod-studio.md) |
 | install and order **many** mods at once | [Mod Manager](../../apps/mod-manager/README.md) or [`gore mgr`](mod-manager.md) |
 | edit your saved progress | [Save Editor](../../apps/save-editor/README.md) |
 | hand-write custom Lua behavior | [gore-lua](../../lua/README.md) |

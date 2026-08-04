@@ -12,6 +12,9 @@ gore-tex = { path = "../gore-tex" }
 gore-as = { path = "../gore-as" }
 gore-vo = { path = "../gore-vo" }
 image = "0.25"
+# The `pak_files` section writes a V11 override pak straight into `~mods`; gore-tex uses the same
+# writer for the sidecar beside a Zen triplet, but does not re-export it.
+repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

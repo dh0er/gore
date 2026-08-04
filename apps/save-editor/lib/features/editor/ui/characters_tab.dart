@@ -6,6 +6,7 @@ import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/attribute_detail.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/inventory_detail.dart';
+import 'package:goresave/features/editor/ui/position_detail.dart';
 import 'package:goresave/features/editor/ui/progression_panel.dart'
     show KnowledgeDetail, EventsDetail;
 import 'package:goresave/l10n/app_localizations.dart';
@@ -15,15 +16,15 @@ import 'package:goresave/providers/data_providers.dart';
 import '../domain/editor_notifier.dart';
 
 /// The unified "Charaktere" tab: a shared [CharacterMasterList] on the left and
-/// four detail sub-tabs on the right (Attribute · Inventar · Wissen ·
-/// Ereignisse). The selected character is the SHARED editor state
+/// five detail sub-tabs on the right (Attribute · Inventar · Wissen ·
+/// Ereignisse · Position). The selected character is the SHARED editor state
 /// (`state.selectedActor` / `notifier.selectActor`), so switching sub-tabs keeps
 /// the same actor. Each sub-tab body is kept alive across sub-tab switches so
 /// pending edits (and their pending-registry entries) survive.
 ///
 /// Orphan characters (knowledge-only, no spawned actor / GlobalId) have no
-/// attributes, inventory, or events; for an orphan selection those three
-/// sub-tabs show a clean empty state and only Wissen is wired up.
+/// attributes, inventory, events, or stored position; for an orphan selection
+/// those four sub-tabs show a clean empty state and only Wissen is wired up.
 ///
 /// The [ActorDetailHeader] sits once above the secondary tab bar. It therefore
 /// identifies the persistent character context instead of being duplicated in
@@ -99,6 +100,25 @@ class CharactersTab extends ConsumerWidget {
             actor: selected,
             canCompress: inventoryCanCompress,
             showActorHeader: false,
+          );
+
+    // Position: the player's transform editor (its only home — it used to sit
+    // in the Attribute tab's HeroStatsCard sidebar) and, for an NPC, the saved
+    // pose from `private.npc.position` READ-ONLY (the game restores an NPC's
+    // placement from the level; see PositionDetail). Orphans have no actor and
+    // therefore no stored pose, so they get the same clean empty state as
+    // Attribute/Inventar/Ereignisse.
+    final Widget positionBody = isOrphan
+        ? _MessagePane(
+            icon: Icons.place_outlined,
+            title: l10n.heroTransform,
+            body: l10n.characterNoActorBody,
+          )
+        : PositionDetail(
+            inspection: inspection,
+            notifier: notifier,
+            editable: attributeEditable,
+            actor: selected,
           );
 
     // Wissen (knowledge) always works: the player's key is 'Hero' (which IS
@@ -180,7 +200,7 @@ class CharactersTab extends ConsumerWidget {
         const VerticalDivider(width: 1),
         Expanded(
           child: DefaultTabController(
-            length: 4,
+            length: 5,
             child: Column(
               children: [
                 ActorDetailHeader(
@@ -211,6 +231,10 @@ class CharactersTab extends ConsumerWidget {
                       icon: const Icon(Icons.history_outlined),
                       text: l10n.sectionEvents,
                     ),
+                    Tab(
+                      icon: const Icon(Icons.place_outlined),
+                      text: l10n.heroTransform,
+                    ),
                   ],
                 ),
                 Expanded(
@@ -220,6 +244,7 @@ class CharactersTab extends ConsumerWidget {
                       _KeepAliveTab(child: inventoryBody),
                       _KeepAliveTab(child: knowledgeBody),
                       _KeepAliveTab(child: eventsBody),
+                      _KeepAliveTab(child: positionBody),
                     ],
                   ),
                 ),

@@ -1220,6 +1220,102 @@ abstract class AppLocalizations {
   /// **'Rotation roll'**
   String get rotationRoll;
 
+  /// No description provided for @spawnPositionSection.
+  ///
+  /// In en, this message translates to:
+  /// **'Spawn position (reference)'**
+  String get spawnPositionSection;
+
+  /// No description provided for @positionNotReadable.
+  ///
+  /// In en, this message translates to:
+  /// **'The stored position could not be read for this character.'**
+  String get positionNotReadable;
+
+  /// No description provided for @npcPositionReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'The game restores an NPC\'s position from the level, not from the savegame, so these values can be read but not changed.'**
+  String get npcPositionReadOnly;
+
+  /// No description provided for @pickLocation.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose location…'**
+  String get pickLocation;
+
+  /// No description provided for @pickLocationDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a location'**
+  String get pickLocationDialogTitle;
+
+  /// No description provided for @applySpotRotation.
+  ///
+  /// In en, this message translates to:
+  /// **'Also apply the spot\'s orientation'**
+  String get applySpotRotation;
+
+  /// No description provided for @locationAreaOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get locationAreaOther;
+
+  /// No description provided for @locationAreaCavalornValley.
+  ///
+  /// In en, this message translates to:
+  /// **'Cavalorn Valley'**
+  String get locationAreaCavalornValley;
+
+  /// No description provided for @locationAreaEastForest.
+  ///
+  /// In en, this message translates to:
+  /// **'East Forest'**
+  String get locationAreaEastForest;
+
+  /// No description provided for @locationAreaFogTower.
+  ///
+  /// In en, this message translates to:
+  /// **'Fog Tower'**
+  String get locationAreaFogTower;
+
+  /// No description provided for @locationAreaIllegalWeedMixers.
+  ///
+  /// In en, this message translates to:
+  /// **'Illegal Weed Mixers'**
+  String get locationAreaIllegalWeedMixers;
+
+  /// No description provided for @locationAreaOrcArena.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Arena'**
+  String get locationAreaOrcArena;
+
+  /// No description provided for @locationAreaOrcGraveyard.
+  ///
+  /// In en, this message translates to:
+  /// **'Orc Graveyard'**
+  String get locationAreaOrcGraveyard;
+
+  /// No description provided for @locationAreaShipwreck.
+  ///
+  /// In en, this message translates to:
+  /// **'Shipwreck'**
+  String get locationAreaShipwreck;
+
+  /// No description provided for @locationAreaTundra.
+  ///
+  /// In en, this message translates to:
+  /// **'Tundra'**
+  String get locationAreaTundra;
+
+  /// No description provided for @locationCatalogUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The location catalog could not be loaded.'**
+  String get locationCatalogUnavailable;
+
   /// No description provided for @invalid.
   ///
   /// In en, this message translates to:
@@ -3824,6 +3920,12 @@ abstract class AppLocalizations {
   /// **'NPC attributes failed: {details}'**
   String editorNpcAttributesFailed(String details);
 
+  /// No description provided for @editorNpcPositionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the NPC position failed: {details}'**
+  String editorNpcPositionFailed(String details);
+
   /// No description provided for @editorNpcInventoryFailed.
   ///
   /// In en, this message translates to:
@@ -3977,6 +4079,132 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{segmentId, select, Access{Access} AccessDenied{Access Denied} AccesToTemple{Access to Temple} Advice{Advice} AfterFight{After Fight} AfterFireMages{After Fire Mages} AfterNek{After Nek} AfterQuest{After Quest} Alone{Alone} Amulet{Amulet} Annoying{Annoying} Armor{Armor} Avoid{Avoid} Backstory{Backstory} BackStory{Back Story} BasicMagic{Basic Magic} Beated{Beaten} BecomeMercenary{Become Mercenary} Beer{Beer} Bestiary{Bestiary} Blessing{Blessing} Boss{Boss} Bully{Bully} BullyAdvice{Bully Advice} Camp{Camp} CampDivided{Camp Divided} CareOfMessengers{Care of Messengers} ChangeOpinion{Change Opinion} ChargeUriziel{Charge Uriziel} Chosen{Chosen} Contact{Contact} Courier{Courier} CraftBows{Craft Bows} Crazy{Crazy} DailyMeal{Daily Meal} DailyRation_Trader{Daily Ration Trader} DAM{Dam} Dead{Dead} Deal{Deal} Dealer{Dealer} Deceived{Deceived} Dementia{Dementia} DenyAccess{Deny Access} DifferentOpinion{Different Opinion} Discussion{Discussion} DontTalk{Don’t Talk} Duel{Duel} Entrance{Entrance} Escape{Escape} Extended{Extended} Extra{Extra} ExtraInfo{Extra Info} Fanatic{Fanatic} Fight{Fight} FindUlumulu{Find Ulu-Mulu} FireMages{Fire Mages} FireMagesEscape{Fire Mages Escape} FiskNewDealer{New Fence for Fisk} FiskNewDealerCompleted{New Fence for Fisk — Completed} FogTower{Fog Tower} Food{Food} Forgave{Forgave} Forgive{Forgive} Forgiven{Forgiven} FourFriends{Four Friends} FreeHut{Free Hut} FreeMine{Free Mine} Fury{Fury} GoodTeacher{Good Teacher} Gossip{Gossip} GotScavenger{Got Scavenger} GrantedAccess{Granted Access} GRDArmor{Guard Armor} Guide{Guide} HateMages{Hate Mages} HateMagesExplanation{Hate Mages Explanation} HateRiceLord{Hate Rice Lord} Heal{Heal} Healing{Healing} Help{Help} Helper{Helper} HelpKagan{Help Kagan} HutStory{Hut Story} Ignore{Ignore} Impress{Impress} ImpressAlchemy{Impress Alchemy} ImpressInscription{Impress Inscription} Info{Info} Interested{Interested} Introduction{Introduction} Introduction_2{Introduction 2} Introduction_Armor{Introduction – Armor} Introduction_Teacher{Introduction – Teacher} Introduction_Trader{Introduction – Trader} Invocation{Invocation} JoinSC{Join Swamp Camp} Joint{Joint} KalomCamp{Kalom Camp} Leader{Leader} Learning{Learning} LearnOrcish{Learn Orcish} LeftParty{Left Party} Library{Library} Lie{Lie} Lock{Lock} Lockpick{Lockpick} Mad{Mad} Mandibles{Minecrawler Mandibles} MapMaker{Map Maker} Monastery{Monastery} MordragKO{Mordrag KO} Nek{Nek} NewCamp{New Camp} NewCamper{New Camper} NewLeader{New Leader} NightPatrol{Night Patrol} NotInterested{Not Interested} OldCamp{Old Camp} OrcEnclaveEntrance{Orc Enclave Entrance} OrcGraveyard{Orc Graveyard} OreArmor{Ore Armor} Party{Party} Pay{Pay} PayMoney{Pay Money} Permission{Permission} Pet{Pet} PreparingInvocation{Preparing Invocation} Quest{Quest} RankUpFireMages{Fire Mage Promotion} RankUpGuard{Guard Promotion} RanUpFireMagesCompleted{Fire Mage Promotion Completed} Realocated{Relocated} Reason{Reason} Respect{Respect} ReturnToSC{Return to Swamp Camp} RicelordForeman{Rice Lord’s Foreman} RideScavenger{Ride Scavenger} Robe{Robe} Safe{Safe} Scraper{Scraper} SecondChance{Second Chance} SecretLocation{Secret Location} SecretPassage{Secret Passage} SecretPath{Secret Path} SleeperFollower{Sleeper Follower} SleeperTemple{Sleeper Temple} SmallInfo{Small Info} Stonehenge{Stonehenge} StopFollowing{Stop Following} SwampCamp{Swamp Camp} Talkative{Talkative} Teach{Teach} TeachBow{Teach Bow} Teacher{Teacher} Teacher2{Teacher 2} TeacherInscription{Teacher Inscription} TeacherMana{Teacher Mana} TeachIchor{Teach Minecrawler Ichor Extraction} TeachMagic{Teach Magic} TeachOrcish{Teach Orcish} TeachStats{Teach Stats} TeachWeapon{Teach Weapon} Teleport{Teleport} TheMysteriousOrc{The Mysterious Orc} ThroneRoom{Throne Room} TradeBow{Trade Bow} Trader{Trader} TradeSkins_Trader{Skin Trader} Traitor{Traitor} Trial{Trial} TrollCanyon{Troll Canyon} Trust{Trust} Ulumulu{Ulu-Mulu} Unexperienced{Inexperienced} Uriziel{Uriziel} UrizielRune{Uriziel Rune} Useful{Useful} Velaya{Velaya} Vibrations{Vibrations} WaitFreeMine{Wait at Free Mine} WaitInTrainingArea{Wait In Training Area} Warning{Warning} WarningTooLate{Warning Came Too Late} WaterMessenger{Messenger for the Water Mages} Weapon{Weapon} Who{Who} Women{Women} other{{fallback}}}'**
   String glossaryCatalogSegmentLabel(String segmentId, String fallback);
+
+  /// No description provided for @slotRepairTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Damaged inventory slots'**
+  String get slotRepairTitle;
+
+  /// No description provided for @slotRepairBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This savegame holds {count} inventory slots whose id no longer matches their position — in the game, dropping such an item removes a different one instead. The repair only rewrites the ids: no item is added, removed or changed. A backup is created when you save, as always.'**
+  String slotRepairBody(int count);
+
+  /// No description provided for @slotRepairQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Repair queued — save to apply it.'**
+  String get slotRepairQueued;
+
+  /// No description provided for @slotRepairAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Repair'**
+  String get slotRepairAction;
+
+  /// No description provided for @slotRepairDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard'**
+  String get slotRepairDiscard;
+
+  /// No description provided for @editorInventorySlotEditConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.'**
+  String get editorInventorySlotEditConflict;
+
+  /// No description provided for @backupFactFile.
+  ///
+  /// In en, this message translates to:
+  /// **'File'**
+  String get backupFactFile;
+
+  /// No description provided for @renameBackupTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Name this backup'**
+  String get renameBackupTooltip;
+
+  /// No description provided for @renameBackupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Name backup'**
+  String get renameBackupTitle;
+
+  /// No description provided for @renameBackupLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Name'**
+  String get renameBackupLabel;
+
+  /// No description provided for @renameBackupHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Shown instead of the file name {fileName}. Leave empty to remove the name; the file itself is not renamed.'**
+  String renameBackupHelp(String fileName);
+
+  /// No description provided for @deleteBackupTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete this backup'**
+  String get deleteBackupTooltip;
+
+  /// No description provided for @deleteBackupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete backup'**
+  String get deleteBackupTitle;
+
+  /// No description provided for @deleteBackupBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete “{name}” ({fileName})? The file is removed from disk and cannot be brought back.'**
+  String deleteBackupBody(String name, String fileName);
+
+  /// No description provided for @deleteBackupConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get deleteBackupConfirm;
+
+  /// No description provided for @editorDeletedBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup deleted: {path}'**
+  String editorDeletedBackup(String path);
+
+  /// No description provided for @editorDeleteBackupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not delete the backup: {details}'**
+  String editorDeleteBackupFailed(String details);
+
+  /// No description provided for @editorRenameBackupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not name the backup: {details}'**
+  String editorRenameBackupFailed(String details);
+
+  /// No description provided for @slotRepairUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Repairing is not possible right now — this savegame cannot be written.'**
+  String get slotRepairUnavailable;
+
+  /// No description provided for @editorDeletedBackupWithLabelWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup deleted: {path} — its name could not be removed: {details}'**
+  String editorDeletedBackupWithLabelWarning(String path, String details);
+
+  /// No description provided for @slotRepairNotOffered.
+  ///
+  /// In en, this message translates to:
+  /// **'The repair is not available for this savegame.'**
+  String get slotRepairNotOffered;
 }
 
 class _AppLocalizationsDelegate

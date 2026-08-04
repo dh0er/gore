@@ -1012,7 +1012,7 @@ fn preflight_json_string_tokens(bytes: &[u8]) -> Result<(), NpcCatalogError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_story_catalog::{known_generation_v1, known_generation_v2};
+    use gore_story_catalog::known_supported_generations;
     use std::collections::BTreeSet;
 
     fn story_catalog() -> StoryCatalogFile {
@@ -1123,53 +1123,66 @@ mod tests {
     }
 
     #[test]
-    fn supported_hotfix_generation_is_accepted_only_as_an_exact_triple() {
-        let generation = known_generation_v2();
-        assert_ne!(generation, known_generation_v1());
-        assert!(is_supported_generation(&generation));
-
-        let file = file_from_payload_for_generation(
-            payload(),
-            generation.clone(),
-            seal_bytes(b"trusted supported-v2 Story catalog"),
+    fn every_audited_generation_is_accepted_only_as_an_exact_triple() {
+        // This named the second generation and asserted it differed from the first, so it proved
+        // nothing about any build added later. Reading the whole supported set instead means a new
+        // audited generation is covered here the moment it is admitted anywhere.
+        let audited = known_supported_generations();
+        assert!(
+            audited.len() >= 2,
+            "one generation would make the distinctness check below vacuous"
         );
-        assert_eq!(file.generation(), &generation);
-        assert_eq!(file.source().shipping_cache, generation.shipping_cache);
-        assert_eq!(file.source().binds_cache, generation.binds_cache);
-        validate_wire_integrity(&file.wire).unwrap();
+        for (index, generation) in audited.iter().enumerate() {
+            for other in audited.iter().skip(index + 1) {
+                assert_ne!(generation, other, "audited generations must be distinct");
+            }
+            assert!(is_supported_generation(generation));
 
-        let mut source_drift = file.wire.clone();
-        source_drift.catalog.source.shipping_cache.sha256 = Sha256Digest::from_bytes([0x5c; 32]);
-        let body = canonical_json(
-            &source_drift.catalog,
-            "source-drift body",
-            MAX_CATALOG_JSON_BYTES,
-        )
-        .unwrap();
-        source_drift.catalog_seal = seal_bytes(&body);
-        assert!(matches!(
-            validate_wire_integrity(&source_drift),
-            Err(NpcCatalogError::Invariant(_))
-        ));
+            let file = file_from_payload_for_generation(
+                payload(),
+                generation.clone(),
+                seal_bytes(b"trusted supported Story catalog"),
+            );
+            assert_eq!(file.generation(), generation);
+            assert_eq!(file.source().shipping_cache, generation.shipping_cache);
+            assert_eq!(file.source().binds_cache, generation.binds_cache);
+            validate_wire_integrity(&file.wire).unwrap();
 
-        let mut nearby_unknown = file.wire.clone();
-        nearby_unknown.catalog.generation.executable.sha256 = Sha256Digest::from_bytes([0xa5; 32]);
-        assert_eq!(
-            nearby_unknown.catalog.generation.edition,
-            generation.edition
-        );
-        assert!(!is_supported_generation(&nearby_unknown.catalog.generation));
-        let body = canonical_json(
-            &nearby_unknown.catalog,
-            "unknown-generation body",
-            MAX_CATALOG_JSON_BYTES,
-        )
-        .unwrap();
-        nearby_unknown.catalog_seal = seal_bytes(&body);
-        assert!(matches!(
-            validate_wire_integrity(&nearby_unknown),
-            Err(NpcCatalogError::UnsupportedGeneration)
-        ));
+            let mut source_drift = file.wire.clone();
+            source_drift.catalog.source.shipping_cache.sha256 =
+                Sha256Digest::from_bytes([0x5c; 32]);
+            let body = canonical_json(
+                &source_drift.catalog,
+                "source-drift body",
+                MAX_CATALOG_JSON_BYTES,
+            )
+            .unwrap();
+            source_drift.catalog_seal = seal_bytes(&body);
+            assert!(matches!(
+                validate_wire_integrity(&source_drift),
+                Err(NpcCatalogError::Invariant(_))
+            ));
+
+            let mut nearby_unknown = file.wire.clone();
+            nearby_unknown.catalog.generation.executable.sha256 =
+                Sha256Digest::from_bytes([0xa5; 32]);
+            assert_eq!(
+                nearby_unknown.catalog.generation.edition,
+                generation.edition
+            );
+            assert!(!is_supported_generation(&nearby_unknown.catalog.generation));
+            let body = canonical_json(
+                &nearby_unknown.catalog,
+                "unknown-generation body",
+                MAX_CATALOG_JSON_BYTES,
+            )
+            .unwrap();
+            nearby_unknown.catalog_seal = seal_bytes(&body);
+            assert!(matches!(
+                validate_wire_integrity(&nearby_unknown),
+                Err(NpcCatalogError::UnsupportedGeneration)
+            ));
+        }
     }
 
     #[test]

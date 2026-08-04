@@ -4,6 +4,7 @@
 //! editor and the modding tools classify item ids identically. Prefix set
 //! verified against the UE4SS object dump (see memory `gothic-remake-ue4ss-dump`).
 
+pub mod location;
 pub mod pipeline;
 
 use serde::{Deserialize, Serialize};

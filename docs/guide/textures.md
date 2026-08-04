@@ -4,6 +4,10 @@ Replace any `Texture2D` packed in the game's UE5 IoStore container. The output
 is an **additive** Zen triplet (`.utoc`/`.ucas`/`.pak`) dropped into the game's
 `~mods\` folder — no original game file is ever modified.
 
+Not everything you see on screen is one of those assets, and these commands
+cannot tell you when it is not. Start with
+[what these commands reach](#what-these-commands-reach).
+
 ## Find an asset
 
 ```powershell
@@ -59,18 +63,138 @@ gore texture undeploy --game "$GAME" --name zzz_MyMod_P
 ### Compression
 
 `pack --compress` Oodle-compresses the `.ucas` blocks. It is **opt-in and off by
-default**: uncompressed containers are the ones proven to load reliably in game.
-The compressed path follows the base game's writer conventions (raw
-`ContainerHeader`, 1 KiB admission threshold, 16-aligned blocks) and uses the
-pure-Rust Oodle implementation in `gore-oodle` — no proprietary `oo2core` DLL is
-required.
+default**: the uncompressed path is the one with the most in-game mileage, so it
+stays the default even though a fully compressed multi-block container has since
+been seen to mount and render (see
+[what is proven, and by what](#what-is-proven-and-by-what)). The compressed path
+follows the base game's own writer conventions and uses a pure-Rust Oodle
+implementation — no proprietary `oo2core` DLL is required.
+
+## What these commands reach
+
+`gore texture` reaches cooked `Texture2D` assets **inside the IoStore
+container**, and nothing else. Everything the engine opens through a real
+filesystem path is a second world, and no `replace`, `pack` or `deploy` will
+ever touch it.
+
+That second world is small enough to enumerate:
+
+```powershell
+gore texture list    --game "$GAME" --filter Cursor   # is it in the container?
+gore texture paklist --game "$GAME" --filter Cursor   # is it also inside a pak?
+
+Get-ChildItem -Recurse -File "$GAME\G1R\Content" |
+  Where-Object { $_.Extension -notin '.pak', '.ucas', '.utoc' }
+```
+
+The `Get-ChildItem` line prints about thirty files on a stock install, in four
+groups:
+
+| Loose file | What it is |
+|---|---|
+| `G1R\Content\FMOD\Desktop\*.bank` | sounds and music — [Audio](audio.md) |
+| `G1R\Content\Movies\*.bk2` (with `.srt`/`.uasset` sidecars) | pre-rendered Bink movies — [Voice-over](voice.md#the-intro-movie-brings-its-own-audio) |
+| `G1R\Content\Slate\Cursors\Normal\*` | the mouse cursor — see below |
+| `G1R\Content\Splash\Splash.bmp` | the startup splash |
+
+Loose is not the same as reachable on disk. Checking every loose file in the
+install against the file indexes of all six shipped paks yields exactly eight
+collisions, and they are the eight cursors. The FMOD banks, the Bink movies with
+their `.srt` subtitles, and `Splash.bmp` appear in no pak at all, so those three
+groups are single-copy and a bundle's [`files` section](bundles.md#loose-files)
+replaces them in place. The cursors are the exception, and they need
+[`pak_files`](bundles.md#shadowed-destinations).
+
+`G1R\Config` is the trap that never shows up as a collision: there is no loose
+`Config` directory anywhere in the install. Every `.ini` the game reads,
+`DefaultEngine.ini` included, exists **only** inside `G1R-Windows.pak`. Editing
+one is a `pak_files` job by construction — `files` is replace-only, and here
+there is nothing on disk to replace.
+
+Spoken dialog is loose too, just not under `Content`: it lives in language ZIPs
+under `G1R\Story\VoiceOver` ([Voice-over](voice.md)).
+
+So the first question to ask about anything on screen is *which of the two
+worlds does it live in*. Ask it early, because nothing downstream will answer
+it for you: against a cooked asset the engine never samples, `replace`, `pack`
+and `deploy` all succeed, the container is well formed, the deploy verifies —
+and the screen does not change.
+
+### The mouse cursor is not the cursor texture
+
+`/Game/UI/Textures/Common/T_HardwareCursor` is the trap this rule was written
+for. `list` finds it (it is the container's only cursor texture), `extract` and
+`replace` work on it, the triplet packs and deploys, and the pointer does not
+change.
+
+It is imported source art that came along into the cook. It is 128×128
+`PF_DXT5`, while the real UI brushes beside it in the same folder are
+uncompressed — `T_Arrow` and `T_Checkbox_Checked` are both 64×64
+`PF_B8G8R8A8`. And no Unreal API turns a cooked `Texture2D` into an OS cursor:
+the hardware path (`UWidgetBlueprintLibrary::SetHardwareCursor`, present in the
+shipping binary) takes a *Content-relative file path*, and the software path
+takes a *widget class*. Neither consumes a texture.
+
+What the player sees is a file-based hardware cursor: eight loose PNGs under
+`G1R\Content\Slate\Cursors\Normal\`, selected by display scale.
+
+| File | Size |
+|---|---|
+| `Normal.PNG` | 32×32 |
+| `Normal@1.1x.png` | 36×36 |
+| `Normal@1.25x.png` | 40×40 |
+| `Normal@1.33x.png` | 44×44 |
+| `Normal@1.50x.png` | 44×44 |
+| `Normal@1.66x.png` | 50×50 |
+| `Normal@1.75x.png` | 54×54 |
+| `Normal@2x.png` | 60×60 |
+
+Replace all eight — you cannot know which one a given player's display picks —
+keep each file's dimensions, and keep the artwork cropped the way the shipped
+set is, with the pointer tip on pixel (0, 0). The suffix ladder is UE's own DPI
+convention; the shipping binary carries no `@2x`-style literal that would say
+which file a given scale resolves to, which is one more reason to change all of
+them. The `HardwareCursors=` line that names the path lives in a packed
+`DefaultEngine.ini` that has not been read, so the hotspot is inferred from how
+the art is cropped rather than quoted from the config.
+
+Editing those eight files on disk, however, does nothing — and that part is
+settled. The same eight names are also entries in `G1R-Windows.pak`, at the same
+uncompressed sizes, and no offline reading could say which copy the loader
+opens. One launch decided it: all eight loose PNGs were replaced and the pointer
+did not change, while a cooked texture replaced by the same bundle in the same
+launch was plainly visible. The packed copy is the live one. A new cursor has to
+ship as a pak that overrides those eight entries, which is a bundle's
+[`pak_files` section](bundles.md#shadowed-destinations).
+
+## What is proven, and by what
+
+Worth being exact about, because the words carry weight the moment something
+does not work. What the tests prove on every run is *structural*: a written
+triplet is a well-formed container, and an asset read back out of it through
+retoc is byte-identical to what went in, down to the pixels. What a human has
+seen — once each, recorded in a commit message and nowhere else — is that such
+a container mounts and renders in game: first an uncompressed one, and after the
+compressed-writer fix a fully compressed multi-block one too. The most recent
+sighting is the one with a date on it: on BuildID 24340829, a triplet deployed
+into `~mods\` by `gore mod deploy` replaced
+`/Game/UI/Textures/Common/T_LogoRemake` — 512×180 `PF_DXT5`, the logo on the
+main menu — and the new art was on screen, in the same launch that showed the
+loose cursor edit changing nothing. That one asset is the known-good target to
+retest with — `T_Logo` sits beside it in the same folder and has never been
+looked at. The sighting is what establishes that `~mods\` mounts on this build,
+and it is still one person looking at one screen: there is no screenshot, and
+nothing in the test suite checks any of it. A *deployed* triplet is verified by
+SHA-256 and by nothing else: `deploy` records a hash per file and confirms the
+bytes arrived. Nothing in this toolkit ever observes the screen, so a successful
+deploy means the file is in place — never that anything changed.
 
 ## Flag summary
 
 | Flag | Commands | Meaning |
 |---|---|---|
 | `--game <PATH>` | all | Install dir containing `G1R\Content\Paks\…`. Falls back to the configured path. |
-| `--filter <TEXT>` | `list` | Keep only asset paths containing this substring. |
+| `--filter <TEXT>` | `list`, `paklist` | Keep only paths containing this substring. |
 | `-o, --out <PATH>` | `extract`, `pack`, `index` | Output PNG, triplet output dir, or index path. |
 | `--image <PNG>` | `replace` | Replacement PNG (RGBA8/RGB8). |
 | `--mod-dir <DIR>` | `replace`, `pack` | Cooked-file staging dir laid out under its mount path. |

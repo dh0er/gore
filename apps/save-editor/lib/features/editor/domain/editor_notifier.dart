@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
@@ -11,6 +12,7 @@ import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
+import 'package:goresave/features/editor/domain/npc_position.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
@@ -193,8 +195,13 @@ class EditorState {
     for (final key in invalidEditKeys) {
       if (key.startsWith('npc.attributes:')) return key;
       // Older callers were allowed to use an arbitrary pending key. Preserve
-      // that round-trip while excluding the one known non-NPC validation key.
-      if (key != storyStatePendingKey) legacyFallback ??= key;
+      // that round-trip while excluding validation keys owned by surfaces that
+      // key themselves through `setEditInvalid`: returning one here would let
+      // `setNpcEditInvalid`'s `..remove(invalidNpcEditKey)` clear another
+      // surface's block as a side effect.
+      if (key != storyStatePendingKey) {
+        legacyFallback ??= key;
+      }
     }
     return legacyFallback;
   }
@@ -1344,11 +1351,41 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorInventoryResetConflict);
       return false;
     }
+    // The whole-save slot repair rewrites every misaligned m_Id. Any edit that
+    // addresses a slot by the id the UI showed — an NPC removal or count edit —
+    // must therefore run BEFORE it, so the repair gets its own trailing write
+    // instead of leading the fixed batch.
+    const repairSlotsPath = 'private.inventory.repairSlots';
+    final repairEdits = allEdits
+        .where((k) => k.edit['path'] == repairSlotsPath)
+        .toList();
+    // An add or a removal claims a whole slot — the add fills a blank one and
+    // resets its payload, the removal blanks one — so ANY raw All-Data edit into
+    // a slot would be silently overwritten while Save still reported success.
+    // The repair is narrower: it only rewrites ids, and only after everything
+    // else has run, so it collides with an edit of a slot's m_Id and with
+    // nothing else. Refuse those combinations the way a queued reset does.
+    const slotClaimingPaths = {
+      'private.inventory.addItem',
+      'private.inventory.removeItem',
+    };
+    final claimsSlots = allEdits.any(
+      (k) => slotClaimingPaths.contains(k.edit['path']),
+    );
+    final conflicts = claimsSlots
+        ? allEdits.any((k) => isInventorySlotTypedEdit(k.edit))
+        : repairEdits.isNotEmpty &&
+              allEdits.any((k) => isInventorySlotIdTypedEdit(k.edit));
+    if (conflicts) {
+      state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
+      return false;
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
               !splicingPaths.contains(k.edit['path']) &&
-              k.edit['path'] != skillPath,
+              k.edit['path'] != skillPath &&
+              k.edit['path'] != repairSlotsPath,
         )
         .toList();
 
@@ -1379,6 +1416,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // (see skillPath above).
       if (skillEdits.isNotEmpty)
         _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
+      // Last: the slot repair, so every id-addressed edit above resolved against
+      // the ids the user saw (see repairSlotsPath).
+      if (repairEdits.isNotEmpty)
+        _SubWrite(edits: [for (final keyed in repairEdits) keyed.edit]),
     ];
 
     final n = displayEditCount;
@@ -2321,6 +2362,62 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }, failureMessage: (details) => _l10n.editorRestoreFailed(details));
   }
 
+  /// Delete one backup of the selected save (or of `targetPath`). The core only
+  /// accepts a file its own backup listing produced, so this can never remove
+  /// the live save or another slot's snapshot.
+  Future<void> deleteBackup(String backupPath, {String? targetPath}) async {
+    final path = targetPath ?? state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'delete_backup',
+        payload: {'path': path, 'backupPath': backupPath},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _l10n.editorDeleteBackupFailed(_errorDetails(response)),
+        );
+        return;
+      }
+      // The core deletes first and tidies the name afterwards, so a name it
+      // could not drop comes back as a warning on an otherwise successful
+      // response. Say so: the leftover would otherwise be inherited unannounced
+      // by the next backup that lands under the same file name.
+      final warning = (response['data'] as Map?)?['labelWarning'];
+      state = state.copyWith(
+        lastWriteMessage: warning is String && warning.isNotEmpty
+            ? _l10n.editorDeletedBackupWithLabelWarning(backupPath, warning)
+            : _l10n.editorDeletedBackup(backupPath),
+      );
+      await refreshBackups();
+    }, failureMessage: (details) => _l10n.editorDeleteBackupFailed(details));
+  }
+
+  /// Label one backup of the selected save (or of `targetPath`). An empty name
+  /// clears the label. The backup FILE keeps its own name either way — it
+  /// encodes which save it belongs to and when it was taken.
+  Future<void> renameBackup(
+    String backupPath,
+    String name, {
+    String? targetPath,
+  }) async {
+    final path = targetPath ?? state.selectedPath;
+    if (path == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'rename_backup',
+        payload: {'path': path, 'backupPath': backupPath, 'name': name},
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _l10n.editorRenameBackupFailed(_errorDetails(response)),
+        );
+        return;
+      }
+      await refreshBackups();
+    }, failureMessage: (details) => _l10n.editorRenameBackupFailed(details));
+  }
+
   Future<void> checkCodec() async {
     try {
       final response = await _execute('check_codec');
@@ -2840,6 +2937,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// GlobalId can exist in two saves.
   final Map<String, Future<NpcAttributesResult>> _npcAttributesCache = {};
   final Map<String, Future<NpcInventoryResult>> _npcInventoryCache = {};
+  final Map<String, Future<NpcPoseResult>> _npcPositionCache = {};
 
   /// The save path the per-NPC detail memos were populated for. `selectedPath`
   /// changes at the START of a slot switch, but [_invalidateNpcCache] only runs
@@ -2855,6 +2953,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (_npcDetailCacheForPath != path) {
       _npcAttributesCache.clear();
       _npcInventoryCache.clear();
+      _npcPositionCache.clear();
       _npcDetailCacheForPath = path;
     }
   }
@@ -2867,6 +2966,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFor = null;
     _npcAttributesCache.clear();
     _npcInventoryCache.clear();
+    _npcPositionCache.clear();
     _npcDetailCacheForPath = null;
   }
 
@@ -2965,6 +3065,50 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }();
     _npcAttributesCache[id] = future;
+    return future;
+  }
+
+  /// Load a single NPC's saved pose (by GlobalId) from the core
+  /// `private.npc.position` command for the currently selected save: the
+  /// character location/rotation plus the spawn location/rotation. Rotations
+  /// arrive as `{pitch, yaw, roll}`.
+  ///
+  /// READ-ONLY. The game restores an NPC's placement from the level, not from
+  /// the save — a runtime probe read back the original pre-edit values after
+  /// loading a save whose pose records had all been rewritten — so this pose is
+  /// displayed and never written (see `NpcPositionPanel`).
+  ///
+  /// Memoized per (save, GlobalId) exactly like [loadNpcAttributes]; a failed
+  /// load is NOT cached so a transient error can retry.
+  Future<NpcPoseResult> loadNpcPosition(String id) {
+    final path = state.selectedPath;
+    if (path == null) {
+      return Future.value(NpcPoseResult(error: _l10n.editorNoSaveSelected));
+    }
+    _guardNpcDetailCache(path);
+    final cached = _npcPositionCache[id];
+    if (cached != null) return cached;
+    final future = () async {
+      try {
+        final response = await _execute(
+          'private.npc.position',
+          payload: {'path': path, 'id': id},
+        );
+        if (response['ok'] != true) {
+          _npcPositionCache.remove(id);
+          return NpcPoseResult(
+            error: _l10n.editorNpcPositionFailed(_errorDetails(response)),
+          );
+        }
+        return NpcPoseResult.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        );
+      } catch (error) {
+        _npcPositionCache.remove(id);
+        return NpcPoseResult(error: _l10n.editorNpcPositionFailed('$error'));
+      }
+    }();
+    _npcPositionCache[id] = future;
     return future;
   }
 
@@ -3426,6 +3570,60 @@ String? _activeEffectsDefActor(Map<String, Object?> edit) {
 /// `m_Inventory`. Such an edit collides with a queued `private.inventory.reset`,
 /// which replaces the whole `m_Inventory`: the reset splice runs after the fixed
 /// batch and would silently discard the typed edit (see [EditorNotifier.saveAllPending]).
+/// Every raw typed operation, whether it writes a value or mutates a container.
+/// All of them address their target the same way, through `value.path`.
+const _typedEditPaths = {
+  'private.typed.setValue',
+  'private.typed.setAdd',
+  'private.typed.setRemove',
+  'private.typed.arrayRemove',
+  'private.typed.arrayDuplicate',
+};
+
+/// A raw typed edit that reaches a slot — INTO one (its id, its count, a set or
+/// array inside its payload, anything below `m_Slots/[i]`) or AT the slot array
+/// itself, which an array operation addresses by ending at `m_Slots` and naming
+/// its element in `value.index`.
+///
+/// An add or a removal claims whole slots, so either shape collides with it: the
+/// add fills a blank slot the splice may then delete, and a splice of the array
+/// shifts every later slot away from its id again.
+///
+/// Matched on the `m_Slots` step rather than on an ancestor name: only the
+/// PLAYER inventory sits under an `m_Inventory` segment, while an NPC's lives
+/// under `InventoryByGlobalId{id}/InventoryItems/…` (see
+/// `npc::npc_inventory_path`), and both are rewritten alike.
+@visibleForTesting
+bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
+  if (!_typedEditPaths.contains(edit['path'])) return false;
+  final path = (edit['value'] as Map?)?['path'];
+  if (path is! List) return false;
+  final segments = path.whereType<String>().toList();
+  if (segments.isNotEmpty && segments.last == 'm_Slots') return true;
+  for (var index = 0; index + 1 < segments.length; index++) {
+    if (segments[index] != 'm_Slots') continue;
+    final slot = segments[index + 1];
+    if (slot.startsWith('[') && slot.endsWith(']')) return true;
+  }
+  return false;
+}
+
+/// A raw typed edit that writes a slot's `m_Id` — the one field the whole-save
+/// repair rewrites, and therefore the only one it can collide with. Anything
+/// else inside a slot survives the repair untouched.
+@visibleForTesting
+bool isInventorySlotIdTypedEdit(Map<String, Object?> edit) {
+  if (!_typedEditPaths.contains(edit['path'])) return false;
+  final path = (edit['value'] as Map?)?['path'];
+  if (path is! List) return false;
+  final segments = path.whereType<String>().toList();
+  if (segments.length < 3 || segments.last != 'm_Id') return false;
+  final slot = segments[segments.length - 2];
+  return segments[segments.length - 3] == 'm_Slots' &&
+      slot.startsWith('[') &&
+      slot.endsWith(']');
+}
+
 bool _isInventoryTypedEdit(Map<String, Object?> edit) {
   if (edit['path'] != 'private.typed.setValue') return false;
   final value = edit['value'];

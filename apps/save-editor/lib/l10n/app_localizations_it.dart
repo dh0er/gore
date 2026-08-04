@@ -639,6 +639,57 @@ class AppLocalizationsIt extends AppLocalizations {
   String get rotationRoll => 'Rollio (roll)';
 
   @override
+  String get spawnPositionSection => 'Posizione di generazione (riferimento)';
+
+  @override
+  String get positionNotReadable =>
+      'Non è stato possibile leggere la posizione salvata di questo personaggio.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Il gioco ripristina la posizione di un PNG dal livello, non dal salvataggio: questi valori si possono leggere ma non modificare.';
+
+  @override
+  String get pickLocation => 'Scegli una posizione…';
+
+  @override
+  String get pickLocationDialogTitle => 'Scegli una posizione';
+
+  @override
+  String get applySpotRotation => 'Applica anche l’orientamento del punto';
+
+  @override
+  String get locationAreaOther => 'Altro';
+
+  @override
+  String get locationAreaCavalornValley => 'Valle di Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Foresta Orientale';
+
+  @override
+  String get locationAreaFogTower => 'Torre della Nebbia';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Mescolatori d\'erba illegali';
+
+  @override
+  String get locationAreaOrcArena => 'Arena degli orchi';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cimitero degli orchi';
+
+  @override
+  String get locationAreaShipwreck => 'Relitto';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Impossibile caricare il catalogo delle posizioni.';
+
+  @override
   String get invalid => 'Non valido';
 
   @override
@@ -2267,6 +2318,11 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'Caricamento della posizione del PNG non riuscito: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'Caricamento dell’inventario del PNG non riuscito: $details';
   }
@@ -2617,4 +2673,84 @@ class AppLocalizationsIt extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Slot dell’inventario danneggiati';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Questo salvataggio contiene $count slot dell’inventario il cui id non corrisponde più alla loro posizione: nel gioco, lasciare cadere un oggetto del genere ne rimuove un altro. La riparazione riscrive solo gli id: nessun oggetto viene aggiunto, rimosso o modificato. Al salvataggio viene creato un backup, come sempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Riparazione in coda — salva per applicarla.';
+
+  @override
+  String get slotRepairAction => 'Ripara';
+
+  @override
+  String get slotRepairDiscard => 'Annulla';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Una modifica diretta a uno slot dell’inventario è in coda insieme a un’operazione che occupa slot interi (riparazione, aggiunta o rimozione). La seconda sovrascriverebbe la prima: annullane una, poi salva di nuovo.';
+
+  @override
+  String get backupFactFile => 'File';
+
+  @override
+  String get renameBackupTooltip => 'Assegna un nome a questo backup';
+
+  @override
+  String get renameBackupTitle => 'Assegna un nome al backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Mostrato al posto del nome file $fileName. Lascia vuoto per rimuovere il nome; il file non viene rinominato.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Elimina questo backup';
+
+  @override
+  String get deleteBackupTitle => 'Elimina backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Eliminare «$name» ($fileName)? Il file viene rimosso dal disco e non può essere recuperato.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Elimina';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup eliminato: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Impossibile eliminare il backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Impossibile assegnare un nome al backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'La riparazione non è possibile al momento: questo salvataggio non può essere scritto.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup eliminato: $path — non è stato possibile rimuoverne il nome: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'La riparazione non è disponibile per questo salvataggio.';
 }

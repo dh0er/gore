@@ -639,6 +639,57 @@ class AppLocalizationsPt extends AppLocalizations {
   String get rotationRoll => 'Rotação (roll)';
 
   @override
+  String get spawnPositionSection => 'Posição de nascimento (referência)';
+
+  @override
+  String get positionNotReadable =>
+      'Não foi possível ler a posição guardada desta personagem.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'O jogo restaura a posição de um NPC a partir do nível e não do jogo guardado, pelo que estes valores podem ser lidos, mas não alterados.';
+
+  @override
+  String get pickLocation => 'Escolher local…';
+
+  @override
+  String get pickLocationDialogTitle => 'Escolher um local';
+
+  @override
+  String get applySpotRotation => 'Aplicar também a orientação do local';
+
+  @override
+  String get locationAreaOther => 'Outros';
+
+  @override
+  String get locationAreaCavalornValley => 'Vale de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Floresta do Leste';
+
+  @override
+  String get locationAreaFogTower => 'Torre da Névoa';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Misturadores ilegais de erva';
+
+  @override
+  String get locationAreaOrcArena => 'Arena dos Orcs';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cemitério dos Orcs';
+
+  @override
+  String get locationAreaShipwreck => 'Naufrágio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Não foi possível carregar o catálogo de locais.';
+
+  @override
   String get invalid => 'Inválido';
 
   @override
@@ -2262,6 +2313,11 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'O carregamento da posição do NPC falhou: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'O carregamento do inventário do NPC falhou: $details';
   }
@@ -2612,6 +2668,86 @@ class AppLocalizationsPt extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -3247,6 +3383,57 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get rotationRoll => 'Rotação (roll)';
+
+  @override
+  String get spawnPositionSection => 'Posição de spawn (referência)';
+
+  @override
+  String get positionNotReadable =>
+      'Não foi possível ler a posição salva deste personagem.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'O jogo restaura a posição de um NPC a partir da fase e não do jogo salvo, portanto esses valores podem ser lidos, mas não alterados.';
+
+  @override
+  String get pickLocation => 'Escolher local…';
+
+  @override
+  String get pickLocationDialogTitle => 'Escolher um local';
+
+  @override
+  String get applySpotRotation => 'Aplicar também a orientação do ponto';
+
+  @override
+  String get locationAreaOther => 'Outros';
+
+  @override
+  String get locationAreaCavalornValley => 'Vale de Cavalorn';
+
+  @override
+  String get locationAreaEastForest => 'Floresta do Leste';
+
+  @override
+  String get locationAreaFogTower => 'Torre da Névoa';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Misturadores ilegais de erva';
+
+  @override
+  String get locationAreaOrcArena => 'Arena dos Orcs';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cemitério dos Orcs';
+
+  @override
+  String get locationAreaShipwreck => 'Naufrágio';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Não foi possível carregar o catálogo de locais.';
 
   @override
   String get invalid => 'Inválido';
@@ -4871,6 +5058,11 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'O carregamento da posição do NPC falhou: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'O carregamento do inventário do NPC falhou: $details';
   }
@@ -5221,4 +5413,84 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Espaços de inventário danificados';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Este jogo salvo tem $count espaços de inventário cujo id já não corresponde à sua posição — no jogo, largar um desses itens remove outro. O reparo apenas reescreve os ids: nenhum item é adicionado, removido ou alterado. Ao salvar, um backup é criado, como sempre.';
+  }
+
+  @override
+  String get slotRepairQueued => 'Reparo na fila — salve para aplicar.';
+
+  @override
+  String get slotRepairAction => 'Reparar';
+
+  @override
+  String get slotRepairDiscard => 'Descartar';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get backupFactFile => 'Arquivo';
+
+  @override
+  String get renameBackupTooltip => 'Nomear este backup';
+
+  @override
+  String get renameBackupTitle => 'Nomear backup';
+
+  @override
+  String get renameBackupLabel => 'Nome';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Exibido no lugar do nome do arquivo $fileName. Deixe vazio para remover o nome; o arquivo em si não é renomeado.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Excluir este backup';
+
+  @override
+  String get deleteBackupTitle => 'Excluir backup';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Excluir “$name” ($fileName)? O arquivo é removido do disco e não pode ser recuperado.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Excluir';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup excluído: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Não foi possível excluir o backup: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Não foi possível nomear o backup: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'No momento não é possível reparar — este jogo salvo não pode ser gravado.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup excluído: $path — não foi possível remover o nome dele: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'O reparo não está disponível para este jogo salvo.';
 }

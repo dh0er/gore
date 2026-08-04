@@ -14,13 +14,13 @@ fn fixture_path() -> String {
 fn expected_default_evidence(cache: &[u8]) -> (&'static str, &'static str, &'static str) {
     match format!("{:x}", Sha256::digest(cache)).as_str() {
         "1018f1cfe6b99a650eecb33afb96752d691d2088ead27808971b812f04ecb4c2" => (
-            gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
-            gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            gore_generation::ROW_G1R_1_0_3.native_ancestry_profile_id,
+            gore_generation::ROW_G1R_1_0_3.gameplay_tag_float32_map_proof_id,
             "d02d0b0a7bd68cdae2d2e04b530fa959a94c2270cf178d406f64c474f1840312",
         ),
         "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385" => (
-            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
-            gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+            gore_generation::ROW_G1R_24169431.native_ancestry_profile_id,
+            gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id,
             "7b6864cf0e12a886b80b1ad574bb08a42c0afe0d6ae6831fd441a90dcefb304c",
         ),
         other => panic!("configured cache is not an exact supported pristine generation: {other}"),
@@ -37,6 +37,134 @@ fn decode_header_prints_values() {
         .stdout(contains("magic      : 0x9e377abe"))
         .stdout(contains("type_count : 7264"))
         .stdout(contains("d54f0ffb10c1054b99f11446a43ed5dc"));
+}
+
+/// A file that is not a module cache, shaped like the one people actually hit: `Binds.Cache` sits
+/// beside the real cache, carries no `CACHE_MAGIC` at 0x10, and holds the ASCII of an embedded
+/// script path where a Modules walk expects an `FString` length — `b"/Scr"` little-endian is the
+/// 1919111983 out of the original report.
+fn not_a_module_cache() -> Vec<u8> {
+    let mut bytes = vec![0u8; 16];
+    bytes.extend_from_slice(&0x0072_6579u32.to_le_bytes()); // 0x10: not CACHE_MAGIC
+    bytes.extend_from_slice(&0x0000_7fffu32.to_le_bytes()); // 0x14: a count nothing backs
+    bytes.extend_from_slice(b"/Script/Engine.Actor"); // 0x18: the FString length that lied
+    bytes
+}
+
+#[test]
+fn every_module_cache_subcommand_rejects_a_file_that_is_not_a_module_cache() {
+    // `Binds.Cache` sits beside the real cache and is the file people point `as` at by mistake.
+    // Every structural walker skips the outer header and re-reads the module count from 0x14, so
+    // `decompile` started a Modules walk at 0x18, read the ASCII of an embedded script path as an
+    // FString length, and blamed the container: `resolver: unexpected end of data at pos 28: needed
+    // 1919111983 more bytes`. The decoy below reproduces exactly that read. `decode-header` had
+    // parsed the magic all along but named neither the file nor a code, so it goes through the same
+    // gate rather than standing apart from it. The two patch arms are absent only because they
+    // validate their selector file first — they reach this gate through the same two helpers.
+    let dir = tempfile::tempdir().unwrap();
+    let decoy_path = dir.path().join("Binds.Cache");
+    std::fs::write(&decoy_path, not_a_module_cache()).unwrap();
+    let decoy = decoy_path.to_str().unwrap();
+    let out_path = dir.path().join("never-written.Cache");
+    let out = out_path.to_str().unwrap();
+    let outdir_path = dir.path().join("never-emitted");
+    let outdir = outdir_path.to_str().unwrap();
+
+    for args in [
+        &["as", "decode-header", decoy][..],
+        &["as", "info", decoy][..],
+        &["as", "walk", decoy][..],
+        &["as", "decompile", decoy][..],
+        &["as", "disasm", decoy][..],
+        &["as", "emit", decoy][..],
+        &["as", "emit-all", decoy, outdir][..],
+        &["as", "static-names", decoy][..],
+        &["as", "replace", decoy, decoy, "SomeModule", "-o", out][..],
+        &["as", "splice", decoy, decoy, "-o", out][..],
+        &["as", "extract", decoy, "SomeModule", "-o", out][..],
+        &["as", "extract-remap", decoy, "SomeModule", decoy, "-o", out][..],
+        &["as", "bytediff", decoy, decoy][..],
+        &["as", "default-sites", decoy][..],
+        &["as", "tag-map-sites", decoy][..],
+    ] {
+        let assertion = Command::cargo_bin("gore").unwrap().args(args).assert().failure();
+        let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+        let invocation = args.join(" ");
+        assert!(
+            stderr.contains("bad cache magic"),
+            "`gore {invocation}` must name the format mismatch, got: {stderr}"
+        );
+        assert!(
+            stderr.contains(decoy),
+            "`gore {invocation}` must name the offending file, got: {stderr}"
+        );
+        assert!(
+            !stderr.contains("unexpected end of data"),
+            "`gore {invocation}` still blames the container walk: {stderr}"
+        );
+    }
+    // Every `-o` arm above was handed the same destination, so this is what its name claims: a
+    // refusal that has already opened, created or truncated the output leaves the file behind.
+    assert!(
+        !out_path.exists(),
+        "a refused input must leave the -o path uncreated"
+    );
+    assert!(
+        !outdir_path.exists(),
+        "emit-all must refuse before it creates an output tree"
+    );
+}
+
+#[test]
+fn catalog_knowledge_rejects_a_script_cache_that_is_not_a_module_cache() {
+    // The same walkers, reached from another command family: `--script-cache` hands a user-chosen
+    // path to the knowledge-caption extractor, which runs `parse_modules` and `RefResolver::build`
+    // itself. Pointed at `Binds.Cache` it produced the identical invented length, worded as
+    // `extracting knowledge captions from '…': unexpected end of data at pos 28: needed 1919111983
+    // more bytes`. The case lives beside the `as` arms because the check it reaches is theirs.
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("UE4SS_ObjectDump.txt");
+    std::fs::write(
+        &dump_path,
+        "[0001] ASClass /Script/Angelscript.Topic_Diego_209799 [n: 1]\n",
+    )
+    .unwrap();
+    let decoy_path = dir.path().join("Binds.Cache");
+    std::fs::write(&decoy_path, not_a_module_cache()).unwrap();
+    let decoy = decoy_path.to_str().unwrap();
+    let out_path = dir.path().join("never-written.json");
+
+    let assertion = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "catalog",
+            "--kind",
+            "knowledge",
+            dump_path.to_str().unwrap(),
+            "--script-cache",
+            decoy,
+            "-o",
+            out_path.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("bad cache magic"),
+        "`gore catalog --kind knowledge --script-cache` must name the format mismatch, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(decoy),
+        "`gore catalog --kind knowledge --script-cache` must name the offending file, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("unexpected end of data"),
+        "`gore catalog --kind knowledge --script-cache` still blames the container walk: {stderr}"
+    );
+    assert!(
+        !out_path.exists(),
+        "a refused script cache must leave the catalog output uncreated"
+    );
 }
 
 #[test]
@@ -103,7 +231,7 @@ fn configured_hotfix_24169431_cli_loads_only_the_exact_profile_pair() {
         .assert()
         .success()
         .stderr(contains(
-            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+            gore_generation::ROW_G1R_24169431.native_ancestry_profile_id,
         ));
     let document: Value = serde_json::from_slice(&assertion.get_output().stdout)
         .expect("BuildID-24169431 default-sites JSON");
@@ -115,7 +243,7 @@ fn configured_hotfix_24169431_cli_loads_only_the_exact_profile_pair() {
         assert_eq!(site["selector"]["value_type"], "float32");
         assert_eq!(
             site["selector"]["ancestry_profile"],
-            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+            gore_generation::ROW_G1R_24169431.native_ancestry_profile_id
         );
     }
 }
@@ -810,4 +938,349 @@ fn configured_shipping_tag_map_patch_is_operand_only_rediscovered_and_fail_close
         .stdout(predicates::str::is_empty())
         .stderr(contains("without clobbering"));
     assert_eq!(std::fs::read(&output).unwrap(), patched);
+}
+
+// ---------------------------------------------------------------------------------------------
+// `gore as qualify`
+//
+// The command that is meant to make the next Steam patch a data change. What these cases are for
+// is the one input a green seal cannot vouch for: the USMAP is generated by UE4SS on the user's
+// machine, not shipped, so a dump from the previous build passes its own hash check while
+// describing the wrong game. Every case below is about refusing that rather than resolving it.
+// ---------------------------------------------------------------------------------------------
+
+/// A game tree with the three sealed files where every other command looks for them, plus
+/// `usmaps` reflection dumps under `ue4ss/`.
+struct QualifyFixture {
+    _temp: tempfile::TempDir,
+    game: std::path::PathBuf,
+    executable: Vec<u8>,
+    cache: Vec<u8>,
+    binds: Vec<u8>,
+}
+
+fn qualify_fixture(usmaps: usize) -> QualifyFixture {
+    let temp = tempfile::TempDir::new().unwrap();
+    let game = temp.path().join("Gothic 1 Remake");
+    let win64 = game.join("G1R/Binaries/Win64");
+    let script = game.join("G1R/Script");
+    let dumps = win64.join("ue4ss");
+    std::fs::create_dir_all(&dumps).unwrap();
+    std::fs::create_dir_all(&script).unwrap();
+
+    let cache = std::fs::read(fixture_path()).unwrap();
+    std::fs::write(script.join("PrecompiledScript_Shipping.Cache"), &cache).unwrap();
+    let binds = b"fixture Binds.Cache, deliberately not a parseable bind database".to_vec();
+    std::fs::write(script.join("Binds.Cache"), &binds).unwrap();
+
+    // The executable has to name the classes the dumps declare, because that naming is the only
+    // file-only tie between a reflection dump and the build it claims to describe, and it is what
+    // the command decides on. A fixture whose executable named none of them would exercise the
+    // "no dump fits" path in every case and never reach the interesting ones.
+    let mut executable = b"G1R-Win64-Shipping fixture; not a portable executable\0".to_vec();
+    for index in 0..usmaps {
+        let path = dumps.join(format!("G1R-5.4.3-{index}-fixture.usmap"));
+        gore_asset::test_fixture::write_valid_usmap(&path).unwrap();
+        if index == 0 {
+            let schemas =
+                gore_asset::SchemaDb::from_usmap(&std::fs::read(&path).unwrap()).unwrap();
+            for record in schemas.schemas() {
+                executable.extend_from_slice(record.name.as_bytes());
+                executable.push(0);
+            }
+        }
+    }
+    std::fs::write(win64.join("G1R-Win64-Shipping.exe"), &executable).unwrap();
+    QualifyFixture {
+        _temp: temp,
+        game,
+        executable,
+        cache,
+        binds,
+    }
+}
+
+fn qualify(fixture: &QualifyFixture) -> Command {
+    let mut command = Command::cargo_bin("gore").unwrap();
+    command
+        .env_remove("GORE_AS_BINDS")
+        .env_remove("GORE_AS_USMAP")
+        .env("GORE_DISABLE_GAME_AUTODETECT", "1")
+        .args(["as", "qualify", "--game"])
+        .arg(&fixture.game)
+        .arg("--json");
+    command
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[test]
+fn qualify_refuses_when_no_reflection_dump_can_be_tied_to_the_executable() {
+    // The failure this rules out is a qualification that shrugs. Without a dump there is no class
+    // graph, no ancestry and no profile ID, and the three generations sealed before this command
+    // existed were qualified by a person who had to remember that. A warning here reads as
+    // "mostly fine", and mostly fine is what puts a wrong digest in the table.
+    let fixture = qualify_fixture(0);
+    let assertion = qualify(&fixture)
+        .assert()
+        .failure()
+        .stderr(contains("AS_QUALIFY_USMAP"))
+        .stderr(contains("re-dump"));
+
+    // The refusal still emits its document: the three file seals are the cheapest inventory a
+    // maintainer has and they are correct whatever the dump situation turned out to be.
+    let document: Value = serde_json::from_slice(&assertion.get_output().stdout)
+        .expect("a refusing qualify run still emits its document");
+    assert_eq!(document["format"], "gore-as-qualify-v1");
+    assert_eq!(
+        document["inputs"]["executable"]["sha256"],
+        sha256_hex(&fixture.executable)
+    );
+    assert_eq!(
+        document["inputs"]["executable"]["byte_len"],
+        fixture.executable.len() as u64
+    );
+    assert_eq!(
+        document["inputs"]["shipping_cache"]["sha256"],
+        sha256_hex(&fixture.cache)
+    );
+    assert_eq!(
+        document["inputs"]["binds_cache"]["sha256"],
+        sha256_hex(&fixture.binds)
+    );
+    assert!(document["usmap_selection"]["sealed"].is_null());
+    assert_eq!(document["complete"], false);
+}
+
+#[test]
+fn qualify_refuses_to_choose_between_two_dumps_that_fit_this_build_equally_well() {
+    // The whole reason the command exists. Two dumps sit side by side in `ue4ss/` after an update —
+    // one re-dumped against this build, one left over — and the stale one still hashes to its own
+    // sealed value and parses perfectly. Picking either is picking at random, and the wrong pick
+    // produces a profile that is internally consistent over the previous game's class graph.
+    let fixture = qualify_fixture(2);
+    let assertion = qualify(&fixture)
+        .assert()
+        .failure()
+        .stderr(contains("refusing to choose"))
+        .stderr(contains("--usmap"));
+
+    let document: Value = serde_json::from_slice(&assertion.get_output().stdout).expect("document");
+    assert!(document["usmap_selection"]["sealed"].is_null());
+    assert_eq!(
+        document["usmap_selection"]["examined"]
+            .as_array()
+            .expect("both dumps are reported, not only the one that lost")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn qualify_names_every_row_value_it_could_not_derive_and_refuses_to_render_it() {
+    // A draft that quietly omitted a value would be the most dangerous thing this command could
+    // produce: twenty-four fields of the right types compile whatever they say, and a zero digest
+    // reads as a measurement. So an underived value renders as something that cannot be pasted,
+    // and the document names it twice — in `row.missing`, and in `unavailable` with the reason.
+    let fixture = qualify_fixture(1);
+    let assertion = qualify(&fixture).assert();
+    let document: Value = serde_json::from_slice(&assertion.get_output().stdout).expect("document");
+
+    assert_eq!(
+        document["usmap_selection"]["sealed"]["sha256"]
+            .as_str()
+            .map(str::len),
+        Some(64)
+    );
+    let missing: Vec<&str> = document["row"]["missing"]
+        .as_array()
+        .expect("missing fields")
+        .iter()
+        .map(|value| value.as_str().expect("a field name"))
+        .collect();
+    for field in [
+        "script_cache_mutation_stable_sha256",
+        "binds_field_map_sha256",
+        "binds_class_path_map_sha256",
+        "resolved_class_profile_sha256",
+        "native_ancestry_profile_id",
+    ] {
+        assert!(
+            missing.contains(&field),
+            "{field} is not reported as missing"
+        );
+    }
+    let literal = document["row"]["literal"].as_str().expect("a row literal");
+    assert!(
+        literal.contains(gore_generation::qualify::UNDERIVED),
+        "an underived value must render as something that does not compile"
+    );
+    assert!(
+        !literal.contains("sha256: hex(\"0000000000000000"),
+        "an underived digest must never render as zeroes"
+    );
+    assert!(
+        !document["unavailable"]
+            .as_array()
+            .expect("unavailable")
+            .is_empty(),
+        "every value the command could not reach has to carry the reason it could not"
+    );
+    assert!(
+        document["still_to_do"]
+            .as_array()
+            .expect("still to do")
+            .iter()
+            .any(|step| step.as_str().unwrap_or_default().contains("lib.rs")),
+        "qualifying is not admitting: the row still has to be added by a person"
+    );
+}
+
+/// Reads the installed game, writes nothing to it, and needs the real `.usmap` a UE4SS run leaves
+/// beside the executable. Set `GORE_AS_QUALIFY_GAME` to point somewhere other than the configured
+/// install.
+#[test]
+#[ignore = "local real-game proof; reads the installed game and never writes to it"]
+fn qualify_reproduces_the_sealed_values_of_the_generation_it_is_run_against() {
+    // The case that makes the command trustworthy rather than merely careful. Everything above
+    // proves `qualify` refuses correctly; this proves it *derives* correctly, by re-deriving an
+    // audited generation from the installed bytes and comparing against the row that generation is
+    // already sealed as. A derivation that is subtly wrong produces a seal that agrees with itself
+    // and describes nothing, and this is the only place that difference is visible.
+    let mut command = Command::cargo_bin("gore").unwrap();
+    command
+        .env_remove("GORE_AS_BINDS")
+        .env_remove("GORE_AS_USMAP");
+    if let Some(game) = std::env::var_os("GORE_AS_QUALIFY_GAME") {
+        command.arg("--game").arg(game);
+    }
+    let assertion = command.args(["as", "qualify", "--json"]).assert().success();
+    let document: Value = serde_json::from_slice(&assertion.get_output().stdout).expect("document");
+
+    let executable = document["inputs"]["executable"]["sha256"]
+        .as_str()
+        .expect("an executable seal");
+    let row = gore_generation::rows()
+        .iter()
+        .find(|row| gore_generation::qualify::hex_lower(&row.executable.sha256) == executable)
+        .expect("the installed game is one of the audited generations");
+    assert_eq!(document["already_audited_as"], row.id);
+
+    let field = |name: &str| -> String {
+        document["row"]["fields"]
+            .as_array()
+            .expect("row fields")
+            .iter()
+            .find(|entry| entry["field"] == name)
+            .and_then(|entry| entry["value"].as_str())
+            .unwrap_or_else(|| panic!("{name} was not derived"))
+            .to_owned()
+    };
+    assert_eq!(
+        field("usmap"),
+        format!(
+            "{} bytes / sha256 {}",
+            row.usmap.byte_len,
+            gore_generation::qualify::hex_lower(&row.usmap.sha256)
+        ),
+        "the dump this run sealed is not the dump the row is sealed against"
+    );
+    assert_eq!(
+        field("script_cache_guid"),
+        gore_generation::qualify::hex_lower(&row.script_cache_guid)
+    );
+    assert_eq!(
+        field("usmap_class_graph_sha256"),
+        gore_generation::qualify::hex_lower(&row.usmap_class_graph_sha256),
+        "the class-graph digest derived here disagrees with the one the admission gate checks"
+    );
+    assert_eq!(
+        field("gameplay_tag_float32_map_profile_sha256"),
+        gore_generation::qualify::hex_lower(&row.gameplay_tag_float32_map_profile_sha256)
+    );
+    assert_eq!(
+        field("native_ancestry_profile_id"),
+        row.native_ancestry_profile_id
+    );
+    assert_eq!(
+        field("gameplay_tag_float32_map_proof_id"),
+        row.gameplay_tag_float32_map_proof_id
+    );
+    assert_eq!(
+        field("scalar_default_operand_count"),
+        row.scalar_default_operand_count.to_string()
+    );
+    assert_eq!(
+        document["qualification"]["class_count"],
+        serde_json::json!(qualified_number(row.id, "class_count"))
+    );
+    assert_eq!(
+        document["qualification"]["gameplay_tag_float32_map_field_count"],
+        serde_json::json!(qualified_number(
+            row.id,
+            "gameplay_tag_float32_map_field_count"
+        ))
+    );
+    assert_eq!(
+        document["qualification"]["unresolved_fields_with_ancestry"],
+        0
+    );
+    assert!(
+        document["curated_records"]["all_reproduce"]
+            .as_bool()
+            .unwrap_or(false),
+        "every curated module must still emit the source the story catalog seals"
+    );
+
+    // Step 7 of `docs/reference/game-updates.md`, reproduced rather than remembered. The counts
+    // this run measures against the generation before it have to be the ones the artifact records,
+    // and none of them may have fallen — a digest is silent about a parser that dropped rows.
+    let previous = gore_generation::rows()
+        .iter()
+        .position(|candidate| candidate.id == row.id)
+        .and_then(|index| index.checked_sub(1))
+        .map(|index| gore_generation::rows()[index].id);
+    assert_eq!(document["compared_against"], serde_json::json!(previous));
+    let counts = document["counts"].as_array().expect("counts");
+    let count = |name: &str| -> &Value {
+        counts
+            .iter()
+            .find(|count| count["name"] == name)
+            .unwrap_or_else(|| panic!("{name} was not counted"))
+    };
+    assert_eq!(
+        count("scalar default windows")["observed"],
+        serde_json::json!(row.scalar_default_operand_count)
+    );
+    assert_eq!(
+        count("bridged classes")["observed"],
+        serde_json::json!(qualified_number(row.id, "class_count"))
+    );
+    assert_eq!(
+        count("USMAP tag-map field declarations")["observed"],
+        serde_json::json!(qualified_number(
+            row.id,
+            "gameplay_tag_float32_map_field_count"
+        ))
+    );
+    for entry in counts {
+        assert_eq!(
+            entry["fell"],
+            serde_json::json!(false),
+            "{} fell against the previous generation",
+            entry["name"]
+        );
+    }
+}
+
+fn qualified_number(row_id: &str, key: &str) -> u64 {
+    let (_, artifact) = gore_generation::QUALIFICATION_ARTIFACTS
+        .iter()
+        .find(|(id, _)| *id == row_id)
+        .expect("every row carries a committed qualification artifact");
+    serde_json::from_str::<Value>(artifact).expect("artifact JSON")[key]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{key} is not a number in {row_id}'s artifact"))
 }

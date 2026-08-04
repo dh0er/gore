@@ -66,6 +66,12 @@ pub fn run(
             if let Some(cache_path) = script_cache.as_ref() {
                 let cache = fs::read(cache_path)
                     .with_context(|| format!("reading script cache '{}'", cache_path.display()))?;
+                // The caption extractor walks the Modules TMap, which skips the outer header and
+                // re-reads the module count from 0x14. Pointed at `Binds.Cache` — the file that
+                // sits next to the real cache — it read the ASCII of an embedded script path as an
+                // FString length and reported `unexpected end of data at pos 28: needed 1919111983
+                // more bytes`, blaming a container parse for a wrong file.
+                crate::cmd::as_cache::validate_module_cache(cache_path, &cache, "AS_CACHE_INPUT")?;
                 let metadata =
                     gore_as::cache::knowledge_metadata::extract_knowledge_metadata(&cache)
                         .with_context(|| {

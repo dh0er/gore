@@ -19,6 +19,7 @@ use super::default_class_hierarchy::{
     DefaultClassAncestryProof as AncestryProof, DefaultClassHierarchy as ClassHierarchy,
     DefaultClassHierarchyError, DefaultClassIdentity as ClassIdentity,
 };
+use super::default_evidence::{audited_builds, NativeEvidenceStatus, ObservedBuild};
 use super::default_fingerprint::{combined_default_cache_fingerprint, scalar_default_cache_sha256};
 pub use super::default_patterns::DefaultPattern;
 use super::default_patterns::{
@@ -35,8 +36,10 @@ use super::walk_modules::FuncCodeKind;
 use super::walk_modules::{collect_function_bytecode_spans, module_region_end, FuncCodeSpan};
 
 pub const DEFAULT_SITE_SELECTOR_FORMAT: &str = "gore-as-default-site-v4";
-pub const DEFAULT_SITES_REPORT_FORMAT: &str = "gore-as-default-sites-v1";
-pub const DEFAULT_PATCH_REPORT_FORMAT: &str = "gore-as-default-patch-v1";
+/// Both report documents carry a required `evidence` object since v2. A consumer pinned to v1 saw
+/// counts with no stated cause and must be told the document grew a reason for them.
+pub const DEFAULT_SITES_REPORT_FORMAT: &str = "gore-as-default-sites-v2";
+pub const DEFAULT_PATCH_REPORT_FORMAT: &str = "gore-as-default-patch-v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawEncoding {
@@ -115,6 +118,10 @@ pub struct DefaultSiteReport {
     pub cache_sha256: String,
     pub sites: Vec<DefaultSite>,
     pub stats: DefaultSiteStats,
+    /// Why native field types and native ancestry were, or were not, available. Without this the
+    /// stats above are a number with no cause, which is what made an unaudited build read as a
+    /// broken tool.
+    pub evidence: NativeEvidenceStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +129,7 @@ pub struct DefaultPatch {
     pub bytes: Vec<u8>,
     pub before: DefaultSite,
     pub after: DefaultSite,
+    pub evidence: NativeEvidenceStatus,
 }
 
 #[derive(Debug, Error)]
@@ -236,6 +244,7 @@ struct InspectionContext {
     /// script enum's full module/namespace/name identity.
     script_enum_fields: HashMap<String, HashMap<String, TypeIdentity>>,
     script_cache_guid: [u8; 16],
+    evidence: NativeEvidenceStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +272,21 @@ pub fn default_sites_with_native_ancestry(
     native: Option<NativeApi>,
     ancestry: Option<DefaultNativeAncestry>,
 ) -> Result<DefaultSiteReport, DefaultSiteError> {
-    let context = InspectionContext::build(cache, native, ancestry)?;
+    default_sites_with_evidence(cache, native, ancestry, None)
+}
+
+/// Discover defaults and report why the sealed native evidence did or did not qualify.
+///
+/// `upstream` is what the caller already learned while resolving the evidence — which USMAP files
+/// it examined and what each one said. This layer cannot know that, and must never invent it, so a
+/// loader that searched the disk passes its own verdict in and it wins.
+pub fn default_sites_with_evidence(
+    cache: &[u8],
+    native: Option<NativeApi>,
+    ancestry: Option<DefaultNativeAncestry>,
+    upstream: Option<NativeEvidenceStatus>,
+) -> Result<DefaultSiteReport, DefaultSiteError> {
+    let context = InspectionContext::build(cache, native, ancestry, upstream)?;
     context.inspect(cache)
 }
 
@@ -295,7 +318,21 @@ pub fn patch_default_with_native_ancestry(
     expected: &[u8],
     replacement: &[u8],
 ) -> Result<DefaultPatch, DefaultPatchError> {
-    let context = InspectionContext::build(cache, native, ancestry)?;
+    patch_default_with_evidence(cache, native, ancestry, None, selector, expected, replacement)
+}
+
+/// Patch a default and report the same native-evidence verdict discovery reports. See
+/// `default_sites_with_evidence` for what `upstream` carries and why this layer will not guess it.
+pub fn patch_default_with_evidence(
+    cache: &[u8],
+    native: Option<NativeApi>,
+    ancestry: Option<DefaultNativeAncestry>,
+    upstream: Option<NativeEvidenceStatus>,
+    selector: &DefaultSiteSelector,
+    expected: &[u8],
+    replacement: &[u8],
+) -> Result<DefaultPatch, DefaultPatchError> {
+    let context = InspectionContext::build(cache, native, ancestry, upstream)?;
     let before_report = context.inspect(cache)?;
     let matches: Vec<_> = before_report
         .sites
@@ -393,6 +430,7 @@ pub fn patch_default_with_native_ancestry(
         bytes: output,
         before,
         after,
+        evidence: context.evidence.clone(),
     })
 }
 
@@ -401,6 +439,7 @@ impl InspectionContext {
         cache: &[u8],
         native: Option<NativeApi>,
         ancestry: Option<DefaultNativeAncestry>,
+        upstream: Option<NativeEvidenceStatus>,
     ) -> Result<Self, DefaultSiteError> {
         validate_cache(cache)?;
         let script_cache_guid = CacheHeader::parse(cache)
@@ -416,11 +455,28 @@ impl InspectionContext {
                     .map_err(|error| DefaultSiteError::NativeProfileFingerprint(error.to_string()))
             })
             .transpose()?;
-        let ancestry = ancestry.filter(|profile| {
+        // The profile either belongs to this exact cache or it proves nothing here. That was a
+        // `filter`, and a `filter` throws the reason away: the caller was left holding counts with
+        // no cause, and the only message a user saw named a USMAP path for a refusal the script
+        // cache had already decided. Keep the verdict.
+        let supports_cache = ancestry.as_ref().is_some_and(|profile| {
             mutation_stable_profile
                 .as_ref()
                 .is_some_and(|fingerprint| profile.supports_cache(&script_cache_guid, fingerprint))
         });
+        let evidence = match (upstream, ancestry.as_ref()) {
+            // A loader that searched the disk knows which files it examined; this layer does not.
+            (Some(status), _) => status,
+            (None, Some(profile)) if supports_cache => {
+                NativeEvidenceStatus::qualified(profile.profile_id(), None)
+            }
+            (None, Some(_)) => NativeEvidenceStatus::UnsupportedGeneration {
+                observed: ObservedBuild::from_script_cache(script_cache_guid, cache),
+                audited: audited_builds(),
+            },
+            (None, None) => NativeEvidenceStatus::NotRequested,
+        };
+        let ancestry = if supports_cache { ancestry } else { None };
         let hierarchy = ClassHierarchy::build(&modules, ancestry)?;
         let mut refs = RefResolver::build(cache).map_err(wire_error)?;
         let script_enum_fields = proven_script_enum_fields(&modules, &refs);
@@ -430,6 +486,7 @@ impl InspectionContext {
             hierarchy,
             script_enum_fields,
             script_cache_guid,
+            evidence,
         })
     }
 
@@ -518,6 +575,7 @@ impl InspectionContext {
             cache_sha256: sha256_hex(cache),
             sites,
             stats,
+            evidence: self.evidence.clone(),
         })
     }
 
@@ -1131,7 +1189,7 @@ mod tests {
         assert_eq!(
             hierarchy.proves_ancestry("UApple", "UNativeOwner"),
             Some(AncestryProof::Native(
-                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+                gore_generation::GENERATION_ROWS[0].native_ancestry_profile_id
             ))
         );
 
@@ -1142,7 +1200,7 @@ mod tests {
             field: "Value".into(),
             value_type: "int".into(),
             ancestry_profile: Some(
-                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID.into(),
+                gore_generation::GENERATION_ROWS[0].native_ancestry_profile_id.into(),
             ),
         };
         let mut stale = current.clone();

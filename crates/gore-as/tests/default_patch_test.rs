@@ -786,6 +786,159 @@ fn configured_real_cache_spans_match_legacy_walk_and_payload_bounds() {
     assert_spans_match_legacy(&bytes, &path.to_string_lossy());
 }
 
+/// What one audited generation's Shipping cache yields, for the counts a
+/// [`gore_generation::GenerationRow`] does not itself carry. Keyed by row id, because these are
+/// build-shaped numbers: as bare literals in the two goldens below they were assertions about
+/// whichever build the developer happened to have installed, and the third audited generation is
+/// where "the build these numbers came from" and "the build on this machine" stopped being one
+/// build.
+struct DefaultCensus {
+    generation: &'static str,
+    /// `qualifications/<id>.json` → `class_count`: classes the Binds/USMAP join bridges.
+    bridged_classes: usize,
+    init_functions: usize,
+    /// `__InitDefaults` spans by shape. These two shapes are the whole population.
+    plain_initializers: usize,
+    ufunction_initializers: usize,
+    branched_init_functions: usize,
+    /// Counted *without* a sealed native-ancestry profile, which is how the golden below inspects.
+    /// Supplied with one, every audited generation resolves every field and this is zero instead.
+    unresolved_fields: usize,
+    unresolved_types: usize,
+    ambiguous_fields: usize,
+}
+
+/// One entry per row of `gore_generation::rows()`;
+/// `every_audited_generation_has_a_recorded_default_census` is what keeps that true.
+static DEFAULT_CENSUS: [DefaultCensus; 3] = [
+    DefaultCensus {
+        generation: "g1r-steam-1.0.3",
+        bridged_classes: 6_572,
+        init_functions: 29_951,
+        plain_initializers: 3_248,
+        ufunction_initializers: 26_703,
+        branched_init_functions: 1,
+        unresolved_fields: 5_197,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+    // Every count is the previous row's, and that is transcribed rather than assumed:
+    // `qualifications/g1r-steam-24169431.json` names
+    // `configured_real_cache_exposes_known_direct_default_sites` as the witness for this
+    // generation's `direct_windows`, and that golden cannot have witnessed anything for this build
+    // without passing, in the same run, the initializer-shape and stats counts it asserts beside
+    // it. Steam replaced only the executable and the script cache here, and the two caches are the
+    // same length carrying the same 26,339 scalar and 1,432 tag operands.
+    DefaultCensus {
+        generation: "g1r-steam-24169431",
+        bridged_classes: 6_572,
+        init_functions: 29_951,
+        plain_initializers: 3_248,
+        ufunction_initializers: 26_703,
+        branched_init_functions: 1,
+        unresolved_fields: 5_197,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+    // Measured against the 2026-07-31 update. The script cache grew: 54 more initializers and 60
+    // more scalar default windows, 13 of which have an owner the cache alone cannot name. Nothing
+    // fell. The 13 are not a loss either — a sealed ancestry profile resolves every one of them,
+    // which is what the zero in the generation golden at the end of this file says.
+    DefaultCensus {
+        generation: "g1r-steam-24340829",
+        bridged_classes: 6_582,
+        init_functions: 30_005,
+        plain_initializers: 3_250,
+        ufunction_initializers: 26_755,
+        branched_init_functions: 1,
+        unresolved_fields: 5_210,
+        unresolved_types: 1,
+        ambiguous_fields: 1,
+    },
+];
+
+fn default_census(generation: &str) -> Option<&'static DefaultCensus> {
+    DEFAULT_CENSUS
+        .iter()
+        .find(|census| census.generation == generation)
+}
+
+/// The audited generation a configured cache belongs to, having named the build when the table
+/// does not claim it. The cache's first sixteen bytes are the whole resolution: generation GUIDs
+/// are pairwise distinct, so nothing else has to be read to know which build this is.
+fn audited_generation(
+    cache: &[u8],
+    path: &Path,
+) -> Option<&'static gore_generation::GenerationRow> {
+    let guid = CacheHeader::parse(cache)
+        .expect("parse configured cache header")
+        .hash;
+    let row = gore_generation::row_for_script_cache_guid(&guid);
+    if row.is_none() {
+        eprintln!(
+            "skip: {} carries script-cache GUID {}, which no audited generation claims",
+            path.display(),
+            gore_as::cache::default_patch::encode_hex(&guid)
+        );
+    }
+    row
+}
+
+/// The `.usmap` in `directory` that is the dump a generation sealed. UE4SS writes its dump into the
+/// game tree and never removes the one before it, so the directory accumulates every dump the
+/// machine has taken and a stale one passes its own hash check while describing a previous build.
+/// The row's digest is the only thing that says which file describes *this* one.
+fn sealed_usmap_in(
+    directory: &Path,
+    seal: &gore_generation::FileSeal,
+) -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<_> = std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("usmap"))
+        })
+        .collect();
+    candidates.sort();
+    candidates.into_iter().find(|path| {
+        std::fs::read(path).is_ok_and(|bytes| {
+            bytes.len() as u64 == seal.byte_len
+                && <[u8; 32]>::from(Sha256::digest(&bytes)) == seal.sha256
+        })
+    })
+}
+
+#[test]
+fn every_audited_generation_has_a_recorded_default_census() {
+    // The two configured goldens below look their expectations up by row id, so a generation the
+    // table gained and this file did not would make them skip — on the one machine that could have
+    // run them, for the build that just shipped, saying nothing. This is the half of that guard
+    // that does not need the game installed to fail.
+    for row in gore_generation::rows() {
+        assert!(
+            default_census(row.id).is_some(),
+            "{} is an audited generation with no recorded default census; measure it and add the \
+             entry, or the configured goldens quietly stop covering the build people are running",
+            row.id
+        );
+    }
+    for census in &DEFAULT_CENSUS {
+        assert!(
+            gore_generation::row_by_id(census.generation).is_some(),
+            "a default census is recorded for {}, which is not an audited generation",
+            census.generation
+        );
+        assert_eq!(
+            census.plain_initializers + census.ufunction_initializers,
+            census.init_functions,
+            "{}: the two initializer shapes must be the whole initializer population",
+            census.generation
+        );
+    }
+}
+
 #[test]
 fn configured_real_cache_exposes_known_direct_default_sites() {
     let Some(path) = std::env::var_os("GORE_AS_DEFAULT_CACHE") else {
@@ -794,6 +947,13 @@ fn configured_real_cache_exposes_known_direct_default_sites() {
     };
     let path = std::path::PathBuf::from(path);
     let bytes = std::fs::read(&path).expect("read configured real cache");
+    // What this used to assert was one generation's counts against whatever cache the environment
+    // pointed at, so following the re-qualification checklist — which is what sets this variable —
+    // turned the golden red on the build it was meant to qualify.
+    let Some(row) = audited_generation(&bytes, &path) else {
+        return;
+    };
+    let census = default_census(row.id).expect("every audited generation has a recorded census");
     let refs = gore_as::cache::refs::RefResolver::build(&bytes).expect("build refs");
     let owner = refs
         .type_by_id(0x0400_121d)
@@ -846,11 +1006,15 @@ fn configured_real_cache_exposes_known_direct_default_sites() {
     assert_eq!(initializer_shapes.len(), 2, "{initializer_shapes:#?}");
     assert_eq!(
         initializer_shapes.get("ClassMethod/table=true/traits=0x0/params=0/ret=0x52"),
-        Some(&3_248)
+        Some(&census.plain_initializers),
+        "{} initializer shapes: {initializer_shapes:#?}",
+        row.id
     );
     assert_eq!(
         initializer_shapes.get("ClassMethod/table=true/traits=0x20/params=0/ret=0x52"),
-        Some(&26_703)
+        Some(&census.ufunction_initializers),
+        "{} initializer shapes: {initializer_shapes:#?}",
+        row.id
     );
     let apple_span = all_spans
         .into_iter()
@@ -870,16 +1034,43 @@ fn configured_real_cache_exposes_known_direct_default_sites() {
         .collect();
     assert!(apple.contains(&("m_Value", "4")), "{apple:?}");
     assert!(apple.contains(&("m_MaxStack", "99")), "{apple:?}");
-    assert_eq!(report.stats.init_functions, 29_951);
-    assert_eq!(report.stats.branched_init_functions, 1);
-    assert_eq!(report.stats.direct_windows, 26_339);
+    assert_eq!(
+        report.stats.init_functions, census.init_functions,
+        "{} initializer population",
+        row.id
+    );
+    assert_eq!(
+        report.stats.branched_init_functions, census.branched_init_functions,
+        "{} branched initializers",
+        row.id
+    );
+    // The one count here the generation table already carries, so it is read off the row rather
+    // than recorded twice: a scalar default window is exactly what the row seals as
+    // `scalar_default_operand_count`, and the profile ID every selector quotes is derived from it.
+    assert_eq!(
+        report.stats.direct_windows, row.scalar_default_operand_count,
+        "{} seals {} scalar default windows",
+        row.id, row.scalar_default_operand_count
+    );
     // Native inheritance beyond the first native base is not present in the script cache.
     // Those windows remain visible in `direct_windows` but are deliberately not editable until
     // a separately sealed native-ancestry profile can prove target -> declaring owner.
-    assert_eq!(report.stats.unresolved_fields, 5_197);
-    assert_eq!(report.stats.unresolved_types, 1);
+    assert_eq!(
+        report.stats.unresolved_fields, census.unresolved_fields,
+        "{} windows whose declaring owner the cache alone cannot name",
+        row.id
+    );
+    assert_eq!(
+        report.stats.unresolved_types, census.unresolved_types,
+        "{} unresolved types",
+        row.id
+    );
     // Ten formerly ambiguous groups are wholly inside the unproven native-grandparent set.
-    assert_eq!(report.stats.ambiguous_fields, 1);
+    assert_eq!(
+        report.stats.ambiguous_fields, census.ambiguous_fields,
+        "{} ambiguous fields",
+        row.id
+    );
     // Sword derives from the unparsed native `USword1H`; its owners UItemDefinition and
     // UWeaponDefinition are native grandparents, so both formerly known raw windows now fail the
     // required ancestry proof until a sealed native hierarchy profile is supplied.
@@ -928,38 +1119,74 @@ fn configured_real_cache_exposes_known_direct_default_sites() {
 
 #[test]
 fn configured_real_default_ancestry_profile_is_sealed() {
+    // The profile is a join of three files, and the USMAP is the one of them Steam does not ship:
+    // it is dumped on the machine, the previous dump stays beside the new one, and a stale dump
+    // passes its own hash check while describing the build before this. Defaulting to a filename —
+    // which this did, to the 168781 dump, long after 171261 existed — is the one way every seal
+    // below can be green over the wrong class graph.
     let Some(path) = std::env::var_os("GORE_AS_DEFAULT_CACHE") else {
         eprintln!("skip: set GORE_AS_DEFAULT_CACHE");
         return;
     };
     let path = std::path::PathBuf::from(path);
     let bytes = std::fs::read(&path).expect("read configured real cache");
+    let Some(row) = audited_generation(&bytes, &path) else {
+        return;
+    };
+    let census = default_census(row.id).expect("every audited generation has a recorded census");
     let semantic_sha = gore_as::cache::default_patch::default_profile_cache_sha256(&bytes)
         .expect("compute default-profile cache identity");
     eprintln!(
         "default-profile-cache-sha256={}",
         gore_as::cache::default_patch::encode_hex(&semantic_sha)
     );
-    let binds = gore_as::cache::binds::NativeApi::load(
-        &path.parent().expect("Script directory").join("Binds.Cache"),
-    )
-    .expect("load sibling Binds.Cache");
-    let usmap = std::env::var_os("GORE_AS_USMAP")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            path.parent()
-                .expect("Script directory")
-                .parent()
-                .expect("G1R directory")
-                .join("Binaries/Win64/ue4ss/G1R-5.4.3-168781-272ce2f8.usmap")
-        });
+    let script_dir = path.parent().expect("Script directory");
+    let binds = gore_as::cache::binds::NativeApi::load(&script_dir.join("Binds.Cache"))
+        .expect("load sibling Binds.Cache");
+    let ue4ss = script_dir
+        .parent()
+        .expect("G1R directory")
+        .join("Binaries/Win64/ue4ss");
+    let usmap = match std::env::var_os("GORE_AS_USMAP") {
+        Some(configured) => std::path::PathBuf::from(configured),
+        None => {
+            let Some(sealed) = sealed_usmap_in(&ue4ss, &row.usmap) else {
+                eprintln!(
+                    "skip: no .usmap in {} is the dump {} sealed — re-dump it with UE4SS, or set \
+                     GORE_AS_USMAP to it",
+                    ue4ss.display(),
+                    row.id
+                );
+                return;
+            };
+            sealed
+        }
+    };
     let usmap_bytes = std::fs::read(&usmap).expect("read configured USMAP");
     let schemas = gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse configured USMAP");
     let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
         &binds, &bytes, &schemas,
     )
     .expect("build sealed ancestry profile");
-    assert_eq!(profile.class_count(), 6_572);
+    assert_eq!(
+        profile.class_count(),
+        census.bridged_classes,
+        "{} bridges {} classes",
+        row.id,
+        census.bridged_classes
+    );
+    assert_eq!(
+        profile.profile_id(),
+        row.native_ancestry_profile_id,
+        "{} derived a profile ID its own row does not publish",
+        row.id
+    );
+    assert_eq!(
+        profile.gameplay_tag_float32_map_proof_id(),
+        row.gameplay_tag_float32_map_proof_id,
+        "{} derived a tag-map proof ID its own row does not publish",
+        row.id
+    );
     assert!(
         gore_as::cache::default_ancestry::is_supported_gameplay_tag_float32_proof_pair(
             profile.profile_id(),
@@ -978,27 +1205,14 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
     let exe = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
     let cache_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
     let binds_path = game.join("G1R/Script/Binds.Cache");
+    // Named, never discovered. This defaulted to whatever the single `.usmap` in the directory was
+    // and asserted there was one, which made the golden's outcome a fact about how many times the
+    // machine had run UE4SS: the 2026-07-31 re-dump puts a second file beside this generation's
+    // and turned the count into a panic. The seal below is what proves the file, so the only job
+    // left for the default is to name the dump this generation was audited against.
     let usmap = std::env::var_os("GORE_AS_HOTFIX_24169431_USMAP")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            let directory = game.join("G1R/Binaries/Win64/ue4ss");
-            let mut candidates: Vec<_> = std::fs::read_dir(&directory)
-                .expect("read configured hotfix ue4ss directory")
-                .map(|entry| entry.expect("read ue4ss entry").path())
-                .filter(|path| {
-                    path.extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("usmap"))
-                })
-                .collect();
-            candidates.sort();
-            assert_eq!(
-                candidates.len(),
-                1,
-                "hotfix qualification requires one USMAP"
-            );
-            candidates.remove(0)
-        });
+        .unwrap_or_else(|| game.join("G1R/Binaries/Win64/ue4ss/G1R-5.4.3-168781-272ce2f8.usmap"));
 
     fn stream_seal(path: &Path) -> (u64, String) {
         let mut file = std::fs::File::open(path).expect("open sealed generation file");
@@ -1082,11 +1296,11 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
     assert_eq!(profile.class_count(), 6_572);
     assert_eq!(
         profile.profile_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+        gore_generation::ROW_G1R_24169431.native_ancestry_profile_id
     );
     assert_eq!(
         profile.gameplay_tag_float32_map_proof_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
     );
 
     let tag_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(&cache, &profile)
@@ -1094,11 +1308,11 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
     assert_eq!(tag_report.site_count(), 1_432);
     assert_eq!(
         tag_report.ancestry_profile_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID
+        gore_generation::ROW_G1R_24169431.native_ancestry_profile_id
     );
     assert_eq!(
         tag_report.map_proof_id(),
-        gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+        gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
     );
 
     let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
@@ -1149,9 +1363,210 @@ fn configured_hotfix_24169431_profile_and_item_field_matrix_are_exact() {
         if let Some(ancestry_profile) = site.selector.ancestry_profile.as_deref() {
             assert_eq!(
                 ancestry_profile,
-                gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
+                gore_generation::ROW_G1R_24169431.native_ancestry_profile_id,
                 "{field}"
             );
+            *native_counts.entry(field).or_insert(0usize) += 1;
+        }
+        assert!(
+            target_fields
+                .entry((site.selector.module.clone(), site.selector.class.clone()))
+                .or_default()
+                .insert(site.selector.field.clone()),
+            "duplicate qualified target field: {}.{}.{}",
+            site.selector.module,
+            site.selector.class,
+            site.selector.field
+        );
+    }
+    assert_eq!(counts, expected_counts);
+    assert_eq!(native_counts, expected_native_counts);
+    assert_eq!(target_fields.len(), 918);
+
+    let mut combinations: BTreeMap<Vec<String>, usize> = BTreeMap::new();
+    for fields in target_fields.values() {
+        *combinations
+            .entry(fields.iter().cloned().collect())
+            .or_default() += 1;
+    }
+    assert_eq!(
+        combinations,
+        BTreeMap::from([
+            (vec!["m_Mass".into()], 2usize),
+            (vec!["m_MaxStack".into()], 10usize),
+            (vec!["m_MaxStack".into(), "m_Value".into()], 631usize),
+            (vec!["m_Value".into()], 166usize),
+            (vec!["m_Value".into(), "m_Weight".into()], 109usize),
+        ])
+    );
+}
+
+#[test]
+fn configured_build_24340829_profile_and_item_field_matrix_are_exact() {
+    // The qualification run for the 2026-07-31 update, and the first one where all four sealed
+    // files moved at once — so unlike the hotfix above, not one of this generation's five
+    // parser-output digests is inherited from a predecessor. Half of what is asserted here is
+    // counts rather than digests, and deliberately: a digest cannot tell you a parser silently
+    // dropped rows, so the counts are what says the ten added bridged classes and sixty added
+    // default windows are additions and that nothing fell out under them. The numbers are written
+    // down in `crates/gore-generation/qualifications/g1r-steam-24340829.json`.
+    let Some(game) = std::env::var_os("GORE_AS_BUILD_24340829_GAME") else {
+        eprintln!("skip: set GORE_AS_BUILD_24340829_GAME");
+        return;
+    };
+    let game = std::path::PathBuf::from(game);
+    let exe = game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+    let cache_path = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+    let binds_path = game.join("G1R/Script/Binds.Cache");
+    // Named, never discovered. The previous generation's dump still sits beside this one and still
+    // hashes to its own seal, so "the only USMAP in the directory" has stopped being a rule that
+    // can hold — and choosing the wrong one is the single way every seal below can be green and
+    // still describe a build nobody is running.
+    let usmap = std::env::var_os("GORE_AS_BUILD_24340829_USMAP")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| game.join("G1R/Binaries/Win64/ue4ss/G1R-5.4.3-171261-272ce2f8.usmap"));
+
+    fn stream_seal(path: &Path) -> (u64, String) {
+        let mut file = std::fs::File::open(path).expect("open sealed generation file");
+        let length = file.metadata().expect("read sealed file metadata").len();
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0u8; 1024 * 1024];
+        loop {
+            let read = file.read(&mut buffer).expect("hash sealed generation file");
+            if read == 0 {
+                break;
+            }
+            hash.update(&buffer[..read]);
+        }
+        (
+            length,
+            gore_as::cache::default_patch::encode_hex(&hash.finalize()),
+        )
+    }
+
+    assert_eq!(
+        stream_seal(&exe),
+        (
+            171_787_776,
+            "ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&cache_path),
+        (
+            124_352_336,
+            "36124f1cdd4caae555423581aa40631af0ac80d5cef42528382739f932b0e728".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&binds_path),
+        (
+            5_908_587,
+            "854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5".into()
+        )
+    );
+    assert_eq!(
+        stream_seal(&usmap),
+        (
+            2_487_358,
+            "67b9e645bcfd9f4f360e11f611da92896cf7d6280f2747ad0c8bbe7542f024c7".into()
+        )
+    );
+
+    let row = gore_generation::row_by_id("g1r-steam-24340829").expect("audited generation row");
+    let cache = std::fs::read(&cache_path).expect("read Shipping cache");
+    assert_eq!(
+        CacheHeader::parse(&cache).expect("parse header").hash,
+        [
+            0x7d, 0xd3, 0x6f, 0x66, 0x63, 0xd3, 0x43, 0x40, 0xa6, 0x39, 0x35, 0x8c, 0x73, 0xf8,
+            0xe9, 0x1e,
+        ]
+    );
+    let binds_bytes = std::fs::read(&binds_path).expect("read Binds");
+    let binds =
+        gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes).expect("parse sealed Binds");
+    let usmap_bytes = std::fs::read(&usmap).expect("read USMAP");
+    let schemas = gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse sealed USMAP");
+    let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+        &binds, &cache, &schemas,
+    )
+    .expect("derive exact BuildID-24340829 profile");
+    // 6572 on both earlier generations. The join gained the twelve native classes this USMAP added
+    // — the new Binds.Cache names all twelve, which is the file-only evidence that this dump and
+    // this build belong together — and lost two entries the previous Binds resolved and this one
+    // no longer names. Which two is not decidable without the previous Binds.Cache, and it does
+    // not have to be: neither is one of the four classes the USMAP dropped.
+    assert_eq!(profile.class_count(), 6_582);
+    assert_eq!(profile.profile_id(), row.native_ancestry_profile_id);
+    assert_eq!(
+        profile.gameplay_tag_float32_map_proof_id(),
+        row.gameplay_tag_float32_map_proof_id
+    );
+
+    let tag_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(&cache, &profile)
+        .expect("inspect sealed tag maps");
+    assert_eq!(tag_report.site_count(), 1_432);
+    assert_eq!(
+        tag_report.ancestry_profile_id(),
+        row.native_ancestry_profile_id
+    );
+    assert_eq!(
+        tag_report.map_proof_id(),
+        row.gameplay_tag_float32_map_proof_id
+    );
+
+    let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+        &cache,
+        Some(
+            gore_as::cache::binds::NativeApi::from_bytes(&binds_bytes)
+                .expect("reparse sealed Binds"),
+        ),
+        Some(profile),
+    )
+    .expect("inspect defaults with sealed ancestry");
+    // 26339 on both earlier generations. The sixty added windows are what the script cache grew;
+    // the ancestry still places every one of them, which is what zero unresolved fields says. It
+    // is also the assertion that makes the sealed Binds field-type map load-bearing here, since
+    // that map is what types a window whose owner the cache alone cannot name.
+    assert_eq!(report.stats.direct_windows, 26_399);
+    assert_eq!(report.stats.unresolved_fields, 0);
+
+    let wanted_types = BTreeMap::from([
+        ("m_Value", "int"),
+        ("m_MaxStack", "int"),
+        ("m_Weight", "float32"),
+        ("m_Mass", "float32"),
+    ]);
+    let expected_counts = BTreeMap::from([
+        ("m_Value", 906usize),
+        ("m_MaxStack", 641usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let expected_native_counts = BTreeMap::from([
+        ("m_Value", 583usize),
+        ("m_MaxStack", 317usize),
+        ("m_Weight", 109usize),
+        ("m_Mass", 2usize),
+    ]);
+    let mut counts = BTreeMap::new();
+    let mut native_counts = BTreeMap::new();
+    let mut target_fields: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for site in report
+        .sites
+        .iter()
+        .filter(|site| wanted_types.contains_key(site.selector.field.as_str()))
+    {
+        let field = site.selector.field.as_str();
+        assert_eq!(site.selector.field_owner, "UItemDefinition", "{field}");
+        assert_eq!(
+            site.selector.value_type,
+            *wanted_types.get(field).expect("known requested field"),
+            "{field}"
+        );
+        *counts.entry(field).or_insert(0usize) += 1;
+        if let Some(ancestry_profile) = site.selector.ancestry_profile.as_deref() {
+            assert_eq!(ancestry_profile, row.native_ancestry_profile_id, "{field}");
             *native_counts.entry(field).or_insert(0usize) += 1;
         }
         assert!(

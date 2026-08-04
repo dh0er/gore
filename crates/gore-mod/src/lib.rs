@@ -35,6 +35,9 @@ const MAX_DEPLOY_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_AUDIO_WAV_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SCRIPT_MINI_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_TEXTURE_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// A loose game file is opaque bytes we never decode, so the cap only has to keep one bundle
+/// payload from exhausting the disk it is staged on. Nothing about the format is assumed.
+const MAX_LOOSE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PRISTINE_PATCH_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_UE4SS_TREE_ENTRIES: u64 = 250_000;
 const MAX_UE4SS_FILE_BYTES: u64 = 512 * 1024 * 1024;
@@ -86,6 +89,23 @@ pub struct AudioReplacement {
 pub struct TextureReplacement {
     pub asset: String,      // e.g. "/Game/UI/Textures/Common/T_HardwareCursor"
     pub image_path: String, // a PNG on disk
+}
+
+/// One LOOSE game-file replacement: put `source_path`'s bytes in place of the file the game reads
+/// from disk at `game_path`.
+///
+/// `game_path` is forward-slash and relative to the game install root (the directory that contains
+/// `G1R`), for example `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. This is the escape hatch for
+/// content Unreal loads from the filesystem rather than from the IoStore containers or an archive,
+/// and it is deliberately REPLACE-only: the target must already exist, so undeploy can put the
+/// original back from the `*.gore-bak` snapshot the same way it does for the .lcache and the banks.
+/// Only a bounded set of destinations is accepted — see the guide's bundle page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LooseFileReplacement {
+    /// Game-root-relative, forward-slash destination, e.g. `G1R/Content/Slate/.../Normal.PNG`.
+    pub game_path: String,
+    /// Replacement file on disk. Resolved relative to the build spec's own directory.
+    pub source_path: String,
 }
 
 /// One AngelScript module mod: splice (`op = "add"`) or replace (`op = "edit"`) the compiled
@@ -279,6 +299,15 @@ pub struct BuildSpec {
     pub audio: Vec<AudioReplacement>,
     #[serde(default)]
     pub texture: Vec<TextureReplacement>,
+    /// Loose game files to replace on disk — reaches content living outside the IoStore containers
+    /// and the voice/FMOD archives, but only where no mounted pak already carries the same path.
+    #[serde(default)]
+    pub files: Vec<LooseFileReplacement>,
+    /// The same destinations, claimed from an ADDITIVE `~mods` pak instead of overwritten on disk.
+    /// Which mechanism a bundle uses is declared here and never inferred from the install: a
+    /// bundle that switched routes per machine would owe a different undeploy on every machine.
+    #[serde(default)]
+    pub pak_files: Vec<LooseFileReplacement>,
     #[serde(default)]
     pub scripts: Vec<ScriptModule>,
     /// Authored AngelScript topics to register at the target conversation's natural UI boundary.
@@ -315,6 +344,15 @@ pub enum Component {
     /// Texture patch dir at `path` (manifest.json + pngs); deploy cooks + packs a Zen triplet
     /// into `~mods` for `assets`. Additive — no in-place game-file patch, no `*.gore-bak`.
     TexturePatch { path: String, assets: Vec<String> },
+    /// Loose-file payloads at `path` (manifest.json + opaque payload files); deploy replaces each
+    /// game-root-relative destination in `targets` in place, with a `*.gore-bak` backup.
+    /// Replace-only: every target must already exist in the install.
+    FilePatch { path: String, targets: Vec<String> },
+    /// Loose-file payloads at `path` (manifest.json + opaque payload files); deploy packs them into
+    /// ONE additive `~mods` pak that claims each game-root-relative destination in `targets` from
+    /// the pak filesystem. Additive — no in-place write and no `*.gore-bak`; undeploy deletes the
+    /// pak. Unlike [`Component::FilePatch`] the destinations need not exist on disk.
+    PakFilePatch { path: String, targets: Vec<String> },
     /// AngelScript mini-caches at `path` (manifest.json + `*.cache`); deploy splices/replaces
     /// them into `PrecompiledScript_Shipping.Cache` in place, with a `*.gore-bak` backup.
     AngelScriptPatch { path: String },
@@ -334,6 +372,19 @@ pub struct ModManifest {
 pub struct Bundle {
     pub files: Files,
     pub manifest: ModManifest,
+}
+
+// Hand-written because a bundle carries whole WAVs and Oggs: the derive would dump every payload
+// byte into the panic message of a test that expected a build to fail and got one that succeeded.
+// The name and the staged paths are what identifies a bundle; the bytes never are.
+impl std::fmt::Debug for Bundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Bundle")
+            .field("mod", &self.manifest.mod_meta.name)
+            .field("components", &self.manifest.components.len())
+            .field("files", &self.files.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 enum VoiceBuildPayload {
@@ -502,8 +553,34 @@ pub fn build_sealed_voice_bundle(
 }
 
 // ── Build ──────────────────────────────────────────────────────────────────────
-/// Assemble the in-memory bundle (files + manifest) from a declarative spec.
+/// Resolve one authored asset path against `base`: an absolute path is used as written, a relative
+/// one is joined onto the base. Same rule as `gore audio replace --map`, which resolves its WAVs
+/// against the map file's directory.
+fn resolve_spec_path(base: &Path, rel: &str) -> PathBuf {
+    let path = Path::new(rel);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+/// Assemble the in-memory bundle (files + manifest) from a declarative spec, resolving every
+/// relative asset path against the process's working directory.
+///
+/// This is the compatibility entry point for callers that have no spec FILE — the GUI builds its
+/// spec in memory and fills every path from a file picker, so it is always absolute. A caller that
+/// read the spec from disk should use [`build_bundle_relative_to`] with the spec's own directory:
+/// a path written next to the spec must mean the file next to the spec, whatever directory the
+/// process happens to be in.
 pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
+    build_bundle_relative_to(spec, Path::new("."))
+}
+
+/// Assemble the in-memory bundle (files + manifest) from a declarative spec, resolving every
+/// relative asset path (`wav_path`, `ogg_path`, `image_path`, `mini_cache`, `source_path`) against
+/// `base` — the directory the spec itself came from. Absolute paths are used as written.
+pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle> {
     let mut files = Files::new();
     let mut components = Vec::new();
     let name = &spec.meta.name;
@@ -585,8 +662,10 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     if !spec.audio.is_empty() {
         let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         for (i, a) in spec.audio.iter().enumerate() {
-            let wav =
-                std::fs::read(&a.wav_path).map_err(io(&format!("reading wav {}", a.wav_path)))?;
+            validate_bank_name(&a.bank)?;
+            let source = resolve_spec_path(base, &a.wav_path);
+            let wav = std::fs::read(&source)
+                .map_err(io(&format!("reading audio[{i}] wav {}", source.display())))?;
             // Prefix with the index so distinct samples that sanitize to the same name can't
             // collide and overwrite each other.
             let fname = format!("{i}_{}__{}.wav", sanitize(&a.bank), sanitize(&a.sample));
@@ -618,7 +697,11 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
                 archive: edit.archive.clone(),
                 op: edit.op,
                 archive_path: edit.archive_path.clone(),
-                payload: VoiceBuildPayload::File(edit.ogg_path.clone()),
+                payload: VoiceBuildPayload::File(
+                    resolve_spec_path(base, &edit.ogg_path)
+                        .display()
+                        .to_string(),
+                ),
                 observation: edit.observation.clone(),
             })
             .collect();
@@ -628,8 +711,11 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     if !spec.texture.is_empty() {
         let mut map: BTreeMap<String, String> = BTreeMap::new();
         for (i, t) in spec.texture.iter().enumerate() {
-            let png = std::fs::read(&t.image_path)
-                .map_err(io(&format!("reading png {}", t.image_path)))?;
+            let source = resolve_spec_path(base, &t.image_path);
+            let png = std::fs::read(&source).map_err(io(&format!(
+                "reading texture[{i}] png {}",
+                source.display()
+            )))?;
             let fname = format!("{i}_{}.png", sanitize(&t.asset));
             files.insert(format!("texture/{fname}"), png);
             map.insert(t.asset.clone(), format!("texture/{fname}"));
@@ -655,8 +741,11 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
                     s.op, s.module_name
                 )));
             }
-            let mini = std::fs::read(&s.mini_cache)
-                .map_err(io(&format!("reading mini-cache {}", s.mini_cache)))?;
+            let source = resolve_spec_path(base, &s.mini_cache);
+            let mini = std::fs::read(&source).map_err(io(&format!(
+                "reading scripts[{i}] mini-cache {}",
+                source.display()
+            )))?;
             let mini_rel = format!("scripts/{i}_{}.cache", sanitize(&s.module_name));
             files.insert(mini_rel.clone(), mini);
             entries.push(ScriptEntry {
@@ -674,6 +763,24 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
         });
     }
 
+    // loose files → manifest + opaque payloads (replaced in place at deploy, with a backup)
+    if !spec.files.is_empty() {
+        let map = lower_loose_section(base, "files", &spec.files, &mut files)?;
+        components.push(Component::FilePatch {
+            path: "files".into(),
+            targets: map.into_keys().collect(),
+        });
+    }
+
+    // pak files → the same manifest + payloads, packed into an additive `~mods` pak at deploy
+    if !spec.pak_files.is_empty() {
+        let map = lower_loose_section(base, "pak_files", &spec.pak_files, &mut files)?;
+        components.push(Component::PakFilePatch {
+            path: "pak_files".into(),
+            targets: map.into_keys().collect(),
+        });
+    }
+
     let manifest = ModManifest {
         format: 1,
         mod_meta: spec.meta.clone(),
@@ -684,6 +791,52 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
         serde_json::to_vec_pretty(&manifest)?,
     );
     Ok(Bundle { files, manifest })
+}
+
+/// Stage one loose-file section's payloads into the bundle under `section/` and return its
+/// `{ game_path: bundle-relative payload }` manifest map.
+///
+/// `files` and `pak_files` name destinations in exactly the same spelling and differ only in the
+/// mechanism deploy uses to reach them, so the authoring questions — is this destination allowed,
+/// and was it named twice — are asked here once. Build stays game-free: whether the destination is
+/// reachable in place on THIS install is a deploy-time question, not a bundle property.
+fn lower_loose_section(
+    base: &Path,
+    section: &str,
+    entries: &[LooseFileReplacement],
+    files: &mut Files,
+) -> Result<BTreeMap<String, String>> {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (i, f) in entries.iter().enumerate() {
+        validate_loose_game_path(&f.game_path)?;
+        // Windows path identity is case-insensitive, so two spellings of one destination are
+        // one destination. Silently letting the later entry win would leave the loser's bytes
+        // in the bundle with nothing pointing at them; say so instead.
+        if !seen.insert(f.game_path.to_ascii_lowercase()) {
+            return Err(ModError::Other(format!(
+                "duplicate {section} entry for game path {:?}: one bundle must not name the \
+                 same loose file twice in one section",
+                f.game_path
+            )));
+        }
+        let source = resolve_spec_path(base, &f.source_path);
+        let bytes = read_regular_file_limited(
+            &source,
+            &format!("{section}[{i}] source"),
+            MAX_LOOSE_FILE_BYTES,
+        )?;
+        // Prefix with the index so distinct destinations that sanitize to the same name can't
+        // collide and overwrite each other.
+        let fname = format!("{i}_{}", sanitize(&f.game_path));
+        files.insert(format!("{section}/{fname}"), bytes);
+        map.insert(f.game_path.clone(), format!("{section}/{fname}"));
+    }
+    files.insert(
+        format!("{section}/manifest.json"),
+        serde_json::to_vec_pretty(&map)?,
+    );
+    Ok(map)
 }
 
 /// Write a built bundle's files under `dir` (creating parent dirs).
@@ -1933,6 +2086,148 @@ fn is_safe_rel_path(p: &str) -> bool {
     gore_vo::validate_archive_entry_path(p, &gore_vo::Limits::default()).is_ok()
 }
 
+/// The native path a loose-file destination names below the install root. Built component by
+/// component so the joined result uses this platform's separator: a stored record path with mixed
+/// separators would still validate, but every later comparison would have to normalize it first.
+pub(crate) fn loose_relative_os_path(game_path: &str) -> PathBuf {
+    game_path.split('/').collect()
+}
+
+/// Accept one authored loose-file destination, or say why it is refused.
+///
+/// Two independent gates: the spelling must be a portable relative path (no `..`, no backslash, no
+/// drive letter or ADS colon, no reserved device name), and the destination must be inside the set
+/// of files a bundle is allowed to replace. The second gate is [`loose_target_allowed`], the same
+/// one every deploy-record write goes through, so a bundle can never author a destination the
+/// record layer would later reject.
+pub(crate) fn validate_loose_game_path(game_path: &str) -> Result<()> {
+    if !is_safe_rel_path(game_path) {
+        return Err(ModError::Other(format!(
+            "unsafe loose file game path {game_path:?}: expected a forward-slash path relative to \
+             the game install root, e.g. \"G1R/Content/Slate/Cursors/Normal/Normal.PNG\""
+        )));
+    }
+    if !loose_target_allowed(&loose_relative_os_path(game_path)) {
+        return Err(ModError::Other(format!(
+            "loose file game path {game_path:?} is not a replaceable game file; only files under \
+             G1R/Content or G1R/Config qualify, and not the pak containers, a *.gore-bak backup, \
+             or a file that already has its own deploy mechanism (.lcache, FMOD bank, script \
+             cache, voice ZIP)"
+        )));
+    }
+    Ok(())
+}
+
+/// Accept one authored audio `bank` field, or say why it is refused.
+///
+/// Deploy joins this straight onto the install's `G1R/Content/FMOD/Desktop`, so the only spelling
+/// that can ever work is a bare file name. The check runs twice on purpose: at build time, where
+/// the rest of the spec is validated, so a spec that can never deploy does not first print
+/// "built bundle"; and again in the deploy planner, which also accepts bundles this process did
+/// not build.
+pub(crate) fn validate_bank_name(bank: &str) -> Result<()> {
+    if !is_safe_filename(bank) {
+        return Err(ModError::Other(format!(
+            "invalid audio bank name {bank:?}: must be the bare file name of a bank in the \
+             install's G1R/Content/FMOD/Desktop, not a path — e.g. \"SFX.bank\""
+        )));
+    }
+    Ok(())
+}
+
+/// Which mounted pak entries this install already carries — the oracle that says whether an
+/// in-place loose-file write can be observed at all.
+///
+/// Unreal consults a mounted pak before the physical filesystem, so a destination the base
+/// containers already carry is inert on disk: the write succeeds, the backup is taken, and the game
+/// keeps reading the packed copy. This is deliberately a DEPLOY-time question. Whether a path is
+/// shadowed is a property of the installation, not of the bundle, and a bundle that decided its own
+/// footprint per machine would owe a different undeploy on every machine.
+///
+/// Built at most once per deploy and only when something actually asks: a texture-only bundle must
+/// not pay for parsing ~110 KB of pak directory it will never consult.
+pub(crate) struct PakShadowIndex {
+    game_root: PathBuf,
+    entries: Option<BTreeSet<String>>,
+}
+
+impl PakShadowIndex {
+    pub(crate) fn new(game_root: &Path) -> Self {
+        Self {
+            game_root: game_root.to_path_buf(),
+            entries: None,
+        }
+    }
+
+    /// The filename of the pak already carrying `game_path`, or `None` when the destination is
+    /// reachable on disk.
+    pub(crate) fn owning_pak(&mut self, game_path: &str) -> Result<Option<String>> {
+        let paks = self.game_root.join("G1R").join("Content").join("Paks");
+        // An install with no `Paks` directory carries nothing, and neither does a synthetic test
+        // root. Asking gore-tex to scan a directory that is not there would turn "no paks" into a
+        // deploy failure, which is the opposite of what this gate is for.
+        if !paks.is_dir() {
+            return Ok(None);
+        }
+        if self.entries.is_none() {
+            self.entries = Some(
+                gore_tex::container::pak_shadow_index(&self.game_root).map_err(|error| {
+                    ModError::Other(format!(
+                        "reading the installed pak index below {}: {error}",
+                        paks.display()
+                    ))
+                })?,
+            );
+        }
+        let key = shadow_key(game_path);
+        if !self
+            .entries
+            .as_ref()
+            .expect("the index was just built")
+            .contains(&key)
+        {
+            return Ok(None);
+        }
+        // Name the container, not just the fact. The index is a flat set of entry paths, so the
+        // provenance is recovered here — on the refusal path only, where re-reading a few
+        // indexes costs nothing and every ordinary deploy pays nothing for it.
+        Ok(Some(
+            shadowing_pak_name(&self.game_root, &key).unwrap_or_else(|| "a mounted pak".into()),
+        ))
+    }
+}
+
+/// The one spelling both sides of a shadow comparison are folded to: forward slashes, lowercase.
+/// Deliberately `to_lowercase`, not the ASCII-only fold used for authoring dedup — this string is
+/// looked up in a set gore-tex built with `to_lowercase`, and the two must agree exactly.
+fn shadow_key(path: &str) -> String {
+    path.trim().replace('\\', "/").to_lowercase()
+}
+
+/// The filename of the shipped container whose index carries `key` (an already-folded game-root-
+/// relative path). Entries are re-anchored through the same mount-prefix rule the shadow index
+/// itself uses, so the name this reports can never disagree with the refusal it decorates.
+fn shadowing_pak_name(game_root: &Path, key: &str) -> Option<String> {
+    for listing in gore_tex::container::list_game_paks(game_root).ok()? {
+        let Some(prefix) = gore_tex::container::mount_prefix_from_game_root(&listing.mount_point)
+        else {
+            continue;
+        };
+        if listing
+            .files
+            .iter()
+            .any(|file| shadow_key(&format!("{prefix}{file}")) == key)
+        {
+            return listing
+                .pak
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned);
+        }
+    }
+    None
+}
+
 /// Voice archives are single `.zip` filenames under the fixed `Story/VoiceOver` directory.
 pub(crate) fn is_safe_voice_archive(name: &str) -> bool {
     is_safe_filename(name)
@@ -2677,6 +2972,10 @@ fn metadata_is_link(metadata: &std::fs::Metadata) -> bool {
 // ── Game paths ──────────────────────────────────────────────────────────────────
 /// Resolved game-install locations. `root` is the game folder that contains `G1R/`.
 pub struct GamePaths {
+    /// The semantic install root — the directory that CONTAINS `G1R`, whether the caller passed
+    /// that directory or its `G1R` child. Everything game-root-relative (loose files, `~mods`)
+    /// resolves against this instead of counting ancestors off another field.
+    pub root: PathBuf,
     pub executable: PathBuf,
     pub ue4ss_mods: PathBuf,
     pub fmod_desktop: PathBuf,
@@ -2769,6 +3068,7 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
         })
     };
     GamePaths {
+        root: semantic_install_root(root),
         executable: g1r
             .join("Binaries")
             .join("Win64")
@@ -3462,12 +3762,57 @@ fn install_compile_state_detail(state: &gore_as::compile::InstallCompileStatePro
 /// Acquire cross-tool ownership only after the read-only gore-as process/recovery probe says the
 /// install is safe. Both functions normalize `G1R/` callers to the same semantic parent so gore-as
 /// compile, single-mod deploy, manager apply, and undeploy contend on exactly one lock path.
+/// Whether this build asks the operating system whether the game is running.
+///
+/// Production does. A test build answers "closed" unless a test says otherwise, because these
+/// fixtures are temporary directories: the installed game cannot be running *in* one of them, so
+/// "nothing has this tree open" is the honest answer rather than a convenient one. Asking the real
+/// process list here would make every deploy and apply test depend on whether a developer happens
+/// to have Gothic open while the suite runs — a fact about the desktop, not about the transaction
+/// being tested. A test that is *about* the refusal states it, with [`StatedGameProcess`].
+#[cfg(not(test))]
+fn probe_install_state(install_root: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    gore_as::compile::probe_install_compile_state(install_root)
+}
+
+#[cfg(test)]
+thread_local! {
+    static STATED_GAME_PROCESS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn probe_install_state(install_root: &Path) -> gore_as::compile::InstallCompileStateProbe {
+    let running = STATED_GAME_PROCESS.with(|stated| stated.get());
+    gore_as::compile::probe_install_compile_state_with_stated_game_process(install_root, move || {
+        Ok(running)
+    })
+}
+
+/// States, for the rest of this test, that the game is running. Restores the previous answer on
+/// drop so one test cannot leak its premise into the next.
+#[cfg(test)]
+struct StatedGameProcess(bool);
+
+#[cfg(test)]
+impl StatedGameProcess {
+    fn running() -> Self {
+        Self(STATED_GAME_PROCESS.with(|stated| stated.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for StatedGameProcess {
+    fn drop(&mut self) {
+        STATED_GAME_PROCESS.with(|stated| stated.set(self.0));
+    }
+}
+
 fn acquire_live_install_mutation(
     game_root: &Path,
     owner: &str,
 ) -> Result<gore_as::compile::InstallMutationGuard> {
     let install_root = record_root(game_root);
-    let state = gore_as::compile::probe_install_compile_state(&install_root);
+    let state = probe_install_state(&install_root);
     if !state.safe_to_compile {
         return Err(ModError::Other(format!(
             "INSTALL_MUTATION_BLOCKED: {}",
@@ -5082,6 +5427,8 @@ fn prepare(
     let mut plan = DeployPlan::default();
     let mut voice = PendingVoiceEdits::new();
     let mut voice_order = 0usize;
+    // One oracle for the whole deploy, however many loose-file components the bundle carries.
+    let mut shadow = PakShadowIndex::new(&gp.root);
     for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
             Component::Ue4ssLua { name, path, .. } => {
@@ -5196,9 +5543,7 @@ fn prepare(
                 // known constant.
                 let fmod_key = resolve_fmod_key(gp);
                 for (bank, samples) in &map {
-                    if !is_safe_filename(bank) {
-                        return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
-                    }
+                    validate_bank_name(bank)?;
                     let bank_path = gp.fmod_desktop.join(bank);
                     let (pristine, drifted) =
                         read_pristine_bounded(&bank_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
@@ -5319,6 +5664,19 @@ fn prepare(
                 }
                 plan.writes.push((cache_path, running));
             }
+            Component::FilePatch { path, targets: _ } => {
+                prepare_file_component(bundle_dir, path, gp, prev, &mut shadow, &mut plan)?;
+            }
+            Component::PakFilePatch { path, targets: _ } => {
+                let paks = prepare_pak_file_component(
+                    bundle_dir,
+                    path,
+                    &manifest.mod_meta.name,
+                    comp_idx,
+                    gp,
+                )?;
+                plan.texture_triplets.extend(paks);
+            }
             Component::VoiceArchivePatch { path } => {
                 merge_voice_component(bundle_dir, path, &mut voice, &mut voice_order)?;
             }
@@ -5326,6 +5684,142 @@ fn prepare(
     }
     prepare_voice_archive_writes(&voice, gp, prev, &mut plan)?;
     Ok(plan)
+}
+
+/// Prepare ONE loose-file component: for every game-root-relative destination in its manifest,
+/// take the same pristine/drift decision the .lcache and the FMOD banks take, and stage the
+/// bundle payload as a verified disk-backed write. Nothing is written to the game here.
+///
+/// Replace-only. A missing, non-regular or link target is refused now, before `stage` creates a
+/// single backup — an add-new loose file would need delete-on-undeploy semantics, and
+/// `validate_record` refuses a delete-only cleanup claim against a live game file for good reason.
+/// A destination a mounted pak already carries is refused for the opposite reason: the write would
+/// succeed and change nothing, which is the one failure the toolkit cannot observe afterwards.
+fn prepare_file_component(
+    bundle_dir: &Path,
+    path: &str,
+    gp: &GamePaths,
+    prev: Option<&DeployRecord>,
+    shadow: &mut PakShadowIndex,
+    plan: &mut DeployPlan,
+) -> Result<()> {
+    if !is_safe_rel_path(path) {
+        return Err(ModError::Other(format!("unsafe file patch path: {path:?}")));
+    }
+    let map: BTreeMap<String, String> = serde_json::from_slice(&read_safe_bundle_file(
+        bundle_dir,
+        Path::new(&format!("{path}/manifest.json")),
+        "loose file manifest",
+        MAX_BUNDLE_MANIFEST_BYTES,
+    )?)?;
+    for (game_path, payload_rel) in &map {
+        // The manifest may come from an untrusted bundle: re-ask the authoring-time question here
+        // rather than trusting that whoever wrote the bundle asked it.
+        validate_loose_game_path(game_path)?;
+        if !is_safe_rel_path(payload_rel) {
+            return Err(ModError::Other(format!(
+                "unsafe loose file payload path: {payload_rel:?}"
+            )));
+        }
+        let live = gp.root.join(loose_relative_os_path(game_path));
+        match std::fs::symlink_metadata(&live) {
+            Ok(metadata) if metadata_is_link(&metadata) || !metadata.is_file() => {
+                return Err(ModError::Other(format!(
+                    "loose file target is not a regular non-link file: {}",
+                    live.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // The whole `G1R/Config` subtree is like this: shipped only inside the pak, absent
+                // from disk. "Does not exist" would be true and misleading, so say which it is.
+                if let Some(pak) = shadow.owning_pak(game_path)? {
+                    return Err(shadowed_loose_target_error(game_path, &pak));
+                }
+                return Err(ModError::Other(format!(
+                    "loose file target does not exist: {} — a bundle can only replace a file this \
+                     install already ships",
+                    live.display()
+                )));
+            }
+            Err(error) => return Err(io("reading loose file target metadata")(error)),
+        }
+        if let Some(pak) = shadow.owning_pak(game_path)? {
+            return Err(shadowed_loose_target_error(game_path, &pak));
+        }
+        // Inherit the game-update contract wholesale: if Steam replaced this file underneath a
+        // deployed mod, the preserved backup is stale and `stage` must re-snapshot the newer file.
+        if select_pristine_source(&live, prev)?.drifted {
+            plan.refresh_baks.push(live.clone());
+        }
+        let (candidate, hash) = snapshot_bundle_payload(
+            bundle_dir,
+            payload_rel,
+            "loose file payload",
+            MAX_LOOSE_FILE_BYTES,
+        )?;
+        plan.file_writes.push(DiskWrite {
+            live,
+            candidate,
+            hash,
+        });
+    }
+    Ok(())
+}
+
+/// The refusal for an in-place destination a mounted pak already carries. It names the container
+/// that wins and the section that would reach the same destination, because "this does nothing" is
+/// only useful to an author who is told what does.
+fn shadowed_loose_target_error(game_path: &str, pak: &str) -> ModError {
+    ModError::Other(format!(
+        "loose file target {game_path:?} is already packed in {pak}; a mounted pak is consulted \
+         before the file on disk, so replacing it in place would change nothing — move this \
+         destination to the bundle's \"pak_files\" section, which claims it from an additive \
+         ~mods pak instead"
+    ))
+}
+
+/// Stream one bundle payload into a private temp candidate and hash it, without ever holding the
+/// payload in memory. The bundle-side resolver already refused links and anything resolving
+/// outside the bundle; the copy then runs on that same resolved path and rejects a file that
+/// changed size underneath it.
+fn snapshot_bundle_payload(
+    bundle_dir: &Path,
+    rel: &str,
+    label: &str,
+    max_bytes: u64,
+) -> Result<(tempfile::TempPath, String)> {
+    let (canonical, len) = resolve_safe_bundle_file(bundle_dir, Path::new(rel), label)?;
+    if len > max_bytes {
+        return Err(ModError::Other(format!(
+            "{label} exceeds the {max_bytes}-byte limit: {len} bytes at {}",
+            canonical.display()
+        )));
+    }
+    let mut source = std::fs::File::open(&canonical)
+        .map_err(io(&format!("opening {label} {}", canonical.display())))?;
+    let mut candidate = tempfile::Builder::new()
+        .prefix(".gore-mod-loose-")
+        .tempfile()
+        .map_err(io(&format!("creating {label} candidate")))?;
+    let copied = std::io::copy(
+        &mut std::io::Read::by_ref(&mut source).take(max_bytes.saturating_add(1)),
+        candidate.as_file_mut(),
+    )
+    .map_err(io(&format!("copying {label} {}", canonical.display())))?;
+    if copied != len {
+        return Err(ModError::Other(format!(
+            "{label} changed while being copied: {}",
+            canonical.display()
+        )));
+    }
+    candidate
+        .as_file()
+        .sync_all()
+        .map_err(io(&format!("syncing {label} candidate")))?;
+    let candidate = candidate.into_temp_path();
+    let hash = content_hash_file(&candidate).map_err(io(&format!("hashing {label} candidate")))?;
+    Ok((candidate, hash))
 }
 
 /// Prepare ONE texture component: cook each PNG in the patch dir at `path` (bundle-relative)
@@ -5350,13 +5844,7 @@ fn prepare_texture_component(
         "texture manifest",
         MAX_BUNDLE_MANIFEST_BYTES,
     )?)?;
-    // game install dir: ue4ss_mods == <root>/G1R/Binaries/Win64/ue4ss/Mods -> 5 up.
-    let game_dir = gp
-        .ue4ss_mods
-        .ancestors()
-        .nth(5)
-        .ok_or_else(|| ModError::Other("cannot derive game dir from paths".into()))?
-        .to_path_buf();
+    let game_dir = gp.root.clone();
     let utoc = gore_tex::paths::main_container(&game_dir)
         .map_err(|e| ModError::Other(format!("container: {e}")))?;
     let usmap =
@@ -5498,6 +5986,109 @@ fn prepare_texture_component(
         out.push((src, dst));
     }
     Ok(out)
+}
+
+/// Prepare ONE pak-file component: pack every payload in the manifest at `path` (bundle-relative)
+/// into a single plain V11 `.pak` named
+/// `zzz_{sanitize(mod_name)}_{name_hash(mod_name)}_{comp_idx}_files_P`, mirroring the `_tex_P`
+/// convention. Returns the (src, dst) pair to copy into `~mods` — temp work only, no game writes.
+///
+/// The container shape is the one the shipped paks use: mount point `../../../` with entries
+/// spelled `G1R/Content/…`, so a claimed destination lands in the same virtual namespace the base
+/// container resolves. Entries are stored uncompressed; the base game's Oodle slot is never
+/// referenced, so the method table stays empty and correct.
+fn prepare_pak_file_component(
+    bundle_dir: &Path,
+    path: &str,
+    mod_name: &str,
+    comp_idx: usize,
+    gp: &GamePaths,
+) -> Result<Vec<(PathBuf, PathBuf)>> {
+    if !is_safe_rel_path(path) {
+        return Err(ModError::Other(format!(
+            "unsafe pak file patch path: {path:?}"
+        )));
+    }
+    let map: BTreeMap<String, String> = serde_json::from_slice(&read_safe_bundle_file(
+        bundle_dir,
+        Path::new(&format!("{path}/manifest.json")),
+        "pak file manifest",
+        MAX_BUNDLE_MANIFEST_BYTES,
+    )?)?;
+    if map.is_empty() {
+        return Err(ModError::Other(
+            "pak file component claims no destinations; an empty pak would mount and do nothing"
+                .into(),
+        ));
+    }
+    // The pak name must be unique across DISTINCT mods and across several pak-file components in
+    // one bundle, for exactly the reasons the triplet name is. Keeping `files` non-numeric before
+    // `_P` also keeps `container_priority_key`'s `_<n>_P` version branch from firing on it.
+    let pak_name = format!(
+        "zzz_{}_{}_{}_files_P",
+        sanitize(mod_name),
+        name_hash(mod_name),
+        comp_idx
+    );
+    let pack_out = std::env::temp_dir().join(format!(
+        "gore-mod-pak-files-{}-{}",
+        std::process::id(),
+        comp_idx
+    ));
+    let _ = std::fs::remove_dir_all(&pack_out);
+    std::fs::create_dir_all(&pack_out).map_err(io("mkdir pak-files pack dir"))?;
+    let src = pack_out.join(format!("{pak_name}.pak"));
+    {
+        let file = std::fs::File::create(&src)
+            .map_err(io(&format!("creating loose-file pak {}", src.display())))?;
+        let mut buffered = std::io::BufWriter::new(file);
+        {
+            let mut writer = repak::PakBuilder::new().writer(
+                &mut buffered,
+                repak::Version::V11,
+                "../../../".to_string(),
+                None,
+            );
+            for (game_path, payload_rel) in &map {
+                // The manifest may come from an untrusted bundle: ask the same authoring question
+                // the `files` section asks, against the same allowlist. One allowlist, one answer
+                // to "may a bundle claim this destination" — the mechanism does not widen it.
+                validate_loose_game_path(game_path)?;
+                if !is_safe_rel_path(payload_rel) {
+                    return Err(ModError::Other(format!(
+                        "unsafe pak file payload path: {payload_rel:?}"
+                    )));
+                }
+                let bytes = read_safe_bundle_file(
+                    bundle_dir,
+                    Path::new(payload_rel),
+                    "pak file payload",
+                    MAX_LOOSE_FILE_BYTES,
+                )?;
+                writer
+                    .write_file(game_path, false, &bytes)
+                    .map_err(|error| {
+                        ModError::Other(format!("writing pak entry {game_path:?}: {error}"))
+                    })?;
+            }
+            writer
+                .write_index()
+                .map_err(|error| ModError::Other(format!("writing pak index: {error}")))?;
+        }
+        let file = buffered.into_inner().map_err(|error| {
+            ModError::Io(format!("flushing loose-file pak {}: {error}", src.display()))
+        })?;
+        file.sync_all()
+            .map_err(io(&format!("syncing loose-file pak {}", src.display())))?;
+    }
+    let dst = gp
+        .root
+        .join("G1R")
+        .join("Content")
+        .join("Paks")
+        .join("~mods")
+        .join(format!("{pak_name}.pak"));
+    Ok(vec![(src, dst)])
 }
 
 /// Stage a prepared plan WITHOUT touching any live game file: snapshot each target's current
@@ -6789,29 +7380,7 @@ fn record_path_matches_class(relative: &Path, class: RecordPathClass) -> bool {
     };
     match class {
         RecordPathClass::LiveFile => {
-            (parts.len() == 4
-                && parts[0] == "g1r"
-                && parts[1] == "story"
-                && parts[2] == "cache"
-                && parts[3].ends_with(".lcache")
-                && file_name_safe())
-                || (parts.len() == 5
-                    && parts[0] == "g1r"
-                    && parts[1] == "content"
-                    && parts[2] == "fmod"
-                    && parts[3] == "desktop"
-                    && parts[4].ends_with(".bank")
-                    && file_name_safe())
-                || (parts.len() == 3
-                    && parts[0] == "g1r"
-                    && parts[1] == "script"
-                    && parts[2] == "precompiledscript_shipping.cache")
-                || (parts.len() == 4
-                    && parts[0] == "g1r"
-                    && parts[1] == "story"
-                    && parts[2] == "voiceover"
-                    && parts[3].ends_with(".zip")
-                    && file_name_safe())
+            fixed_live_file(&parts, file_name_safe()) || loose_target_allowed(relative)
         }
         RecordPathClass::BackupFile => {
             let relative = relative.to_string_lossy();
@@ -6857,6 +7426,93 @@ fn record_path_matches_class(relative: &Path, class: RecordPathClass) -> bool {
             parts.len() == 1 && parts[0].starts_with(".gore-mod-cleanup-") && file_name_safe()
         }
     }
+}
+
+/// The four FIXED in-place targets, each of which has its own deploy mechanism: the localization
+/// cache, an FMOD bank, the precompiled script cache, a voice ZIP. `parts` are the lowercased
+/// normal components of the game-root-relative path.
+fn fixed_live_file(parts: &[String], file_name_safe: bool) -> bool {
+    (parts.len() == 4
+        && parts[0] == "g1r"
+        && parts[1] == "story"
+        && parts[2] == "cache"
+        && parts[3].ends_with(".lcache")
+        && file_name_safe)
+        || (parts.len() == 5
+            && parts[0] == "g1r"
+            && parts[1] == "content"
+            && parts[2] == "fmod"
+            && parts[3] == "desktop"
+            && parts[4].ends_with(".bank")
+            && file_name_safe)
+        || (parts.len() == 3
+            && parts[0] == "g1r"
+            && parts[1] == "script"
+            && parts[2] == "precompiledscript_shipping.cache")
+        || (parts.len() == 4
+            && parts[0] == "g1r"
+            && parts[1] == "story"
+            && parts[2] == "voiceover"
+            && parts[3].ends_with(".zip")
+            && file_name_safe)
+}
+
+/// May a bundle REPLACE the loose game file at `relative` (a game-root-relative path)?
+///
+/// This is the whole new safety surface of the `files` section, and it is deliberately one
+/// function: build-time authoring, manager import and every deploy-record write ask exactly this
+/// question, so a destination can never be accepted at one layer and refused at another. Widening
+/// `RecordPathClass::LiveFile` to "any relative path" instead would let a hostile or corrupted
+/// record name `G1R/Binaries/Win64/G1R-Win64-Shipping.exe` and have undeploy write a "backup"
+/// over it.
+///
+/// Allowed: `G1R/Content/**` and `G1R/Config/**` — the two subtrees Unreal reads loose files from.
+/// `G1R/Binaries/**` is therefore excluded by construction, along with `Story`, `Script`, `Saved`
+/// and anything at the install root.
+///
+/// Denied inside those subtrees:
+/// * `G1R/Content/Paks/**` — owned by [`RecordPathClass::AdditiveFile`] and by the IoStore
+///   containers; a loose write there would fight a pak this same deploy installs.
+/// * anything ending in `.gore-bak` — that spelling IS how the restore machinery names a snapshot,
+///   so accepting one would let a record aim a restore at its own backup.
+/// * anything matching a fixed live-file shape — a second class for one file would bypass the
+///   checks that class carries (bank key, lcache decode, voice reseal).
+/// * the deploy record itself, under any spelling.
+fn loose_target_allowed(relative: &Path) -> bool {
+    let mut parts: Vec<String> = Vec::new();
+    for component in relative.components() {
+        // Unlike `record_path_matches_class`, this is also called on authored input that has not
+        // been through `validate_record_path` yet, so a non-normal component is refused here
+        // rather than silently dropped.
+        let std::path::Component::Normal(value) = component else {
+            return false;
+        };
+        let Some(text) = value.to_str() else {
+            return false;
+        };
+        if !is_safe_filename(text) || text.eq_ignore_ascii_case(RECORD_NAME) {
+            return false;
+        }
+        parts.push(text.to_ascii_lowercase());
+    }
+    // `G1R/<subtree>/<file>` at minimum: a bare file at the install root is never a loose target,
+    // and neither is a whole directory.
+    if parts.len() < 3 || parts[0] != "g1r" {
+        return false;
+    }
+    if parts[1] != "content" && parts[1] != "config" {
+        return false;
+    }
+    if parts[1] == "content" && parts[2] == "paks" {
+        return false;
+    }
+    let last = parts.last().expect("length was checked above");
+    if last.ends_with(".gore-bak") {
+        return false;
+    }
+    // Every component was checked with `is_safe_filename` above, so the file-name predicate the
+    // fixed shapes take is already satisfied.
+    !fixed_live_file(&parts, true)
 }
 
 fn read_record(game_root: &Path) -> Result<Option<StoredDeployRecord>> {
@@ -8693,6 +9349,24 @@ mod tests {
     }
 
     #[test]
+    fn a_running_game_blocks_the_deploy_before_anything_is_written() {
+        // The other half of the seam above. Every other test in this file states that nothing has
+        // the tree open, so this is the one that proves the refusal still exists and still comes
+        // before the first write — otherwise "state it closed" would be indistinguishable from
+        // having quietly removed the check.
+        let temp = tempfile::tempdir().unwrap();
+        let (game, bundle, deployed, _) = install_mutation_fixture(temp.path());
+
+        let _game_process = StatedGameProcess::running();
+        let error = deploy(&bundle, &game).unwrap_err().to_string();
+
+        assert!(error.contains("INSTALL_MUTATION_BLOCKED"), "got: {error}");
+        assert!(error.contains("close the game"), "got: {error}");
+        assert!(!deployed.exists(), "a refused deploy published a file");
+        assert!(!record_path(&game).exists(), "a refused deploy left a record");
+    }
+
+    #[test]
     fn active_compile_guard_blocks_deploy_and_undeploy_before_live_mutation() {
         let temp = tempfile::tempdir().unwrap();
         let (game, bundle, deployed, _) = install_mutation_fixture(temp.path());
@@ -8854,6 +9528,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -9030,6 +9706,8 @@ mod tests {
                 wav_path: wav.display().to_string(),
             }],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9136,6 +9814,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9164,6 +9844,8 @@ mod tests {
                 asset: "/Game/UI/T_X".into(),
                 image_path: png.display().to_string(),
             }],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -9196,6 +9878,8 @@ mod tests {
             loc_edits: Default::default(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "MyMod".into(),
@@ -9219,6 +9903,459 @@ mod tests {
         assert_eq!(m[0].mini, "scripts/0_MyMod.cache");
     }
 
+    /// Every asset section of one spec, written the way a user writes it: bare filenames sitting
+    /// beside the spec. `set_current_dir` is deliberately not used — cargo runs these tests
+    /// multi-threaded in one process and the working directory is global, so the base is driven
+    /// through the parameter instead.
+    fn test_spec_with_bare_asset_names(name: &str) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![AudioReplacement {
+                bank: "SFX.bank".into(),
+                sample: "Foo".into(),
+                wav_path: "click.wav".into(),
+            }],
+            texture: vec![TextureReplacement {
+                asset: "/Game/UI/T_X".into(),
+                image_path: "cursor.png".into(),
+            }],
+            files: vec![LooseFileReplacement {
+                game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                source_path: "Normal.PNG".into(),
+            }],
+            pak_files: vec![],
+            scripts: vec![ScriptModule {
+                op: "add".into(),
+                module_name: "MyModule".into(),
+                mini_cache: "mod.cache".into(),
+            }],
+            dialog_topics: vec![],
+            voice: vec![VoiceArchiveEdit {
+                archive: "German.zip".into(),
+                op: VoicePatchOp::Replace,
+                archive_path: "NPC/Hero/hello.ogg".into(),
+                ogg_path: "line.ogg".into(),
+                observation: None,
+            }],
+        }
+    }
+
+    fn write_test_bare_assets(dir: &Path) {
+        std::fs::write(dir.join("click.wav"), b"WAV-BYTES").unwrap();
+        std::fs::write(dir.join("cursor.png"), b"PNG-BYTES").unwrap();
+        std::fs::write(dir.join("mod.cache"), b"MINI-BYTES").unwrap();
+        std::fs::write(dir.join("Normal.PNG"), b"CURSOR-BYTES").unwrap();
+        std::fs::write(dir.join("line.ogg"), test_ogg(32_000)).unwrap();
+    }
+
+    #[test]
+    fn build_bundle_resolves_spec_relative_assets() {
+        // The failure this exists for: a spec and its assets in one directory, built from anywhere
+        // else. Every path in the spec then named a file that did not exist relative to the
+        // process, and the only clue was a bare filename in the error.
+        let assets = tempfile::tempdir().unwrap();
+        write_test_bare_assets(assets.path());
+
+        let bundle =
+            build_bundle_relative_to(&test_spec_with_bare_asset_names("Relative"), assets.path())
+                .unwrap();
+        assert_eq!(bundle.files["audio/0_SFX_bank__Foo.wav"], b"WAV-BYTES");
+        assert_eq!(bundle.files["texture/0__Game_UI_T_X.png"], b"PNG-BYTES");
+        assert_eq!(bundle.files["scripts/0_MyModule.cache"], b"MINI-BYTES");
+        assert_eq!(bundle.files["voice/payload/0.ogg"], test_ogg(32_000));
+        let files: BTreeMap<String, String> =
+            serde_json::from_slice(&bundle.files["files/manifest.json"]).unwrap();
+        let payload = &files["G1R/Content/Slate/Cursors/Normal/Normal.PNG"];
+        assert_eq!(bundle.files[payload], b"CURSOR-BYTES");
+    }
+
+    #[test]
+    fn absolute_spec_paths_ignore_the_base() {
+        // Mod Studio fills every path from a file picker, so they are absolute and belong to no
+        // spec directory at all. Rebasing one would break the GUI.
+        let base = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        write_test_bare_assets(elsewhere.path());
+        let mut spec = test_spec_with_bare_asset_names("Absolute");
+        spec.audio[0].wav_path = elsewhere.path().join("click.wav").display().to_string();
+        spec.texture[0].image_path = elsewhere.path().join("cursor.png").display().to_string();
+        spec.files[0].source_path = elsewhere.path().join("Normal.PNG").display().to_string();
+        spec.scripts[0].mini_cache = elsewhere.path().join("mod.cache").display().to_string();
+        spec.voice[0].ogg_path = elsewhere.path().join("line.ogg").display().to_string();
+
+        let bundle = build_bundle_relative_to(&spec, base.path()).unwrap();
+        assert_eq!(bundle.files["audio/0_SFX_bank__Foo.wav"], b"WAV-BYTES");
+    }
+
+    #[test]
+    fn a_bank_named_by_a_full_path_is_refused_by_build_rather_than_by_deploy() {
+        // The session this exists for: a spec whose bank read
+        // "D:\SteamLibrary\...\FMOD\Desktop\Music.bank" built happily and printed "built bundle:
+        // … (4 components, 9 files)". Only the deploy refused it, four calls later. The planner
+        // keeps its own copy of the guard for bundles this process did not build; this one stops
+        // a spec that can never deploy from reporting a successful build.
+        let assets = tempfile::tempdir().unwrap();
+        write_test_bare_assets(assets.path());
+        let mut spec = test_spec_with_bare_asset_names("BankByPath");
+        spec.audio[0].bank =
+            r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Content\FMOD\Desktop\Music.bank"
+                .into();
+
+        let error = build_bundle_relative_to(&spec, assets.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Music.bank"),
+            "the refusal must quote what it was given: {error}"
+        );
+        assert!(
+            error.contains("G1R/Content/FMOD/Desktop"),
+            "the refusal must name the constraint, not just call the value unsafe: {error}"
+        );
+        assert!(
+            error.contains("SFX.bank"),
+            "the refusal must show a spelling that works: {error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_spec_relative_asset_is_reported_by_its_resolved_path_and_section() {
+        // A bare filename in the error is no longer even the path that was opened, and a spec with
+        // ten audio entries gave no clue which one failed.
+        let assets = tempfile::tempdir().unwrap();
+        let error =
+            build_bundle_relative_to(&test_spec_with_bare_asset_names("Missing"), assets.path())
+                .unwrap_err()
+                .to_string();
+        let resolved = assets.path().join("click.wav");
+        assert!(
+            error.contains(&resolved.display().to_string()) && error.contains("audio[0]"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn build_bundle_wrapper_still_resolves_against_the_process_directory() {
+        // gore-ffi and the manager's own re-builds pass a spec that never came from a file, so the
+        // legacy entry point must keep its cwd-relative contract exactly.
+        let error = build_bundle(&test_spec_with_bare_asset_names("Wrapper"))
+            .unwrap_err()
+            .to_string();
+        let expected = Path::new(".").join("click.wav");
+        assert!(
+            error.contains(&expected.display().to_string()),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn build_emits_file_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor = dir.path().join("Normal.PNG");
+        std::fs::write(&cursor, b"CURSOR-BYTES").unwrap();
+        let spec = test_loose_spec(
+            "FileMod",
+            vec![
+                LooseFileReplacement {
+                    game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                    source_path: cursor.display().to_string(),
+                },
+                LooseFileReplacement {
+                    game_path: "G1R/Config/DefaultEngine.ini".into(),
+                    source_path: cursor.display().to_string(),
+                },
+            ],
+        );
+
+        let bundle = build_bundle(&spec).unwrap();
+        let map: BTreeMap<String, String> =
+            serde_json::from_slice(&bundle.files["files/manifest.json"]).unwrap();
+        assert_eq!(
+            map.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "G1R/Config/DefaultEngine.ini".to_string(),
+                "G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_string(),
+            ]
+        );
+        for payload in map.values() {
+            assert_eq!(bundle.files[payload], b"CURSOR-BYTES");
+        }
+        assert!(matches!(bundle.manifest.components.last(),
+            Some(Component::FilePatch { path, targets })
+                if path == "files" && targets.len() == 2 && targets[0] == "G1R/Config/DefaultEngine.ini"));
+    }
+
+    #[test]
+    fn build_refuses_a_loose_destination_the_deploy_record_would_reject() {
+        // Authoring is the first place the destination allowlist is asked about, and it has to
+        // give the same answer the record layer gives — otherwise a bundle builds happily and
+        // dies at deploy, after the user has shipped it.
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("payload.bin");
+        std::fs::write(&source, b"payload").unwrap();
+        for game_path in [
+            "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
+            "G1R/Content/Paks/~mods/zzz_Other_P.pak",
+            "G1R/Content/FMOD/Desktop/SFX.bank",
+            "G1R/Story/Cache/AlkimiaLocalization_0.lcache",
+            "G1R/Content/Slate/Cursors/Normal/Normal.PNG.gore-bak",
+            "../outside.bin",
+            "G1R\\Content\\Slate\\Normal.PNG",
+        ] {
+            let spec = test_loose_spec(
+                "Refused",
+                vec![LooseFileReplacement {
+                    game_path: game_path.into(),
+                    source_path: source.display().to_string(),
+                }],
+            );
+            let error = build_bundle(&spec).unwrap_err().to_string();
+            assert!(
+                error.contains("loose file game path"),
+                "{game_path} was not refused: {error}"
+            );
+        }
+
+        let spec = test_loose_spec(
+            "Doubled",
+            vec![
+                LooseFileReplacement {
+                    game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                    source_path: source.display().to_string(),
+                },
+                LooseFileReplacement {
+                    game_path: "g1r/content/slate/cursors/normal/normal.png".into(),
+                    source_path: source.display().to_string(),
+                },
+            ],
+        );
+        let error = build_bundle(&spec).unwrap_err().to_string();
+        assert!(error.contains("duplicate files entry"), "{error}");
+    }
+
+    fn test_loose_spec(name: &str, files: Vec<LooseFileReplacement>) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files,
+            pak_files: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        }
+    }
+
+    fn test_pak_files_spec(name: &str, pak_files: Vec<LooseFileReplacement>) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![],
+            pak_files,
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        }
+    }
+
+    /// A plain V11 pak in the exact shape the shipped containers use — mount `../../../`, entries
+    /// spelled `G1R/…` — sitting directly in `G1R/Content/Paks` where the shadow oracle looks.
+    fn write_base_pak(game: &Path, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
+        let paks = game.join("G1R").join("Content").join("Paks");
+        std::fs::create_dir_all(&paks).unwrap();
+        let path = paks.join(format!("{name}.pak"));
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        {
+            let mut writer = repak::PakBuilder::new().writer(
+                &mut file,
+                repak::Version::V11,
+                "../../../".to_string(),
+                None,
+            );
+            for &(entry, bytes) in entries {
+                writer.write_file(entry, false, bytes).unwrap();
+            }
+            writer.write_index().unwrap();
+        }
+        file.flush().unwrap();
+        path
+    }
+
+    /// The additive route is DECLARED, never inferred from the install. `pak_files` gets its own
+    /// component, its own bundle subdir and its own manifest, so one bundle keeps one footprint on
+    /// every machine — the two sections may even name the same destination, said twice on purpose.
+    #[test]
+    fn a_pak_files_section_produces_its_own_component_beside_the_in_place_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+        let mut spec = test_pak_files_spec(
+            "BothRoutes",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        spec.files = vec![LooseFileReplacement {
+            game_path: "G1R/Content/Movies/Intro.bk2".into(),
+            source_path: source.display().to_string(),
+        }];
+
+        let bundle = build_bundle(&spec).unwrap();
+        assert!(matches!(
+            bundle.manifest.components.as_slice(),
+            [
+                Component::FilePatch { path: files, targets: file_targets },
+                Component::PakFilePatch { path: paks, targets: pak_targets },
+            ] if files == "files"
+                && paks == "pak_files"
+                && file_targets == &vec!["G1R/Content/Movies/Intro.bk2".to_string()]
+                && pak_targets == &vec![TEST_CURSOR.to_string()]
+        ));
+        assert!(bundle.files.contains_key("pak_files/manifest.json"));
+        assert!(
+            bundle
+                .files
+                .keys()
+                .any(|rel| rel.starts_with("pak_files/0_")),
+            "the payload must be staged under its own section: {:?}",
+            bundle.files.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// The experiment this gate exists for: all eight cursor PNGs were replaced on disk and the
+    /// cursor did not change, because `G1R-Windows.pak` carries them and Unreal consults a mounted
+    /// pak before the filesystem. A deploy that succeeds and changes nothing is the one failure the
+    /// toolkit can never observe afterwards, so it is refused before the backup is taken — naming
+    /// the container that wins and the section that does reach the file.
+    #[test]
+    fn deploy_refuses_an_in_place_target_a_mounted_pak_already_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        write_base_pak(&game, "G1R-Windows", &[(TEST_CURSOR, b"packed-cursor")]);
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "ShadowedCursor", &source);
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("already packed in G1R-Windows.pak"),
+            "the refusal must name the container that wins: {error}"
+        );
+        assert!(
+            error.contains("pak_files"),
+            "the refusal must name the section that reaches it instead: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&live).unwrap(),
+            b"shipped-cursor",
+            "the refusal must land before any write"
+        );
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    /// A destination NO pak carries stays reachable in place. Without this, the gate could pass by
+    /// refusing everything the moment an install has containers at all — which is every install.
+    #[test]
+    fn deploy_still_replaces_a_loose_target_no_pak_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        write_base_pak(
+            &game,
+            "G1R-Windows",
+            &[("G1R/Content/Movies/Intro.bk2", b"packed-movie")],
+        );
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "UnshadowedCursor", &source);
+        deploy(&bundle_dir, &game).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"modded-cursor");
+    }
+
+    /// The `pak_files` route is additive end to end: one `zzz_…_files_P.pak` in `~mods`, no backup
+    /// to keep, and undeploy deletes exactly what was added. The destination need not exist on disk
+    /// at all — on the shipped build the whole `G1R/Config` subtree is like that.
+    #[test]
+    fn pak_files_publish_one_additive_pak_that_undeploy_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(game.join("G1R").join("Content")).unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+        let spec = test_pak_files_spec(
+            "PakCursor",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        let bundle_dir = dir.path().join("bundle-pak-cursor");
+        write_bundle(&bundle_dir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let record = deploy(&bundle_dir, &game).unwrap();
+        assert!(
+            record.backups.is_empty(),
+            "an additive component must take no backup: {:?}",
+            record.backups
+        );
+        let mut published: Vec<PathBuf> =
+            std::fs::read_dir(game.join("G1R").join("Content").join("Paks").join("~mods"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+        published.sort();
+        assert_eq!(published.len(), 1, "published: {published:?}");
+        let pak = published.remove(0);
+        let name = pak.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("zzz_PakCursor_") && name.ends_with("_files_P.pak"),
+            "the pak must mirror the triplet naming convention: {name}"
+        );
+        assert_eq!(
+            gore_tex::container::list_pak_files(&pak).unwrap(),
+            vec![TEST_CURSOR.to_string()],
+            "the entry must be spelled exactly as the base container spells it"
+        );
+        assert!(
+            !game.join(loose_relative_os_path(TEST_CURSOR)).exists(),
+            "an additive component must not create the destination on disk"
+        );
+
+        undeploy(&game).unwrap();
+        assert!(!pak.exists(), "undeploy must delete what it added");
+        assert!(!record_path(&game).exists());
+    }
+
     #[test]
     fn build_emits_reproducible_versioned_voice_patch() {
         let dir = tempfile::tempdir().unwrap();
@@ -9237,6 +10374,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![
@@ -9315,6 +10454,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![
@@ -10308,6 +11449,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -10602,6 +11745,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -10660,6 +11805,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice,
@@ -10785,6 +11932,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
@@ -10916,6 +12065,8 @@ mod tests {
             loc_edits: Default::default(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "ignored_for_add".into(),
@@ -11427,6 +12578,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -11707,6 +12860,8 @@ mod tests {
             loc_edits: BTreeMap::new(),
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![],
             dialog_topics: vec![],
             voice: vec![],
@@ -12975,6 +14130,186 @@ mod tests {
         );
         assert_eq!(std::fs::read(&sentinel).unwrap(), b"external-sentinel");
         assert_eq!(std::fs::read(record_path(&game)).unwrap(), raw);
+    }
+
+    #[test]
+    fn a_loose_target_is_a_content_or_config_file_that_belongs_to_no_other_class() {
+        // The one genuinely new safety decision the `files` section introduces. Widening the
+        // live-file class to "any relative path" would let a corrupted or hostile record name the
+        // game executable and have undeploy write a "backup" over it, so the accepted set is
+        // pinned here directly instead of only being exercised through a deploy.
+        for path in [
+            "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+            "G1R/Content/Movies/Intro.mp4",
+            "G1R/Config/DefaultEngine.ini",
+        ] {
+            let relative = loose_relative_os_path(path);
+            assert!(loose_target_allowed(&relative), "{path}");
+            assert!(
+                record_path_matches_class(&relative, RecordPathClass::LiveFile),
+                "{path}"
+            );
+            let backup = loose_relative_os_path(&format!("{path}.gore-bak"));
+            assert!(
+                record_path_matches_class(&backup, RecordPathClass::BackupFile),
+                "{path}"
+            );
+        }
+        for path in [
+            "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
+            "G1R/Binaries/Win64/ue4ss/Mods/Other/Scripts/main.lua",
+            "G1R/Content/Paks/~mods/zzz_Other_P.pak",
+            "G1R/Content/Paks/G1R-Windows.utoc",
+            "G1R/Content/Slate/Cursors/Normal/Normal.PNG.gore-bak",
+            "G1R/Content/FMOD/Desktop/SFX.bank",
+            "G1R/Story/Cache/AlkimiaLocalization_0.lcache",
+            "G1R/Story/VoiceOver/german_new.zip",
+            "G1R/Script/PrecompiledScript_Shipping.Cache",
+            "G1R/Saved/Config/WindowsNoEditor/Engine.ini",
+            "G1R/Content",
+            "gore-mod.deployed.json",
+            "G1R/Content/gore-mod.deployed.json",
+            "G1R/Content/../../outside.bin",
+        ] {
+            assert!(
+                !loose_target_allowed(&loose_relative_os_path(path)),
+                "{path} must not be reachable as a loose file"
+            );
+        }
+        // The four dedicated in-place targets keep their own class; the loose gate only refuses to
+        // ALSO claim them, so their existing deploy mechanisms are untouched.
+        for path in [
+            "G1R/Content/FMOD/Desktop/SFX.bank",
+            "G1R/Story/Cache/AlkimiaLocalization_0.lcache",
+            "G1R/Story/VoiceOver/german_new.zip",
+            "G1R/Script/PrecompiledScript_Shipping.Cache",
+        ] {
+            assert!(
+                record_path_matches_class(&loose_relative_os_path(path), RecordPathClass::LiveFile),
+                "{path}"
+            );
+        }
+    }
+
+    const TEST_CURSOR: &str = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+
+    fn test_cursor_bundle(dir: &Path, name: &str, source: &Path) -> PathBuf {
+        let bundle_dir = dir.join(format!("bundle-{name}"));
+        let spec = test_loose_spec(
+            name,
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        write_bundle(&bundle_dir, &build_bundle(&spec).unwrap()).unwrap();
+        bundle_dir
+    }
+
+    #[test]
+    fn loose_file_deploy_backs_up_replaces_and_undeploy_restores() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "CursorMod", &source);
+        let record = deploy(&bundle_dir, &game).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"modded-cursor");
+        assert_eq!(std::fs::read(bak_path(&live)).unwrap(), b"shipped-cursor");
+        assert_eq!(record.backups.len(), 1, "backups: {:?}", record.backups);
+
+        undeploy(&game).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"shipped-cursor");
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn loose_file_deploy_refuses_a_target_this_install_does_not_ship() {
+        // Replace-only, and the refusal has to land in prepare: an add-new loose file would need
+        // delete-on-undeploy semantics, which `validate_record` refuses against a live game file.
+        // Failing later would mean a backup had already been taken for some other component.
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(game.join("G1R/Content")).unwrap();
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "GhostCursor", &source);
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("loose file target does not exist"),
+            "unexpected error: {error}"
+        );
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn loose_file_deploy_refuses_a_symlinked_target_before_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        let sentinel = dir.path().join("external.png");
+        std::fs::write(&sentinel, b"external-sentinel").unwrap();
+        if !make_test_file_link(&sentinel, &live) {
+            return;
+        }
+        let source = dir.path().join("Normal.PNG");
+        std::fs::write(&source, b"modded-cursor").unwrap();
+
+        let bundle_dir = test_cursor_bundle(dir.path(), "LinkedCursor", &source);
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("not a regular non-link file"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"external-sentinel");
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn loose_file_drift_refreshes_the_backup_and_undeploy_keeps_the_updated_file() {
+        // Steam replacing the file underneath a deployed mod must not resurrect the pre-update
+        // bytes: the stale backup is dropped, the newer file becomes the pristine, and a later
+        // undeploy restores THAT — the same contract the .lcache and the banks already have.
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join(loose_relative_os_path(TEST_CURSOR));
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"shipped-cursor").unwrap();
+        let first_source = dir.path().join("one.png");
+        let second_source = dir.path().join("two.png");
+        std::fs::write(&first_source, b"cursor-one").unwrap();
+        std::fs::write(&second_source, b"cursor-two").unwrap();
+
+        deploy(
+            &test_cursor_bundle(dir.path(), "CursorOne", &first_source),
+            &game,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"cursor-one");
+
+        std::fs::write(&live, b"patched-by-steam").unwrap();
+        deploy(
+            &test_cursor_bundle(dir.path(), "CursorTwo", &second_source),
+            &game,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"cursor-two");
+        assert_eq!(
+            std::fs::read(bak_path(&live)).unwrap(),
+            b"patched-by-steam",
+            "the stale pre-update backup must be replaced, not kept"
+        );
+
+        undeploy(&game).unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"patched-by-steam");
+        assert!(!bak_path(&live).exists());
     }
 
     #[test]

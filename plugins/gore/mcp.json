@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gore": {
+      "command": "gore",
+      "args": ["mcp", "serve"],
+      "env": {
+        "GORE_MCP_ALLOW_WRITE": "${user_config.allow_write}",
+        "GORE_MCP_ALLOW_GAME_LAUNCH": "${user_config.allow_game_launch}"
+      }
+    }
+  }
+}

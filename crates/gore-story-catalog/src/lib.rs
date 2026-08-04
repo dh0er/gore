@@ -13,6 +13,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use gore_generation::{FileSeal, GenerationRow};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
@@ -27,20 +28,6 @@ pub const QUEST_COLLISION_CATALOG_LAYER: &str = "resolved-loadout.scripts.v1";
 
 const STORY_FORMAT: &str = "story_catalog";
 const STORY_SCHEMA_REVISION: u32 = 1;
-const RECORD_SET_ID_V1: &str = "g1r-steam-1.0.3-curated-story-v1";
-const RECORD_SET_BYTE_LEN_V1: u64 = 5_499;
-const RECORD_SET_SHA256_V1: &str =
-    "323ffe3fb3d6394c0d4397d090aabddb5e87c1ac7e5cecd14382b0a4f0516fc8";
-const CATALOG_PAYLOAD_BYTE_LEN_V1: u64 = 5_611;
-const CATALOG_PAYLOAD_SHA256_V1: &str =
-    "51192393aa28cff00b1a4e59de7793a8db354e30692569719c4b46e2f9bc4853";
-const RECORD_SET_ID_V2: &str = "g1r-steam-1.0.3-curated-story-v2";
-const RECORD_SET_BYTE_LEN_V2: u64 = 5_499;
-const RECORD_SET_SHA256_V2: &str =
-    "3dcf62650b9c4c5c320988644adb3e10a4f3888dba9447b8d0ef06da2d541def";
-const CATALOG_PAYLOAD_BYTE_LEN_V2: u64 = 5_611;
-const CATALOG_PAYLOAD_SHA256_V2: &str =
-    "e93bbd62fc824ca8166c3ab9b67f21cf1493295969bf19adff438d665fc16bc3";
 const VIPER_OFFLINE_EVIDENCE_ID: &str = concat!(
     "npc-logical-clone-v1:viper-current-v1:proof-format-v1:",
     "sha256-b65b551f1f7d0c783c982250c87934287141cc3bf29013ba58c9cdce5852e68a"
@@ -806,6 +793,14 @@ pub fn capture_generation(
     Ok(capture_generation_guarded(paths, limits)?.generation)
 }
 
+/// The edition a capture stamps on the triple it just sealed.
+///
+/// It is a literal and not a row field because capture runs before any row is known: the three
+/// digests are what find the row, and an install that matches none still has to be described in the
+/// refusal. `every_audited_generation_carries_the_edition_a_capture_stamps` is what keeps that
+/// literal and the table from disagreeing.
+const CAPTURED_EDITION: &str = "g1r-steam";
+
 fn capture_generation_guarded(
     paths: &GenerationPaths,
     limits: GenerationInputLimits,
@@ -828,7 +823,7 @@ fn capture_generation_guarded(
     )?;
     Ok(CapturedGeneration {
         generation: GameGenerationSeal {
-            edition: "g1r-steam".to_owned(),
+            edition: CAPTURED_EDITION.to_owned(),
             executable,
             shipping_cache,
             binds_cache,
@@ -877,7 +872,7 @@ fn capture_generation_with_shipping_snapshot_guarded(
     )?;
     Ok(CapturedGeneration {
         generation: GameGenerationSeal {
-            edition: "g1r-steam".to_owned(),
+            edition: CAPTURED_EDITION.to_owned(),
             executable,
             shipping_cache,
             binds_cache,
@@ -898,7 +893,7 @@ fn build_known_catalog_from_capture(
             supported: known_supported_generations(),
             actual: Box::new(actual.clone()),
         })?;
-    let wire = build_wire_from_verified_records(actual, revision.curated_records())?;
+    let wire = build_wire_from_verified_records(actual, curated_records_for(revision))?;
     let catalog = StoryCatalogFile {
         wire,
         input_guard: Some(captured.guard),
@@ -1191,80 +1186,100 @@ fn authoring_selector_alias(catalog_id: &str, role: &str) -> String {
     format!("Catalog_{}", Sha256Digest::from_bytes(bytes))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KnownCatalogRevision {
-    V1,
-    V2,
-}
-
-const KNOWN_CATALOG_REVISIONS: [KnownCatalogRevision; 2] =
-    [KnownCatalogRevision::V1, KnownCatalogRevision::V2];
-
-impl KnownCatalogRevision {
-    fn generation(self) -> GameGenerationSeal {
-        match self {
-            Self::V1 => known_generation_v1(),
-            Self::V2 => known_generation_v2(),
-        }
-    }
-
-    fn record_set_id(self) -> &'static str {
-        match self {
-            Self::V1 => RECORD_SET_ID_V1,
-            Self::V2 => RECORD_SET_ID_V2,
-        }
-    }
-
-    fn record_set_seal(self) -> ContentSeal {
-        match self {
-            Self::V1 => known_seal(RECORD_SET_BYTE_LEN_V1, RECORD_SET_SHA256_V1),
-            Self::V2 => known_seal(RECORD_SET_BYTE_LEN_V2, RECORD_SET_SHA256_V2),
-        }
-    }
-
-    fn catalog_payload_seal(self) -> ContentSeal {
-        match self {
-            Self::V1 => known_seal(CATALOG_PAYLOAD_BYTE_LEN_V1, CATALOG_PAYLOAD_SHA256_V1),
-            Self::V2 => known_seal(CATALOG_PAYLOAD_BYTE_LEN_V2, CATALOG_PAYLOAD_SHA256_V2),
-        }
-    }
-
-    fn curated_records(self) -> VerifiedExtractionRecords {
-        curated_records(self.generation(), self.record_set_id())
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::V1 => "compiled curated V1",
-            Self::V2 => "compiled curated V2",
-        }
-    }
-
-    fn record_seal_kind(self) -> &'static str {
-        match self {
-            Self::V1 => "compiled curated V1 record set",
-            Self::V2 => "compiled curated V2 record set",
-        }
-    }
-
-    fn catalog_seal_kind(self) -> &'static str {
-        match self {
-            Self::V1 => "compiled curated V1 catalog payload",
-            Self::V2 => "compiled curated V2 catalog payload",
+impl From<FileSeal> for ContentSeal {
+    fn from(seal: FileSeal) -> Self {
+        Self {
+            byte_len: seal.byte_len,
+            sha256: Sha256Digest::from_bytes(seal.sha256),
         }
     }
 }
 
-fn known_catalog_revision(generation: &GameGenerationSeal) -> Option<KnownCatalogRevision> {
-    KNOWN_CATALOG_REVISIONS
-        .into_iter()
-        .find(|revision| revision.generation() == *generation)
+fn as_file_seal(seal: &ContentSeal) -> FileSeal {
+    FileSeal {
+        byte_len: seal.byte_len,
+        sha256: *seal.sha256.as_bytes(),
+    }
 }
 
-fn known_supported_generations() -> Box<[GameGenerationSeal]> {
-    KNOWN_CATALOG_REVISIONS
-        .into_iter()
-        .map(KnownCatalogRevision::generation)
+fn generation_seal(row: &GenerationRow) -> GameGenerationSeal {
+    GameGenerationSeal {
+        edition: row.edition.to_owned(),
+        executable: row.executable.into(),
+        shipping_cache: row.shipping_cache.into(),
+        binds_cache: row.binds_cache.into(),
+    }
+}
+
+fn curated_records_for(row: &'static GenerationRow) -> VerifiedExtractionRecords {
+    curated_records(generation_seal(row), row.record_set_id)
+}
+
+/// The two seals a generation row publishes for its curated story content, and the record counts a
+/// reviewer reads them against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CuratedCatalogSeals {
+    pub record_set_id: String,
+    pub record_set_seal: ContentSeal,
+    pub catalog_payload_seal: ContentSeal,
+    pub npc_count: usize,
+    pub quest_parent_count: usize,
+}
+
+/// Compile the curated record set and catalog payload for a generation the table does not carry
+/// yet, and return only what they seal to.
+///
+/// Every other entry point here refuses an unknown generation, and must: building a *catalog* for a
+/// build nobody audited would hand a caller records claiming to describe it. This one builds the
+/// same canonical bytes and then throws the catalog away, because the question it answers is the
+/// one a qualification run asks — what would this generation's two seals be? — and the answer is
+/// arithmetic over a record set that is already compiled in. It is what stops `record_set_seal` and
+/// `catalog_payload_seal` from being the last two values in a new row that a person hand-copies
+/// from the row above and adjusts until the tests stop failing.
+///
+/// The record set embeds the generation, so the seals move with the build even though the curated
+/// content does not. Whether that content is still *true* of the build is a different question, and
+/// the only thing that answers it is decompiling each curated module out of the new cache and
+/// comparing it against its recorded source seal.
+pub fn compile_curated_seals(
+    generation: &GameGenerationSeal,
+    record_set_id: &str,
+) -> Result<CuratedCatalogSeals, CatalogError> {
+    let records = curated_records(generation.clone(), record_set_id);
+    let npc_count = records.npcs.len();
+    let quest_parent_count = records.quest_parents.len();
+    let wire = build_wire_from_verified_records(generation.clone(), records)?;
+    Ok(CuratedCatalogSeals {
+        record_set_id: wire.catalog.record_set_id,
+        record_set_seal: wire.catalog.record_set_seal,
+        catalog_payload_seal: wire.catalog_seal,
+        npc_count,
+        quest_parent_count,
+    })
+}
+
+/// The audited generation whose catalog revision this seal names, if any. Matching the three files
+/// is not enough on its own: the edition must agree too, because a build shipped through another
+/// channel is not a build this catalog was reviewed against.
+fn known_catalog_revision(generation: &GameGenerationSeal) -> Option<&'static GenerationRow> {
+    let row = gore_generation::row_for_file_seals(
+        &as_file_seal(&generation.executable),
+        &as_file_seal(&generation.shipping_cache),
+        &as_file_seal(&generation.binds_cache),
+    )?;
+    (row.edition == generation.edition).then_some(row)
+}
+
+/// Every audited generation's seal, in generation-table order: entry `i` is the seal of
+/// `gore_generation::rows()[i]`.
+///
+/// This is the only way to name an audited generation from outside this crate, and it is plural on
+/// purpose. The per-build accessors it replaced let a caller know two generations and silently miss
+/// a third — which is exactly what happened when the third one shipped.
+pub fn known_supported_generations() -> Box<[GameGenerationSeal]> {
+    gore_generation::rows()
+        .iter()
+        .map(generation_seal)
         .collect::<Vec<_>>()
         .into_boxed_slice()
 }
@@ -1277,51 +1292,14 @@ pub fn is_supported_generation(generation: &GameGenerationSeal) -> bool {
     known_catalog_revision(generation).is_some()
 }
 
-pub fn known_generation_v1() -> GameGenerationSeal {
-    GameGenerationSeal {
-        edition: "g1r-steam".to_owned(),
-        executable: known_seal(
-            171_698_176,
-            "f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5",
-        ),
-        shipping_cache: known_seal(
-            123_394_250,
-            "1018f1cfe6b99a650eecb33afb96752d691d2088ead27808971b812f04ecb4c2",
-        ),
-        binds_cache: known_seal(
-            5_903_938,
-            "46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea",
-        ),
-    }
-}
-
-/// The reviewed Steam hotfix generation (Steam build 24169431).
-pub fn known_generation_v2() -> GameGenerationSeal {
-    GameGenerationSeal {
-        edition: "g1r-steam".to_owned(),
-        executable: known_seal(
-            171_704_320,
-            "b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d",
-        ),
-        shipping_cache: known_seal(
-            123_394_250,
-            "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385",
-        ),
-        binds_cache: known_seal(
-            5_903_938,
-            "46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea",
-        ),
-    }
-}
-
 #[cfg(test)]
 fn curated_records_v1() -> VerifiedExtractionRecords {
-    KnownCatalogRevision::V1.curated_records()
+    curated_records_for(&gore_generation::ROW_G1R_1_0_3)
 }
 
 fn curated_records(
     generation: GameGenerationSeal,
-    record_set_id: &'static str,
+    record_set_id: &str,
 ) -> VerifiedExtractionRecords {
     VerifiedExtractionRecords {
         record_set_id: record_set_id.to_owned(),
@@ -1482,37 +1460,35 @@ fn validate_catalog_file(catalog: &StoryCatalogFile) -> Result<(), CatalogError>
             actual: Box::new(wire.catalog.generation.clone()),
         }
     })?;
-    if wire.catalog.record_set_id != revision.record_set_id() {
+    if wire.catalog.record_set_id != revision.record_set_id {
         return Err(CatalogError::UntrustedCatalog(format!(
             "record_set_id {:?} is not the {} record set {:?}",
-            wire.catalog.record_set_id,
-            revision.label(),
-            revision.record_set_id()
+            wire.catalog.record_set_id, revision.catalog_label, revision.record_set_id
         )));
     }
 
     let records = records_from_wire(wire);
-    let mut expected_records = revision.curated_records();
+    let mut expected_records = curated_records_for(revision);
     normalize_records(&mut expected_records);
     if records != expected_records {
         return Err(CatalogError::UntrustedCatalog(format!(
             "record content differs from the {} record set",
-            revision.label()
+            revision.catalog_label
         )));
     }
 
-    let expected_record_seal = revision.record_set_seal();
+    let expected_record_seal: ContentSeal = revision.record_set_seal.into();
     if wire.catalog.record_set_seal != expected_record_seal {
         return Err(CatalogError::SealMismatch {
-            kind: revision.record_seal_kind(),
+            kind: revision.record_seal_kind,
             expected: expected_record_seal,
             actual: wire.catalog.record_set_seal.clone(),
         });
     }
-    let expected_catalog_seal = revision.catalog_payload_seal();
+    let expected_catalog_seal: ContentSeal = revision.catalog_payload_seal.into();
     if wire.catalog_seal != expected_catalog_seal {
         return Err(CatalogError::SealMismatch {
-            kind: revision.catalog_seal_kind(),
+            kind: revision.catalog_seal_kind,
             expected: expected_catalog_seal,
             actual: wire.catalog_seal.clone(),
         });
@@ -2441,10 +2417,9 @@ mod tests {
         records
     }
 
-    fn trusted_catalog_for(revision: KnownCatalogRevision) -> StoryCatalogFile {
-        let wire =
-            build_wire_from_verified_records(revision.generation(), revision.curated_records())
-                .unwrap();
+    fn trusted_catalog_for(revision: &'static GenerationRow) -> StoryCatalogFile {
+        let records = curated_records_for(revision);
+        let wire = build_wire_from_verified_records(generation_seal(revision), records).unwrap();
         let catalog = StoryCatalogFile {
             wire,
             input_guard: None,
@@ -2454,7 +2429,7 @@ mod tests {
     }
 
     fn trusted_catalog() -> StoryCatalogFile {
-        trusted_catalog_for(KnownCatalogRevision::V1)
+        trusted_catalog_for(&gore_generation::ROW_G1R_1_0_3)
     }
 
     fn attach_test_input_guard(catalog: &mut StoryCatalogFile, root: &Path) -> GenerationPaths {
@@ -2541,57 +2516,147 @@ mod tests {
     }
 
     #[test]
-    fn hotfix_catalog_has_its_own_exact_pinned_records_and_payload() {
-        let catalog = trusted_catalog_for(KnownCatalogRevision::V2);
-        assert_eq!(catalog.wire.catalog.generation, known_generation_v2());
-        assert_eq!(catalog.wire.catalog.record_set_id, RECORD_SET_ID_V2);
-        assert_eq!(
-            catalog.wire.catalog.record_set_seal,
-            KnownCatalogRevision::V2.record_set_seal()
-        );
-        assert_eq!(
-            catalog.wire.catalog_seal,
-            KnownCatalogRevision::V2.catalog_payload_seal()
-        );
+    fn every_generation_has_its_own_exact_pinned_records_and_payload() {
+        // The record set embeds the generation triple, so every build gets different bytes and
+        // therefore different seals — which is exactly why a row added by copying its predecessor
+        // and editing the three file digests would carry two seals that describe nothing. This
+        // rebuilds the catalog for each row and requires the seals the row publishes to be the
+        // ones the builder actually produces.
+        for row in gore_generation::rows() {
+            let catalog = trusted_catalog_for(row);
+            assert_eq!(catalog.wire.catalog.generation, generation_seal(row));
+            assert_eq!(catalog.wire.catalog.record_set_id, row.record_set_id);
+            assert_eq!(
+                catalog.wire.catalog.record_set_seal,
+                ContentSeal::from(row.record_set_seal),
+                "{}: the pinned record-set seal is not the one these records hash to",
+                row.id
+            );
+            assert_eq!(
+                catalog.wire.catalog_seal,
+                ContentSeal::from(row.catalog_payload_seal),
+                "{}: the pinned catalog payload seal is not the one this payload hashes to",
+                row.id
+            );
 
-        let bytes = catalog.to_canonical_json().unwrap();
-        let parsed = StoryCatalogFile::from_json(&bytes).unwrap();
-        assert_eq!(parsed, catalog);
-        assert_eq!(parsed.authoring_selections().unwrap().npcs.len(), MAX_NPCS);
+            let bytes = catalog.to_canonical_json().unwrap();
+            let parsed = StoryCatalogFile::from_json(&bytes).unwrap();
+            assert_eq!(parsed, catalog);
+            assert_eq!(parsed.authoring_selections().unwrap().npcs.len(), MAX_NPCS);
+        }
     }
 
     #[test]
-    fn hotfix_record_recipe_reuses_the_v1_curated_structure_with_a_v2_binding() {
-        // This locks the intentional compiled-record wiring. It is not an independent re-hash of
-        // installed emitted sources; the generation-specific record and payload seals above are
-        // the trust boundary for the reviewed V2 catalog.
-        let mut v1 = curated_records_v1();
-        let v2 = KnownCatalogRevision::V2.curated_records();
-        v1.generation = known_generation_v2();
-        v1.record_set_id = RECORD_SET_ID_V2.to_owned();
-        assert_eq!(v2, v1);
+    fn compiled_curated_seals_reproduce_every_audited_row_and_admit_none() {
+        // What `gore as qualify` reads for the last two values of a proposed row. Two things have
+        // to hold at once and neither is worth much alone: the compiler has to produce the seals
+        // the audited rows already publish — otherwise a new row would carry two numbers derived by
+        // something that is not what the catalog builder does — and compiling seals for a build
+        // nobody audited must leave that build exactly as unsupported as it was.
+        for row in gore_generation::rows() {
+            let seals = compile_curated_seals(&generation_seal(row), row.record_set_id)
+                .expect("an audited generation compiles its own curated seals");
+            assert_eq!(seals.record_set_id, row.record_set_id);
+            assert_eq!(
+                seals.record_set_seal,
+                ContentSeal::from(row.record_set_seal),
+                "{}: the compiled record-set seal is not the one the row publishes",
+                row.id
+            );
+            assert_eq!(
+                seals.catalog_payload_seal,
+                ContentSeal::from(row.catalog_payload_seal),
+                "{}: the compiled payload seal is not the one the row publishes",
+                row.id
+            );
+            assert_eq!((seals.npc_count, seals.quest_parent_count), (MAX_NPCS, MAX_QUEST_PARENTS));
+        }
+
+        let mut unaudited = generation_seal(gore_generation::rows().last().expect("a table"));
+        unaudited.executable.byte_len += 1;
+        let seals = compile_curated_seals(&unaudited, "g1r-steam-1.0.3-curated-story-v4")
+            .expect("an unaudited generation still compiles its proposed seals");
+        assert_ne!(
+            seals.record_set_seal,
+            ContentSeal::from(
+                gore_generation::rows()
+                    .last()
+                    .expect("a table")
+                    .record_set_seal
+            ),
+            "the generation is part of the record bytes, so a different build cannot seal the same"
+        );
+        assert!(
+            !is_supported_generation(&unaudited),
+            "compiling a build's seals must not be a way to make the crate accept that build"
+        );
+        assert!(known_catalog_revision(&unaudited).is_none());
+    }
+
+    #[test]
+    fn every_generation_reuses_the_v1_curated_structure_with_its_own_binding() {
+        // This locks the intentional compiled-record wiring: a later generation is the reviewed V1
+        // record content rebound to a new triple and a new id, and nothing else. It is not an
+        // independent re-hash of installed emitted sources — the per-generation record and payload
+        // seals above are the trust boundary, and decompiling the sealed modules out of the new
+        // cache is the check that proves the content behind them did not move.
+        for row in gore_generation::rows() {
+            let mut rebound = curated_records_v1();
+            rebound.generation = generation_seal(row);
+            rebound.record_set_id = row.record_set_id.to_owned();
+            assert_eq!(curated_records_for(row), rebound, "{}", row.id);
+        }
+    }
+
+    #[test]
+    fn every_audited_generation_carries_the_edition_a_capture_stamps() {
+        // A row whose edition differed from the stamp would be refused by `known_catalog_revision`
+        // on an install whose three digests it admits, and the refusal would name the install
+        // rather than the table. That is the same shape as the private fingerprint list that
+        // refused a build the table already carried; here the stamp is a single literal, so one
+        // assertion covers it.
+        for row in gore_generation::rows() {
+            assert_eq!(
+                row.edition, CAPTURED_EDITION,
+                "{}: a capture would stamp an edition this row does not carry, so its own \
+                 installation could never reach it",
+                row.id
+            );
+        }
     }
 
     #[test]
     fn generation_registry_requires_the_complete_exact_triple() {
-        let v1 = known_generation_v1();
-        let v2 = known_generation_v2();
-        assert!(is_supported_generation(&v1));
-        assert!(is_supported_generation(&v2));
+        // Written over the whole table rather than over a named V1/V2 pair: the hybrids that matter
+        // are one file borrowed from *any* other audited generation, and a version of this that
+        // knew only the first two builds would have gone on passing while saying nothing about the
+        // third.
+        let audited = known_supported_generations();
+        assert!(
+            audited.len() >= 2,
+            "the hybrids below cross one generation with another, so two is the minimum"
+        );
+        for generation in audited.iter() {
+            assert!(is_supported_generation(generation));
+        }
 
         let mut hybrids = Vec::new();
-        let mut hybrid = v1.clone();
-        hybrid.executable = v2.executable.clone();
-        hybrids.push(hybrid);
-        let mut hybrid = v2.clone();
-        hybrid.shipping_cache = v1.shipping_cache.clone();
-        hybrids.push(hybrid);
-        let mut hybrid = v2.clone();
-        hybrid.binds_cache.byte_len += 1;
-        hybrids.push(hybrid);
-        let mut hybrid = v2;
-        hybrid.edition = "g1r-steam-unknown".to_owned();
-        hybrids.push(hybrid);
+        for (index, generation) in audited.iter().enumerate() {
+            for other in audited.iter().skip(index + 1) {
+                let mut hybrid = generation.clone();
+                hybrid.executable = other.executable.clone();
+                hybrids.push(hybrid);
+                let mut hybrid = other.clone();
+                hybrid.shipping_cache = generation.shipping_cache.clone();
+                hybrids.push(hybrid);
+            }
+            let mut hybrid = generation.clone();
+            hybrid.binds_cache.byte_len += 1;
+            hybrids.push(hybrid);
+            let mut hybrid = generation.clone();
+            hybrid.edition = "g1r-steam-unknown".to_owned();
+            hybrids.push(hybrid);
+        }
 
         for hybrid in hybrids {
             assert!(!is_supported_generation(&hybrid));
@@ -2604,9 +2669,11 @@ mod tests {
             };
             match build_known_catalog_from_capture(captured) {
                 Err(CatalogError::UnsupportedGeneration { supported, actual }) => {
+                    assert_eq!(supported, known_supported_generations());
                     assert_eq!(
-                        supported.as_ref(),
-                        [known_generation_v1(), known_generation_v2()]
+                        supported.len(),
+                        gore_generation::rows().len(),
+                        "the refusal must offer every audited generation, not a subset"
                     );
                     assert_eq!(*actual, hybrid);
                 }
@@ -2617,21 +2684,31 @@ mod tests {
 
     #[test]
     fn trusted_reader_rejects_cross_generation_record_bindings_even_when_resealed() {
-        let mut crossed = trusted_catalog_for(KnownCatalogRevision::V2).wire;
-        crossed.catalog.record_set_id = RECORD_SET_ID_V1.to_owned();
-        reseal_wire(&mut crossed);
-        let bytes =
-            canonical_json(&crossed, "crossed story catalog", MAX_CATALOG_JSON_BYTES).unwrap();
-        assert!(matches!(
-            StoryCatalogFile::from_json(&bytes),
-            Err(CatalogError::UntrustedCatalog(message))
-                if message.contains("compiled curated V2 record set")
-        ));
+        // Every generation after the first, not just the second: the pairing of a record set with
+        // the generation it was rebound for is the whole trust boundary, and a build that nobody
+        // wrote a case for is a build where nothing checks it.
+        let (first, rest) = gore_generation::rows().split_first().unwrap();
+        for row in rest {
+            let mut crossed = trusted_catalog_for(row).wire;
+            crossed.catalog.record_set_id = first.record_set_id.to_owned();
+            reseal_wire(&mut crossed);
+            let bytes =
+                canonical_json(&crossed, "crossed story catalog", MAX_CATALOG_JSON_BYTES).unwrap();
+            assert!(
+                matches!(
+                    StoryCatalogFile::from_json(&bytes),
+                    Err(CatalogError::UntrustedCatalog(ref message))
+                        if message.contains(row.record_seal_kind)
+                ),
+                "{}: a resealed cross-generation record binding was accepted",
+                row.id
+            );
 
-        assert!(matches!(
-            build_wire_from_verified_records(known_generation_v2(), curated_records_v1()),
-            Err(CatalogError::RecordGenerationMismatch)
-        ));
+            assert!(matches!(
+                build_wire_from_verified_records(generation_seal(row), curated_records_v1()),
+                Err(CatalogError::RecordGenerationMismatch)
+            ));
+        }
     }
 
     #[test]
@@ -2763,7 +2840,7 @@ mod tests {
 
     #[test]
     fn record_order_does_not_change_catalog_bytes() {
-        let generation = known_generation_v1();
+        let generation = generation_seal(&gore_generation::ROW_G1R_1_0_3);
         let normal =
             build_wire_from_verified_records(generation.clone(), curated_records_v1()).unwrap();
         let mut reversed = curated_records_v1();
@@ -2926,7 +3003,7 @@ mod tests {
 
     #[test]
     fn folded_identities_require_strict_ascii_grammars() {
-        let generation = known_generation_v1();
+        let generation = generation_seal(&gore_generation::ROW_G1R_1_0_3);
         let mut bad_catalog_id = curated_records_v1();
         bad_catalog_id.npcs[0].catalog_id = "g1r:npc:asghän".to_owned();
         assert!(matches!(
@@ -3062,7 +3139,7 @@ mod tests {
             seal_file_guarded(&executable_path, 1024, "test executable").unwrap();
         let (_, binds_guard) = seal_file_guarded(&binds_path, 1024, "test Binds").unwrap();
         let built = build_known_catalog_from_capture(CapturedGeneration {
-            generation: known_generation_v1(),
+            generation: generation_seal(&gore_generation::ROW_G1R_1_0_3),
             guard: GenerationInputGuard {
                 inputs: vec![executable_guard, binds_guard],
                 publication_supported: false,
@@ -3082,7 +3159,11 @@ mod tests {
 
     #[test]
     #[ignore = "requires GORE_STORY_CATALOG_EXE, _SHIPPING_CACHE, and _BINDS_CACHE"]
-    fn installed_steam_build_24169431_matches_the_v2_source_triple() {
+    fn an_installed_source_triple_matches_exactly_one_audited_generation() {
+        // This pinned the second generation by name, so the day a third one shipped the only test
+        // that reads a real install started failing on a build it should have recognised. What it
+        // is actually for is that the triple a live install seals is one of the audited ones — the
+        // table decides which, and the run prints it.
         let path = |name: &str| {
             std::env::var_os(name)
                 .map(PathBuf::from)
@@ -3094,14 +3175,17 @@ mod tests {
             binds_cache: path("GORE_STORY_CATALOG_BINDS_CACHE"),
         };
         let catalog = build_known_catalog(&paths, GenerationInputLimits::default()).unwrap();
-        assert_eq!(catalog.generation(), &known_generation_v2());
         assert!(is_supported_generation(catalog.generation()));
+        let matched = known_catalog_revision(catalog.generation())
+            .expect("a built catalog's generation is always an audited row");
+        eprintln!("installed source triple is {} ({})", matched.id, matched.label);
+        assert_eq!(catalog.generation(), &generation_seal(matched));
         catalog.revalidate_generation_inputs().unwrap();
     }
 
     #[test]
     fn identity_collisions_are_case_insensitive_and_global() {
-        let generation = known_generation_v1();
+        let generation = generation_seal(&gore_generation::ROW_G1R_1_0_3);
         let mut records = curated_records_v1();
         records.npcs[1].runtime_unique_name = records.npcs[0].runtime_unique_name.clone();
         assert!(matches!(
@@ -3132,7 +3216,7 @@ mod tests {
 
     #[test]
     fn selector_and_path_must_be_derived_from_class_identity() {
-        let generation = known_generation_v1();
+        let generation = generation_seal(&gore_generation::ROW_G1R_1_0_3);
         let mut bad_selector = curated_records_v1();
         bad_selector.npcs[0].character_definition.canonical_selector =
             "script-class:wrong/UWrong".to_owned();

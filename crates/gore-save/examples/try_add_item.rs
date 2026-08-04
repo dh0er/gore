@@ -36,6 +36,9 @@ fn main() {
         "WRITE ok={} editsApplied={} bytesChanged={}",
         wv["ok"], wv["data"]["editsApplied"], wv["data"]["bytesChanged"]
     );
+    if wv["ok"] != Value::Bool(true) {
+        eprintln!("WRITE error: {}", wv["error"]);
+    }
 
     let inspect = json!({
         "command": "inspect_save",

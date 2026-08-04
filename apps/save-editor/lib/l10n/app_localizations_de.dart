@@ -638,6 +638,57 @@ class AppLocalizationsDe extends AppLocalizations {
   String get rotationRoll => 'Rollung (Roll)';
 
   @override
+  String get spawnPositionSection => 'Spawn-Position (Referenz)';
+
+  @override
+  String get positionNotReadable =>
+      'Die gespeicherte Position dieses Charakters konnte nicht gelesen werden.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Das Spiel stellt die Position eines NPCs aus dem Level wieder her, nicht aus dem Spielstand. Diese Werte lassen sich daher lesen, aber nicht ändern.';
+
+  @override
+  String get pickLocation => 'Ort wählen…';
+
+  @override
+  String get pickLocationDialogTitle => 'Ort wählen';
+
+  @override
+  String get applySpotRotation => 'Auch die Ausrichtung des Ortes übernehmen';
+
+  @override
+  String get locationAreaOther => 'Sonstige';
+
+  @override
+  String get locationAreaCavalornValley => 'Cavalorns Tal';
+
+  @override
+  String get locationAreaEastForest => 'Ostwald';
+
+  @override
+  String get locationAreaFogTower => 'Nebelturm';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Illegale Sumpfkrautmischer';
+
+  @override
+  String get locationAreaOrcArena => 'Orkarena';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Orkfriedhof';
+
+  @override
+  String get locationAreaShipwreck => 'Schiffswrack';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Der Ortskatalog konnte nicht geladen werden.';
+
+  @override
   String get invalid => 'Ungültig';
 
   @override
@@ -2262,6 +2313,11 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'Die NPC-Position konnte nicht geladen werden: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'Das NPC-Inventar konnte nicht geladen werden: $details';
   }
@@ -2612,4 +2668,85 @@ class AppLocalizationsDe extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Beschädigte Inventar-Slots';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Dieses Savegame hat $count Inventar-Slots, deren Id nicht mehr zu ihrer Position passt — im Spiel verschwindet dadurch beim Ablegen ein anderes Item. Die Reparatur passt nur die Ids an: kein Item wird hinzugefügt, entfernt oder verändert. Beim Speichern wird wie immer ein Backup angelegt.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Reparatur vorgemerkt — zum Anwenden speichern.';
+
+  @override
+  String get slotRepairAction => 'Reparieren';
+
+  @override
+  String get slotRepairDiscard => 'Verwerfen';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'Eine direkte Änderung an einem Inventar-Slot ist zusammen mit einer Änderung vorgemerkt, die ganze Slots beansprucht (Reparatur, Hinzufügen oder Entfernen). Die zweite würde die erste überschreiben — eine von beiden zurücknehmen, dann erneut speichern.';
+
+  @override
+  String get backupFactFile => 'Datei';
+
+  @override
+  String get renameBackupTooltip => 'Backup benennen';
+
+  @override
+  String get renameBackupTitle => 'Backup benennen';
+
+  @override
+  String get renameBackupLabel => 'Name';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Wird statt des Dateinamens $fileName angezeigt. Leer lassen entfernt den Namen; die Datei selbst wird nicht umbenannt.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Backup löschen';
+
+  @override
+  String get deleteBackupTitle => 'Backup löschen';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return '„$name“ ($fileName) löschen? Die Datei wird von der Festplatte entfernt und lässt sich nicht zurückholen.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Löschen';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Backup gelöscht: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Backup konnte nicht gelöscht werden: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Backup konnte nicht benannt werden: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Reparieren ist gerade nicht möglich — dieser Spielstand lässt sich nicht schreiben.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Backup gelöscht: $path — sein Name konnte nicht entfernt werden: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Für dieses Savegame steht die Reparatur nicht zur Verfügung.';
 }

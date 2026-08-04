@@ -1752,6 +1752,8 @@ fn goremod_components(
             | Component::AudioPatch { path, .. }
             | Component::TexturePatch { path, .. }
             | Component::AngelScriptPatch { path, .. }
+            | Component::FilePatch { path, .. }
+            | Component::PakFilePatch { path, .. }
             | Component::VoiceArchivePatch { path, .. } => path,
         };
         if !crate::is_safe_rel_path(comp_path) {
@@ -1823,6 +1825,29 @@ fn goremod_components(
                     targets,
                 }
             }
+            // Both destinations come from the payload manifest deploy actually reads, checked
+            // against the component's own declaration. The allowlist still runs on both, so an
+            // archive cannot smuggle a destination past import through either door.
+            Component::FilePatch { path, targets } => ComponentInfo::FilePatch {
+                rel: join_rel(prefix, path),
+                targets: loose_component_targets(
+                    bundle_dir,
+                    path,
+                    targets,
+                    "loose file manifest",
+                    limits,
+                )?,
+            },
+            Component::PakFilePatch { path, targets } => ComponentInfo::PakFilePatch {
+                rel: join_rel(prefix, path),
+                targets: loose_component_targets(
+                    bundle_dir,
+                    path,
+                    targets,
+                    "pak file manifest",
+                    limits,
+                )?,
+            },
             Component::VoiceArchivePatch { path } => {
                 let manifest_path = Path::new(path).join("manifest.json");
                 let bytes = read_bounded_bundle_file(
@@ -1915,6 +1940,55 @@ fn goremod_components(
         });
     }
     Ok(out)
+}
+
+/// A loose-file component's destinations, read from the payload manifest inside the bundle rather
+/// than believed from the component's own `targets` list.
+///
+/// Those two can disagree, and only one of them is what deploy acts on: `apply` reads
+/// `<path>/manifest.json` and writes whatever it maps, while `mgr analyze` bucketed the declared
+/// list. A bundle whose declaration is short — hand-edited, or written by a tool with a bug — was
+/// therefore reported as claiming nothing at a path it then silently won at apply time, and the
+/// user was told the loadout was conflict-free.
+///
+/// The declared list is still validated first, so a destination smuggled in there is refused with
+/// the same allowlist error as before rather than being quietly ignored; then the two are required
+/// to agree. Refusing the mismatch outright is the only honest option, because the disagreement
+/// means the bundle does not describe what it does, and picking either side would be a guess about
+/// which half is the mistake.
+fn loose_component_targets(
+    bundle_dir: &Path,
+    path: &str,
+    declared: &[String],
+    label: &'static str,
+    limits: ImportLimits,
+) -> crate::Result<Vec<String>> {
+    for target in declared {
+        crate::validate_loose_game_path(target)?;
+    }
+
+    let manifest_path = Path::new(path).join("manifest.json");
+    let bytes =
+        read_bounded_bundle_file(bundle_dir, &manifest_path, label, limits.max_manifest_bytes)?;
+    let map: BTreeMap<String, String> = serde_json::from_slice(&bytes)?;
+    let mut actual: Vec<String> = map.keys().cloned().collect();
+    for target in &actual {
+        crate::validate_loose_game_path(target)?;
+    }
+    actual.sort();
+    actual.dedup();
+
+    let mut stated: Vec<String> = declared.to_vec();
+    stated.sort();
+    stated.dedup();
+    if stated != actual {
+        return Err(ModError::Other(format!(
+            "the {label} and the component's declared targets disagree: the manifest maps {actual:?} \
+             but the component claims {stated:?}"
+        )));
+    }
+
+    Ok(actual)
 }
 
 /// Read one regular bundle file through a hard byte cap. Metadata is checked before opening, and
@@ -2060,7 +2134,15 @@ fn classify_file(root: &Path, path: &Path, out: &mut Vec<ComponentInfo>) {
         }
     } else if lower.ends_with("_p.pak") && !path.with_extension("utoc").is_file() {
         // A pak WITH a sibling .utoc belongs to that triplet, not to a loose-pak component.
-        let targets = gore_tex::container::list_pak_files(path).unwrap_or_default();
+        //
+        // Read through the mount point, because the conflict namespace these targets land in is
+        // game-root-relative and a pak index is not: UnrealPak folds a common leading directory
+        // into the mount point, so a cursor pak names its entry `Normal.PNG` while it claims
+        // `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. Comparing the raw index against real
+        // destinations misses the overlap that matters and invents ones between two paks that
+        // merely share a leaf name.
+        let targets =
+            gore_tex::container::list_pak_files_from_game_root(path).unwrap_or_default();
         out.push(ComponentInfo::LoosePak { rel, targets });
     }
 }
@@ -2177,8 +2259,8 @@ impl Drop for StagingGuard {
 mod tests {
     use super::*;
     use crate::{
-        build_bundle, write_bundle, BuildSpec, ModMeta, ScriptModule, VoiceArchiveEdit,
-        VoicePatchOp,
+        build_bundle, write_bundle, BuildSpec, LooseFileReplacement, ModMeta, ScriptModule,
+        VoiceArchiveEdit, VoicePatchOp,
     };
     use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
@@ -2241,6 +2323,8 @@ mod tests {
             loc_edits: loc,
             audio: vec![],
             texture: vec![],
+            files: vec![],
+            pak_files: vec![],
             scripts: vec![ScriptModule {
                 op: "add".into(),
                 module_name: "TestModule".into(),
@@ -2259,6 +2343,70 @@ mod tests {
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
         bdir
+    }
+
+    /// The library sidecar has to carry a loose-file component's DESTINATIONS, because that is the
+    /// only thing conflict analysis and apply can key off. The second half is the point of the
+    /// test: the manifest is authored data, so an archive that names a destination the deploy
+    /// record would refuse must be caught at import, not at apply — by then a user has already
+    /// built a loadout around it.
+    #[test]
+    fn import_goremod_file_patch_keeps_targets_and_refuses_a_forbidden_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let cursor = tmp.path().join("Normal.PNG");
+        fs::write(&cursor, b"CURSOR-BYTES").unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta {
+                name: "LooseProbe".into(),
+                version: "1".into(),
+                author: "tester".into(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![LooseFileReplacement {
+                game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                source_path: cursor.display().to_string(),
+            }],
+            pak_files: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        };
+        let bdir = tmp.path().join("LooseProbe");
+        write_bundle(&bdir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let meta = import(&lib, &bdir).unwrap();
+        assert!(
+            meta.components.iter().any(|c| matches!(
+                c,
+                ComponentInfo::FilePatch { rel, targets }
+                    if rel == "files"
+                        && targets == &vec!["G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_string()]
+            )),
+            "components: {:?}",
+            meta.components
+        );
+
+        let manifest_path = bdir.join("gore-mod.json");
+        let tampered = String::from_utf8(fs::read(&manifest_path).unwrap())
+            .unwrap()
+            .replace(
+                "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+                "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
+            );
+        fs::write(&manifest_path, tampered).unwrap();
+        // A fresh library so the refusal cannot be confused with an update-path failure.
+        let error = import(&tmp.path().join("lib-tampered"), &bdir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("not a replaceable game file"),
+            "unexpected error: {error}"
+        );
     }
 
     /// A folder import that IS the library dir — or a parent that contains it — must be rejected

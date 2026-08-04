@@ -8,6 +8,130 @@
 
 pub mod vorbis;
 
+/// Synthetic `.bank` fixtures shared by downstream crates' tests.
+///
+/// Deliberately hidden behind the default-off `test-fixtures` feature: it builds banks, it never
+/// reads or writes a game one, and nothing in a shipped binary should be able to reach it. This
+/// crate's own `#[cfg(test)]` tests reach it too, so a plain `cargo test` -- which is what CI runs
+/// -- still compiles and exercises it.
+///
+/// It exists because the public builders stop one layer short of a bank. [`build_fsb5_pcm16_multi`]
+/// emits the inner FSB5 block, which [`parse_bank`](crate::parse_bank) rejects as "not a RIFF/FEV
+/// bank", so a test that wants to exercise a reader end to end has no input at all -- and the real
+/// banks are 260 MB of game data that is never vendored into this repository.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_fixture {
+    use super::{build_fsb5_pcm16_multi, fsb5_encrypt, is_pristine_bank, Pcm16Sample};
+
+    /// `count` mono PCM16 samples named `{prefix}{index:02}`, one frame each.
+    ///
+    /// The names are what a `--filter` is tested against and the frame is what makes the bank
+    /// small; a listing reads neither the audio nor its length.
+    pub fn numbered_pcm16_samples(prefix: &str, count: usize, freq: u32) -> Vec<Pcm16Sample> {
+        (0..count)
+            .map(|index| Pcm16Sample {
+                name: format!("{prefix}{index:02}"),
+                freq,
+                channels: 1,
+                pcm: vec![0i16; 1],
+            })
+            .collect()
+    }
+
+    /// Wrap `samples` in a pristine RIFF/`FEV ` bank encrypted with `key`, the way the game ships
+    /// one: [`is_pristine_bank`] accepts it, [`super::bank_fsb0`] lists it, and
+    /// [`super::replace_samples`] takes it as a base.
+    ///
+    /// Only the wrapper both gore-fmod walkers actually read is emitted -- FMT (the bank version
+    /// lives at absolute 0x14), the top-level LIST holding PROJ/BNKI, an SNDH entry pointing at the
+    /// FSB5, and one WAV node per sample referencing (SoundBankIndex 0, SubsoundIndex i). Every
+    /// sub-chunk is framed as `[fourcc][u32 size][body]` starting right after PROJ, so BNKI carries
+    /// its own size too. The codec is PCM16, not the shipped banks' Vorbis, which is a feature for
+    /// a listing test: `codec` in the output can only be right by reading it.
+    pub fn pristine_bank_pcm16(samples: &[Pcm16Sample], key: &[u8]) -> Result<Vec<u8>, String> {
+        let mut fsb5 = build_fsb5_pcm16_multi(samples)?;
+        fsb5_encrypt(&mut fsb5, key);
+        let u32b = |v: u32| v.to_le_bytes();
+
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        debug_assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+
+        // SNDH: a 4-byte chunk-version prefix (its low 2 bytes double as the injector's X16 count)
+        // plus one 8-byte entry (absolute FSB5 offset, FSB5 size).
+        b.extend_from_slice(b"SNDH");
+        let sndh_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let sndh_body = b.len();
+        b.extend_from_slice(&[2u8, 0, 0, 0]); // X16 count = 1 (1<<1)
+        let sndh_entry = b.len();
+        b.extend_from_slice(&u32b(0)); // entry.offset (backpatched)
+        b.extend_from_slice(&u32b(0)); // entry.size   (backpatched)
+        let sndh_size = (b.len() - sndh_body) as u32;
+        b[sndh_size_pos..sndh_size_pos + 4].copy_from_slice(&u32b(sndh_size));
+
+        // The waveform table: one WAV node per sample, body ≥ 0x1A, carrying SoundBankIndex
+        // (i32 @+0x12) and SubsoundIndex (i32 @+0x16). Slot i reads (0, i) in every shipped bank,
+        // and that identity is the reference an injection repoints. A fixture with a single node
+        // would leave every sample past the first unreachable by [`super::replace_samples`] and
+        // would hide a repoint from [`super::read_bank`], which is exactly the pairing under test.
+        for index in 0..samples.len() {
+            b.extend_from_slice(b"WAV ");
+            let wav_size_pos = b.len();
+            b.extend_from_slice(&u32b(0));
+            let wav_body = b.len();
+            b.extend_from_slice(&[0u8; 0x1A]);
+            b[wav_body + 0x12..wav_body + 0x16].copy_from_slice(&u32b(0));
+            b[wav_body + 0x16..wav_body + 0x1A].copy_from_slice(&u32b(index as u32));
+            let wav_size = (b.len() - wav_body) as u32;
+            b[wav_size_pos..wav_size_pos + 4].copy_from_slice(&u32b(wav_size));
+        }
+
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // SND chunk carrying the encrypted FSB5, 32-aligned.
+        b.extend_from_slice(b"SND ");
+        let snd_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let pad = (32 - (b.len() % 32)) % 32;
+        b.resize(b.len() + pad, 0);
+        let fsb5_abs = b.len() as u32;
+        b.extend_from_slice(&fsb5);
+        let snd_size = (b.len() - (snd_size_pos + 4)) as u32;
+        b[snd_size_pos..snd_size_pos + 4].copy_from_slice(&u32b(snd_size));
+
+        b[sndh_entry..sndh_entry + 4].copy_from_slice(&u32b(fsb5_abs));
+        b[sndh_entry + 4..sndh_entry + 8].copy_from_slice(&u32b(fsb5.len() as u32));
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+
+        // A fixture that is not pristine would send its reader down a different code path than the
+        // one under test, and say nothing about why.
+        if !is_pristine_bank(&b) {
+            return Err("fixture bank is not pristine".into());
+        }
+        Ok(b)
+    }
+}
+
 // ---------- little/big-endian readers ----------
 #[inline]
 pub fn u32_le(b: &[u8], o: usize) -> u32 {
@@ -106,8 +230,14 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
         off += 8;
         match ctype {
             0x4C49_5354 => {
-                // "LIST" — nested; check for SNDH
+                // "LIST" — nested; check for SNDH. This is the arm every shipped bank takes.
                 if off + 8 <= end && u32_be(b, off + 4) == 0x534E_4448 {
+                    // The size field is the four bytes after that fourcc, so it needs `off + 12`,
+                    // not the `off + 8` that proved the fourcc. A file cut short between the two
+                    // is damage; reading it anyway indexed past the buffer and panicked.
+                    if off + 12 > end {
+                        return Err("SNDH chunk header cut short (truncated bank)".into());
+                    }
                     sndh_off = off + 0x0C;
                     sndh_size = u32_le(b, off + 8) as usize;
                 }
@@ -127,8 +257,32 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
     }
 
     let entry_size = if version <= 0x28 { 4 } else { 8 };
+    // A zero-length SNDH body is how FMOD writes a bank that holds no sub-banks at all — it is not
+    // damage. Six of the ten shipped banks look like this: the four 506-byte placeholders
+    // (Music_NotDemo, Music_NyrasPrologue, SFX_NotDemo, SFX_NyrasPrologue) plus Master.bank (mixer
+    // and buses only) and Master.strings.bank (string table only). Every chunk header in them is
+    // intact down to the trailing PLAT; there is simply no `SND ` chunk and no FSB5. That absent
+    // `SND ` is what makes the branch decidable: it sits after the top-level LIST in every bank
+    // that has one, so in a bank that has none the LIST body runs exactly to EOF. Comparing only
+    // the RIFF length would be suggestive rather than exact — zeroing these four size bytes in
+    // place leaves both the file length and the RIFF field honest, and would let a bank still
+    // carrying its whole FSB5 payload be told it is intact and empty. Neither subtraction can
+    // underflow: `b.len() >= 0x18` from the header check, and the PROJ/BNKI check above proved
+    // `list_body + 8 <= b.len()`.
+    let sample_free = sndh_size == 0
+        && b.len() - 8 == u32_le(b, 0x04) as usize
+        && b.len() - list_body == u32_le(b, list_body - 4) as usize;
+    if sample_free {
+        return Err(
+            "bank carries no sample data (its SNDH chunk is empty): a placeholder or a \
+             metadata-only bank such as Master.bank or *.strings.bank, not a damaged one — the \
+             samples are in SFX.bank, Music.bank, VO.bank and CINEMATICS.bank"
+                .into(),
+        );
+    }
+    // 1..=3 bytes cannot hold SNDH's mandatory 4-byte chunk-version prefix, so the body is torn.
     if sndh_size < 4 {
-        return Err("SNDH too small".into());
+        return Err("SNDH too small (truncated or corrupt bank)".into());
     }
     let banks = (sndh_size - 4) / entry_size; // skip 4-byte chunk-version
     let mut out = Vec::with_capacity(banks);
@@ -390,10 +544,12 @@ fn read_cstr(b: &[u8]) -> String {
 /// The recovered FMOD Studio bank encryption key for Gothic 1 Remake (StudioBankKey).
 pub const GOTHIC_STUDIO_KEY: &[u8] = b"NGpxstJ42kfNfz4z3CsS";
 
-/// Decrypt FSB5 sub-bank #0 and return (decrypted block bytes, parsed view).
-pub fn decrypt_fsb0(bank: &[u8], key: &[u8]) -> Result<(Vec<u8>, Fsb5), String> {
+/// Decrypt FSB5 sub-bank `index` and return (decrypted block bytes, parsed view).
+pub fn decrypt_sub_bank(bank: &[u8], key: &[u8], index: usize) -> Result<(Vec<u8>, Fsb5), String> {
     let entries = parse_bank(bank)?;
-    let e = entries.first().ok_or("bank has no FSB5")?;
+    let e = entries
+        .get(index)
+        .ok_or_else(|| format!("bank has no FSB5 sub-bank {index}"))?;
     let mut blk = bank
         .get(e.fsb5_offset..e.fsb5_offset + e.fsb5_size)
         .ok_or("FSB5 out of range")?
@@ -403,9 +559,160 @@ pub fn decrypt_fsb0(bank: &[u8], key: &[u8]) -> Result<(Vec<u8>, Fsb5), String> 
     Ok((blk, fsb))
 }
 
-/// Decrypt + parse FSB5 sub-bank #0 (the game's single audio FSB5).
+/// Decrypt FSB5 sub-bank #0 and return (decrypted block bytes, parsed view).
+///
+/// Sub-bank 0 is the audio the bank shipped with. On a bank that [`replace_samples`] has been
+/// through it is therefore NOT what the runtime plays for a replaced waveform — use [`read_bank`]
+/// for that.
+pub fn decrypt_fsb0(bank: &[u8], key: &[u8]) -> Result<(Vec<u8>, Fsb5), String> {
+    decrypt_sub_bank(bank, key, 0)
+}
+
+/// Decrypt + parse FSB5 sub-bank #0 (the audio the bank shipped with).
 pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
     decrypt_fsb0(bank, key).map(|(_, f)| f)
+}
+
+/// Where one waveform's audio is taken from: a sub-bank index and a subsound within it.
+///
+/// In every shipped bank slot `i` reads `(0, i)` — the identity. Repointing that pair is the whole
+/// of what makes a replacement audible, so it is also the whole of what a reader has to follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WaveformSlot {
+    pub sub_bank: usize,
+    pub subsound: usize,
+}
+
+/// The bank's waveform table, in file order: slot `i` is the `i`-th `WAV ` node in the metadata.
+///
+/// This is the table [`inject_fsb5`] rewrites. Reading it is what separates "the bank still
+/// contains the original audio" (always true — sub-bank 0 is never edited) from "the bank still
+/// plays the original audio" (only true if nothing repointed the slot).
+pub fn waveform_slots(bank: &[u8]) -> Result<Vec<WaveformSlot>, String> {
+    let (list_off, list_size) = find_top_list(bank)?;
+    let metadata_end = (list_off + 8 + list_size).min(bank.len());
+    let mut wavs = Vec::new();
+    let mut sndh = None;
+    gather(bank, list_off + 8 + 4, metadata_end, &mut wavs, &mut sndh);
+    wavs.iter()
+        .map(|&(_, sub_bank, subsound)| {
+            if sub_bank < 0 || subsound < 0 {
+                return Err("negative waveform reference (corrupt bank)".to_string());
+            }
+            Ok(WaveformSlot {
+                sub_bank: sub_bank as usize,
+                subsound: subsound as usize,
+            })
+        })
+        .collect()
+}
+
+/// One waveform as the runtime addresses it: named by the bank it shipped in, described by the
+/// audio it now plays.
+#[derive(Debug, Clone)]
+pub struct BankSample {
+    /// The name from sub-bank 0. A replacement never renames a waveform — the name is the stable
+    /// identity a `--map` entry, a patch manifest and a mod bundle all key on.
+    pub name: String,
+    /// Where the audio comes from now.
+    pub slot: WaveformSlot,
+    /// Whether [`Self::slot`] has been repointed away from this waveform's own subsound in
+    /// sub-bank 0, i.e. whether an injection replaced it.
+    pub replaced: bool,
+    pub codec: Codec,
+    pub freq: u32,
+    pub channels: u32,
+    /// Decoded PCM frames per channel, of the audio that actually plays.
+    pub num_samples: u32,
+}
+
+/// A bank read the way the runtime reads it: every sub-bank decrypted once, every waveform resolved
+/// to the sub-bank it points at.
+pub struct BankView {
+    /// `(decrypted block, parsed header)` per FSB5 sub-bank, in SNDH order.
+    pub sub_banks: Vec<(Vec<u8>, Fsb5)>,
+    /// One entry per waveform in sub-bank 0, in its order.
+    pub samples: Vec<BankSample>,
+}
+
+impl BankView {
+    /// The codec of the audio the bank shipped with. `list` prints this as the bank's codec; a
+    /// replaced waveform carries its own in [`BankSample::codec`].
+    pub fn codec(&self) -> Codec {
+        self.sub_banks
+            .first()
+            .map(|(_, f)| f.codec)
+            .unwrap_or(Codec::None)
+    }
+
+    /// Decode waveform `index` to a gapless PCM16 WAV, reading from the sub-bank its slot points at
+    /// rather than always from sub-bank 0.
+    pub fn extract_wav(&self, index: usize) -> Result<Vec<u8>, String> {
+        let sample = self.samples.get(index).ok_or("sample index out of range")?;
+        let (block, fsb) = self
+            .sub_banks
+            .get(sample.slot.sub_bank)
+            .ok_or("sub-bank out of range")?;
+        crate::extract_wav(block, fsb, sample.slot.subsound)
+    }
+}
+
+/// Read every sub-bank and resolve every waveform reference.
+///
+/// The reason this exists rather than [`bank_fsb0`]: [`replace_samples`] does not overwrite audio,
+/// it appends a sub-bank and repoints the waveform at it. Sub-bank 0 therefore still holds — byte
+/// for byte — the audio that was replaced, and a reader that stops there reports the replacement as
+/// having done nothing, on a bank where the runtime plays the new audio.
+///
+/// The waveform table is matched to sub-bank 0 by position, which is what every shipped bank
+/// writes (slot `i` reads `(0, i)`). A bank whose table is a different length is one this mapping
+/// cannot speak for, so every waveform there is reported unreplaced rather than guessed at.
+pub fn read_bank(bank: &[u8], key: &[u8]) -> Result<BankView, String> {
+    let count = parse_bank(bank)?.len();
+    let mut sub_banks = Vec::with_capacity(count);
+    for index in 0..count {
+        sub_banks.push(decrypt_sub_bank(bank, key, index)?);
+    }
+    let base = &sub_banks.first().ok_or("bank has no FSB5")?.1;
+    let slots = waveform_slots(bank)?;
+    let positional = slots.len() == base.samples.len();
+
+    let mut samples = Vec::with_capacity(base.samples.len());
+    for (index, shipped) in base.samples.iter().enumerate() {
+        let identity = WaveformSlot {
+            sub_bank: 0,
+            subsound: index,
+        };
+        let slot = if positional { slots[index] } else { identity };
+        let (_, fsb) = sub_banks.get(slot.sub_bank).ok_or_else(|| {
+            format!(
+                "waveform {index} ({}) points at sub-bank {}, which the bank does not carry",
+                shipped.name, slot.sub_bank
+            )
+        })?;
+        let source = fsb.samples.get(slot.subsound).ok_or_else(|| {
+            format!(
+                "waveform {index} ({}) points at subsound {} of sub-bank {}, which holds {}",
+                shipped.name,
+                slot.subsound,
+                slot.sub_bank,
+                fsb.samples.len()
+            )
+        })?;
+        samples.push(BankSample {
+            name: shipped.name.clone(),
+            slot,
+            replaced: slot != identity,
+            codec: fsb.codec,
+            freq: source.freq,
+            channels: source.channels,
+            num_samples: source.num_samples,
+        });
+    }
+    Ok(BankView {
+        sub_banks,
+        samples,
+    })
 }
 
 /// Decode one Vorbis sample (by index in FSB5 #0) to a gapless 16-bit PCM WAV.
@@ -413,6 +720,37 @@ pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
 /// granule positions are approximate (some players insert silence at page boundaries),
 /// whereas decoded PCM is exact and plays cleanly everywhere.
 pub fn extract_wav(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, String> {
+    // A replaced sample is PCM16, because that is what `replace_samples` appends — and the whole
+    // point of reading the bank the game plays is being able to read your own replacement back. A
+    // Vorbis-only path here made `audio extract` skip exactly the sample the user had just written,
+    // and report success having produced no file at all.
+    if fsb.codec == Codec::Pcm16 {
+        let s = fsb.samples.get(index).ok_or("sample index out of range")?;
+        let start = (fsb.data_section + s.data_offset) as usize;
+        // `size` spans to the next sample's offset, and FSB5 offsets are 32-byte aligned — so for
+        // any sample whose PCM does not land on that boundary it runs past the audio into as much
+        // as 30 bytes of padding. Emitting those appends silence the replacement never had, which
+        // means `extract` does not reproduce what `replace` wrote. The frame count is what says
+        // where the audio actually ends; `size` only says where the next one begins.
+        let declared = (s.num_samples as usize)
+            .saturating_mul(s.channels as usize)
+            .saturating_mul(2);
+        let mut len = s.size as usize;
+        // Only ever narrows. A bank whose header understates its own frame count would otherwise
+        // lose real audio here, and `size` remains the outer bound in either direction.
+        if declared > 0 {
+            len = len.min(declared);
+        }
+        let end = (start + len).min(block.len());
+        let audio = block.get(start..end).ok_or("sample data out of range")?;
+        // Truncated rather than refused: an odd length means one dangling byte, and dropping it
+        // costs half a sample of the tail where erroring would cost the whole recording.
+        let pcm: Vec<i16> = audio
+            .chunks_exact(2)
+            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        return Ok(wav_pcm16(s.freq, s.channels, &pcm));
+    }
     let ogg = extract_ogg(block, fsb, index)?;
     let mut reader = lewton::inside_ogg::OggStreamReader::new(std::io::Cursor::new(ogg))
         .map_err(|e| format!("vorbis open: {e:?}"))?;
@@ -916,6 +1254,55 @@ mod tests {
     }
 
     #[test]
+    fn a_pcm16_sample_reads_back_as_the_wav_it_was_built_from() {
+        // What `replace_samples` appends is PCM16, so this is the codec of every replacement — and
+        // `extract_wav` used to hand the whole job to a Vorbis-only path. `audio extract` therefore
+        // skipped precisely the sample the user had just written, and reported success having
+        // produced nothing: the one check that tells someone their replacement actually landed.
+        let rate = 22050;
+        let pcm: Vec<i16> = (0..512).map(|n| (n as i16).wrapping_mul(311)).collect();
+        let fsb_bytes = build_fsb5_pcm16("replaced", rate, 1, &pcm).unwrap();
+        let fsb = parse_fsb5(&fsb_bytes).unwrap();
+        assert_eq!(fsb.codec, Codec::Pcm16, "the fixture has to be the codec under test");
+
+        let wav = extract_wav(&fsb_bytes, &fsb, 0).expect("a PCM16 sample must extract");
+        assert_eq!(wav, wav_pcm16(rate, 1, &pcm), "the samples must survive the round trip");
+
+        // The header has to describe the audio, not the defaults: a replacement recorded at another
+        // rate would otherwise play back at the wrong speed in whatever the user opens it with.
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), rate);
+        assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn a_padded_sample_extracts_its_audio_and_not_the_padding_after_it() {
+        // FSB5 offsets are 32-byte aligned, so the builder pads between samples and a sample's
+        // `size` — the gap to the next offset — overshoots its audio by up to 30 bytes. Reading to
+        // `size` appended that padding as silence, which meant `extract` did not reproduce what
+        // `replace` had written. 100 frames is 200 bytes, which is 8 short of the boundary.
+        let first: Vec<i16> = (0..100).map(|n| (n as i16).wrapping_mul(37).wrapping_add(1)).collect();
+        let second: Vec<i16> = (0..64).map(|n| (n as i16).wrapping_mul(-11)).collect();
+        assert_ne!(first.len() * 2 % 32, 0, "the fixture has to be the unaligned case");
+
+        let bytes = build_fsb5_pcm16_multi(&[
+            Pcm16Sample { name: "first".into(), freq: 44_100, channels: 1, pcm: first.clone() },
+            Pcm16Sample { name: "second".into(), freq: 44_100, channels: 1, pcm: second.clone() },
+        ])
+        .unwrap();
+        let fsb = parse_fsb5(&bytes).unwrap();
+
+        assert_eq!(
+            extract_wav(&bytes, &fsb, 0).unwrap(),
+            wav_pcm16(44_100, 1, &first),
+            "the padding between this sample and the next is not audio"
+        );
+        // The last sample has nothing after it to pad against, which is why the bug only ever
+        // showed on the earlier ones — and why a single-sample fixture would have missed it.
+        assert_eq!(extract_wav(&bytes, &fsb, 1).unwrap(), wav_pcm16(44_100, 1, &second));
+    }
+
+    #[test]
     fn parse_fsb5_truncated_chunk_errors_not_panics() {
         // A bank whose sample-header FREQUENCY chunk payload is cut off must return a decode error
         // rather than indexing past the buffer and panicking. The 88200 sample has a 4-byte freq
@@ -923,5 +1310,352 @@ mod tests {
         let fsb = build_fsb5_pcm16("hi", 88200, 2, &[0i16; 128]).unwrap();
         assert!(fsb.len() > 0x4A);
         assert!(parse_fsb5(&fsb[..0x4A]).is_err());
+    }
+
+    /// How SNDH hangs off BNKI. `parse_bank` has an arm for each and they read the size field from
+    /// different offsets; all ten shipped banks take the nested one, so a fixture that only emits
+    /// `Direct` leaves the arm the game actually uses untested.
+    #[derive(Clone, Copy)]
+    enum Sndh {
+        /// A direct sub-chunk of BNKI.
+        Direct,
+        /// One level down, inside a nested `LIST`, the way the shipped banks are written.
+        NestedInList,
+    }
+
+    /// A minimal RIFF/`FEV ` bank whose SNDH body is exactly `body`, followed by `trailing_snd` as
+    /// the payload of a top-level `SND ` chunk — empty for the sample-free banks, which have no
+    /// `SND ` chunk at all. Carries only the wrapper `parse_bank` actually walks — FMT (bank
+    /// version at absolute 0x14), the top-level LIST holding PROJ/BNKI, then SNDH — and backpatches
+    /// the RIFF size so the whole-file length field is honest. The real game banks are never
+    /// vendored here; the chunk layout is the whole of what these tests need.
+    fn bank_with_sndh(body: &[u8], sndh: Sndh, trailing_snd: &[u8]) -> Vec<u8> {
+        let u32b = |v: u32| v.to_le_bytes();
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        // The sub-chunk walk begins right after PROJ framing chunks as [fourcc][u32 size][body],
+        // so BNKI is the first such header and needs a size of its own.
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+        match sndh {
+            Sndh::Direct => {
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+            Sndh::NestedInList => {
+                // [LIST][size][list type][SNDH][size][body]: the walk recognises the nested chunk
+                // by the fourcc four bytes into the LIST body and takes the body twelve bytes in.
+                b.extend_from_slice(b"LIST");
+                b.extend_from_slice(&u32b((0x0C + body.len()) as u32));
+                b.extend_from_slice(b"MODS");
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+        }
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // A bank that carries samples keeps them in a top-level `SND ` chunk behind the LIST, so
+        // its LIST is not the last chunk in the file. A sample-free bank ends with the LIST.
+        if !trailing_snd.is_empty() {
+            b.extend_from_slice(b"SND ");
+            b.extend_from_slice(&u32b(trailing_snd.len() as u32));
+            b.extend_from_slice(trailing_snd);
+        }
+
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+        b
+    }
+
+    /// The sample-free shape with SNDH directly under BNKI.
+    fn bank_with_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::Direct, &[])
+    }
+
+    /// The sample-free shape with SNDH nested in a `LIST`, as every shipped bank writes it.
+    fn bank_with_nested_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::NestedInList, &[])
+    }
+
+    /// Offset of the four bytes `parse_bank` reads as the SNDH size, i.e. just past the fourcc.
+    fn sndh_size_field(b: &[u8]) -> usize {
+        b.windows(4)
+            .position(|w| w == b"SNDH")
+            .expect("the fixture writes exactly one SNDH fourcc")
+            + 4
+    }
+
+    #[test]
+    fn parse_bank_reports_an_empty_sndh_as_a_sample_free_bank_not_a_broken_one() {
+        // Six of the ten shipped banks are shaped like this — the four 506-byte placeholders plus
+        // Master.bank (mixer only) and Master.strings.bank (string table only). Calling them
+        // "SNDH too small" sent people looking for a corrupt file that was never corrupt.
+        let err = parse_bank(&bank_with_sndh_body(&[])).unwrap_err();
+        assert!(
+            err.contains("no sample data"),
+            "an intact bank that simply has no samples must say so, got {err:?}"
+        );
+        assert!(
+            !err.contains("too small"),
+            "a bank that is not damaged must not be described as damaged, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_still_reports_damage_when_the_sndh_body_is_a_partial_version_prefix() {
+        // 1..=3 bytes cannot hold SNDH's mandatory 4-byte chunk-version prefix, so this file is
+        // torn, not empty. Widening the friendly branch to the whole `< 4` guard would swallow it.
+        let err = parse_bank(&bank_with_sndh_body(&[0, 0, 0])).unwrap_err();
+        assert!(
+            err.contains("SNDH too small"),
+            "a torn SNDH body must still be reported as damage, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_calls_an_empty_sndh_damaged_when_the_riff_length_disagrees_with_the_file_size() {
+        // What the RIFF-length corroboration buys: a file whose byte count disagrees with its own
+        // RIFF header must not pass itself off as a placeholder just because SNDH reads zero.
+        let mut b = bank_with_sndh_body(&[]);
+        b.push(0); // RIFF now claims the file ends one byte earlier than it does
+        let err = parse_bank(&b).unwrap_err();
+        assert!(
+            err.contains("SNDH too small"),
+            "a bank whose RIFF length disagrees with its size must be called damaged, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_does_not_call_a_bank_sample_free_when_its_sndh_size_was_zeroed_in_place() {
+        // The case the RIFF length alone cannot see, and the reason the LIST must reach EOF too.
+        // Zeroing those four bytes in a real `VO.bank` — 652,800 bytes, 598 KB of `SND ` payload
+        // it can no longer find — changes neither the file length nor the RIFF field, so a
+        // corroboration built only on those two tells a badly damaged bank it is "not a damaged
+        // one". Saying nothing is wrong is worse than the "SNDH too small" this branch replaced.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let mut b = bank_with_sndh(&body, Sndh::NestedInList, &[0xAB; 64]);
+        assert_eq!(
+            parse_bank(&b).unwrap().len(),
+            1,
+            "the fixture must be a bank that really does carry a sample before it is corrupted"
+        );
+        let size_field = sndh_size_field(&b);
+        b[size_field..size_field + 4].copy_from_slice(&0u32.to_le_bytes());
+        let err = parse_bank(&b).unwrap_err();
+        assert!(
+            !err.contains("no sample data"),
+            "a bank whose `SND ` payload is still there must not be called sample-free, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_bank_reports_a_bank_truncated_inside_its_nested_sndh_header_instead_of_panicking() {
+        // The window this exists for: `Music_NotDemo.bank` cut to 444..=447 bytes. The guard proved
+        // room for the fourcc and the body then read four more bytes for the size, so `gore audio
+        // list` answered a short file with a Rust backtrace — and the Studio, which catches the
+        // unwind, with an opaque transport panic instead of a decode error.
+        let whole = bank_with_nested_sndh_body(&[0u8; 12]);
+        let size_field = sndh_size_field(&whole);
+        for cut in size_field..size_field + 4 {
+            let err = parse_bank(&whole[..cut]).unwrap_err();
+            assert!(
+                err.contains("truncated"),
+                "a bank cut off at {cut} inside its SNDH size field must be reported as \
+                 truncated, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_bank_finds_the_sndh_chunk_that_a_shipped_bank_nests_inside_a_list() {
+        // Every one of the ten real banks reaches SNDH through the nested `LIST` arm, not the
+        // direct one the other fixtures emit. Pin that the nested fixture is genuinely walked, so
+        // the truncation case above cannot pass by failing some earlier check.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let entries = parse_bank(&bank_with_nested_sndh_body(&body)).unwrap();
+        assert_eq!(entries.len(), 1, "a nested SNDH with one entry holds one FSB5");
+    }
+
+    #[test]
+    fn parse_bank_still_returns_one_entry_for_a_bank_that_ships_an_fsb5() {
+        // The ordinary bank runs through the same guard, so pin it next to the new branch: a
+        // 4-byte version prefix plus one 8-byte entry is still exactly one FSB5.
+        let mut body = vec![2u8, 0, 0, 0]; // X16 count = 1
+        body.extend_from_slice(&[0u8; 8]); // one entry: FSB5 offset, FSB5 size
+        let entries = parse_bank(&bank_with_sndh_body(&body)).unwrap();
+        assert_eq!(entries.len(), 1, "a bank with one SNDH entry holds one FSB5");
+    }
+
+    /// A ramp, so two samples built with different lengths are also different bytes.
+    fn ramp(name: &str, freq: u32, frames: usize) -> Pcm16Sample {
+        Pcm16Sample {
+            name: name.to_owned(),
+            freq,
+            channels: 1,
+            pcm: (0..frames).map(|i| (i as i16).wrapping_mul(37)).collect(),
+        }
+    }
+
+    /// Two samples, the second of which every test below replaces.
+    fn two_sample_bank() -> Vec<u8> {
+        let samples = [ramp("SFX_UI_Click_00", 22_050, 64), ramp("SFX_UI_Click_01", 22_050, 96)];
+        test_fixture::pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap()
+    }
+
+    /// Count the top-level `SND ` chunks, walking the RIFF exactly as `find_top_list` does.
+    fn top_level_snd_chunks(b: &[u8]) -> usize {
+        let mut off = 0x0C;
+        let mut count = 0;
+        while off + 8 <= b.len() {
+            let cc = &b[off..off + 4];
+            if !printable(cc) {
+                break;
+            }
+            if cc == b"SND " {
+                count += 1;
+            }
+            off = off + 8 + u32_le(b, off + 4) as usize;
+        }
+        count
+    }
+
+    #[test]
+    fn a_replaced_sample_reads_back_as_the_replacement_and_not_as_what_it_replaced() {
+        // The defect this exists for. `replace_samples` does not overwrite audio: it appends a
+        // second FSB5 and repoints the waveform at it, and the runtime follows that repoint —
+        // FMOD's own loader, handed a bank injected by this code, plays the injected audio. But
+        // every reader here went to sub-bank 0, which by design still holds the audio that was
+        // replaced, byte for byte. So `gore audio list` answered a 0.30 s injection with the
+        // original's 32.70 s, `extract` wrote out the original under the replaced sample's name,
+        // and there was no way through these tools to tell a landed replacement from a lost one.
+        let bank = two_sample_bank();
+        let injected = replace_samples(
+            &bank,
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_01".into(), ramp("whatever_it_is_called", 44_100, 8))],
+        )
+        .unwrap();
+
+        let view = read_bank(&injected, GOTHIC_STUDIO_KEY).unwrap();
+        let replaced = &view.samples[1];
+        assert!(replaced.replaced, "the injected waveform must read as replaced");
+        assert_eq!(
+            (replaced.freq, replaced.num_samples),
+            (44_100, 8),
+            "the replacement's own rate and length must be what a listing reports, not the \
+             22050 Hz / 96 frames it replaced"
+        );
+        assert_eq!(
+            replaced.name, "SFX_UI_Click_01",
+            "a replacement never renames the waveform: the name stays the identity a --map keys on"
+        );
+        assert_eq!(replaced.slot, WaveformSlot { sub_bank: 1, subsound: 0 });
+
+        let untouched = &view.samples[0];
+        assert!(!untouched.replaced, "replacing one waveform must not mark the others");
+        assert_eq!((untouched.freq, untouched.num_samples), (22_050, 64));
+
+        // Nothing above would fail if the injected audio itself were wrong, so read the PCM back
+        // out of the sub-bank the slot names and compare it with what went in.
+        let (block, fsb) = &view.sub_banks[replaced.slot.sub_bank];
+        let source = &fsb.samples[replaced.slot.subsound];
+        let start = (fsb.data_section + source.data_offset) as usize;
+        let played: Vec<i16> = block[start..start + 16]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(
+            played,
+            ramp("x", 44_100, 8).pcm,
+            "the bytes read back must be the bytes injected"
+        );
+    }
+
+    #[test]
+    fn an_unreplaced_bank_reads_every_waveform_as_its_own_subsound_in_sub_bank_zero() {
+        // The other half of the pair: `replaced` has to be false for a bank nobody has touched, or
+        // the flag says nothing. It also pins the identity mapping the resolver assumes — slot i
+        // reads (0, i) — which is what makes a repointed slot detectable at all.
+        let view = read_bank(&two_sample_bank(), GOTHIC_STUDIO_KEY).unwrap();
+        assert_eq!(view.samples.len(), 2);
+        for (index, sample) in view.samples.iter().enumerate() {
+            assert!(!sample.replaced, "{} must not read as replaced", sample.name);
+            assert_eq!(sample.slot, WaveformSlot { sub_bank: 0, subsound: index });
+        }
+    }
+
+    #[test]
+    fn an_injected_bank_carries_one_snd_chunk_for_every_sndh_entry() {
+        // Why the `SND ` count is *supposed* to grow, and what must hold while it does. FMOD pairs
+        // the i-th `SND ` chunk with SNDH entry i, so a second sub-bank needs a second chunk; two
+        // chunks where the original had one is the injection working, not a file being appended to
+        // by accident. The failure worth catching is the two counts drifting apart — an SNDH entry
+        // with no chunk behind it is a bank the runtime cannot load, and `parse_bank` would still
+        // read it happily because it only ever looks at SNDH.
+        let bank = two_sample_bank();
+        assert_eq!(top_level_snd_chunks(&bank), parse_bank(&bank).unwrap().len());
+
+        let injected = replace_samples(
+            &bank,
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_00".into(), ramp("tone", 44_100, 8))],
+        )
+        .unwrap();
+        let entries = parse_bank(&injected).unwrap();
+        assert_eq!(entries.len(), 2, "an injection adds exactly one sub-bank");
+        assert_eq!(
+            top_level_snd_chunks(&injected),
+            entries.len(),
+            "every SNDH entry must have the `SND ` chunk FMOD pairs with it"
+        );
+        assert_eq!(
+            u32_le(&injected, 0x04) as usize,
+            injected.len() - 8,
+            "the RIFF length must describe the file the injection actually wrote"
+        );
+    }
+
+    #[test]
+    fn replacing_a_second_time_refuses_instead_of_stacking_another_sub_bank() {
+        // Rebuilding from an already-injected bank would append a third FSB5 whose sub-bank 0 is
+        // itself a modded bank, and each round would carry the last round's audio forward for ever.
+        // The refusal is what makes `*.gore-bak` the input, and it has to name that remedy.
+        let injected = replace_samples(
+            &two_sample_bank(),
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_00".into(), ramp("tone", 44_100, 8))],
+        )
+        .unwrap();
+        let err = replace_samples(
+            &injected,
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_01".into(), ramp("tone", 44_100, 8))],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("already contains modded audio") && err.contains("gore-bak"),
+            "the refusal must name the backup that is the real input, got {err:?}"
+        );
     }
 }

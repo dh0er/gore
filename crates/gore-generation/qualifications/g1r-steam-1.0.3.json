@@ -1,0 +1,26 @@
+{
+  "generation_id": "g1r-steam-1.0.3",
+  "label": "Steam 1.0.3 Hotfix 1",
+  "native_ancestry_profile_id": "sha256:98da5430f213b0107bd7361fa3c78316bf5320fbd15a53a9258d50d8d3ac9ed5",
+  "gameplay_tag_float32_map_proof_id": "sha256:f20ce5ce571f3d121046ac1942e0705cfb30c3761a3e390cd5d77ea2c16159cc",
+  "scalar_default_operand_count": 26339,
+  "gameplay_tag_float32_operand_count": 1432,
+  "class_count": 6572,
+  "gameplay_tag_float32_map_field_count": 8,
+  "unresolved_fields_with_ancestry": 0,
+  "direct_windows": 26339,
+  "witnesses": {
+    "native_ancestry_profile_id": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids (GORE_AS_DEFAULT_CACHE, GORE_AS_DEFAULT_USMAP)",
+    "gameplay_tag_float32_map_proof_id": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "scalar_default_operand_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "gameplay_tag_float32_operand_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "class_count": "crates/gore-as/tests/default_patch_test.rs::configured_real_default_ancestry_profile_is_sealed",
+    "gameplay_tag_float32_map_field_count": "crates/gore-as/src/cache/default_ancestry.rs::configured_production_profile_derives_its_evidence_ids",
+    "unresolved_fields_with_ancestry": "crates/gore/tests/integration/as_cache_test.rs::configured_real_cache_native_ancestry_patch_is_rediscovered_and_fail_closed",
+    "direct_windows": "crates/gore-as/tests/default_patch_test.rs::configured_real_cache_exposes_known_direct_default_sites"
+  },
+  "notes": [
+    "The USMAP is a UE4SS reflection dump taken on a developer machine, not a file Steam ships. This generation's sealed USMAP digest is the one all later rows have so far inherited.",
+    "Prose record of the same measurements: docs/internal/native-defaults-checkpoint.md."
+  ]
+}

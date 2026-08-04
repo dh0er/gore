@@ -36,7 +36,8 @@ pub enum ConflictKind {
     Loc,
     /// FMOD sample replacements, target `"<bank>|<sample>"`.
     Audio,
-    /// Cooked-asset packages: texture patches, foreign triplets and loose paks share this space.
+    /// Cooked-asset packages: texture patches and foreign triplets share this space. Loose paks do
+    /// NOT — their targets are game-relative file paths, which is a different namespace entirely.
     Asset,
     /// Class-default-object edits from UE4SS lua, target `"Class.Field"`.
     Cdo,
@@ -48,6 +49,10 @@ pub enum ConflictKind {
     VoiceArchive,
     /// Wholesale live-file replacement (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
     RawFile,
+    /// One game-root-relative file claimed by two mods, target = that path (case-insensitive,
+    /// forward slashes). Both routes to it live here: an in-place `files` replacement, and a pak
+    /// — this toolkit's `pak_files` or a foreign `_P.pak` — carrying an entry at the same path.
+    LooseFile,
 }
 
 /// How bad an overlap is.
@@ -69,6 +74,10 @@ pub enum Severity {
 pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
     let enabled = enabled_in_order(mods, loadout);
     let mut buckets: BTreeMap<(ConflictKind, String), (Severity, Vec<String>)> = BTreeMap::new();
+    // Loose-file claims are collected separately because their severity is a property of the PAIR,
+    // not of either claimant: `note`'s take-the-worse rule cannot express "these two are only soft
+    // because both arrive through the pak filesystem".
+    let mut loose: BTreeMap<String, LooseClaims> = BTreeMap::new();
 
     for m in &enabled {
         for c in &m.components {
@@ -95,11 +104,10 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                         );
                     }
                 }
-                // Texture patches, foreign triplets and loose paks all mount cooked packages,
-                // so their footprints live in ONE shared namespace.
+                // Texture patches and foreign triplets both mount cooked packages, so their
+                // footprints live in ONE shared namespace of `/Game/…` package paths.
                 ComponentInfo::TexturePatch { targets, .. }
-                | ComponentInfo::Triplet { targets, .. }
-                | ComponentInfo::LoosePak { targets, .. } => {
+                | ComponentInfo::Triplet { targets, .. } => {
                     for t in targets {
                         note(
                             &mut buckets,
@@ -138,6 +146,22 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                         );
                     }
                 }
+                // Three components claim ONE game-root-relative file path, and they must share one
+                // bucket. A pak's `targets` are the paths its entries CLAIM, not the `~mods` path
+                // it writes — so the old argument that `loose_target_allowed` keeps the sets
+                // disjoint (true of in-place writers) never applied to pak-namespace claimants,
+                // and a foreign `_P.pak` fighting a `files` bundle over one file reported nothing.
+                ComponentInfo::FilePatch { targets, .. } => {
+                    for t in targets {
+                        loose.entry(norm_loose(t)).or_default().claim(false, &m.id);
+                    }
+                }
+                ComponentInfo::PakFilePatch { targets, .. }
+                | ComponentInfo::LoosePak { targets, .. } => {
+                    for t in targets {
+                        loose.entry(norm_loose(t)).or_default().claim(true, &m.id);
+                    }
+                }
                 ComponentInfo::VoiceArchivePatch { targets, .. } => {
                     for t in targets {
                         note(
@@ -152,6 +176,16 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                 // Raw files need cross-matching against patch components; handled below.
                 ComponentInfo::RawFile { .. } => {}
             }
+        }
+    }
+
+    // Fold the loose-file claims in with their pair-derived severity. Inserted directly rather than
+    // through `note` because a single mod using BOTH routes on one path is not a conflict, and the
+    // final filter lets any `Info` bucket through regardless of how many mods are in it.
+    for (target, claims) in loose {
+        if claims.ids.len() >= 2 {
+            let severity = claims.severity();
+            buckets.insert((ConflictKind::LooseFile, target), (severity, claims.ids));
         }
     }
 
@@ -232,6 +266,58 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
         .collect()
 }
 
+/// Every mod claiming one game-root-relative file, and by which route each of them claims it.
+#[derive(Default)]
+struct LooseClaims {
+    /// Ids whose pak entry claims this path: this toolkit's `pak_files`, or a foreign `_P.pak`.
+    from_pak: Vec<String>,
+    /// Ids whose in-place `files` replacement overwrites the bytes on disk.
+    in_place: Vec<String>,
+    /// Claimant ids in loadout order, first-seen, deduped. A mod reaching this path by BOTH routes
+    /// appears once here and in both route lists.
+    ids: Vec<String>,
+}
+
+impl LooseClaims {
+    fn claim(&mut self, from_pak: bool, id: &str) {
+        let route = if from_pak { &mut self.from_pak } else { &mut self.in_place };
+        if !route.iter().any(|x| x == id) {
+            route.push(id.to_string());
+        }
+        if !self.ids.iter().any(|x| x == id) {
+            self.ids.push(id.to_string());
+        }
+    }
+
+    /// Severity is a property of the pairing, not of either claimant:
+    ///
+    /// * **pak vs pak** — `Soft`. Genuine later-wins by mount order; the loser loses this one
+    ///   entry and keeps the rest of its container.
+    /// * **in-place vs in-place** — `Hard`. A loose file is replaced whole, so the loser does not
+    ///   lose one key the way a loc id does — it loses its entire file.
+    /// * **pak vs in-place** — `Info`, and this is the honest answer rather than a cop-out. Deploy
+    ///   refuses an in-place write to a path the shipped containers already carry, so a mixed pair
+    ///   can only occur at a path NO pak previously had. Whether the engine's file reader prefers a
+    ///   newly-introduced mod-pak entry over a physical file at such a path is not established
+    ///   here, and `Info` is exactly the "advisory, not a proven later-wins clash" verdict.
+    ///
+    /// So a bucket reports the strongest pairing it can prove, not the weakest one present. Asking
+    /// two booleans instead used to collapse a whole bucket to `Info`: two `files` mods clobbering
+    /// each other were printed as "advisory; no winner" the moment any third mod reached the same
+    /// path through a pak — while `apply` went on silently picking a winner between them. Dropping
+    /// that pak from the loadout made the very same pair `Hard` again, which is the tell that the
+    /// verdict was a property of the bucket rather than of any pairing really in it.
+    fn severity(&self) -> Severity {
+        if self.in_place.len() >= 2 {
+            Severity::Hard
+        } else if self.from_pak.len() >= 2 {
+            Severity::Soft
+        } else {
+            Severity::Info
+        }
+    }
+}
+
 /// Enabled loadout mods resolved against the library: loadout order, deduped by id. Loadout ids
 /// without a library entry are skipped — analysis is best-effort, not library validation.
 fn enabled_in_order<'a>(mods: &[&'a ModEntryMeta], loadout: &Loadout) -> Vec<&'a ModEntryMeta> {
@@ -282,6 +368,13 @@ fn norm_asset(t: &str) -> String {
 }
 
 fn norm_voice(t: &str) -> String {
+    t.trim().replace('\\', "/").to_lowercase()
+}
+
+/// Loose-file namespace normalization. Windows path identity is case-insensitive and pak lookup
+/// hashes a lowercased path, so two mods spelling one destination differently — or one of them
+/// copying the shipped index's uppercase `Normal.PNG` — are still fighting over one file.
+fn norm_loose(t: &str) -> String {
     t.trim().replace('\\', "/").to_lowercase()
 }
 
@@ -401,6 +494,157 @@ mod tests {
             target_file,
         }
     }
+    fn loose(targets: &[&str]) -> ComponentInfo {
+        ComponentInfo::FilePatch {
+            rel: "files".into(),
+            targets: strs(targets),
+        }
+    }
+    fn pak_files(targets: &[&str]) -> ComponentInfo {
+        ComponentInfo::PakFilePatch {
+            rel: "pak_files".into(),
+            targets: strs(targets),
+        }
+    }
+
+    /// Two mods replacing one loose game file is a whole-file clobber, not a mergeable later-wins
+    /// situation like a loc key: the loser keeps nothing. Windows path identity is
+    /// case-insensitive, so the two spellings below name ONE file and must land in one bucket —
+    /// reporting them separately would tell the user the two mods do not overlap.
+    #[test]
+    fn two_mods_replacing_one_loose_file_conflict_hard_across_spellings() {
+        let a = meta(
+            "mod-a",
+            vec![loose(&["G1R/Content/Slate/Cursors/Normal/Normal.PNG"])],
+        );
+        let b = meta(
+            "mod-b",
+            vec![loose(&["G1R\\Content\\Slate\\Cursors\\Normal\\normal.png"])],
+        );
+        let c = meta("mod-c", vec![loose(&["G1R/Content/Movies/Intro.mp4"])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
+
+        assert_eq!(
+            analyze(&[&a, &b, &c], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/slate/cursors/normal/normal.png",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )],
+            "a third mod on a different loose file must not be dragged in"
+        );
+    }
+
+    /// A third claimant arriving by the other route must not soften what the first two prove.
+    ///
+    /// Severity used to come from two per-bucket booleans, so any pak claim on the same path turned
+    /// a whole-file clobber between two `files` mods into `Info` — printed as "advisory; no winner"
+    /// while `apply` went on picking a winner between them. The tell was that dropping the pak made
+    /// the very same pair `Hard` again.
+    #[test]
+    fn a_pak_claimant_does_not_soften_a_clobber_two_files_mods_already_prove() {
+        let path = "G1R/Content/Movies/Intro.bk2";
+        let a = meta("mod-a", vec![loose(&[path])]);
+        let b = meta("mod-b", vec![loose(&[path])]);
+        let c = meta("mod-c", vec![pak_files(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
+
+        assert_eq!(
+            analyze(&[&a, &b, &c], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b", "mod-c"],
+                Severity::Hard
+            )],
+            "two in-place claimants are a proven clobber whoever else is in the bucket"
+        );
+
+        // One mod reaching the path by both routes does it with only two mods, and is the shape
+        // that made the old booleans look reasonable: the bucket had both flags set, but the
+        // pairing that matters is still `files` against `files`.
+        let both = meta("mod-a", vec![loose(&[path]), pak_files(&[path])]);
+        let other = meta("mod-b", vec![loose(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true)]);
+        assert_eq!(
+            analyze(&[&both, &other], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )]
+        );
+
+        // And a genuinely mixed pair is still the advisory it was: one claimant per route.
+        let pak_only = meta("mod-a", vec![pak_files(&[path])]);
+        let files_only = meta("mod-b", vec![loose(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true)]);
+        assert_eq!(
+            analyze(&[&pak_only, &files_only], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b"],
+                Severity::Info
+            )]
+        );
+    }
+
+    /// The pak-side twin of the case above. Two paks claiming one file both mount, so the loser
+    /// loses only that entry rather than its whole container — soft, not hard. They still have to
+    /// fold into ONE bucket: the shipped index spells the cursor `Normal.PNG` with an uppercase
+    /// extension and a mod author will not, and reporting those separately would tell the user two
+    /// mods overwriting each other do not overlap.
+    #[test]
+    fn two_mods_claiming_one_file_from_paks_conflict_soft_across_spellings() {
+        let a = meta(
+            "mod-a",
+            vec![pak(&["G1R/Content/Slate/Cursors/Normal/Normal.PNG"])],
+        );
+        let b = meta(
+            "mod-b",
+            vec![pak_files(&[
+                "G1R\\Content\\Slate\\Cursors\\Normal\\normal.png",
+            ])],
+        );
+        let c = meta("mod-c", vec![pak(&["G1R/Content/Movies/Intro.bk2"])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
+
+        assert_eq!(
+            analyze(&[&a, &b, &c], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/slate/cursors/normal/normal.png",
+                &["mod-a", "mod-b"],
+                Severity::Soft
+            )],
+            "a third mod on a different pak entry must not be dragged in"
+        );
+    }
+
+    /// The hole this bucket was widened to close. A foreign `_P.pak` and a `files` bundle claiming
+    /// the same file used to report NOTHING: pak targets went to `Asset` case-preserved, `files`
+    /// targets to `LooseFile` lowercased, and the two sets could never meet. They meet now, and the
+    /// verdict is `Info` rather than a later-wins claim — deploy refuses an in-place write to any
+    /// path the shipped containers already carry, so a mixed pair can only exist where no pak had
+    /// the path before, and which side the engine reads there is not established.
+    #[test]
+    fn a_pak_and_an_in_place_claim_on_one_file_are_reported_as_uncertain() {
+        let a = meta("mod-a", vec![pak(&["G1R/Content/Movies/Intro.bk2"])]);
+        let b = meta("mod-b", vec![loose(&["G1R\\Content\\Movies\\intro.BK2"])]);
+        let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
+        assert_eq!(
+            out,
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b"],
+                Severity::Info
+            )]
+        );
+    }
 
     fn conflict(kind: ConflictKind, target: &str, mods: &[&str], severity: Severity) -> Conflict {
         Conflict {
@@ -470,13 +714,15 @@ mod tests {
         );
     }
 
-    /// Texture patches, foreign triplets and loose paks share ONE asset namespace, compared as
-    /// raw strings after trimming and slash-normalizing.
+    /// Texture patches and foreign triplets share ONE asset namespace of cooked package paths,
+    /// compared as raw strings after trimming and slash-normalizing. A loose pak is deliberately
+    /// not in it: its targets are game-relative FILE paths, and `norm_asset`'s permissiveness was
+    /// the only thing that ever made putting both in one namespace look harmless.
     #[test]
     fn asset_overlap_triplet_vs_texture_patch() {
         let a = meta("mod-a", vec![tex(&["/Game/UI/T_X"])]);
         let b = meta("mod-b", vec![triplet(&[" \\Game\\UI\\T_X "])]);
-        let c = meta("mod-c", vec![pak(&["/Game/UI/T_X"])]);
+        let c = meta("mod-c", vec![pak(&["G1R/Content/Movies/Intro.bk2"])]);
         let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
         let out = analyze(&[&a, &b, &c], &lo);
         assert_eq!(
@@ -484,7 +730,7 @@ mod tests {
             vec![conflict(
                 ConflictKind::Asset,
                 "/Game/UI/T_X",
-                &["mod-a", "mod-b", "mod-c"],
+                &["mod-a", "mod-b"],
                 Severity::Soft
             )]
         );
@@ -755,7 +1001,13 @@ mod tests {
                 as_patch(&["CombatTweaks"]),
                 raw(RawTarget::ScriptCache),
                 tex(&["/Game/UI/T_X"]),
-                pak(&["/Game/UI/T_X"]), // same asset twice within the same mod
+                triplet(&["/Game/UI/T_X"]), // same asset twice within the same mod
+                loose(&["G1R/Content/Slate/Cursors/Normal/Normal.PNG"]),
+                loose(&["g1r/content/slate/cursors/normal/normal.png"]), // and once more, folded
+                // One mod may reach one file by BOTH routes — two sections, two components, said
+                // twice on purpose. A mixed pairing is `Info`, and `Info` is the one severity the
+                // final filter emits with a single claimant, so this also pins that it does not.
+                pak_files(&["G1R/Content/Slate/Cursors/Normal/NORMAL.png"]),
                 lua("DirA", &["ADamageData.Health"], false),
                 lua("DirA", &["ADamageData.Health"], false), // same dir name twice
             ],

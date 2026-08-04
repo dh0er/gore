@@ -26,12 +26,22 @@ const MAX_LOC_ID_BYTES: usize = 512;
 
 #[derive(Debug, Subcommand)]
 pub enum VoiceAction {
-    /// Index and list every entry in a voice archive
+    /// Index a voice archive and list a bounded page of its entries
     #[command(visible_alias = "index")]
     List {
         /// Input voice ZIP
         #[arg(long)]
         archive: PathBuf,
+        /// Keep only entry paths containing this substring (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Max entries to print. The result states how many matched when it stops here; 0 lists
+        /// nothing and reports only the counts
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+        /// Also list the archive's directory entries, which carry no audio
+        #[arg(long)]
+        directories: bool,
         /// Emit one JSON document instead of the human-readable table
         #[arg(long)]
         json: bool,
@@ -135,7 +145,13 @@ impl VoiceSelector {
 
 pub fn run(action: VoiceAction) -> Result<()> {
     match action {
-        VoiceAction::List { archive, json } => list(&archive, json),
+        VoiceAction::List {
+            archive,
+            filter,
+            max,
+            directories,
+            json,
+        } => list(&archive, filter.as_deref(), max, directories, json),
         VoiceAction::MatchLine {
             archive,
             loc_id,
@@ -250,11 +266,49 @@ fn open_archive(path: &Path) -> Result<ArchiveIndex> {
         .with_context(|| format!("indexing voice archive '{}'", path.display()))
 }
 
-fn list(path: &Path, json: bool) -> Result<()> {
+/// List archive entries under a bound. `ArchiveIndex::list()` stays complete -- every writer path
+/// depends on that -- so the narrowing happens here, where it is a presentation decision. A
+/// listing that stopped silently would let a caller read the first `max` entries as the whole
+/// archive and conclude a recording does not exist, so both output modes label the cut.
+fn list(
+    path: &Path,
+    filter: Option<&str>,
+    max: usize,
+    directories: bool,
+    json: bool,
+) -> Result<()> {
     let archive = open_archive(path)?;
+    let entry_count = archive.entries().len();
+    // Filter first, cap second: `matched_count` is only meaningful if the cap never hides a
+    // candidate the filter would have kept.
+    let needle = filter.map(str::to_lowercase);
+    let selected = archive
+        .list()
+        .filter(|entry| {
+            needle
+                .as_deref()
+                .is_none_or(|needle| contains_case_insensitive(&entry.path, needle))
+        })
+        .collect::<Vec<_>>();
+    // Counted after the filter, because the only job this number has is to name records the caller
+    // can still get back. Counting the whole archive made `--filter DIA_` advertise `--directories`
+    // for a `NPC/` record the filter rejects too, so following the advice changed nothing.
+    let directory_count = selected.iter().filter(|entry| entry.is_directory).count();
+    let matched = if directories {
+        selected
+    } else {
+        selected
+            .into_iter()
+            .filter(|entry| !entry.is_directory)
+            .collect()
+    };
+    let listed = &matched[..matched.len().min(max)];
+    let notice = (listed.len() < matched.len())
+        .then(|| list_truncation_notice(matched.len(), listed.len()));
+
     if json {
-        let entries = archive
-            .list()
+        let entries = listed
+            .iter()
             .map(|entry| {
                 serde_json::json!({
                     "index": entry.index,
@@ -270,24 +324,50 @@ fn list(path: &Path, json: bool) -> Result<()> {
                 })
             })
             .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "archive": archive.path().display().to_string(),
-                "entry_count": entries.len(),
-                "entries": entries,
-            }))?
-        );
+        // Two booleans because there are two questions and one answer cannot serve both.
+        // `truncated` says whether `--max` stopped the listing, and it is what `truncation_notice`
+        // belongs to. "Is this array the whole archive" is a different question -- a filter or a
+        // dropped directory record narrows without truncating -- and `complete` answers it, so
+        // neither has to be inferred by comparing counts.
+        let mut document = serde_json::json!({
+            "archive": archive.path().display().to_string(),
+            "entry_count": entry_count,
+            "directory_count": directory_count,
+            "matched_count": matched.len(),
+            "listed_count": entries.len(),
+            "truncated": notice.is_some(),
+            "complete": entries.len() == entry_count,
+            "entries": entries,
+        });
+        if let Some(notice) = &notice {
+            document["truncation_notice"] = serde_json::json!(notice);
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
         return Ok(());
     }
 
+    // Without this clause a filter that matched nothing prints a header, a column header and no
+    // rows -- which is exactly what an empty archive prints.
+    let narrowed = match filter {
+        Some(_) => format!(", {} matched --filter", matched.len()),
+        None => String::new(),
+    };
+    let omitted = if directories || directory_count == 0 {
+        String::new()
+    } else {
+        let record = if directory_count == 1 {
+            "directory record"
+        } else {
+            "directory records"
+        };
+        format!(", {directory_count} {record} omitted — pass --directories to include them")
+    };
     println!(
-        "Voice archive: {} ({} entries)",
-        archive.path().display(),
-        archive.entries().len()
+        "Voice archive: {} ({entry_count} entries{narrowed}{omitted})",
+        archive.path().display()
     );
     println!(" INDEX        SIZE       PACKED  METHOD      CRC32     PATH");
-    for entry in archive.list() {
+    for entry in listed {
         let flags = match (entry.is_directory, entry.is_symlink, entry.encrypted) {
             (true, _, _) => " [directory]",
             (_, true, _) => " [symlink]",
@@ -305,7 +385,39 @@ fn list(path: &Path, json: bool) -> Result<()> {
             flags
         );
     }
+    if let Some(notice) = &notice {
+        // The same marker the MCP server appends to a clipped result, so a reader who has learned
+        // to look for one line has learned to look for both.
+        println!("… [truncated: {notice}]");
+    }
     Ok(())
+}
+
+/// One sentence that must answer "how much am I not seeing" and "what do I type instead". It
+/// deliberately does not hand back the `--max` that would list everything: followed on the 33,323
+/// entries of `german_new.zip` that is an ~11 MB document against a 256 KiB result budget
+/// (`gore_mcp::DEFAULT_MAX_STDOUT_BYTES`), so the cut lands inside `entries` -- and serde_json
+/// sorts keys here, so the surviving prefix has lost the counts and `truncated` along with the end
+/// of the array, and no longer parses. Sending a caller there is the failure this bound prevents.
+fn list_truncation_notice(matched: usize, listed: usize) -> String {
+    format!(
+        "{matched} entries matched and only the first {listed} are shown. Narrow the query with \
+         --filter, and raise --max only as far as you need: asking for all {matched} at once \
+         produces a document large enough to be cut off in transit, and a cut-off JSON array no \
+         longer parses."
+    )
+}
+
+/// Case-insensitive substring test for `--filter`. Voice archives genuinely mix case --
+/// `LINE_ONE.OGG` sits beside `line.ogg` -- so a case-sensitive filter would answer "no such
+/// entry" when the truth is "wrong case", which is a false negative dressed as a fact.
+///
+/// The fold is `str::to_lowercase`, which is what `gore_vo`'s `fold_case` applies to `--basename`.
+/// Folding only ASCII here would move that same false negative one code point up: German archives
+/// are the documented target, and `--filter MÜLLER` must not report nothing about an archive where
+/// `extract --basename DIA_MÜLLER_01.OGG` resolves. An empty needle keeps every entry.
+fn contains_case_insensitive(haystack: &str, lowercase_needle: &str) -> bool {
+    haystack.to_lowercase().contains(lowercase_needle)
 }
 
 fn match_line(path: &Path, loc_id: &str, json: bool) -> Result<()> {

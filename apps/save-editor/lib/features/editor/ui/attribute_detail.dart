@@ -273,21 +273,6 @@ class _PrivatePanel extends StatelessWidget {
     );
   }
 
-  /// The transform editor, flattened (see [_legacyAttributesSection]).
-  Widget? _transformSection() {
-    if (inspection.privatePlayer.transform == null) return null;
-    return _PrivatePlayerTransformEditor(
-      transform: inspection.privatePlayer.transform!,
-      editable:
-          editable &&
-          inspection.privatePlayer.writable.contains(
-            'private.player.setTransform',
-          ),
-      notifier: notifier,
-      reloadKey: inspection,
-    );
-  }
-
   /// Shared sub-tab layout (see CharactersTab): outer 20/top 8 → one Card →
   /// inner 16 around the whole attribute editor.
   Widget _mainCard(Widget content) {
@@ -340,7 +325,6 @@ class _PrivatePanel extends StatelessWidget {
             fallback: inspection.privatePlayer.attributes.isNotEmpty
                 ? _legacyAttributesSection()
                 : null,
-            transformCard: _transformSection(),
             // The hero's learned skills live in the "Talente" group, rendered
             // in the same row style and wired to the shared Save button via its
             // own 'skills' pending-registry entry.
@@ -354,7 +338,9 @@ class _PrivatePanel extends StatelessWidget {
         );
       }
       // Legacy / non-typed path: stacked layout in a ListView inside the same
-      // single main card.
+      // single main card. The player transform is NOT part of this list any
+      // more — it lives in the Position sub-tab (PositionDetail), which renders
+      // it regardless of privateTypedVerified so this path stays covered.
       return _mainCard(
         ListView(
           children: [
@@ -365,299 +351,12 @@ class _PrivatePanel extends StatelessWidget {
                 _legacyAttributesSection(),
                 const SizedBox(height: 16),
               ],
-              if (inspection.privatePlayer.transform != null) ...[
-                _transformSection()!,
-                const SizedBox(height: 16),
-              ],
             ],
           ],
         ),
       );
     }
     return _MessagePane(icon: icon, title: title, body: lockedBody);
-  }
-}
-
-class _PrivatePlayerTransformEditor extends StatefulWidget {
-  const _PrivatePlayerTransformEditor({
-    required this.transform,
-    required this.editable,
-    required this.notifier,
-    this.reloadKey,
-  });
-
-  final PrivatePlayerTransform transform;
-  final bool editable;
-  final EditorNotifier notifier;
-  // When provided, a change in identity triggers a field reseed even if the
-  // transform values haven't changed (e.g. Reset followed by re-inspect that
-  // returns the same values).
-  final Object? reloadKey;
-
-  @override
-  State<_PrivatePlayerTransformEditor> createState() =>
-      _PrivatePlayerTransformEditorState();
-}
-
-class _PrivatePlayerTransformEditorState
-    extends State<_PrivatePlayerTransformEditor> {
-  late final TextEditingController _locationXController;
-  late final TextEditingController _locationYController;
-  late final TextEditingController _locationZController;
-  late final TextEditingController _rotationPitchController;
-  late final TextEditingController _rotationYawController;
-  late final TextEditingController _rotationRollController;
-  PrivatePlayerTransform? _lastTransform;
-  // Track the inspection (widget parent) identity so that a Reset/refresh that
-  // produces a new inspection instance triggers a reseed even when the
-  // transform values themselves haven't changed.
-  Object? _inspectionIdentity;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _locationXController = TextEditingController();
-    _locationYController = TextEditingController();
-    _locationZController = TextEditingController();
-    _rotationPitchController = TextEditingController();
-    _rotationYawController = TextEditingController();
-    _rotationRollController = TextEditingController();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PrivatePlayerTransformEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _sync();
-  }
-
-  @override
-  void dispose() {
-    _locationXController.dispose();
-    _locationYController.dispose();
-    _locationZController.dispose();
-    _rotationPitchController.dispose();
-    _rotationYawController.dispose();
-    _rotationRollController.dispose();
-    super.dispose();
-  }
-
-  void _sync() {
-    final transform = widget.transform;
-    final last = _lastTransform;
-    // Re-seed on reloadKey identity change (e.g. after Reset/refresh that
-    // produces a new SaveInspection) even when the transform values themselves
-    // are unchanged, so the fields visually revert after a Reset.
-    final newKey = widget.reloadKey;
-    final sameKey = newKey == null || identical(newKey, _inspectionIdentity);
-    if (!sameKey) {
-      _inspectionIdentity = newKey;
-    }
-    if (sameKey &&
-        last != null &&
-        last.location.x == transform.location.x &&
-        last.location.y == transform.location.y &&
-        last.location.z == transform.location.z &&
-        last.rotation.pitch == transform.rotation.pitch &&
-        last.rotation.yaw == transform.rotation.yaw &&
-        last.rotation.roll == transform.rotation.roll) {
-      return;
-    }
-    _lastTransform = transform;
-    _locationXController.text = _formatAttributeValue(transform.location.x);
-    _locationYController.text = _formatAttributeValue(transform.location.y);
-    _locationZController.text = _formatAttributeValue(transform.location.z);
-    _rotationPitchController.text = _formatAttributeValue(
-      transform.rotation.pitch,
-    );
-    _rotationYawController.text = _formatAttributeValue(transform.rotation.yaw);
-    _rotationRollController.text = _formatAttributeValue(
-      transform.rotation.roll,
-    );
-    _error = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Icon(Icons.explore_outlined),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                l10n.heroTransform,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-            ),
-          ],
-        ),
-        if (_error != null) ...[
-          const SizedBox(height: 6),
-          Text(
-            _error!,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
-          ),
-        ],
-        const SizedBox(height: 10),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final compact = constraints.maxWidth < 700;
-            final fields = [
-              _TransformNumberField(
-                controller: _locationXController,
-                label: l10n.locationX,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-              _TransformNumberField(
-                controller: _locationYController,
-                label: l10n.locationY,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-              _TransformNumberField(
-                controller: _locationZController,
-                label: l10n.locationZ,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-              _TransformNumberField(
-                controller: _rotationPitchController,
-                label: l10n.rotationPitch,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-              _TransformNumberField(
-                controller: _rotationYawController,
-                label: l10n.rotationYaw,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-              _TransformNumberField(
-                controller: _rotationRollController,
-                label: l10n.rotationRoll,
-                enabled: widget.editable,
-                onChanged: (_) => _updatePending(),
-              ),
-            ];
-            if (compact) {
-              return Column(
-                children: [
-                  for (final field in fields) ...[
-                    field,
-                    if (field != fields.last) const SizedBox(height: 8),
-                  ],
-                ],
-              );
-            }
-            return Column(
-              children: [
-                Row(
-                  children: [
-                    for (final field in fields.take(3)) ...[
-                      Expanded(child: field),
-                      if (field != fields[2]) const SizedBox(width: 8),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final field in fields.skip(3)) ...[
-                      Expanded(child: field),
-                      if (field != fields.last) const SizedBox(width: 8),
-                    ],
-                  ],
-                ),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  void _updatePending() {
-    if (!widget.editable) return;
-    final locationX = double.tryParse(_locationXController.text.trim());
-    final locationY = double.tryParse(_locationYController.text.trim());
-    final locationZ = double.tryParse(_locationZController.text.trim());
-    final rotationPitch = double.tryParse(_rotationPitchController.text.trim());
-    final rotationYaw = double.tryParse(_rotationYawController.text.trim());
-    final rotationRoll = double.tryParse(_rotationRollController.text.trim());
-    if (locationX == null ||
-        locationY == null ||
-        locationZ == null ||
-        rotationPitch == null ||
-        rotationYaw == null ||
-        rotationRoll == null) {
-      final invalid = AppLocalizations.of(context).invalid;
-      setState(() => _error = invalid);
-      widget.notifier.clearPendingEdit('transform');
-      return;
-    }
-    setState(() => _error = null);
-    final orig = widget.transform;
-    if (locationX == orig.location.x &&
-        locationY == orig.location.y &&
-        locationZ == orig.location.z &&
-        rotationPitch == orig.rotation.pitch &&
-        rotationYaw == orig.rotation.yaw &&
-        rotationRoll == orig.rotation.roll) {
-      widget.notifier.clearPendingEdit('transform');
-      return;
-    }
-    widget.notifier.setPendingEdit(
-      'transform',
-      PendingSaveEdit(
-        edits: [
-          {
-            'path': 'private.player.setTransform',
-            'value': {
-              'location': {'x': locationX, 'y': locationY, 'z': locationZ},
-              'rotation': {
-                'pitch': rotationPitch,
-                'yaw': rotationYaw,
-                'roll': rotationRoll,
-              },
-            },
-          },
-        ],
-      ),
-    );
-  }
-}
-
-class _TransformNumberField extends StatelessWidget {
-  const _TransformNumberField({
-    required this.controller,
-    required this.label,
-    required this.enabled,
-    this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final String label;
-  final bool enabled;
-  final ValueChanged<String>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      enabled: enabled,
-      onChanged: onChanged,
-      keyboardType: const TextInputType.numberWithOptions(
-        decimal: true,
-        signed: true,
-      ),
-      decoration: InputDecoration(labelText: label),
-    );
   }
 }
 

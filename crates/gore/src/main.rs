@@ -60,6 +60,19 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Build the named-location catalog from the game's InteractionSpots.json
+    LocationCatalog {
+        /// Path to G1R\Script\Map\MainMap\InteractionSpots.json (default: inside the resolved game)
+        source: Option<PathBuf>,
+        /// Output location_catalog.json path
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Look named locations up in the bundled catalog (no game install needed)
+    Location {
+        #[command(subcommand)]
+        action: cmd::location::LocationAction,
+    },
     /// Convert a gore-cli reflection model into a gore-mod GUI shape JSON
     GuiModel {
         /// Path to model.json (output of `gore-cli dump`)
@@ -181,13 +194,75 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::config::ConfigAction,
     },
+    /// Serve this toolkit over the Model Context Protocol (stdio JSON-RPC) for AI agents
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+    /// Render the built-in guide for offline reading
+    Guide {
+        #[command(subcommand)]
+        action: GuideAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum GuideAction {
+    /// Rank guide and reference sections against a query, best first — the ranking the MCP server serves
+    Search {
+        /// Words to search for; several words are one query, so no quoting is needed
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+        /// Maximum number of hits. Clamped to 25, as in the MCP tool
+        #[arg(long, default_value_t = cmd::guide::DEFAULT_SEARCH_LIMIT, value_name = "N")]
+        limit: usize,
+    },
+    /// Write the whole guide as one self-contained HTML file — sidebar, filter, no external assets
+    Html {
+        /// Output path
+        #[arg(short = 'o', long, default_value = "guide.html")]
+        out: PathBuf,
+        /// Commit or branch that links leaving the guide tree are pinned to
+        #[arg(long, default_value = cmd::guide::DEFAULT_REPO_REF, value_name = "REF")]
+        repo_ref: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    /// Run the MCP server on stdin/stdout. Speaks JSON-RPC; it is not an interactive shell.
+    Serve {
+        /// Pre-approve commands that change the game installation or overwrite an existing file,
+        /// so they run without confirming with you. Without this they are still allowed — the
+        /// agent's client asks you first. Use it where nobody is watching (CI, batch runs).
+        /// Also settable as GORE_MCP_ALLOW_WRITE=1, which is the only route a plugin has
+        #[arg(long)]
+        allow_write: bool,
+        /// Pre-approve commands that launch the game executable (`as compile`, `as compile-module`).
+        /// Also settable as GORE_MCP_ALLOW_GAME_LAUNCH=1
+        #[arg(long)]
+        allow_game_launch: bool,
+        /// Never ask, and refuse anything that would need confirming. The strict posture, for a
+        /// server exposed to an agent whose calls nobody reviews.
+        /// Also settable as GORE_MCP_NO_CONSENT_PROMPTS=1
+        #[arg(long)]
+        no_consent_prompts: bool,
+        /// Override every per-command wall-clock cap, in seconds (0 keeps the defaults)
+        #[arg(long, default_value_t = 0, value_name = "SECS")]
+        timeout_secs: u64,
+        /// Cap on captured stdout per command, in KiB (0 keeps the default)
+        #[arg(long, default_value_t = 256, value_name = "KIB")]
+        max_output_kib: usize,
+    },
+    /// Print the tool definitions the server would advertise, then exit
+    Tools,
 }
 
 #[derive(Subcommand)]
 enum ModAction {
     /// Build a bundle dir from a BuildSpec JSON
     Build {
-        /// Path to the build spec JSON
+        /// Path to the build spec JSON; asset paths inside it resolve against its directory
         #[arg(long)]
         spec: PathBuf,
         /// Output directory (the bundle is written to <out>/<mod-name>)
@@ -218,6 +293,16 @@ enum AudioAction {
         /// Path to a .bank file
         #[arg(long)]
         bank: PathBuf,
+        /// Keep only sample names containing this substring (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Max samples to print. The result states how many matched when it stops here; 0 lists
+        /// nothing and reports only the counts
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+        /// Emit one JSON document instead of the human-readable table
+        #[arg(long)]
+        json: bool,
         /// Override the bank encryption key (defaults to the Gothic 1 Remake key)
         #[arg(long)]
         key: Option<String>,
@@ -300,9 +385,10 @@ enum LocAction {
     Status,
     /// Decrypt the .lcache and write {id:{language:value}} JSON (all languages)
     Export {
-        /// Path to AlkimiaLocalization_*.lcache
+        /// Path to AlkimiaLocalization_*.lcache, the game dir, or a Steam library (else
+        /// auto-detect)
         #[arg(long)]
-        lcache: PathBuf,
+        lcache: Option<PathBuf>,
         /// Output loc_catalog.json
         #[arg(short = 'o', long)]
         out: PathBuf,
@@ -312,13 +398,13 @@ enum LocAction {
     },
     /// Apply {id:{language:value}} edits and re-encrypt the .lcache
     Import {
-        /// Path to the .lcache to edit
+        /// Path to the .lcache to edit, the game dir, or a Steam library (else auto-detect)
         #[arg(long)]
-        lcache: PathBuf,
+        lcache: Option<PathBuf>,
         /// Path to edits JSON ({id:{language:value}})
         #[arg(long)]
         edits: PathBuf,
-        /// Output .lcache (defaults to overwriting --lcache)
+        /// Output .lcache (defaults to overwriting the cache that was read)
         #[arg(short = 'o', long)]
         out: Option<PathBuf>,
         /// Add ids absent from the input .lcache (default: reject them)
@@ -364,6 +450,8 @@ fn run_cli() {
             binds,
             out,
         } => cmd::story_catalog::run(exe, cache, binds, out),
+        Commands::LocationCatalog { source, out } => cmd::location_catalog::run(source, out),
+        Commands::Location { action } => cmd::location::run(action),
         Commands::GuiModel {
             model,
             catalog,
@@ -401,7 +489,13 @@ fn run_cli() {
         Commands::Asset { action } => cmd::asset::run(action),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
-            AudioAction::List { bank, key } => cmd::audio::list(bank, key),
+            AudioAction::List {
+                bank,
+                filter,
+                max,
+                json,
+                key,
+            } => cmd::audio::list(bank, filter, max, json, key),
             AudioAction::Extract {
                 bank,
                 out,
@@ -432,6 +526,26 @@ fn run_cli() {
         Commands::Texture { action } => cmd::texture::run(action),
         Commands::Mgr { action } => cmd::mgr::run(action),
         Commands::Config { action } => cmd::config::run(action),
+        Commands::Mcp { action } => match action {
+            McpAction::Serve {
+                allow_write,
+                allow_game_launch,
+                no_consent_prompts,
+                timeout_secs,
+                max_output_kib,
+            } => cmd::mcp::serve(cmd::mcp::ServeOptions {
+                allow_write,
+                allow_game_launch,
+                no_consent_prompts,
+                timeout_secs,
+                max_output_kib,
+            }),
+            McpAction::Tools => cmd::mcp::tools(),
+        },
+        Commands::Guide { action } => match action {
+            GuideAction::Search { query, limit } => cmd::guide::search(&query, limit),
+            GuideAction::Html { out, repo_ref } => cmd::guide::html_file(out, &repo_ref),
+        },
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");
@@ -577,6 +691,30 @@ mod voice_cli_tests {
                 }
             ));
         }
+    }
+
+    #[test]
+    fn voice_list_bounds_default_to_a_hundred_entries_and_hide_directories() {
+        // The bound only protects anybody if it applies to the call nobody thought about, so pin
+        // the defaults here rather than leaving them to a `default_value_t` that can be edited
+        // without anything noticing.
+        let cli =
+            Cli::try_parse_from(["gore", "voice", "list", "--archive", "voices.zip"]).unwrap();
+        let Commands::Voice {
+            action:
+                cmd::voice::VoiceAction::List {
+                    filter,
+                    max,
+                    directories,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected voice list command");
+        };
+        assert_eq!(max, 100);
+        assert_eq!(filter, None);
+        assert!(!directories);
     }
 
     #[test]

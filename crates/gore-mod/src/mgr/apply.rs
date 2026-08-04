@@ -76,6 +76,8 @@ struct ApplyLimits {
     max_tree_total_bytes: u64,
     max_additive_file_bytes: u64,
     max_additive_total_bytes: u64,
+    max_loose_file_bytes: u64,
+    max_loose_total_bytes: u64,
 }
 
 const DEFAULT_APPLY_LIMITS: ApplyLimits = ApplyLimits {
@@ -99,6 +101,10 @@ const DEFAULT_APPLY_LIMITS: ApplyLimits = ApplyLimits {
     max_tree_total_bytes: 16 * 1024 * 1024 * 1024,
     max_additive_file_bytes: 8 * 1024 * 1024 * 1024,
     max_additive_total_bytes: 16 * 1024 * 1024 * 1024,
+    // Loose files are opaque bytes streamed to disk, never decoded, so they share the rawfile
+    // envelope rather than the smaller in-memory ceilings.
+    max_loose_file_bytes: 8 * 1024 * 1024 * 1024,
+    max_loose_total_bytes: 16 * 1024 * 1024 * 1024,
 };
 
 #[derive(Debug, Default)]
@@ -113,6 +119,7 @@ struct ApplyBudget {
     tree_entries: usize,
     tree_bytes: u64,
     additive_bytes: u64,
+    loose_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -274,6 +281,30 @@ fn snapshot_raw_payload(
         limits.max_raw_total_bytes,
     )?;
     Ok((candidate, len))
+}
+
+fn snapshot_loose_payload(
+    source: &PendingPayload,
+    limits: ApplyLimits,
+    budget: &mut ApplyBudget,
+) -> crate::Result<tempfile::TempPath> {
+    let remaining = remaining_bytes(
+        "manager loose files",
+        budget.loose_bytes,
+        limits.max_loose_total_bytes,
+    )?;
+    let (candidate, len) = source.entry.snapshot_payload_bounded(
+        &source.rel,
+        "loose file payload",
+        limits.max_loose_file_bytes.min(remaining),
+    )?;
+    charge_bytes(
+        "manager loose files",
+        &mut budget.loose_bytes,
+        len,
+        limits.max_loose_total_bytes,
+    )?;
+    Ok(candidate)
 }
 
 fn read_pristine_for_patch(
@@ -498,6 +529,14 @@ fn apply_loadout_with_limits(
         values: BTreeMap<String, (String, String)>,
     }
     let mut rawfile_sources: BTreeMap<PathBuf, PendingRaw> = BTreeMap::new();
+    // Keyed by the CASE-FOLDED destination, so loadout order gives later-wins before the plan is
+    // built. This is not cosmetic: `first_duplicate_dst` rejects a plan with two writes to one
+    // path, and it *resolves* those paths — so on Windows two mods spelling one file differently
+    // (`Normal.PNG` against `normal.png`) would otherwise turn the ordinary two-mod overlap that
+    // `mgr analyze` reports, whose `norm_loose` folds exactly the same way, into a hard apply
+    // failure. The value carries the winning mod's own spelling, which is what gets written and
+    // recorded.
+    let mut loose_files: BTreeMap<String, (PathBuf, PendingPayload)> = BTreeMap::new();
     let mut loc: BTreeMap<String, PendingLoc> = BTreeMap::new();
     let mut audio: BTreeMap<(String, String), PendingPayload> = BTreeMap::new();
     let mut scripts: Vec<(String, String, PendingPayload)> = Vec::new();
@@ -513,6 +552,12 @@ fn apply_loadout_with_limits(
     // output triplet name by this index, so two TexturePatch components in one mod would otherwise
     // collide and clobber each other's output.
     let mut tex_comp_idx = 0usize;
+    // Same reasoning for pak-file components, on its own counter so a bundle carrying both kinds
+    // cannot have one kind's index collide with the other's temp dir.
+    let mut pak_files_comp_idx = 0usize;
+    // One pak-shadow oracle for the whole composed apply, built at most once and only if a loose
+    // destination actually asks.
+    let mut shadow = crate::PakShadowIndex::new(&gp.root);
     for l in &loaded {
         for comp in &l.meta.components {
             match comp {
@@ -775,6 +820,104 @@ fn apply_loadout_with_limits(
                         ));
                     }
                 }
+                ComponentInfo::FilePatch { rel, .. } => {
+                    validate_payload_rel(rel, "loose file component", limits)?;
+                    let manifest_rel = PathBuf::from(format!("{rel}/manifest.json"));
+                    validate_payload_rel(
+                        &manifest_rel.to_string_lossy(),
+                        "loose file manifest",
+                        limits,
+                    )?;
+                    let manifest_payload = PendingPayload {
+                        entry: l.library_entry.clone(),
+                        rel: manifest_rel,
+                    };
+                    let map: BTreeMap<String, String> =
+                        serde_json::from_slice(&read_manifest_payload(
+                            &manifest_payload,
+                            "loose file manifest",
+                            limits,
+                            &mut budget,
+                        )?)?;
+                    charge_entries(
+                        "manager manifests",
+                        &mut budget.manifest_entries,
+                        map.len(),
+                        limits.max_manifest_entries,
+                    )?;
+                    for (game_path, payload_rel) in map {
+                        crate::validate_loose_game_path(&game_path)?;
+                        validate_payload_rel(&payload_rel, "loose file payload", limits)?;
+                        let target = gp.root.join(crate::loose_relative_os_path(&game_path));
+                        // A loose file REPLACES an existing game file. If this install does not
+                        // have it (a mod built against another version), skip it with a warning
+                        // HERE, before the deferred undeploy — otherwise commit_plan fails while
+                        // backing up the missing file, after the working deployment is gone.
+                        if !target.is_file() {
+                            warnings.push(format!(
+                                "{}: loose-file target {} not present in this install — skipping",
+                                l.entry.id,
+                                target.display()
+                            ));
+                            continue;
+                        }
+                        // A destination one of the shipped containers already carries is inert:
+                        // Unreal consults a mounted pak before the file on disk, so the write
+                        // would succeed and change nothing. Warn and SKIP rather than fail, for
+                        // the same reason the missing-target case does — the manager composes many
+                        // mods and one bad destination must not brick the whole loadout after the
+                        // working deployment is gone.
+                        if let Some(pak) = shadow.owning_pak(&game_path)? {
+                            warnings.push(format!(
+                                "{}: loose-file target {game_path} is already packed in {pak}, so \
+                                 the packed copy wins and replacing it on disk would change \
+                                 nothing — skipping (the mod's author wants a \"pak_files\" \
+                                 section instead)",
+                                l.entry.id
+                            ));
+                            continue;
+                        }
+                        loose_files.insert(
+                            game_path.to_lowercase(),
+                            (
+                                target,
+                                PendingPayload {
+                                    entry: l.library_entry.clone(),
+                                    rel: PathBuf::from(payload_rel),
+                                },
+                            ),
+                        );
+                        // later-wins
+                    }
+                }
+                ComponentInfo::PakFilePatch { rel, .. } => {
+                    validate_payload_rel(rel, "pak file component", limits)?;
+                    let snapshot = snapshot_component_tree(
+                        &l.library_entry,
+                        rel,
+                        "pak file component",
+                        limits,
+                        &mut budget,
+                    )?;
+                    // Additive, so no destination has to exist and nothing is shadow-checked:
+                    // `meta.id` gives cross-mod uniqueness of the pak name, `pak_files_comp_idx`
+                    // per-component uniqueness within a mod.
+                    //
+                    // The `gm{idx:03}` prefix is what lets the LOADOUT decide who wins a contested
+                    // path. `~mods` containers mount in filename order — the same reason
+                    // `slot_stem` prefixes foreign paks — so a name built from the mod id alone
+                    // freezes the winner by id, and reordering the loadout changes nothing on disk
+                    // while `mgr analyze` goes on naming the last enabled claimant the winner.
+                    let paks = crate::prepare_pak_file_component(
+                        snapshot.bundle_root(),
+                        rel,
+                        &format!("gm{:03}_{}", l.idx, l.meta.id),
+                        pak_files_comp_idx,
+                        &gp,
+                    )?;
+                    plan.texture_triplets.extend(paks);
+                    pak_files_comp_idx += 1;
+                }
                 ComponentInfo::VoiceArchivePatch { rel, .. } => {
                     validate_payload_rel(rel, "voice patch", limits)?;
                     let snapshot = snapshot_component_tree(
@@ -1021,6 +1164,27 @@ fn apply_loadout_with_limits(
         });
     }
 
+    // Loose files have no patch layer to fold onto them: the winning payload IS the final content.
+    // Publish through the same disk-backed write path the rawfiles use, so even a multi-GiB
+    // replacement never becomes a resident `Vec` and an apply error drops every candidate before
+    // the game is touched.
+    for (_folded, (target, source)) in loose_files {
+        let drifted = crate::select_pristine_source(&target, prior)?.drifted;
+        let candidate = snapshot_loose_payload(&source, limits, &mut budget)?;
+        let hash = crate::content_hash_file(&candidate).map_err(crate::io(&format!(
+            "hashing loose-file candidate for {}",
+            target.display()
+        )))?;
+        if drifted {
+            plan.refresh_baks.push(target.clone());
+        }
+        plan.file_writes.push(crate::DiskWrite {
+            live: target,
+            candidate,
+            hash,
+        });
+    }
+
     crate::prepare_voice_archive_writes(&voice, &gp, prior, &mut plan)?;
 
     // (6) The full plan is built — every fallible read/decode/cook above succeeded and the prior
@@ -1077,11 +1241,13 @@ pub fn undeploy_all(game_root: &Path) -> crate::Result<bool> {
 
 // ── naming helpers ────────────────────────────────────────────────────────────────────────────
 
-/// `<root>/G1R/Content/Paks/~mods` — where manager paks/triplets mount. Derived like the texture
-/// arm: `gp.ue4ss_mods` is `<root>/G1R/Binaries/Win64/ue4ss/Mods`, so its 5th ancestor is `<root>`.
+/// `<root>/G1R/Content/Paks/~mods` — where manager paks/triplets mount.
 fn mods_dir(gp: &crate::GamePaths) -> PathBuf {
-    let root = gp.ue4ss_mods.ancestors().nth(5).unwrap_or(&gp.ue4ss_mods);
-    root.join("G1R").join("Content").join("Paks").join("~mods")
+    gp.root
+        .join("G1R")
+        .join("Content")
+        .join("Paks")
+        .join("~mods")
 }
 
 /// Slot-prefixed pak stem for a foreign triplet whose `rel_base` file stem may already carry the
@@ -1736,6 +1902,41 @@ mod tests {
                         serde_json::to_vec(&edits).unwrap(),
                     )
                     .unwrap();
+                },
+            )
+        }
+
+        /// `<root>/<game_path>` — the live file a loose-file component replaces.
+        fn loose_file(&self, game_path: &str) -> PathBuf {
+            self.root.join(crate::loose_relative_os_path(game_path))
+        }
+
+        /// Add a loose-file mod: `files/manifest.json` = {game_path: payload_rel} plus the payload.
+        fn add_loose_file_mod(
+            &self,
+            id: &str,
+            name: &str,
+            game_path: &str,
+            bytes: &[u8],
+        ) -> String {
+            let payload_rel = "files/0_payload".to_string();
+            let manifest: BTreeMap<String, String> =
+                BTreeMap::from([(game_path.to_string(), payload_rel.clone())]);
+            self.add_mod(
+                id,
+                name,
+                vec![ComponentInfo::FilePatch {
+                    rel: "files".into(),
+                    targets: vec![game_path.into()],
+                }],
+                |dir| {
+                    fs::create_dir_all(dir.join("files")).unwrap();
+                    fs::write(
+                        dir.join("files/manifest.json"),
+                        serde_json::to_vec(&manifest).unwrap(),
+                    )
+                    .unwrap();
+                    fs::write(dir.join(&payload_rel), bytes).unwrap();
                 },
             )
         }
@@ -2870,6 +3071,97 @@ mod tests {
             read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"),
             "Gouda"
         );
+    }
+
+    /// Two enabled mods replace the SAME loose file. The later one wins — and the accumulator that
+    /// makes that true also has to dedupe BEFORE the plan is built: `first_duplicate_dst` rejects a
+    /// plan with two writes to one path, so without it an ordinary two-mod overlap would become a
+    /// hard apply failure instead of a later-wins merge.
+    #[test]
+    fn two_mods_replacing_one_loose_file_apply_as_later_wins_not_as_a_collision() {
+        let g = FakeGame::new();
+        let cursor = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+        let live = g.loose_file(cursor);
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        fs::write(&live, b"shipped").unwrap();
+        let a = g.add_loose_file_mod("mod-a", "Alpha", cursor, b"alpha-cursor");
+        let b = g.add_loose_file_mod("mod-b", "Bravo", cursor, b"bravo-cursor");
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true), (&b, true)])).unwrap();
+        assert_eq!(
+            report.applied,
+            vec!["Alpha".to_string(), "Bravo".to_string()],
+            "both mods must apply; only the file is contested"
+        );
+        assert_eq!(fs::read(&live).unwrap(), b"bravo-cursor");
+        assert_eq!(
+            fs::read(crate::bak_path(&live)).unwrap(),
+            b"shipped",
+            "the pristine file must be preserved exactly once"
+        );
+
+        assert!(undeploy_all(&g.root).unwrap());
+        assert_eq!(fs::read(&live).unwrap(), b"shipped");
+        assert!(!crate::bak_path(&live).exists());
+    }
+
+    /// A loose-file replacement whose target this install does not have is skipped with a warning —
+    /// NOT a hard error — and, like the rawfile skip, the decision is taken before the deferred
+    /// undeploy so an incompatible mod cannot tear down the working deployment and then fail while
+    /// backing up a file that was never there.
+    #[test]
+    fn loose_file_missing_target_is_skipped_with_warning() {
+        let g = FakeGame::new();
+        let ghost = "G1R/Content/Slate/Cursors/Normal/Ghost.PNG";
+        let base = g.add_loc_mod("mod-base", "Base", "itfo_cheese", "Gouda");
+        let missing = g.add_loose_file_mod("ghost", "Ghost", ghost, b"whatever");
+
+        let report = apply_loadout(
+            &g.root,
+            &g.lib,
+            &loadout(&[(&base, true), (&missing, true)]),
+        )
+        .unwrap();
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("not present in this install")),
+            "expected a skip warning, got: {:?}",
+            report.warnings
+        );
+        assert!(!g.loose_file(ghost).exists(), "a skip must not create it");
+        assert_eq!(
+            read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"),
+            "Gouda"
+        );
+    }
+
+    #[test]
+    fn bounded_apply_loose_file_rejects_before_game_mutation() {
+        let g = FakeGame::new();
+        let cursor = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+        let live = g.loose_file(cursor);
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        fs::write(&live, b"shipped").unwrap();
+        let id = g.add_loose_file_mod("oversized-loose", "OversizedLoose", cursor, b"12345");
+
+        let error = apply_loadout_with_limits(
+            &g.root,
+            &g.lib,
+            &loadout(&[(&id, true)]),
+            ApplyLimits {
+                max_loose_file_bytes: 4,
+                ..DEFAULT_APPLY_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("loose file payload exceeds the 4 byte limit"),
+            "{error}"
+        );
+        assert_no_apply_artifacts(&g, &live, b"shipped");
     }
 
     /// A present but invalid record is recovery state, not "nothing deployed".

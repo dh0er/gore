@@ -635,7 +635,7 @@ mod tests {
     use gore_authoring::{
         FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, SchemaRevisionV3,
     };
-    use gore_story_catalog::known_generation_v1;
+    use gore_story_catalog::known_supported_generations;
     use gore_story_inventory::Revision3QuestDraftInsertRequestV3;
     use tempfile::TempDir;
 
@@ -846,7 +846,14 @@ mod tests {
     fn live_native_route_inspects_a_published_quest_without_mutating_store_or_game() {
         let game_root = std::env::var("GORE_STORY_GAME_ROOT")
             .expect("set GORE_STORY_GAME_ROOT to run the live Quest inspection FFI test");
-        let generation = known_generation_v1();
+        // Any audited generation's executable will do as the project anchor: this route inspects a
+        // published Quest against the installed game and never compares the anchor to it. Taking
+        // the first row rather than a named V1 accessor keeps that an incidental choice instead of
+        // a build this test is pinned to.
+        let generation = known_supported_generations()
+            .first()
+            .expect("the generation table is never empty")
+            .clone();
         let project: ProjectRevision3 = serde_json::from_value(json!({
             "format": 2,
             "schema_revision": 3,

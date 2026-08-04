@@ -43,7 +43,9 @@ Code signing (Azure Trusted / Artifact Signing):
         TRUSTED_SIGNING_ENDPOINT  TRUSTED_SIGNING_ACCOUNT  TRUSTED_SIGNING_PROFILE
         AZURE_TENANT_ID  AZURE_CLIENT_ID  AZURE_CLIENT_SECRET   (service principal)
     With GORE_SIGN=1 a missing var hard-fails rather than silently shipping
-    unsigned.
+    unsigned. GORE_SIGN_NO_PROXY=1 makes the signtool call alone bypass the
+    system proxy, for machines whose PAC routes AAD login through a tunnel that
+    may be down (the rest of the build keeps the system proxy).
 """
 
 from __future__ import annotations
@@ -152,6 +154,12 @@ PROJECTS: dict[str, dict] = {
         # Markdown docs staged beside the exe. Links that point out of the guide
         # tree are rewritten to absolute GitHub URLs (see stage_docs).
         "doc_dirs": [("docs/guide", "docs")],
+        # The same guide, rendered by the freshly built binary into one browsable,
+        # self-contained HTML file. The Markdown copies are what `grep` wants (the
+        # MCP server has its own, compiled into the exe); this is what a human
+        # double-clicks, because Windows has no handler for .md and the guide is
+        # far too table-heavy for Notepad.
+        "guide_html": "docs/guide.html",
     },
 }
 
@@ -182,13 +190,22 @@ def env() -> dict[str, str]:
     return out
 
 
-def run(label: str, cmd: list[object], cwd: Path = ROOT, dry: bool = False) -> None:
+def run(
+    label: str,
+    cmd: list[object],
+    cwd: Path = ROOT,
+    dry: bool = False,
+    extra_env: dict[str, str] | None = None,
+) -> None:
     printable = " ".join(str(part) for part in cmd)
     print(f"\n{'=' * 72}\n{label}\n-> {printable}  (cwd={cwd})\n{'=' * 72}")
     if dry:
         print("[dry-run] skipped")
         return
-    completed = subprocess.run([str(part) for part in cmd], cwd=cwd, env=env())
+    child_env = env()
+    if extra_env:
+        child_env.update(extra_env)
+    completed = subprocess.run([str(part) for part in cmd], cwd=cwd, env=child_env)
     if completed.returncode != 0:
         raise SystemExit(f"{label} failed (exit {completed.returncode})")
 
@@ -236,6 +253,37 @@ def _signing_config() -> dict[str, str] | None:
     if missing:
         raise SystemExit(f"GORE_SIGN=1 but missing signing env: {', '.join(missing)}")
     return vals
+
+
+# Opt-in proxy bypass for the signing call only (GORE_SIGN_NO_PROXY=1).
+#
+# A corporate PAC may route login.microsoftonline.com through a local tunnel; when
+# that tunnel is down, token acquisition dies with "No connection could be made
+# because the target machine actively refused it (localhost:9000)" and signing
+# fails even though the network is fine. These overrides are handed to the signtool
+# child process alone, so the rest of the build (Flutter, cargo, pub) keeps using
+# the system proxy untouched.
+#
+# .NET only builds its proxy from the environment when a proxy is actually set
+# there, and only then honours NO_PROXY -- hence the deliberately dead dummy
+# proxy paired with a bypass list covering every host signing talks to (AAD
+# login, the codesigning endpoint, and the RFC3161 timestamp server). Bypass
+# entries need the leading-dot form to match subdomains.
+_SIGN_NO_PROXY = (
+    ".microsoftonline.com,login.microsoftonline.com,.microsoft.com,"
+    ".azure.net,.windows.net"
+)
+
+
+def _sign_proxy_overrides() -> dict[str, str]:
+    if os.environ.get("GORE_SIGN_NO_PROXY") != "1":
+        return {}
+    print("signing: bypassing the system proxy for signtool (GORE_SIGN_NO_PROXY=1)")
+    return {
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": _SIGN_NO_PROXY,
+    }
 
 
 def _find_signtool() -> Path:
@@ -322,6 +370,7 @@ def sign_paths(paths: list[Path], dry: bool) -> None:
                 "/dlib", dlib, "/dmdf", meta,
                 *pe,
             ],
+            extra_env=_sign_proxy_overrides(),
         )
     finally:
         meta.unlink(missing_ok=True)
@@ -340,8 +389,8 @@ def pdir(project: str) -> Path:
 # Docs staging                                                                #
 # --------------------------------------------------------------------------- #
 # Base for links the shipped guide inherits from the repo. A guide page links to
-# component READMEs, crates and the internal docs with `../…`; inside a release
-# zip those targets do not exist, so they are rewritten to absolute GitHub URLs.
+# component READMEs and crates with `../…`; inside a release zip those targets do
+# not exist, so they are rewritten to absolute GitHub URLs.
 # GitHub serves files under /blob/ and directories under /tree/ — it redirects
 # between the two, but emit the right one so the packaged links resolve in one
 # hop and do not depend on that redirect.
@@ -717,6 +766,18 @@ def dist_project(project: str, dry: bool) -> Path | None:
         if not written:
             raise SystemExit(f"no docs found in {src_dir}")
         print(f"staged {written} doc file(s) from {src_rel} -> {dest_name}/")
+    # Render the browsable guide with the binary we just built, so it can never disagree
+    # with the pages compiled into it. Pinned to the same commit as the Markdown copies.
+    guide_html = cfg.get("guide_html")
+    if guide_html:
+        rendered = staging / guide_html
+        rendered.parent.mkdir(parents=True, exist_ok=True)
+        run(
+            "render browsable guide",
+            [staging / exe.name, "guide", "html", "-o", rendered, "--repo-ref", repo_ref()],
+        )
+        if not rendered.is_file():
+            raise SystemExit(f"guide render produced nothing at {rendered}")
     sign_dir(staging, dry=dry)
     if base.with_suffix(".zip").exists():
         base.with_suffix(".zip").unlink()

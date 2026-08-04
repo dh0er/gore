@@ -15,6 +15,7 @@ import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
+import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
@@ -1092,6 +1093,20 @@ class _OverviewPanel extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+        // Damage an older build left in the save is save-wide, so it is called
+        // out here first — someone who only edits attributes or story state
+        // would otherwise never see the inventory's copy of this warning.
+        if (slotRepairWarranted(inspection)) ...[
+          SlotRepairBanner(
+            notifier: notifier,
+            misalignedSlots: inspection.privateInventory.misalignedSlots,
+            availability: slotRepairAvailability(
+              inspection,
+              canCompress: state.codecCompressReady,
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
         _MetadataEditor(
@@ -3048,6 +3063,8 @@ class _BackupsPanel extends StatelessWidget {
               isLoading: state.isLoading,
               showRestoreAction: true,
               onRestore: () => notifier.restoreBackup(backup.path),
+              onRename: (name) => notifier.renameBackup(backup.path, name),
+              onDelete: () => notifier.deleteBackup(backup.path),
             ),
           ),
         ],
@@ -3064,6 +3081,8 @@ class _BackupsPanel extends StatelessWidget {
               isLoading: state.isLoading,
               showRestoreAction: true,
               onRestore: () => notifier.restoreCompanionBackup(backup.path),
+              onRename: (name) => notifier.renameBackup(backup.path, name),
+              onDelete: () => notifier.deleteBackup(backup.path),
             ),
           ),
         ],
@@ -3078,12 +3097,18 @@ class _BackupCard extends StatelessWidget {
     required this.isLoading,
     required this.showRestoreAction,
     required this.onRestore,
+    required this.onRename,
+    required this.onDelete,
   });
 
   final BackupEntry backup;
   final bool isLoading;
   final bool showRestoreAction;
   final VoidCallback onRestore;
+
+  /// Store a new label, or clear it with an empty string.
+  final ValueChanged<String> onRename;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -3111,7 +3136,9 @@ class _BackupCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      backup.fileName,
+                      // A label replaces the file name here; the file name
+                      // stays readable in the facts below either way.
+                      backup.title,
                       style: Theme.of(context).textTheme.titleMedium,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3129,6 +3156,10 @@ class _BackupCard extends StatelessWidget {
                             label: l10n.backupFactSlot,
                             value: backup.slotName!,
                           ),
+                        _SmallFact(
+                          label: l10n.backupFactFile,
+                          value: backup.fileName,
+                        ),
                         _SmallFact(
                           label: l10n.backupFactCreated,
                           value: _formatBackupTime(l10n, backup.createdEpoch),
@@ -3154,10 +3185,25 @@ class _BackupCard extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
+              Tooltip(
+                message: l10n.renameBackupTooltip,
+                child: IconButton(
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: isLoading ? null : () => _rename(context, l10n),
+                ),
+              ),
+              Tooltip(
+                message: l10n.deleteBackupTooltip,
+                child: IconButton(
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: isLoading ? null : () => _delete(context, l10n),
+                ),
+              ),
               if (showRestoreAction) ...[
-                const SizedBox(width: 12),
+                const SizedBox(width: 4),
                 Tooltip(
-                  message: l10n.restoreBackupTooltip(backup.fileName),
+                  message: l10n.restoreBackupTooltip(backup.title),
                   child: IconButton.filledTonal(
                     icon: const Icon(Icons.restore),
                     onPressed: isLoading || !canRestore ? null : onRestore,
@@ -3168,6 +3214,104 @@ class _BackupCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Ask for a label and hand it to [onRename]. Prefilled with the current one;
+  /// emptying the field clears it again. The backup file is never renamed — its
+  /// name says which save it belongs to and when it was taken.
+  Future<void> _rename(BuildContext context, AppLocalizations l10n) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (_) => _RenameBackupDialog(
+        fileName: backup.fileName,
+        initial: backup.name ?? '',
+      ),
+    );
+    if (name != null) onRename(name);
+  }
+
+  /// Deleting a backup cannot be undone, so it is confirmed first — unlike the
+  /// queued edits elsewhere, this one hits the disk right away.
+  Future<void> _delete(BuildContext context, AppLocalizations l10n) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(l10n.deleteBackupTitle),
+        content: Text(l10n.deleteBackupBody(backup.title, backup.fileName)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(l10n.deleteBackupConfirm),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) onDelete();
+  }
+}
+
+/// Asks for a backup's label. Owns its text controller so it lives exactly as
+/// long as the dialog does — disposing it right after `showDialog` returns would
+/// pull it out from under the field still on screen during the close animation.
+///
+/// Pops the entered text, or nothing when cancelled. An empty result is a
+/// deliberate "clear the label", so it is NOT the same as cancelling.
+class _RenameBackupDialog extends StatefulWidget {
+  const _RenameBackupDialog({required this.fileName, required this.initial});
+
+  final String fileName;
+  final String initial;
+
+  @override
+  State<_RenameBackupDialog> createState() => _RenameBackupDialogState();
+}
+
+class _RenameBackupDialogState extends State<_RenameBackupDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return AlertDialog(
+      title: Text(l10n.renameBackupTitle),
+      // The helper names the backup file, which is long, and a dialog sized to
+      // its title alone clipped it. Give it room to wrap and to be read.
+      content: SizedBox(
+        width: 460,
+        child: TextField(
+          controller: _controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: l10n.renameBackupLabel,
+            helperText: l10n.renameBackupHelp(widget.fileName),
+            helperMaxLines: 6,
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: Text(l10n.save),
+        ),
+      ],
     );
   }
 }
@@ -3235,7 +3379,12 @@ class _SmallFact extends StatelessWidget {
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
-          Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
+          // Long values — a parse-failure status, say — are clipped to keep the
+          // fact grid aligned, so the full text stays one hover away.
+          Tooltip(
+            message: value,
+            child: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
+          ),
         ],
       ),
     );

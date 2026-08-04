@@ -19,6 +19,9 @@ const _authoringRevision3NpcExecutableSha256V1 =
 const _authoringRevision3NpcExecutableByteLengthV2 = 171704320;
 const _authoringRevision3NpcExecutableSha256V2 =
     'b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d';
+const _authoringRevision3NpcExecutableByteLengthV3 = 171787776;
+const _authoringRevision3NpcExecutableSha256V3 =
+    'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
 
 typedef _AuthoringRevision3NpcParentEvidence = ({
   String role,
@@ -670,7 +673,9 @@ bool _authoringRevision3NpcIsSupportedGeneration(
     (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV1 &&
         generation.sha256 == _authoringRevision3NpcExecutableSha256V1) ||
     (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV2 &&
-        generation.sha256 == _authoringRevision3NpcExecutableSha256V2);
+        generation.sha256 == _authoringRevision3NpcExecutableSha256V2) ||
+    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV3 &&
+        generation.sha256 == _authoringRevision3NpcExecutableSha256V3);
 
 void _authoringRevision3NpcRequireExactDelta(
   Map<String, Object?> base,

@@ -159,11 +159,12 @@ void main() {
     await tester.pump();
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-    await tester.scrollUntilVisible(
-      find.text('Position'),
-      120,
-      scrollable: find.byType(Scrollable).last,
-    );
+    // The player's transform editor now lives in the Charaktere → Position
+    // sub-tab (its only home; two copies would both drive the one 'transform'
+    // pending key). It renders there regardless of privateTypedVerified, so
+    // this legacy fixture still reaches it.
+    await tester.tap(find.widgetWithText(Tab, 'Position'));
+    await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Location X'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Y'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Z'), findsOneWidget);
@@ -338,7 +339,8 @@ void main() {
     await tester.tap(find.widgetWithText(Tab, 'Backups'), warnIfMissed: false);
     await tester.pumpAndSettle();
 
-    expect(find.text('G1R-001.sav.bak.200'), findsOneWidget);
+    // Twice: as the unnamed backup's title, and as its "File" fact below.
+    expect(find.text('G1R-001.sav.bak.200'), findsNWidgets(2));
     expect(find.text('Before edit'), findsOneWidget);
 
     await tester.tap(
@@ -363,7 +365,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Profile backups'), findsOneWidget);
-    expect(find.text('PersistentDataList.sav.bak.250'), findsOneWidget);
+    // Title plus "File" fact, same as the slot backup above.
+    expect(find.text('PersistentDataList.sav.bak.250'), findsNWidgets(2));
     expect(find.text('Before companion edit'), findsOneWidget);
     // Companion (PersistentDataList.sav) backups are restorable: restoring one
     // targets PersistentDataList.sav in the save folder, not the selected slot.

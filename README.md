@@ -13,6 +13,7 @@
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | 🚧 Work in progress |
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
 | **[gore-lua](lua/README.md)** | Small Lua helper library that ships into the game, for hand-written UE4SS mods. | 🚧 Work in progress |
+| **[Assistant plugin](plugins/gore/README.md)** | The MCP server and the modding skill, installed into Claude Code, Codex or Cursor in one step. | ⚗️ Experimental use |
 
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
@@ -51,6 +52,83 @@ gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 
 Full walkthrough: [Getting started](docs/guide/getting-started.md).
 
+## Modding from an AI assistant
+
+`gore mcp serve` exposes the whole CLI over the
+[Model Context Protocol](https://modelcontextprotocol.io), so an assistant can
+drive GORE for you. The server is part of `gore.exe`; what you install is the
+**[plugin](plugins/gore/README.md)**, which registers it *and* adds the
+`gore-modding` skill — the workflow around the tools, which the tools themselves
+cannot carry. This repository is its own marketplace:
+
+```powershell
+claude plugin marketplace add dh0er/gore
+claude plugin install gore@gore
+```
+
+In the Claude desktop app, the same without a terminal: the **+** beside the
+prompt box, then **Plugins → Add plugin**.
+
+One prerequisite the plugin cannot satisfy: it starts the server as `gore mcp
+serve`, by name, so **`gore.exe` has to be on `PATH`**. If it is not, no `gore_*`
+tool appears at all — `gore --version` in a terminal is the check.
+
+Codex and Cursor each want the marketplace spelled their own way, and the
+repository carries a manifest for all three. Codex takes a local checkout
+directly:
+
+```powershell
+codex plugin marketplace add C:\path\to\gore
+codex plugin add gore@gore
+```
+
+Cursor has no command-line install, and adding a marketplace of your own is a
+Teams or Enterprise feature there — see [AI assistants](docs/guide/mcp.md) for
+the two-step route that needs no plugin at all.
+
+To wire a client up by hand instead — a client with no plugin support, or one you
+want to pass [flags](docs/guide/mcp.md#answering-in-advance) to:
+
+```json
+{
+  "mcpServers": {
+    "gore": {
+      "command": "gore",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Spell `command` as an absolute path to `gore.exe` if you would rather not touch
+`PATH`.
+
+Reading works out of the box, and so does writing to a free path outside the game
+installation. What is **confirmed with you first** is changing something that is
+already there: the installation itself, an output file that exists, a directory
+that already holds files, an in-place rewrite. Aim a command somewhere new and it
+runs without asking. A handful ask whatever is on disk, because what they change
+is not a path you chose — the installation, the shared catalogs and library the
+tools keep, or a target read out of a file the server does not open (`gen`,
+`texture replace`, `loc extract`, `mgr import`, and the deploy/undeploy pairs).
+
+Your client shows a dialog naming the command and the file, and nothing runs
+unless you agree. Claude Code, Cursor and Codex can all show that dialog — but
+only while they are interactive. Claude Code driven non-interactively answers for
+you, and every such call is refused without you seeing anything.
+
+Where no dialog reaches you, the assistant asks you in the chat instead: the
+refusal shows it the command line to put in front of you, and your answer comes
+back as `user_approved`. The result then says the command ran on that claim — the
+server saw no confirmation of its own, so the transcript is what you check. See
+[MCP server](docs/guide/mcp.md).
+
+For unattended use, `--allow-write` and `--allow-game-launch` answer in advance,
+and `--no-consent-prompts` refuses instead of asking. Each also reads an
+environment variable, which is how the plugin reaches them: enabling it in Claude
+Code asks you about both permissions in a dialog. Details:
+[MCP server](docs/guide/mcp.md).
+
 ## Documentation
 
 Everything lives in [`docs/`](docs/README.md).
@@ -66,9 +144,19 @@ Everything lives in [`docs/`](docs/README.md).
 | [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
 | [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflicts |
 | [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
-| [Building](docs/guide/building.md) | Toolchain, `build.py`, repo layout, crates, versioning |
+| [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
+| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
-Engineering notes and product vision: [`docs/internal/`](docs/internal).
+The CLI release zip carries the same guide offline: `docs\guide.html` is one
+browsable file with a collapsible sidebar, and `docs\*.md` is the same content in
+Markdown, for `grep`. The MCP server answers from its own copy, compiled into
+`gore.exe`, so editing those files changes what you read and not what an
+assistant is told. Regenerate the HTML any time with `gore guide html`.
+
+Implementation contracts behind the commands — receipt semantics, seal
+guarantees, why a patch is refused — live separately in
+[`docs/reference/`](docs/reference/README.md). They are not part of the guide.
 
 ## Build
 
@@ -90,7 +178,7 @@ python build.py <project> build|run|dist|installer|test
 python build.py all test
 ```
 
-Details, repo layout, and the crate table: [Building](docs/guide/building.md).
+Details, repo layout, and the crate table: [Building](docs/development.md).
 
 ## License
 

@@ -6,6 +6,10 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use gore_as::cache::default_evidence::{
+    audited_builds, classify_candidate_failure, CandidateVerdict, EvidenceCounts,
+    NativeEvidenceStatus, ObservedBuild, UsmapCandidate, UsmapProof,
+};
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::splice::splice_auto;
@@ -15,7 +19,9 @@ use gore_as::cache::walk_modules::{module_count, module_region_end};
 pub enum AsCmd {
     /// Parse and print the outer cache header.
     DecodeHeader { file: PathBuf },
-    /// Scan length-prefixed type-name strings (decode investigation aid).
+    /// Scan length-prefixed type-name strings (decode investigation aid). The input must be a
+    /// module cache: the scan starts after the outer header, so the `0x9e377abe` magic is
+    /// checked first and an arbitrary blob is refused rather than scanned.
     Walk {
         file: PathBuf,
         #[arg(long, default_value_t = 100)]
@@ -99,6 +105,34 @@ pub enum AsCmd {
     /// GORE_AS_USMAP; missing, ambiguous, or mismatched evidence fails closed.
     #[command(flatten)]
     TagMap(TagMapCmd),
+    /// Derive an installed build's generation row and qualification artifact. Reads the game and
+    /// writes nothing: it proposes a row for a person to add, and says what it could not measure.
+    Qualify {
+        /// Game install root (the folder containing `G1R/`). Falls back to the configured game
+        /// path, then Steam auto-detect.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Exact `.usmap` reflection dump to qualify against. Omit to select one from the install,
+        /// which refuses rather than choosing when two dumps both fit this executable.
+        #[arg(long)]
+        usmap: Option<PathBuf>,
+        /// A previously published `story_catalog.v1` document, used to name the curated script
+        /// modules and their sealed source. Omit when the build is already audited; the catalog is
+        /// then built from the install itself.
+        #[arg(long, value_name = "CATALOG.json")]
+        catalog: Option<PathBuf>,
+        /// Proposed `GenerationRow::id` for the draft. (default: `g1r-steam-<script cache GUID
+        /// prefix>`, which is a placeholder — a Steam BuildID reads better.)
+        #[arg(long, value_name = "ID")]
+        id: Option<String>,
+        /// Proposed `GenerationRow::label`, the banner a person reads. (default: derived from the
+        /// id.)
+        #[arg(long, value_name = "TEXT")]
+        label: Option<String>,
+        /// Emit one machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
     /// Offline-check whether the optional diagnostics hook has one safe AOB match. Does not launch
     /// the game or change the installation.
     DiagnosticsCheck {
@@ -338,7 +372,7 @@ pub enum TagMapCmd {
 const DEFAULT_SELECTOR_MAX_BYTES: u64 = 64 * 1024;
 const DEFAULT_USMAP_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const DEFAULT_BINDS_MAX_BYTES: u64 = 128 * 1024 * 1024;
-const TAG_MAP_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const MODULE_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES: usize = 1_024;
 const DEFAULT_USMAP_MAX_CANDIDATES: usize = 16;
 const TAG_MAP_SITES_REPORT_FORMAT: &str = "gore-as-tag-map-sites-v1";
@@ -542,7 +576,71 @@ struct DefaultSitesJson<'a> {
     cache: CacheProofJson,
     site_count: usize,
     stats: DefaultStatsJson,
+    evidence: DefaultEvidenceJson,
     sites: Vec<DefaultSiteJson<'a>>,
+}
+
+/// The native-evidence verdict as a document, so `--json` never has to be reconciled against what
+/// the same run printed on stderr.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum DefaultEvidenceJson {
+    Qualified {
+        generation_id: String,
+        generation_label: String,
+        ancestry_profile_id: String,
+        usmap: Option<UsmapProofJson>,
+    },
+    UnsupportedGeneration {
+        observed: ObservedBuildJson,
+        audited: Vec<AuditedBuildJson>,
+    },
+    UsmapMissing {
+        generation_id: Option<String>,
+        examined: Vec<UsmapCandidateJson>,
+    },
+    UsmapAmbiguous {
+        generation_id: String,
+        matched: Vec<String>,
+    },
+    BindsUnavailable {
+        reason: String,
+    },
+    SealDrift {
+        generation_id: Option<String>,
+        drift: String,
+    },
+    NotRequested,
+}
+
+#[derive(Serialize)]
+struct UsmapProofJson {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+struct ObservedBuildJson {
+    script_cache_guid: String,
+    script_cache_length: usize,
+    script_cache_sha256: String,
+    binds_length: Option<usize>,
+    binds_sha256: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AuditedBuildJson {
+    id: &'static str,
+    label: &'static str,
+    ancestry_profile_id: &'static str,
+    map_proof_id: &'static str,
+}
+
+#[derive(Serialize)]
+struct UsmapCandidateJson {
+    path: String,
+    sha256: Option<String>,
+    rejection: &'static str,
 }
 
 #[derive(Serialize)]
@@ -604,6 +702,7 @@ struct DefaultPatchJson<'a> {
     output: CacheProofJson,
     expected_hex: String,
     replacement_hex: String,
+    evidence: DefaultEvidenceJson,
     provenance: DefaultProvenanceJson<'a>,
 }
 
@@ -688,7 +787,15 @@ struct TagMapPatchJson<'a> {
 /// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
 /// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
 fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
-    load_native_api_with_proof(cache_file).map(|(api, _)| api)
+    load_native_api_with_proof(cache_file).map(|loaded| loaded.native)
+}
+
+/// A parsed `Binds.Cache` together with the measurements a refusal has to be able to quote.
+struct LoadedBinds {
+    native: gore_as::cache::binds::NativeApi,
+    proof: EvidenceFileProofJson,
+    len: usize,
+    sha256: [u8; 32],
 }
 
 fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
@@ -698,9 +805,7 @@ fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
     })
 }
 
-fn load_native_api_with_proof(
-    cache_file: &Path,
-) -> Option<(gore_as::cache::binds::NativeApi, EvidenceFileProofJson)> {
+fn load_native_api_with_proof(cache_file: &Path) -> Option<LoadedBinds> {
     let path = native_api_path(cache_file)?;
     let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
         Ok(bytes) => bytes,
@@ -721,9 +826,14 @@ fn load_native_api_with_proof(
     };
     let proof = evidence_file_proof(&path, &bytes);
     match gore_as::cache::binds::NativeApi::from_bytes(&bytes) {
-        Some(api) => {
+        Some(native) => {
             eprintln!("loaded native arities from {}", path.display());
-            Some((api, proof))
+            Some(LoadedBinds {
+                native,
+                proof,
+                len: bytes.len(),
+                sha256: Sha256::digest(&bytes).into(),
+            })
         }
         None => {
             eprintln!("warning: failed to parse {}", path.display());
@@ -737,12 +847,9 @@ struct DefaultMutationEvidence {
     ancestry: Option<gore_as::cache::default_ancestry::DefaultNativeAncestry>,
     binds: Option<EvidenceFileProofJson>,
     usmap: Option<EvidenceFileProofJson>,
-}
-
-#[derive(Clone, Copy)]
-enum DefaultEvidencePolicy {
-    ScalarFallback,
-    RequiredTagMap,
+    /// Why the sealed tuple did or did not qualify. Carried rather than printed here, so that every
+    /// command prints it exactly once, in its own place, with its own counts.
+    status: NativeEvidenceStatus,
 }
 
 /// Resolve USMAP candidates without trusting a Steam location or versioned filename. An explicit
@@ -825,7 +932,7 @@ fn read_default_usmap(path: &Path) -> Result<Vec<u8>> {
 }
 
 fn read_tag_map_cache(path: &Path) -> Result<Vec<u8>> {
-    read_regular_bounded(path, TAG_MAP_CACHE_MAX_BYTES, "AS_TAG_MAP_INPUT")
+    read_validated_cache(path, "AS_TAG_MAP_INPUT")
 }
 
 fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
@@ -858,6 +965,36 @@ fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<
     Ok(bytes)
 }
 
+/// Prove a buffer really is an AngelScript module cache before anything walks it. `Binds.Cache` and
+/// the other side tables carry no `CACHE_MAGIC` at 0x10, and every structural walker deliberately
+/// skips the header and re-reads the module count from 0x14; without this gate they read an
+/// arbitrary `FString` length out of unrelated bytes and blame a container parse for a wrong file.
+/// Visible to the crate because `gore catalog knowledge --script-cache` feeds the same walkers.
+pub(crate) fn validate_module_cache(path: &Path, bytes: &[u8], label: &'static str) -> Result<()> {
+    CacheHeader::parse(bytes).with_context(|| {
+        format!(
+            "{label}: {} is not an AngelScript module cache — pass the game's \
+             PrecompiledScript_Shipping.Cache or a mini-cache from 'gore as extract'",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Read a bounded regular file and prove its outer header, under the caller's own `AS_*` code so
+/// that a tag-map input is not diagnosed as a plain cache input.
+fn read_validated_cache(path: &Path, label: &'static str) -> Result<Vec<u8>> {
+    let bytes = read_regular_bounded(path, MODULE_CACHE_MAX_BYTES, label)?;
+    validate_module_cache(path, &bytes, label)?;
+    Ok(bytes)
+}
+
+/// Read a module cache and prove its outer header. The single entry point for every subcommand that
+/// walks the `Modules` TMap or the seven global tail tables.
+fn read_module_cache(path: &Path) -> Result<Vec<u8>> {
+    read_validated_cache(path, "AS_CACHE_INPUT")
+}
+
 fn evidence_file_proof(path: &Path, bytes: &[u8]) -> EvidenceFileProofJson {
     EvidenceFileProofJson {
         path: path.display().to_string(),
@@ -869,20 +1006,36 @@ fn evidence_file_proof(path: &Path, bytes: &[u8]) -> EvidenceFileProofJson {
 /// Load optional native mutation evidence. Every failure deliberately preserves the existing
 /// scalar-only path: the sealed Binds data may still prove direct native field types, while no
 /// native-grandparent ancestry is supplied.
-fn load_default_mutation_evidence(
-    cache_file: &Path,
-    cache: &[u8],
-    policy: DefaultEvidencePolicy,
-) -> DefaultMutationEvidence {
-    let Some((loaded_native, binds)) = load_native_api_with_proof(cache_file) else {
+///
+/// The verdict about the *build* is hoisted out of the USMAP loop. `from_schema_db` settles the
+/// script-cache identity before it reads a single USMAP byte, so the first candidate that answers
+/// "this is not an audited build" has answered for all of them — and printing that answer under a
+/// candidate's path is what used to make an unaudited build look like a bad reflection dump.
+fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMutationEvidence {
+    let Some(loaded) = load_native_api_with_proof(cache_file) else {
+        let reason = match native_api_path(cache_file) {
+            Some(path) => format!("no usable Binds.Cache at {}", path.display()),
+            None => "no Binds.Cache location could be derived for this script cache".to_owned(),
+        };
         return DefaultMutationEvidence {
             native: None,
             ancestry: None,
             binds: None,
             usmap: None,
+            status: NativeEvidenceStatus::BindsUnavailable { reason },
         };
     };
-    let native = Some(loaded_native);
+    let observed = ObservedBuild {
+        // Every caller proves the outer header first; an all-zero GUID here would be a header this
+        // command already refused to walk.
+        script_cache_guid: CacheHeader::parse(cache).map_or([0u8; 16], |header| header.hash),
+        script_cache_len: cache.len(),
+        script_cache_sha256: Sha256::digest(cache).into(),
+        binds_len: Some(loaded.len),
+        binds_sha256: Some(loaded.sha256),
+    };
+    let binds = loaded.proof;
+    let native = Some(loaded.native);
     let native_ref = native.as_ref().expect("just populated native evidence");
     let configured = std::env::var_os("GORE_AS_USMAP").map(PathBuf::from);
     let candidates = match default_usmap_candidates(cache_file, configured) {
@@ -892,60 +1045,103 @@ fn load_default_mutation_evidence(
             Vec::new()
         }
     };
+
     let mut matches = Vec::new();
+    let mut examined = Vec::new();
+    let mut verdict = None;
     for path in candidates {
-        let result = (|| -> Result<_> {
-            let bytes = read_default_usmap(&path)?;
-            let proof = evidence_file_proof(&path, &bytes);
-            let schemas = gore_asset::SchemaDb::from_usmap(&bytes)
-                .map_err(anyhow::Error::from)
-                .context("AS_DEFAULT_USMAP: parsing sealed schema map")?;
-            let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
-                native_ref, cache, &schemas,
-            )
-            .map_err(anyhow::Error::from)
-            .context("AS_DEFAULT_ANCESTRY: validating cache/Binds/USMAP tuple")?;
-            Ok((profile, proof))
-        })();
-        match result {
-            Ok((profile, proof)) => matches.push((path, profile, proof)),
-            Err(error) => eprintln!(
-                "warning: {} is not usable native-default evidence: {error:#}",
-                path.display()
-            ),
+        if verdict.is_some() {
+            break;
+        }
+        let display = path.display().to_string();
+        let bytes = match read_default_usmap(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("warning: AS_DEFAULT_USMAP: {error:#}");
+                examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: None,
+                    rejection: "could not be read",
+                });
+                continue;
+            }
+        };
+        let proof = evidence_file_proof(&path, &bytes);
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let schemas = match gore_asset::SchemaDb::from_usmap(&bytes) {
+            Ok(schemas) => schemas,
+            Err(error) => {
+                eprintln!("warning: AS_DEFAULT_USMAP: parsing {display}: {error}");
+                examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: Some(digest),
+                    rejection: "is not a parseable schema map",
+                });
+                continue;
+            }
+        };
+        match gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+            native_ref, cache, &schemas,
+        ) {
+            Ok(profile) => matches.push((display, profile, proof, digest)),
+            Err(error) => match classify_candidate_failure(&error) {
+                CandidateVerdict::UnsupportedCache => {
+                    verdict = Some(NativeEvidenceStatus::UnsupportedGeneration {
+                        observed: observed.clone(),
+                        audited: audited_builds(),
+                    });
+                }
+                CandidateVerdict::UnsupportedBinds => {
+                    verdict = Some(NativeEvidenceStatus::BindsUnavailable {
+                        reason: error.to_string(),
+                    });
+                }
+                CandidateVerdict::SealDrift(drift) => {
+                    verdict = Some(NativeEvidenceStatus::SealDrift {
+                        generation_id: None,
+                        drift,
+                    });
+                }
+                CandidateVerdict::Rejected(rejection) => examined.push(UsmapCandidate {
+                    path: display,
+                    sha256: Some(digest),
+                    rejection,
+                }),
+            },
         }
     }
-    let (ancestry, usmap) = match matches.len() {
-        1 => {
-            let (path, profile, proof) = matches.pop().expect("one match");
-            eprintln!(
-                "loaded sealed native-default ancestry {} from {}",
+
+    let (ancestry, usmap, status) = match (verdict, matches.len()) {
+        (Some(status), _) => (None, None, status),
+        (None, 1) => {
+            let (path, profile, proof, sha256) = matches.pop().expect("one match");
+            let status = NativeEvidenceStatus::qualified(
                 profile.profile_id(),
-                path.display()
+                Some(UsmapProof { path, sha256 }),
             );
-            (Some(profile), Some(proof))
+            (Some(profile), Some(proof), status)
         }
-        0 => {
-            match policy {
-                DefaultEvidencePolicy::ScalarFallback => eprintln!(
-                    "native-default ancestry unavailable; using strict scalar-only fallback"
-                ),
-                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
-                    "warning: sealed native-default ancestry required for tag-map operation but unavailable"
-                ),
-            }
-            (None, None)
-        }
-        count => {
-            match policy {
-                DefaultEvidencePolicy::ScalarFallback => eprintln!(
-                    "warning: {count} sealed USMAP candidates matched; refusing ambiguous native-default ancestry"
-                ),
-                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
-                    "warning: {count} sealed USMAP candidates matched; tag-map operation requires exactly one"
-                ),
-            }
-            (None, None)
+        (None, 0) => (
+            None,
+            None,
+            NativeEvidenceStatus::UsmapMissing {
+                generation_id: None,
+                examined,
+            },
+        ),
+        (None, _) => {
+            let generation_id = NativeEvidenceStatus::generation_id_for_profile_id(
+                matches[0].1.profile_id(),
+            );
+            let matched = matches.into_iter().map(|(path, ..)| path).collect();
+            (
+                None,
+                None,
+                NativeEvidenceStatus::UsmapAmbiguous {
+                    generation_id,
+                    matched,
+                },
+            )
         }
     };
     DefaultMutationEvidence {
@@ -953,6 +1149,16 @@ fn load_default_mutation_evidence(
         ancestry,
         binds: Some(binds),
         usmap,
+        status,
+    }
+}
+
+/// Print the native-evidence verdict once, above whatever the command is about to emit. Sites go to
+/// stdout and this goes to stderr, so `--json` keeps a clean document and still states the cause.
+fn print_native_evidence(status: &NativeEvidenceStatus, counts: Option<EvidenceCounts>) {
+    let banner = status.banner(counts);
+    if !banner.is_empty() {
+        eprintln!("{banner}");
     }
 }
 
@@ -966,8 +1172,10 @@ fn load_required_tag_map_evidence(
     cache_file: &Path,
     cache: &[u8],
 ) -> Result<RequiredTagMapEvidence> {
-    let evidence =
-        load_default_mutation_evidence(cache_file, cache, DefaultEvidencePolicy::RequiredTagMap);
+    let evidence = load_default_mutation_evidence(cache_file, cache);
+    // Say what was refused before saying that the command needs it. Without this, a tag-map run on
+    // an unaudited build reports only that evidence is required, never that the build is the reason.
+    print_native_evidence(&evidence.status, None);
     Ok(RequiredTagMapEvidence {
         ancestry: evidence.ancestry.context(
             "AS_TAG_MAP_ANCESTRY: sealed cache/Binds/USMAP evidence is required; refusing fallback",
@@ -996,6 +1204,81 @@ fn default_provenance_json(
         instruction_offset_dwords: site.instruction_offset_dw,
         operand_offset: site.operand_offset,
         length: site.encoding.width(),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    gore_as::cache::default_patch::encode_hex(bytes)
+}
+
+fn default_evidence_json(status: &NativeEvidenceStatus) -> DefaultEvidenceJson {
+    match status {
+        NativeEvidenceStatus::Qualified {
+            generation_id,
+            generation_label,
+            ancestry_profile_id,
+            usmap,
+        } => DefaultEvidenceJson::Qualified {
+            generation_id: (*generation_id).to_owned(),
+            generation_label: (*generation_label).to_owned(),
+            ancestry_profile_id: (*ancestry_profile_id).to_owned(),
+            usmap: usmap.as_ref().map(|proof| UsmapProofJson {
+                path: proof.path.clone(),
+                sha256: hex(&proof.sha256),
+            }),
+        },
+        NativeEvidenceStatus::UnsupportedGeneration { observed, audited } => {
+            DefaultEvidenceJson::UnsupportedGeneration {
+                observed: ObservedBuildJson {
+                    script_cache_guid: hex(&observed.script_cache_guid),
+                    script_cache_length: observed.script_cache_len,
+                    script_cache_sha256: hex(&observed.script_cache_sha256),
+                    binds_length: observed.binds_len,
+                    binds_sha256: observed.binds_sha256.as_ref().map(|sha| hex(sha)),
+                },
+                audited: audited
+                    .iter()
+                    .map(|build| AuditedBuildJson {
+                        id: build.id,
+                        label: build.label,
+                        ancestry_profile_id: build.ancestry_profile_id,
+                        map_proof_id: build.map_proof_id,
+                    })
+                    .collect(),
+            }
+        }
+        NativeEvidenceStatus::UsmapMissing {
+            generation_id,
+            examined,
+        } => DefaultEvidenceJson::UsmapMissing {
+            generation_id: generation_id.map(str::to_owned),
+            examined: examined
+                .iter()
+                .map(|candidate| UsmapCandidateJson {
+                    path: candidate.path.clone(),
+                    sha256: candidate.sha256.as_ref().map(|sha| hex(sha)),
+                    rejection: candidate.rejection,
+                })
+                .collect(),
+        },
+        NativeEvidenceStatus::UsmapAmbiguous {
+            generation_id,
+            matched,
+        } => DefaultEvidenceJson::UsmapAmbiguous {
+            generation_id: (*generation_id).to_owned(),
+            matched: matched.clone(),
+        },
+        NativeEvidenceStatus::BindsUnavailable { reason } => DefaultEvidenceJson::BindsUnavailable {
+            reason: reason.clone(),
+        },
+        NativeEvidenceStatus::SealDrift {
+            generation_id,
+            drift,
+        } => DefaultEvidenceJson::SealDrift {
+            generation_id: generation_id.map(str::to_owned),
+            drift: (*drift).to_owned(),
+        },
+        NativeEvidenceStatus::NotRequested => DefaultEvidenceJson::NotRequested,
     }
 }
 
@@ -1325,10 +1608,28 @@ fn sync_default_output_parent(_parent: &Path) -> Result<()> {
 /// Acquire cross-tool ownership before selecting the deployment-aware pristine cache. The same
 /// guard is then transferred into gore-as, so deploy/undeploy cannot change the authoritative base
 /// between this read and compiler use.
+/// Acquire the compile guard.
+///
+/// Split out for one reason: under `cfg(test)` it answers "is the game running?" from a thread-local
+/// instead of from the real process list. These tests build a throwaway install in a temp directory
+/// and assert on guard bookkeeping, which has nothing to do with what is running on the developer's
+/// machine — but the production probe made the whole suite go red whenever Gothic happened to be
+/// open, which is precisely when someone is likely to be testing modding tools. Production
+/// behaviour is untouched.
+#[cfg(not(test))]
+fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    gore_as::compile::acquire_compile_install_mutation(game)
+}
+
+#[cfg(test)]
+fn acquire_compile_guard(game: &Path) -> Result<gore_as::compile::InstallMutationGuard, String> {
+    gore_as::compile::acquire_compile_install_mutation_with_stated_game_process(game, || Ok(false))
+}
+
 fn guarded_pristine_script_cache(
     game: &Path,
 ) -> Result<(Vec<u8>, gore_as::compile::InstallMutationGuard)> {
-    let mut guard = gore_as::compile::acquire_compile_install_mutation(game)
+    let mut guard = acquire_compile_guard(game)
         .map_err(anyhow::Error::msg)
         .context("acquiring the AngelScript install-mutation guard")?;
     match gore_mod::pristine_script_cache(game) {
@@ -1352,23 +1653,20 @@ fn guarded_pristine_script_cache(
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let h = CacheHeader::parse(&bytes).context("parsing header")?;
             println!("hash       : {}", hex16(&h.hash));
             println!("magic      : {:#010x}", h.magic);
             println!("type_count : {}", h.type_count);
         }
         AsCmd::Walk { file, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             for s in scan_strings(&bytes, CacheHeader::SIZE, max) {
                 println!("0x{:08x}  len={:<4} {}", s.offset, s.len, s.text);
             }
         }
         AsCmd::Info { file } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let tail = module_region_end(&bytes).context("walking modules")?;
             println!("modules  : {}", module_count(&bytes));
             println!("tail_off : {:#x}", tail);
@@ -1379,8 +1677,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Decompile { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
             // decompile output matches emitted source (subclass casts, native-call trimming).
@@ -1403,8 +1700,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} function(s))");
         }
         AsCmd::EmitAll { file, outdir } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             let stats = gore_as::cache::emit_all::emit_all_tree(
@@ -1425,8 +1721,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Emit { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
             let prepared = gore_as::cache::emit_all::PreparedEmit::new(
@@ -1450,8 +1745,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             eprintln!("({n} module(s))");
         }
         AsCmd::StaticNames { file, indices } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             println!("StaticNames count: {}", refs.static_name_count());
             let show: Vec<i64> = if indices.is_empty() {
@@ -1467,8 +1761,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
         }
         AsCmd::Disasm { file, needle, max } => {
-            let bytes =
-                std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let bytes = read_module_cache(&file)?;
             let funcs =
                 gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
@@ -1493,17 +1786,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             let bytes = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let evidence = load_default_mutation_evidence(
-                &cache,
-                &bytes,
-                DefaultEvidencePolicy::ScalarFallback,
-            );
-            let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+            // Ahead of evidence loading: a non-cache input otherwise draws a `not usable
+            // native-default evidence` warning before anything names the real mismatch.
+            validate_module_cache(&cache, &bytes, "AS_DEFAULT_INPUT")?;
+            let evidence = load_default_mutation_evidence(&cache, &bytes);
+            let report = gore_as::cache::default_patch::default_sites_with_evidence(
                 &bytes,
                 evidence.native,
                 evidence.ancestry,
+                Some(evidence.status),
             )
             .context("AS_DEFAULT_INSPECT")?;
+            // The counts are the whole report, so the reason for them belongs above them and above
+            // the sites, not folded into a per-file warning further up.
+            print_native_evidence(
+                &report.evidence,
+                Some(EvidenceCounts {
+                    editable_sites: report.sites.len(),
+                    direct_windows: report.stats.direct_windows,
+                    unresolved_fields: report.stats.unresolved_fields,
+                    unresolved_types: report.stats.unresolved_types,
+                }),
+            );
             let sites: Vec<_> = report
                 .sites
                 .iter()
@@ -1537,10 +1841,18 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         unsupported_types: report.stats.unsupported_types,
                         ambiguous_fields: report.stats.ambiguous_fields,
                     },
+                    evidence: default_evidence_json(&report.evidence),
                     sites: sites.iter().map(|site| default_site_json(site)).collect(),
                 };
                 println!("{}", serde_json::to_string_pretty(&document)?);
             } else {
+                if module.is_some() || class.is_some() || field.is_some() {
+                    eprintln!(
+                        "the counts above are for the whole cache; {} of them match the active \
+                         --module/--class/--field filter",
+                        sites.len()
+                    );
+                }
                 for site in &sites {
                     let selector =
                         serde_json::to_string(&DefaultSelectorJson::from_core(&site.selector))?;
@@ -1591,20 +1903,19 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let replacement = decode_default_hex(&replacement_hex, "AS_DEFAULT_REPLACEMENT")?;
             let input = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let evidence = load_default_mutation_evidence(
-                &cache,
-                &input,
-                DefaultEvidencePolicy::ScalarFallback,
-            );
-            let patch = gore_as::cache::default_patch::patch_default_with_native_ancestry(
+            validate_module_cache(&cache, &input, "AS_DEFAULT_INPUT")?;
+            let evidence = load_default_mutation_evidence(&cache, &input);
+            let patch = gore_as::cache::default_patch::patch_default_with_evidence(
                 &input,
                 evidence.native,
                 evidence.ancestry,
+                Some(evidence.status),
                 &selector,
                 &expected,
                 &replacement,
             )
             .context("AS_DEFAULT_PATCH")?;
+            print_native_evidence(&patch.evidence, None);
             let persisted_output = publish_default_cache_noclobber(&out, &patch.bytes)?;
 
             if json {
@@ -1618,6 +1929,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     replacement_hex: gore_as::cache::default_patch::encode_hex(
                         &patch.after.expected,
                     ),
+                    evidence: default_evidence_json(&patch.evidence),
                     provenance: default_provenance_json(&patch.after),
                 };
                 println!("{}", serde_json::to_string_pretty(&document)?);
@@ -1807,6 +2119,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 Err(error) => return Err(tag_map_post_publish_error(&out, error)),
             }
         }
+        AsCmd::Qualify {
+            game,
+            usmap,
+            catalog,
+            id,
+            label,
+            json,
+        } => run_qualify(game, usmap, catalog, id, label, json)?,
         AsCmd::DiagnosticsCheck { exe, game } => {
             let exe = match exe {
                 Some(exe) => exe,
@@ -1967,10 +2287,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             target,
             out,
         } => {
-            let base_b =
-                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
-            let mini_b =
-                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let base_b = read_module_cache(&base)?;
+            let mini_b = read_module_cache(&mini)?;
             let n = module_count(&base_b);
             let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target)
                 .context("replace")?;
@@ -1985,10 +2303,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Splice { base, mini, out } => {
-            let base_b =
-                std::fs::read(&base).with_context(|| format!("reading {}", base.display()))?;
-            let mini_b =
-                std::fs::read(&mini).with_context(|| format!("reading {}", mini.display()))?;
+            let base_b = read_module_cache(&base)?;
+            let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
             let spliced = splice_auto(&base_b, &mini_b).context("splicing")?;
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
@@ -2002,8 +2318,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             );
         }
         AsCmd::Extract { cache, module, out } => {
-            let b =
-                std::fs::read(&cache).with_context(|| format!("reading {}", cache.display()))?;
+            let b = read_module_cache(&cache)?;
             let n = module_count(&b);
             let mini = gore_as::cache::splice::extract_module(&b, &module).context("extract")?;
             std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
@@ -2022,10 +2337,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             allow_new_symbols,
             out,
         } => {
-            let regen_b = std::fs::read(&regen_cache)
-                .with_context(|| format!("reading {}", regen_cache.display()))?;
-            let base_b = std::fs::read(&base_cache)
-                .with_context(|| format!("reading {}", base_cache.display()))?;
+            let regen_b = read_module_cache(&regen_cache)?;
+            let base_b = read_module_cache(&base_cache)?;
             let n = module_count(&regen_b);
             let mini =
                 gore_as::cache::splice::extract_module(&regen_b, &module).context("extract")?;
@@ -2071,10 +2384,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             fail_on_semantic,
         } => {
             use gore_as::cache::bytediff::{self, Filters, NormOpts, Verdict};
-            let v_bytes = std::fs::read(&vanilla)
-                .with_context(|| format!("reading vanilla {}", vanilla.display()))?;
-            let r_bytes = std::fs::read(&regen)
-                .with_context(|| format!("reading regen {}", regen.display()))?;
+            // The two positionals are the easiest pair in the CLI to swap, so each keeps the role
+            // label its own read carried before both moved to the shared helper.
+            let v_bytes = read_module_cache(&vanilla).context("reading the vanilla cache")?;
+            let r_bytes = read_module_cache(&regen).context("reading the regen cache")?;
 
             let opts = NormOpts {
                 n2_slots: norm_slots,
@@ -2248,9 +2561,1742 @@ fn hex16(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+// ------------------------------------------------------------------------------------------
+// `gore as qualify` — deriving a generation row from an installation.
+//
+// The command exists because the last three generations were qualified by hand: a maintainer ran
+// half a dozen suites, read numbers out of their output, and pasted twenty-four values into a
+// struct literal across six files. Two things went wrong doing that, and both are designed against
+// here. A USMAP dump from the previous build passes its own hash check while describing the wrong
+// game, so the dump is chosen by evidence and an ambiguous directory is refused rather than
+// resolved. And a digest cannot say that a parser dropped rows, so every digest is emitted next to
+// the count it was taken over, compared against the nearest audited row.
+//
+// It never edits `crates/gore-generation/src/lib.rs`. Qualifying is not admitting.
+// ------------------------------------------------------------------------------------------
+
+const QUALIFY_REPORT_FORMAT: &str = "gore-as-qualify-v1";
+const QUALIFY_EXECUTABLE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const QUALIFY_CATALOG_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Shortest run of printable bytes in the executable treated as a name. Class names are far longer;
+/// this only bounds how much noise the run table carries.
+const QUALIFY_MIN_EXECUTABLE_RUN: usize = 4;
+/// How many absent class names a rejected dump lists before the report stops naming them.
+const QUALIFY_MAX_ABSENT_EXAMPLES: usize = 8;
+
+#[derive(Serialize, Clone)]
+struct QualifyFileJson {
+    path: String,
+    byte_len: u64,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+struct QualifyInputsJson {
+    executable: QualifyFileJson,
+    shipping_cache: QualifyFileJson,
+    binds_cache: QualifyFileJson,
+    script_cache_guid: String,
+    usmap: Option<QualifyFileJson>,
+}
+
+#[derive(Serialize)]
+struct QualifyUsmapCandidateJson {
+    path: String,
+    sha256: String,
+    byte_len: u64,
+    class_rows: Option<usize>,
+    /// Class names this dump declares that the executable never names. Zero is the only value that
+    /// ties a dump to this build; anything else means the dump describes a different one.
+    class_names_absent_from_executable: Option<usize>,
+    absent_examples: Vec<String>,
+    /// Of the native base classes this build's own script cache refers to, how many this dump has.
+    native_bases_resolved: Option<usize>,
+    native_bases_total: usize,
+    verdict: &'static str,
+}
+
+#[derive(Serialize)]
+struct QualifyUsmapSelectionJson {
+    sealed: Option<QualifyFileJson>,
+    reason: String,
+    examined: Vec<QualifyUsmapCandidateJson>,
+}
+
+#[derive(Serialize)]
+struct QualifyFieldJson {
+    field: &'static str,
+    value: Option<String>,
+    derived_by: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct QualifyRowJson {
+    id: String,
+    fields: Vec<QualifyFieldJson>,
+    missing: Vec<&'static str>,
+    literal: String,
+}
+
+/// The committed artifact, in the exact shape `crates/gore-generation/qualifications/*.json` uses.
+/// A value this run could not measure is `null` rather than absent, so the gap is visible in the
+/// document a maintainer is about to commit.
+#[derive(Serialize)]
+struct QualifyArtifactJson {
+    generation_id: String,
+    label: String,
+    native_ancestry_profile_id: Option<String>,
+    gameplay_tag_float32_map_proof_id: Option<String>,
+    scalar_default_operand_count: Option<u64>,
+    gameplay_tag_float32_operand_count: Option<u64>,
+    class_count: Option<u64>,
+    gameplay_tag_float32_map_field_count: Option<u64>,
+    unresolved_fields_with_ancestry: Option<u64>,
+    direct_windows: Option<u64>,
+    /// The two Binds row counts. A digest cannot say that a record shape stopped being recognised;
+    /// these are what the next generation's run compares against, and they are recorded here
+    /// because the first three generations were qualified before anything wrote them down.
+    binds_field_row_count: Option<u64>,
+    binds_class_path_row_count: Option<u64>,
+    witnesses: std::collections::BTreeMap<&'static str, String>,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct QualifyCountJson {
+    name: &'static str,
+    previous: Option<u64>,
+    observed: u64,
+    delta: Option<i64>,
+    fell: bool,
+    derived_by: String,
+}
+
+#[derive(Serialize)]
+struct QualifyCuratedModuleJson {
+    module: String,
+    runtime_class: String,
+    expected_byte_len: u64,
+    expected_sha256: String,
+    observed_byte_len: Option<u64>,
+    observed_sha256: Option<String>,
+    reproduces: bool,
+}
+
+#[derive(Serialize)]
+struct QualifyCuratedJson {
+    /// Where the curated module list and its seals came from, or why there is none.
+    source: String,
+    modules: Vec<QualifyCuratedModuleJson>,
+    all_reproduce: bool,
+}
+
+#[derive(Serialize)]
+struct QualifyUnavailableJson {
+    field: &'static str,
+    reason: String,
+}
+
+/// One value this run derived that the sealed row disagrees with. Only an audited build can produce
+/// these, and on an audited build the list being empty is the whole proof: it means every number in
+/// the row came back out of the game the row describes.
+#[derive(Serialize)]
+struct QualifyDivergenceJson {
+    field: &'static str,
+    sealed: String,
+    derived: Option<String>,
+}
+
+#[derive(Serialize)]
+struct QualifyJson {
+    format: &'static str,
+    game: String,
+    already_audited_as: Option<&'static str>,
+    compared_against: Option<&'static str>,
+    inputs: QualifyInputsJson,
+    usmap_selection: QualifyUsmapSelectionJson,
+    counts: Vec<QualifyCountJson>,
+    curated_records: QualifyCuratedJson,
+    row: QualifyRowJson,
+    qualification: QualifyArtifactJson,
+    unavailable: Vec<QualifyUnavailableJson>,
+    diverged_from_sealed_row: Vec<QualifyDivergenceJson>,
+    complete: bool,
+    still_to_do: Vec<String>,
+}
+
+/// The three sealed files, located the way every other command locates them.
+struct QualifyPaths {
+    root: PathBuf,
+    executable: PathBuf,
+    shipping_cache: PathBuf,
+    binds_cache: PathBuf,
+}
+
+fn qualify_paths(game: Option<PathBuf>) -> Result<QualifyPaths> {
+    let root = gore_loc::config::game_root(game).context("resolving game path")?;
+    let g1r = if root.file_name().is_some_and(|name| name == "G1R") {
+        root.clone()
+    } else {
+        root.join("G1R")
+    };
+    Ok(QualifyPaths {
+        root,
+        executable: g1r
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe"),
+        shipping_cache: g1r.join("Script").join("PrecompiledScript_Shipping.Cache"),
+        binds_cache: g1r.join("Script").join("Binds.Cache"),
+    })
+}
+
+fn qualify_file_json(path: &Path, seal: &gore_story_catalog::ContentSeal) -> QualifyFileJson {
+    QualifyFileJson {
+        path: path.display().to_string(),
+        byte_len: seal.byte_len,
+        sha256: seal.sha256.to_string(),
+    }
+}
+
+fn qualify_file_seal(seal: &gore_story_catalog::ContentSeal) -> gore_generation::FileSeal {
+    gore_generation::FileSeal {
+        byte_len: seal.byte_len,
+        sha256: *seal.sha256.as_bytes(),
+    }
+}
+
+/// Every run of printable bytes in the executable, in both the byte-per-character and the
+/// UTF-16-little-endian encodings an Unreal binary mixes.
+///
+/// This is the only file-only tie between a `.usmap` and the executable it claims to describe: the
+/// dump is generated on a player's machine and its filename is a claim, not a proof, so what a
+/// candidate is checked against is whether the binary names the classes the candidate declares.
+fn executable_name_runs(bytes: &[u8]) -> std::collections::HashSet<String> {
+    let mut runs = std::collections::HashSet::new();
+    let mut narrow = String::new();
+    for &byte in bytes {
+        if byte.is_ascii_graphic() {
+            narrow.push(byte as char);
+        } else {
+            if narrow.len() >= QUALIFY_MIN_EXECUTABLE_RUN {
+                runs.insert(std::mem::take(&mut narrow));
+            } else {
+                narrow.clear();
+            }
+        }
+    }
+    if narrow.len() >= QUALIFY_MIN_EXECUTABLE_RUN {
+        runs.insert(narrow);
+    }
+    for start in [0usize, 1] {
+        let mut wide = String::new();
+        let mut cursor = start;
+        while cursor + 1 < bytes.len() {
+            let (low, high) = (bytes[cursor], bytes[cursor + 1]);
+            if high == 0 && low.is_ascii_graphic() {
+                wide.push(low as char);
+            } else if wide.len() >= QUALIFY_MIN_EXECUTABLE_RUN {
+                runs.insert(std::mem::take(&mut wide));
+            } else {
+                wide.clear();
+            }
+            cursor += 2;
+        }
+        if wide.len() >= QUALIFY_MIN_EXECUTABLE_RUN {
+            runs.insert(wide);
+        }
+    }
+    runs
+}
+
+/// Whether the executable names this identifier, allowing for the fact that a run is a whole
+/// string literal and a class name is usually only part of one.
+fn executable_names(runs: &std::collections::HashSet<String>, name: &str) -> bool {
+    runs.contains(name) || runs.iter().any(|run| run.contains(name))
+}
+
+/// The native base-class names this build's own script cache refers to: every `super_class` that no
+/// module in the cache declares. Reported, never decisive — a dump can be complete for the cache
+/// and still describe a different executable.
+fn script_cache_native_bases(modules: &[gore_as::cache::model::Module]) -> Vec<String> {
+    let declared: std::collections::HashSet<&str> = modules
+        .iter()
+        .flat_map(|module| module.classes.iter().map(|class| class.name.as_str()))
+        .collect();
+    let mut bases: Vec<String> = modules
+        .iter()
+        .flat_map(|module| module.classes.iter())
+        .filter_map(|class| class.super_class.as_deref())
+        .filter(|base| !declared.contains(base))
+        .map(str::to_owned)
+        .collect();
+    bases.sort_unstable();
+    bases.dedup();
+    bases
+}
+
+/// AngelScript spells an Unreal class with its engine prefix; the USMAP does not.
+fn unprefixed_class_name(name: &str) -> &str {
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(first), Some(second))
+            if matches!(first, 'U' | 'A' | 'F' | 'I') && second.is_ascii_uppercase() =>
+        {
+            &name[1..]
+        }
+        _ => name,
+    }
+}
+
+/// The three parser-output digests a reflection dump determines, and the counts they were taken
+/// over.
+///
+/// This is the join `DefaultNativeAncestry::from_schema_db` performs — the same `gore_asset`
+/// accessors, in the same order, through the same row digest — minus every comparison against a
+/// sealed row, because a build being qualified has not got one yet. That it really is the same join
+/// is not a claim this file can make about itself:
+/// `qualify_reproduces_the_sealed_values_of_the_generation_it_is_run_against` re-derives an audited
+/// generation and requires both joined digests to come out equal to the ones the gate checks.
+struct QualifyClassProfile {
+    usmap_class_graph_sha256: [u8; 32],
+    usmap_class_rows: usize,
+    usmap_tag_map_declarations: usize,
+    /// Absent when there is no Binds class bridge to join against. A digest over an empty row table
+    /// is a perfectly valid digest, which is exactly why it must never be reported as a measurement.
+    bridge: Option<QualifyClassBridge>,
+}
+
+/// What the Binds class bridge and the class graph say jointly. `class_paths` also names structs
+/// and enums and types this dump has never heard of; they are not class ancestry and their exact
+/// omission is part of what the resolved digest seals.
+struct QualifyClassBridge {
+    resolved_class_profile_sha256: [u8; 32],
+    gameplay_tag_float32_map_profile_sha256: [u8; 32],
+    bridged_class_count: usize,
+    gameplay_tag_float32_map_field_count: usize,
+}
+
+fn derive_class_profiles(
+    schemas: &gore_asset::SchemaDb,
+    class_paths: Option<&std::collections::HashMap<String, String>>,
+) -> std::result::Result<QualifyClassProfile, String> {
+    let mut super_ids = vec![None; schemas.len()];
+    let mut graph_rows = Vec::new();
+    let mut usmap_tag_map_declarations = 0usize;
+    for record in schemas
+        .schemas()
+        .iter()
+        .filter(|record| record.kind == gore_asset::SchemaKind::Class)
+    {
+        let parent = schemas
+            .exact_class_super_schema_id(record.id)
+            .map_err(|error| format!("USMAP class graph: {}: {error}", record.qualified_name()))?;
+        super_ids[record.id] = parent;
+        let parent_name = parent
+            .map(|id| {
+                schemas
+                    .schema(id)
+                    .expect("resolved schema id")
+                    .qualified_name()
+            })
+            .unwrap_or_default();
+        graph_rows.push([record.qualified_name(), parent_name]);
+        for property in &record.properties {
+            if schemas
+                .exact_declared_property_shape(record.id, &property.name)
+                .map_err(|error| {
+                    format!(
+                        "USMAP class graph: {}.{}: {error}",
+                        record.qualified_name(),
+                        property.name
+                    )
+                })?
+                == Some(gore_asset::schema::ExactDeclaredPropertyShape::GameplayTagFloat32Map)
+            {
+                usmap_tag_map_declarations += 1;
+            }
+        }
+    }
+    let usmap_class_rows = graph_rows.len();
+    let usmap_class_graph_sha256 = gore_generation::qualify::canonical_rows_sha256(&mut graph_rows);
+
+    let mut bridge = None;
+    if let Some(class_paths) = class_paths.filter(|paths| !paths.is_empty()) {
+        let mut claimed = std::collections::HashSet::new();
+        let mut resolved_rows = Vec::new();
+        let mut tag_map_rows = Vec::new();
+        for (script_class, path) in class_paths {
+            let id = match schemas.resolve_class(path) {
+                Ok(id) => id,
+                Err(gore_asset::SchemaError::SchemaNotFound { .. }
+                | gore_asset::SchemaError::NotAClass(_)) => continue,
+                Err(error) => {
+                    return Err(format!("Binds class bridge: {script_class} -> {path}: {error}"));
+                }
+            };
+            let canonical_path = schemas
+                .schema(id)
+                .expect("resolved schema id")
+                .qualified_name();
+            if canonical_path != *path {
+                return Err(format!(
+                    "Binds class bridge: {script_class} -> {path}: non-canonical case; exact \
+                     schema path is {canonical_path}"
+                ));
+            }
+            for property in &schemas.schema(id).expect("resolved schema id").properties {
+                if schemas
+                    .exact_declared_property_shape(id, &property.name)
+                    .map_err(|error| {
+                        format!(
+                            "Binds class bridge: {script_class} -> {canonical_path}.{}: {error}",
+                            property.name
+                        )
+                    })?
+                    == Some(gore_asset::schema::ExactDeclaredPropertyShape::GameplayTagFloat32Map)
+                {
+                    tag_map_rows.push([
+                        script_class.clone(),
+                        canonical_path.clone(),
+                        property.name.clone(),
+                    ]);
+                }
+            }
+            if !claimed.insert(id) {
+                return Err(format!(
+                    "Binds class bridge: two Binds class names resolve to USMAP schema \
+                     {canonical_path}"
+                ));
+            }
+            let parent = super_ids[id]
+                .map(|parent| {
+                    schemas
+                        .schema(parent)
+                        .expect("resolved parent id")
+                        .qualified_name()
+                })
+                .unwrap_or_default();
+            resolved_rows.push([script_class.clone(), canonical_path, parent]);
+        }
+        bridge = Some(QualifyClassBridge {
+            bridged_class_count: resolved_rows.len(),
+            gameplay_tag_float32_map_field_count: tag_map_rows.len(),
+            resolved_class_profile_sha256: gore_generation::qualify::canonical_rows_sha256(
+                &mut resolved_rows,
+            ),
+            gameplay_tag_float32_map_profile_sha256:
+                gore_generation::qualify::canonical_rows_sha256(&mut tag_map_rows),
+        });
+    }
+
+    Ok(QualifyClassProfile {
+        usmap_class_graph_sha256,
+        usmap_class_rows,
+        usmap_tag_map_declarations,
+        bridge,
+    })
+}
+
+/// The next curated record set's id and the three labels that carry its version.
+///
+/// These are names rather than measurements, and they would normally be a person's job — except
+/// that the record-set id is hashed into `record_set_seal`, so a draft that left it as a
+/// placeholder would print two seals that stop being true the moment somebody names the record set.
+/// Deriving the name is what makes deriving those two seals worth anything.
+struct QualifyRecordSetNaming {
+    record_set_id: String,
+    catalog_label: String,
+    record_seal_kind: String,
+    catalog_seal_kind: String,
+}
+
+impl QualifyRecordSetNaming {
+    fn succeeding(previous: &gore_generation::GenerationRow) -> Self {
+        let (stem, version) = match previous
+            .record_set_id
+            .rsplit_once("-v")
+            .and_then(|(stem, version)| version.parse::<u32>().ok().map(|version| (stem, version)))
+        {
+            Some((stem, version)) => (stem.to_owned(), version.saturating_add(1)),
+            None => (previous.record_set_id.to_owned(), 2),
+        };
+        Self {
+            record_set_id: format!("{stem}-v{version}"),
+            catalog_label: format!("compiled curated V{version}"),
+            record_seal_kind: format!("compiled curated V{version} record set"),
+            catalog_seal_kind: format!("compiled curated V{version} catalog payload"),
+        }
+    }
+
+    fn of(row: &gore_generation::GenerationRow) -> Self {
+        Self {
+            record_set_id: row.record_set_id.to_owned(),
+            catalog_label: row.catalog_label.to_owned(),
+            record_seal_kind: row.record_seal_kind.to_owned(),
+            catalog_seal_kind: row.catalog_seal_kind.to_owned(),
+        }
+    }
+}
+
+fn qualify_seal_text(seal: &gore_generation::FileSeal) -> String {
+    format!("{} bytes / sha256 {}", seal.byte_len, hex(&seal.sha256))
+}
+
+/// One `.usmap` candidate, measured against the executable and the script cache.
+struct QualifyUsmapCandidate {
+    path: PathBuf,
+    byte_len: u64,
+    sha256: [u8; 32],
+    schemas: Option<gore_asset::SchemaDb>,
+    class_rows: Option<usize>,
+    absent: Vec<String>,
+    absent_count: Option<usize>,
+    native_bases_resolved: Option<usize>,
+    verdict: &'static str,
+}
+
+fn assess_usmap_candidate(
+    path: &Path,
+    runs: &std::collections::HashSet<String>,
+    native_bases: &[String],
+) -> QualifyUsmapCandidate {
+    let mut candidate = QualifyUsmapCandidate {
+        path: path.to_path_buf(),
+        byte_len: 0,
+        sha256: [0; 32],
+        schemas: None,
+        class_rows: None,
+        absent: Vec::new(),
+        absent_count: None,
+        native_bases_resolved: None,
+        verdict: "could not be read",
+    };
+    let Ok(bytes) = read_default_usmap(path) else {
+        return candidate;
+    };
+    candidate.byte_len = bytes.len() as u64;
+    candidate.sha256 = Sha256::digest(&bytes).into();
+    let Ok(schemas) = gore_asset::SchemaDb::from_usmap(&bytes) else {
+        candidate.verdict = "is not a parseable schema map";
+        return candidate;
+    };
+    let classes: Vec<&str> = schemas
+        .schemas()
+        .iter()
+        .filter(|record| record.kind == gore_asset::SchemaKind::Class)
+        .map(|record| record.name.as_str())
+        .collect();
+    candidate.class_rows = Some(classes.len());
+    let absent: Vec<String> = classes
+        .iter()
+        .filter(|name| !executable_names(runs, name))
+        .map(|name| (*name).to_owned())
+        .collect();
+    candidate.absent_count = Some(absent.len());
+    candidate.absent = absent;
+    candidate.native_bases_resolved = Some(
+        native_bases
+            .iter()
+            .filter(|base| schemas.resolve_class(unprefixed_class_name(base)).is_ok())
+            .count(),
+    );
+    candidate.verdict = if candidate.absent.is_empty() {
+        "every class it declares is named by this executable"
+    } else {
+        "declares classes this executable never names"
+    };
+    candidate.schemas = Some(schemas);
+    candidate
+}
+
+fn qualify_candidate_json(
+    candidate: &QualifyUsmapCandidate,
+    native_bases_total: usize,
+) -> QualifyUsmapCandidateJson {
+    QualifyUsmapCandidateJson {
+        path: candidate.path.display().to_string(),
+        sha256: hex(&candidate.sha256),
+        byte_len: candidate.byte_len,
+        class_rows: candidate.class_rows,
+        class_names_absent_from_executable: candidate.absent_count,
+        absent_examples: candidate
+            .absent
+            .iter()
+            .take(QUALIFY_MAX_ABSENT_EXAMPLES)
+            .cloned()
+            .collect(),
+        native_bases_resolved: candidate.native_bases_resolved,
+        native_bases_total,
+        verdict: candidate.verdict,
+    }
+}
+
+/// Pick the one dump that belongs to this build, or say why no single dump does.
+///
+/// A candidate is scored by how many of its own class names the executable never mentions, and then
+/// by how many of the script cache's native base classes it cannot resolve. On the 2026-07-31
+/// update those two numbers are 5 and 4 for the previous generation's dump against 1 and 1 for the
+/// re-dumped one, and the four extra names are exactly the four classes that build removed — so the
+/// binary discriminates between the two dumps even though both parse and both hash to a sealed
+/// value. The winner has to be strictly better than everything else: a tie is a refusal, because
+/// choosing between a current dump and a stale one at random is how a profile ends up internally
+/// consistent over the previous game's class graph.
+///
+/// There is deliberately no absolute threshold. A dump legitimately declares a handful of names the
+/// binary never spells — `Default__Class` is a reflection artifact, not a class — so a fixed floor
+/// would reject every dump ever produced. What guards the case where the only dump on disk is the
+/// stale one is that it is byte-identical to a sealed dump for another executable, which the caller
+/// checks separately.
+fn select_qualify_usmap(
+    candidates: &[QualifyUsmapCandidate],
+    native_bases_total: usize,
+) -> std::result::Result<usize, String> {
+    let scored: Vec<(usize, (usize, usize))> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let absent = candidate.absent_count?;
+            let unresolved = native_bases_total - candidate.native_bases_resolved.unwrap_or(0);
+            Some((index, (absent, unresolved)))
+        })
+        .collect();
+    let Some(&(best_index, best)) = scored.iter().min_by_key(|(_, score)| *score) else {
+        return Err(
+            "no .usmap in the install parsed as a schema map, so nothing can be tied to this \
+             executable — re-dump it with UE4SS and run this again"
+                .to_owned(),
+        );
+    };
+    let tied = scored
+        .iter()
+        .filter(|(index, score)| *score == best && *index != best_index)
+        .count();
+    if tied > 0 {
+        return Err(format!(
+            "{} dumps fit this build equally well ({} class name(s) unnamed by the executable and \
+             {} unresolved native base(s) each); refusing to choose — pass --usmap with the one you \
+             re-dumped against this build",
+            tied + 1,
+            best.0,
+            best.1
+        ));
+    }
+    Ok(best_index)
+}
+
+/// The row this dump is sealed for when that row describes a *different* executable, or `None` when
+/// some row pairs this exact dump with the executable in front of us.
+///
+/// Asking the first row that carries the seal is not the same question, and gets it wrong on the
+/// generations that matter: two audited rows deliberately share one USMAP, because a build may move
+/// the executable and the script cache without moving the reflection layout. Matching a seal
+/// therefore proves nothing on its own. What makes a dump stale is that *every* row carrying it
+/// names another executable — so a build whose own sealed dump is sitting right there could not
+/// requalify without `--usmap`, which is the flag for asserting a reuse deliberately.
+fn stale_usmap_row(
+    usmap_sha256: &[u8; 32],
+    executable_seal: &gore_generation::FileSeal,
+) -> Option<&'static gore_generation::GenerationRow> {
+    let mut carrying = gore_generation::rows().iter().filter(|row| row.usmap.sha256 == *usmap_sha256);
+    let first = carrying.next()?;
+    if first.executable == *executable_seal {
+        return None;
+    }
+    match carrying.find(|row| row.executable == *executable_seal) {
+        Some(_) => None,
+        None => Some(first),
+    }
+}
+
+/// The curated script modules the story catalog seals, and the source each one must reproduce.
+struct QualifyCuratedRecord {
+    module: String,
+    runtime_class: String,
+    seal: gore_story_catalog::ContentSeal,
+}
+
+fn qualify_curated_records(
+    catalog: &gore_story_catalog::StoryCatalogFile,
+) -> Result<Vec<QualifyCuratedRecord>> {
+    let selections = catalog
+        .authoring_selections()
+        .map_err(|error| anyhow::anyhow!("AS_QUALIFY_CATALOG: {error}"))?;
+    let mut records = Vec::new();
+    let mut push = |selection: &gore_story_catalog::AuthoringClassSelection| {
+        // `script-class:<module>/<class>` is the catalog's own provenance spelling; the module is
+        // what `emit` indexes by, so this is the only place the two vocabularies meet.
+        let module = selection
+            .source_catalog_selector
+            .strip_prefix("script-class:")
+            .and_then(|rest| rest.rsplit_once('/'))
+            .map(|(module, _)| module.to_owned());
+        if let Some(module) = module {
+            records.push(QualifyCuratedRecord {
+                module,
+                runtime_class: selection.runtime_class.clone(),
+                seal: selection.source_seal.clone(),
+            });
+        }
+    };
+    for npc in &selections.npcs {
+        push(&npc.character_definition);
+        push(&npc.ai_agent_config);
+        push(&npc.spawn_definition);
+    }
+    for parent in &selections.quest_parents {
+        push(&parent.quest_class);
+    }
+    records.sort_by(|left, right| left.module.cmp(&right.module));
+    records.dedup_by(|left, right| left.module == right.module);
+    Ok(records)
+}
+
+fn read_qualification_number(artifact: &str, key: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(artifact)
+        .ok()
+        .and_then(|value| value.get(key).and_then(serde_json::Value::as_u64))
+}
+
+fn previous_qualification(row_id: &str) -> Option<&'static str> {
+    gore_generation::QUALIFICATION_ARTIFACTS
+        .iter()
+        .find(|(id, _)| *id == row_id)
+        .map(|(_, artifact)| *artifact)
+}
+
+/// Derive an installed build's generation row and qualification artifact.
+///
+/// Reads the installation and writes nothing. Every number it prints names the function that
+/// produced it, and every number it could not produce is named too — a qualification that quietly
+/// omitted a value would be worse than one that refused, because the omission is what gets pasted
+/// into the table as a plausible-looking constant.
+#[allow(clippy::too_many_lines)]
+fn run_qualify(
+    game: Option<PathBuf>,
+    usmap: Option<PathBuf>,
+    catalog: Option<PathBuf>,
+    id: Option<String>,
+    label: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let paths = qualify_paths(game)?;
+    let generation = gore_story_catalog::capture_generation(
+        &gore_story_catalog::GenerationPaths {
+            executable: paths.executable.clone(),
+            shipping_cache: paths.shipping_cache.clone(),
+            binds_cache: paths.binds_cache.clone(),
+        },
+        gore_story_catalog::GenerationInputLimits::default(),
+    )
+    .map_err(|error| anyhow::anyhow!("AS_QUALIFY_INPUTS: {error}"))?;
+    let executable_seal = qualify_file_seal(&generation.executable);
+    let shipping_seal = qualify_file_seal(&generation.shipping_cache);
+    let binds_seal = qualify_file_seal(&generation.binds_cache);
+    let audited =
+        gore_generation::row_for_file_seals(&executable_seal, &shipping_seal, &binds_seal);
+
+    let cache = read_module_cache(&paths.shipping_cache)?;
+    let script_cache_guid = CacheHeader::parse(&cache)
+        .map_err(|error| anyhow::anyhow!("AS_QUALIFY_CACHE: {error}"))?
+        .hash;
+    let proposed_id = id.unwrap_or_else(|| match audited {
+        Some(row) => row.id.to_owned(),
+        None => format!("g1r-steam-{}", &hex16(&script_cache_guid)[..8]),
+    });
+    let proposed_label = label.unwrap_or_else(|| match audited {
+        Some(row) => row.label.to_owned(),
+        None => format!("Unqualified build, script cache GUID {}", hex16(&script_cache_guid)),
+    });
+
+    let executable_bytes = read_regular_bounded(
+        &paths.executable,
+        QUALIFY_EXECUTABLE_MAX_BYTES,
+        "AS_QUALIFY_EXECUTABLE",
+    )?;
+    let runs = executable_name_runs(&executable_bytes);
+    drop(executable_bytes);
+    // A cache this build's own decoder cannot walk is a fact to report, not a reason to stop: the
+    // file seals and the reflection dump are still qualifiable, and refusing here would hide them
+    // behind the one input that failed.
+    let modules = match gore_as::cache::model::parse_modules(&cache) {
+        Ok(modules) => modules,
+        Err(error) => {
+            eprintln!("warning: AS_QUALIFY_MODULES: {error}");
+            Vec::new()
+        }
+    };
+    let native_bases = script_cache_native_bases(&modules);
+
+    let asserted_usmap = usmap.is_some();
+    let configured = usmap.or_else(|| std::env::var_os("GORE_AS_USMAP").map(PathBuf::from));
+    let candidate_paths = default_usmap_candidates(&paths.shipping_cache, configured)?;
+    let candidates: Vec<QualifyUsmapCandidate> = candidate_paths
+        .iter()
+        .map(|path| assess_usmap_candidate(path, &runs, &native_bases))
+        .collect();
+    let mut selection = select_qualify_usmap(&candidates, native_bases.len());
+    // The trap this whole command exists for: a dump from the previous build hashes to that build's
+    // seal and describes it faithfully, so nothing about the file itself is wrong. Two audited rows
+    // legitimately share one dump, so this cannot be an error — but it cannot be silent either.
+    if let (Ok(index), false) = (&selection, asserted_usmap) {
+        if let Some(prior) = stale_usmap_row(&candidates[*index].sha256, &executable_seal) {
+            selection = Err(format!(
+                "the dump that fits is byte-for-byte the one sealed for {}, whose executable is \
+                 not this one. UE4SS generates the dump on your machine and nothing forces it to \
+                 be regenerated, so this is either a build that did not move the reflection \
+                 layout or a stale dump describing the previous game. Re-dump it and run this \
+                 again, or pass --usmap to assert the reuse deliberately",
+                prior.id
+            ));
+        }
+    }
+
+    let sealed = selection.as_ref().ok().map(|index| &candidates[*index]);
+    let sealed_seal = sealed.map(|candidate| gore_generation::FileSeal {
+        byte_len: candidate.byte_len,
+        sha256: candidate.sha256,
+    });
+    let selection_reason = match (&selection, sealed) {
+        (Ok(_), Some(candidate)) => format!(
+            "{} of the {} class(es) it declares are named by this executable, and it resolves {} of \
+             the {} native base class(es) this build's own script cache refers to",
+            candidate.class_rows.unwrap_or(0) - candidate.absent.len(),
+            candidate.class_rows.unwrap_or(0),
+            candidate.native_bases_resolved.unwrap_or(0),
+            native_bases.len()
+        ),
+        (Err(reason), _) => reason.clone(),
+        (Ok(_), None) => unreachable!("a selected index always names a candidate"),
+    };
+
+    let mut unavailable = Vec::new();
+    let mut note =
+        |field, reason: String| unavailable.push(QualifyUnavailableJson { field, reason });
+
+    // The script cache's own three numbers, from the function the admission gate compares a row
+    // against. Reading them anywhere else is the difference between a row that describes this cache
+    // and a row that describes what somebody typed while looking at a test run.
+    let fingerprint =
+        match gore_as::cache::default_fingerprint::combined_default_cache_fingerprint(&cache) {
+            Ok(fingerprint) => Some(fingerprint),
+            Err(error) => {
+                for field in [
+                    "script_cache_mutation_stable_sha256",
+                    "gameplay_tag_float32_operand_count",
+                ] {
+                    note(
+                        field,
+                        format!("the script cache could not be fingerprinted: {error}"),
+                    );
+                }
+                None
+            }
+        };
+
+    // Read `Binds.Cache` again rather than reusing the bytes any other pass held, then require the
+    // re-read to hash to what `capture_generation` sealed. The two digests below are evidence about
+    // this build only if the bytes they were taken over are the bytes the row will name.
+    let binds_bytes = read_regular_bounded(
+        &paths.binds_cache,
+        DEFAULT_BINDS_MAX_BYTES,
+        "AS_QUALIFY_BINDS",
+    )?;
+    let reread_binds_sha256: [u8; 32] = Sha256::digest(&binds_bytes).into();
+    if reread_binds_sha256 != binds_seal.sha256 {
+        bail!(
+            "AS_QUALIFY_BINDS: {} changed while it was being qualified; refusing to seal digests \
+             taken over bytes that are no longer the ones this run sealed",
+            paths.binds_cache.display()
+        );
+    }
+    let binds_profile = gore_as::cache::binds::derive_binds_profile(&binds_bytes);
+    let binds_profile = if binds_profile.field_row_count == 0
+        || binds_profile.class_path_row_count == 0
+    {
+        for field in ["binds_field_map_sha256", "binds_class_path_map_sha256"] {
+            note(
+                field,
+                format!(
+                    "the Binds record scan found {} field row(s) and {} class row(s); a digest over \
+                     an empty table is valid and means nothing, so neither is reported",
+                    binds_profile.field_row_count, binds_profile.class_path_row_count
+                ),
+            );
+        }
+        None
+    } else {
+        Some(binds_profile)
+    };
+
+    let class_profile = match sealed.and_then(|candidate| candidate.schemas.as_ref()) {
+        Some(schemas) => match derive_class_profiles(
+            schemas,
+            binds_profile.as_ref().map(|profile| &profile.class_paths),
+        ) {
+            Ok(profile) => Some(profile),
+            Err(error) => bail!("AS_QUALIFY_PROFILE: {error}"),
+        },
+        None => None,
+    };
+    let bridge = class_profile
+        .as_ref()
+        .and_then(|profile| profile.bridge.as_ref());
+    let usmap_class_rows = class_profile
+        .as_ref()
+        .map(|profile| profile.usmap_class_rows);
+    let usmap_tag_map_declarations = class_profile
+        .as_ref()
+        .map(|profile| profile.usmap_tag_map_declarations);
+
+    let native = load_native_api(&paths.shipping_cache);
+    let ancestry = match (sealed.and_then(|candidate| candidate.schemas.as_ref()), &native) {
+        (Some(schemas), Some(native)) => {
+            gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+                native, &cache, schemas,
+            )
+            .ok()
+        }
+        _ => None,
+    };
+    let report = match gore_as::cache::default_patch::default_sites_with_evidence(
+        &cache,
+        load_native_api(&paths.shipping_cache),
+        ancestry.clone(),
+        None,
+    ) {
+        Ok(report) => Some(report),
+        Err(error) => {
+            eprintln!("warning: AS_QUALIFY_SITES: {error}");
+            None
+        }
+    };
+    let stats = report.as_ref().map(|report| report.stats.clone());
+
+    if class_profile.is_none() {
+        for field in ["usmap_class_graph_sha256"] {
+            note(
+                field,
+                "no reflection dump was tied to this executable, so there is no class graph to \
+                 digest"
+                    .to_owned(),
+            );
+        }
+    }
+    if bridge.is_none() {
+        for field in [
+            "resolved_class_profile_sha256",
+            "gameplay_tag_float32_map_profile_sha256",
+        ] {
+            note(
+                field,
+                "the Binds class bridge and the USMAP class graph are joined to produce this, and \
+                 one of the two was not available"
+                    .to_owned(),
+            );
+        }
+    }
+
+    // The two published IDs, from the nine components measured off this installation, through the
+    // same two functions the runtime gate runs. A qualification that spelled either of them any
+    // other way would mint a row nothing on the mutation path could ever match, and the failure
+    // would surface as a build the table admits and the tool refuses.
+    let published = match (&fingerprint, &binds_profile, &class_profile, bridge, sealed_seal) {
+        (Some(fingerprint), Some(binds), Some(class_profile), Some(bridge), Some(usmap)) => {
+            let components = gore_generation::qualify::observed_profile_components(
+                script_cache_guid,
+                fingerprint.sha256,
+                fingerprint.scalar_operand_count,
+                fingerprint.tag_operand_count,
+                binds_seal.sha256,
+                binds.class_path_map_sha256,
+                usmap.sha256,
+                class_profile.usmap_class_graph_sha256,
+                bridge.resolved_class_profile_sha256,
+            );
+            Some(gore_generation::qualify::derive_published_ids(
+                &components,
+                &bridge.gameplay_tag_float32_map_profile_sha256,
+            ))
+        }
+        _ => {
+            for field in [
+                "native_ancestry_profile_id",
+                "gameplay_tag_float32_map_proof_id",
+            ] {
+                note(
+                    field,
+                    "it is the digest of nine components and at least one of them was not derived; \
+                     see the other entries here"
+                        .to_owned(),
+                );
+            }
+            None
+        }
+    };
+
+    // A build already in the table is compared against the generation it succeeded, not against
+    // itself: re-qualifying row three has to reproduce the 26339 -> 26399 and 6572 -> 6582 moves
+    // that made it a re-seal, or the comparison proves nothing.
+    let comparison_row = match audited {
+        Some(row) => gore_generation::rows()
+            .iter()
+            .position(|candidate| candidate.id == row.id)
+            .and_then(|index| index.checked_sub(1))
+            .map(|index| &gore_generation::rows()[index]),
+        None => gore_generation::qualify::nearest_row(
+            Some(&binds_seal.sha256),
+            sealed_seal.as_ref().map(|seal| &seal.sha256),
+        ),
+    };
+    let previous = comparison_row.and_then(|row| previous_qualification(row.id));
+    let previous_number =
+        |key: &str| previous.and_then(|artifact| read_qualification_number(artifact, key));
+
+    // The record set is named before it is sealed, because its id is inside the bytes the seal is
+    // taken over. An audited build keeps the name it already published; a new one succeeds the
+    // generation it is being compared against.
+    let naming = match (audited, comparison_row) {
+        (Some(row), _) => QualifyRecordSetNaming::of(row),
+        (None, Some(row)) => QualifyRecordSetNaming::succeeding(row),
+        (None, None) => QualifyRecordSetNaming {
+            record_set_id: format!("{proposed_id}-curated-story-v1"),
+            catalog_label: "compiled curated V1".to_owned(),
+            record_seal_kind: "compiled curated V1 record set".to_owned(),
+            catalog_seal_kind: "compiled curated V1 catalog payload".to_owned(),
+        },
+    };
+    let curated_seals = gore_story_catalog::compile_curated_seals(&generation, &naming.record_set_id);
+    if let Err(error) = &curated_seals {
+        for field in ["record_set_seal", "catalog_payload_seal"] {
+            note(
+                field,
+                format!("the curated record set did not compile for this generation: {error}"),
+            );
+        }
+    }
+    let curated_seal = |seal: &gore_story_catalog::ContentSeal| gore_generation::FileSeal {
+        byte_len: seal.byte_len,
+        sha256: *seal.sha256.as_bytes(),
+    };
+
+    // Nothing below is copied out of an audited row. Every measured value in this draft was derived
+    // from the bytes on disk by the crate that owns the format it describes — including for a build
+    // the table already carries, because re-deriving a sealed row is the only way a run can *check*
+    // it rather than print it back.
+    let mut draft = gore_generation::qualify::DraftRow {
+        id: proposed_id.clone(),
+        label: proposed_label.clone(),
+        edition: generation.edition.clone(),
+        executable: Some(executable_seal),
+        shipping_cache: Some(shipping_seal),
+        binds_cache: Some(binds_seal),
+        usmap: sealed_seal,
+        script_cache_guid: Some(script_cache_guid),
+        script_cache_mutation_stable_sha256: fingerprint.map(|fingerprint| fingerprint.sha256),
+        // The gate compares a row's scalar count against the fingerprint's, so that is where the
+        // row's value comes from; `default_sites` counts the same windows through a different
+        // filter and is the cross-check below rather than the source.
+        scalar_default_operand_count: fingerprint
+            .map(|fingerprint| fingerprint.scalar_operand_count)
+            .or_else(|| stats.as_ref().map(|stats| stats.direct_windows)),
+        gameplay_tag_float32_operand_count: fingerprint
+            .map(|fingerprint| fingerprint.tag_operand_count),
+        binds_field_map_sha256: binds_profile
+            .as_ref()
+            .map(|profile| profile.field_map_sha256),
+        binds_class_path_map_sha256: binds_profile
+            .as_ref()
+            .map(|profile| profile.class_path_map_sha256),
+        usmap_class_graph_sha256: class_profile
+            .as_ref()
+            .map(|profile| profile.usmap_class_graph_sha256),
+        resolved_class_profile_sha256: bridge.map(|bridge| bridge.resolved_class_profile_sha256),
+        gameplay_tag_float32_map_profile_sha256: bridge
+            .map(|bridge| bridge.gameplay_tag_float32_map_profile_sha256),
+        native_ancestry_profile_id: published.as_ref().map(|(profile, _)| profile.clone()),
+        gameplay_tag_float32_map_proof_id: published.as_ref().map(|(_, proof)| proof.clone()),
+        record_set_id: naming.record_set_id.clone(),
+        record_set_seal: curated_seals
+            .as_ref()
+            .ok()
+            .map(|seals| curated_seal(&seals.record_set_seal)),
+        catalog_payload_seal: curated_seals
+            .as_ref()
+            .ok()
+            .map(|seals| curated_seal(&seals.catalog_payload_seal)),
+        catalog_label: naming.catalog_label.clone(),
+        record_seal_kind: naming.record_seal_kind.clone(),
+        catalog_seal_kind: naming.catalog_seal_kind.clone(),
+        audited_item_generation: match audited {
+            Some(row) => row.audited_item_generation.to_owned(),
+            None => proposed_id.clone(),
+        },
+    };
+    if let (Some(fingerprint), Some(stats)) = (&fingerprint, &stats) {
+        // Two independent passes over the same cache count the same scalar windows behind different
+        // filters. `docs/reference/game-updates.md` step 7 asks for exactly this comparison, and a
+        // disagreement means the row would seal a number one of the two passes does not see.
+        if fingerprint.scalar_operand_count != stats.direct_windows {
+            bail!(
+                "AS_QUALIFY_SCALAR_COUNT: the cache fingerprint counts {} direct scalar operand \
+                 range(s) and default-site discovery counts {}; the two passes disagree about this \
+                 cache, so neither number may be sealed",
+                fingerprint.scalar_operand_count,
+                stats.direct_windows
+            );
+        }
+    }
+
+    // Anything still missing that did not name its own reason. A value that is absent from the draft
+    // and absent from `unavailable` is the one shape this document must not have: a gap nobody has
+    // to explain is a gap a reader fills in from the row above.
+    for field in draft.missing() {
+        if !unavailable.iter().any(|entry| entry.field == field) {
+            unavailable.push(QualifyUnavailableJson {
+                field,
+                reason: "this run neither derived it nor said why, which is a defect in `gore as \
+                         qualify` rather than a fact about the build"
+                    .to_owned(),
+            });
+        }
+    }
+
+    // The only check available to this command that it derived anything *correctly*. Everything
+    // above came out of the installation; an audited row says what those same values were when a
+    // person last looked at that installation, so on an audited build the two have to agree, field
+    // by field. A run that could quietly disagree here is a run that would seal its own mistakes.
+    let mut diverged: Vec<QualifyDivergenceJson> = Vec::new();
+    if let Some(row) = audited {
+        let mut compare = |field, sealed: String, derived: Option<String>| {
+            if derived.as_deref() != Some(sealed.as_str()) {
+                diverged.push(QualifyDivergenceJson {
+                    field,
+                    sealed,
+                    derived,
+                });
+            }
+        };
+        compare(
+            "usmap",
+            qualify_seal_text(&row.usmap),
+            draft.usmap.as_ref().map(qualify_seal_text),
+        );
+        compare(
+            "script_cache_mutation_stable_sha256",
+            hex(&row.script_cache_mutation_stable_sha256),
+            draft
+                .script_cache_mutation_stable_sha256
+                .as_ref()
+                .map(|digest| hex(digest)),
+        );
+        compare(
+            "scalar_default_operand_count",
+            row.scalar_default_operand_count.to_string(),
+            draft
+                .scalar_default_operand_count
+                .map(|count| count.to_string()),
+        );
+        compare(
+            "gameplay_tag_float32_operand_count",
+            row.gameplay_tag_float32_operand_count.to_string(),
+            draft
+                .gameplay_tag_float32_operand_count
+                .map(|count| count.to_string()),
+        );
+        for (field, sealed, derived) in [
+            (
+                "binds_field_map_sha256",
+                &row.binds_field_map_sha256,
+                &draft.binds_field_map_sha256,
+            ),
+            (
+                "binds_class_path_map_sha256",
+                &row.binds_class_path_map_sha256,
+                &draft.binds_class_path_map_sha256,
+            ),
+            (
+                "usmap_class_graph_sha256",
+                &row.usmap_class_graph_sha256,
+                &draft.usmap_class_graph_sha256,
+            ),
+            (
+                "resolved_class_profile_sha256",
+                &row.resolved_class_profile_sha256,
+                &draft.resolved_class_profile_sha256,
+            ),
+            (
+                "gameplay_tag_float32_map_profile_sha256",
+                &row.gameplay_tag_float32_map_profile_sha256,
+                &draft.gameplay_tag_float32_map_profile_sha256,
+            ),
+        ] {
+            compare(field, hex(sealed), derived.as_ref().map(|d| hex(d)));
+        }
+        compare(
+            "native_ancestry_profile_id",
+            row.native_ancestry_profile_id.to_owned(),
+            draft.native_ancestry_profile_id.clone(),
+        );
+        compare(
+            "gameplay_tag_float32_map_proof_id",
+            row.gameplay_tag_float32_map_proof_id.to_owned(),
+            draft.gameplay_tag_float32_map_proof_id.clone(),
+        );
+        compare(
+            "record_set_seal",
+            qualify_seal_text(&row.record_set_seal),
+            draft.record_set_seal.as_ref().map(qualify_seal_text),
+        );
+        compare(
+            "catalog_payload_seal",
+            qualify_seal_text(&row.catalog_payload_seal),
+            draft.catalog_payload_seal.as_ref().map(qualify_seal_text),
+        );
+    }
+
+    let mut counts = vec![qualify_count(
+        "script-cache native base classes",
+        None,
+        native_bases.len() as u64,
+        "gore_as::cache::model::parse_modules",
+    )];
+    if let Some(stats) = &stats {
+        counts.push(qualify_count(
+            "scalar default windows",
+            previous_number("direct_windows"),
+            stats.direct_windows as u64,
+            "gore_as::cache::default_patch::default_sites",
+        ));
+        counts.push(qualify_count(
+            "initializer functions",
+            None,
+            stats.init_functions as u64,
+            "gore_as::cache::default_patch::default_sites",
+        ));
+    }
+    if let Some(rows) = usmap_class_rows {
+        counts.push(qualify_count(
+            "USMAP class rows",
+            None,
+            rows as u64,
+            "gore_asset::SchemaDb::from_usmap",
+        ));
+    }
+    if let Some(declarations) = usmap_tag_map_declarations {
+        counts.push(qualify_count(
+            "USMAP tag-map field declarations",
+            previous_number("gameplay_tag_float32_map_field_count"),
+            declarations as u64,
+            "gore_asset::SchemaDb::exact_declared_property_shape",
+        ));
+    }
+    if let Some(profile) = &binds_profile {
+        counts.push(qualify_count(
+            "Binds plain-field rows",
+            previous_number("binds_field_row_count"),
+            profile.field_row_count as u64,
+            "gore_as::cache::binds::derive_binds_profile",
+        ));
+        counts.push(qualify_count(
+            "Binds class-path rows",
+            previous_number("binds_class_path_row_count"),
+            profile.class_path_row_count as u64,
+            "gore_as::cache::binds::derive_binds_profile",
+        ));
+    }
+    if let Some(bridge) = bridge {
+        counts.push(qualify_count(
+            "bridged classes",
+            previous_number("class_count"),
+            bridge.bridged_class_count as u64,
+            "gore as qualify, Binds class bridge joined with the USMAP class graph",
+        ));
+    }
+
+    // The curated records are what distinguishes a moved identity from moved content: the catalog
+    // seals the emitted source of specific modules, so the only way to know a patch did not rewrite
+    // them is to decompile each one out of THIS cache and compare.
+    let curated_catalog = match &catalog {
+        Some(path) => {
+            let bytes = read_regular_bounded(path, QUALIFY_CATALOG_MAX_BYTES, "AS_QUALIFY_CATALOG")?;
+            Some((
+                gore_story_catalog::StoryCatalogFile::from_json(&bytes)
+                    .map_err(|error| anyhow::anyhow!("AS_QUALIFY_CATALOG: {error}"))?,
+                format!("--catalog {}", path.display()),
+            ))
+        }
+        None => gore_story_catalog::build_known_catalog(
+            &gore_story_catalog::GenerationPaths {
+                executable: paths.executable.clone(),
+                shipping_cache: paths.shipping_cache.clone(),
+                binds_cache: paths.binds_cache.clone(),
+            },
+            gore_story_catalog::GenerationInputLimits::default(),
+        )
+        .ok()
+        .map(|catalog| (catalog, "the installation's own audited story catalog".to_owned())),
+    };
+    let mut curated = QualifyCuratedJson {
+        source: "none — this build is not audited and no --catalog was passed, so the curated \
+                 source seals could not be named"
+            .to_owned(),
+        modules: Vec::new(),
+        all_reproduce: false,
+    };
+    if let Some((catalog, source)) = curated_catalog {
+        let records = qualify_curated_records(&catalog)?;
+        let mut refs =
+            gore_as::cache::refs::RefResolver::build(&cache).context("AS_QUALIFY_RESOLVER")?;
+        let prepared = gore_as::cache::emit_all::PreparedEmit::new(
+            &modules,
+            &mut refs,
+            load_native_api(&paths.shipping_cache),
+        )
+        .context("AS_QUALIFY_EMIT")?;
+        for record in &records {
+            let emitted = modules
+                .iter()
+                .position(|module| module.name == record.module)
+                .and_then(|index| prepared.emit_module(index).ok());
+            let observed = emitted.as_ref().map(|source| {
+                (
+                    source.len() as u64,
+                    gore_story_catalog::Sha256Digest::from_bytes(
+                        Sha256::digest(source.as_bytes()).into(),
+                    ),
+                )
+            });
+            let reproduces = observed.as_ref().is_some_and(|(len, digest)| {
+                *len == record.seal.byte_len && *digest == record.seal.sha256
+            });
+            curated.modules.push(QualifyCuratedModuleJson {
+                module: record.module.clone(),
+                runtime_class: record.runtime_class.clone(),
+                expected_byte_len: record.seal.byte_len,
+                expected_sha256: record.seal.sha256.to_string(),
+                observed_byte_len: observed.as_ref().map(|(len, _)| *len),
+                observed_sha256: observed.as_ref().map(|(_, digest)| digest.to_string()),
+                reproduces,
+            });
+        }
+        curated.all_reproduce =
+            !curated.modules.is_empty() && curated.modules.iter().all(|module| module.reproduces);
+        curated.source = source;
+        counts.push(qualify_count(
+            "curated modules reproducing their sealed source",
+            Some(curated.modules.len() as u64),
+            curated.modules.iter().filter(|m| m.reproduces).count() as u64,
+            "gore_as::cache::emit_all::PreparedEmit::emit_module",
+        ));
+    }
+
+    let regressions: Vec<&'static str> = counts
+        .iter()
+        .filter(|count| count.fell)
+        .map(|count| count.name)
+        .collect();
+
+    let hex_or = |value: &Option<[u8; 32]>| value.as_ref().map(|bytes| hex(bytes));
+    let seal_text = |seal: &Option<gore_generation::FileSeal>| seal.as_ref().map(qualify_seal_text);
+    let fields = vec![
+        QualifyFieldJson { field: "id", value: Some(draft.id.clone()), derived_by: Some("--id, or the script-cache GUID prefix") },
+        QualifyFieldJson { field: "label", value: Some(draft.label.clone()), derived_by: Some("--label") },
+        QualifyFieldJson { field: "edition", value: Some(draft.edition.clone()), derived_by: Some("gore_story_catalog::capture_generation") },
+        QualifyFieldJson { field: "executable", value: seal_text(&draft.executable), derived_by: Some("gore_story_catalog::capture_generation") },
+        QualifyFieldJson { field: "shipping_cache", value: seal_text(&draft.shipping_cache), derived_by: Some("gore_story_catalog::capture_generation") },
+        QualifyFieldJson { field: "binds_cache", value: seal_text(&draft.binds_cache), derived_by: Some("gore_story_catalog::capture_generation") },
+        QualifyFieldJson { field: "usmap", value: seal_text(&draft.usmap), derived_by: Some("gore as qualify, USMAP selection") },
+        QualifyFieldJson { field: "script_cache_guid", value: draft.script_cache_guid.as_ref().map(hex16), derived_by: Some("gore_as::cache::header::CacheHeader::parse") },
+        QualifyFieldJson { field: "script_cache_mutation_stable_sha256", value: hex_or(&draft.script_cache_mutation_stable_sha256), derived_by: Some("gore_as::cache::default_fingerprint (crate-private)") },
+        QualifyFieldJson { field: "scalar_default_operand_count", value: draft.scalar_default_operand_count.map(|value| value.to_string()), derived_by: Some("gore_as::cache::default_patch::default_sites") },
+        QualifyFieldJson { field: "gameplay_tag_float32_operand_count", value: draft.gameplay_tag_float32_operand_count.map(|value| value.to_string()), derived_by: Some("gore_as::cache::default_fingerprint (crate-private)") },
+        QualifyFieldJson { field: "binds_field_map_sha256", value: hex_or(&draft.binds_field_map_sha256), derived_by: Some("gore_as::cache::binds (crate-private)") },
+        QualifyFieldJson { field: "binds_class_path_map_sha256", value: hex_or(&draft.binds_class_path_map_sha256), derived_by: Some("gore_as::cache::binds (crate-private)") },
+        QualifyFieldJson { field: "usmap_class_graph_sha256", value: hex_or(&draft.usmap_class_graph_sha256), derived_by: Some("gore_generation::qualify::canonical_rows_sha256 over gore_asset::SchemaDb::exact_class_super_schema_id") },
+        QualifyFieldJson { field: "resolved_class_profile_sha256", value: hex_or(&draft.resolved_class_profile_sha256), derived_by: Some("gore_as::cache::default_ancestry (crate-private)") },
+        QualifyFieldJson { field: "gameplay_tag_float32_map_profile_sha256", value: hex_or(&draft.gameplay_tag_float32_map_profile_sha256), derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_profile_sha256") },
+        QualifyFieldJson { field: "native_ancestry_profile_id", value: draft.native_ancestry_profile_id.clone(), derived_by: Some("DefaultNativeAncestry::from_schema_db, which re-derives it through gore_generation::derived_profile_sha256 before returning") },
+        QualifyFieldJson { field: "gameplay_tag_float32_map_proof_id", value: draft.gameplay_tag_float32_map_proof_id.clone(), derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_proof_id") },
+        QualifyFieldJson { field: "record_set_id", value: Some(draft.record_set_id.clone()), derived_by: None },
+        QualifyFieldJson { field: "record_set_seal", value: seal_text(&draft.record_set_seal), derived_by: Some("gore_story_catalog (crate-private canonical record bytes)") },
+        QualifyFieldJson { field: "catalog_payload_seal", value: seal_text(&draft.catalog_payload_seal), derived_by: Some("gore_story_catalog (crate-private canonical payload bytes)") },
+        QualifyFieldJson { field: "catalog_label", value: Some(draft.catalog_label.clone()), derived_by: None },
+        QualifyFieldJson { field: "record_seal_kind", value: Some(draft.record_seal_kind.clone()), derived_by: None },
+        QualifyFieldJson { field: "catalog_seal_kind", value: Some(draft.catalog_seal_kind.clone()), derived_by: None },
+        QualifyFieldJson { field: "audited_item_generation", value: Some(draft.audited_item_generation.clone()), derived_by: None },
+    ];
+
+    let mut witnesses = std::collections::BTreeMap::new();
+    for (key, witness) in [
+        ("native_ancestry_profile_id", "gore as qualify (gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db)"),
+        ("gameplay_tag_float32_map_proof_id", "gore as qualify (DefaultNativeAncestry::gameplay_tag_float32_map_proof_id)"),
+        ("scalar_default_operand_count", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
+        ("gameplay_tag_float32_operand_count", "gore as qualify (not derivable: gore_as::cache::default_fingerprint is crate-private)"),
+        ("class_count", "gore as qualify (DefaultNativeAncestry::class_count)"),
+        ("gameplay_tag_float32_map_field_count", "gore as qualify (gore_asset::SchemaDb::exact_declared_property_shape over every class the sealed dump declares)"),
+        ("unresolved_fields_with_ancestry", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
+        ("direct_windows", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
+    ] {
+        witnesses.insert(key, witness.to_owned());
+    }
+    let mut notes = vec![
+        format!(
+            "Derived by `gore as qualify` against {}. Every digest here comes from the crate that \
+             owns the format it describes; nothing was recomputed by a second implementation.",
+            paths.root.display()
+        ),
+        format!("USMAP: {selection_reason}."),
+    ];
+    if let Some(row) = comparison_row {
+        notes.push(format!(
+            "Counts compared against {}; a count that fell is listed under `counts[].fell` and \
+             blocks acceptance, because a digest cannot say that a parser dropped rows.",
+            row.id
+        ));
+    }
+    if !unavailable.is_empty() {
+        notes.push(format!(
+            "{} row value(s) were not derivable from outside gore-as and gore-story-catalog; see \
+             `unavailable`.",
+            unavailable.len()
+        ));
+    }
+    let artifact = QualifyArtifactJson {
+        generation_id: draft.id.clone(),
+        label: draft.label.clone(),
+        native_ancestry_profile_id: draft.native_ancestry_profile_id.clone(),
+        gameplay_tag_float32_map_proof_id: draft.gameplay_tag_float32_map_proof_id.clone(),
+        scalar_default_operand_count: draft.scalar_default_operand_count.map(|v| v as u64),
+        gameplay_tag_float32_operand_count: draft.gameplay_tag_float32_operand_count.map(|v| v as u64),
+        class_count: ancestry.as_ref().map(|a| a.class_count() as u64),
+        gameplay_tag_float32_map_field_count: usmap_tag_map_declarations.map(|v| v as u64),
+        unresolved_fields_with_ancestry: ancestry
+            .as_ref()
+            .and(stats.as_ref())
+            .map(|stats| stats.unresolved_fields as u64),
+        direct_windows: stats.as_ref().map(|stats| stats.direct_windows as u64),
+        binds_field_row_count: binds_profile
+            .as_ref()
+            .map(|profile| profile.field_row_count as u64),
+        binds_class_path_row_count: binds_profile
+            .as_ref()
+            .map(|profile| profile.class_path_row_count as u64),
+        witnesses,
+        notes,
+    };
+
+    let curated_diverged = curated
+        .modules
+        .iter()
+        .filter(|module| !module.reproduces)
+        .count();
+    let missing = draft.missing();
+    // A divergence is only reachable on a build the table already describes, and there it is the
+    // worst outcome this command has: the installation answered differently than the row a person
+    // signed off. Fold it into `complete` so a run that disagrees with its own sealed row can never
+    // present itself as a finished draft.
+    let complete = missing.is_empty()
+        && regressions.is_empty()
+        && curated.all_reproduce
+        && diverged.is_empty();
+    let mut still_to_do = match (audited, ancestry.is_some()) {
+        (Some(row), true) => vec![format!(
+            "nothing: {} is already in the table. This run re-derived it, so read the values above \
+             against the sealed row rather than pasting them",
+            row.id
+        )],
+        _ => draft.still_to_do(),
+    };
+    if let (Some(row), None) = (audited, &ancestry) {
+        still_to_do.insert(
+            0,
+            format!(
+                "find out why the sealed native ancestry of {} did not qualify against the dump \
+                 this run sealed: the build is audited, so this is a wrong dump or a drifted seal, \
+                 not an unaudited game",
+                row.id
+            ),
+        );
+    }
+    if curated.modules.is_empty() {
+        still_to_do.insert(
+            0,
+            "name the curated records: no story catalog described this build, so a moved identity \
+             cannot yet be told from moved content — re-run with --catalog pointing at the \
+             previous generation's published story_catalog.v1"
+                .to_owned(),
+        );
+    } else if curated_diverged > 0 {
+        still_to_do.insert(
+            0,
+            format!(
+                "read the diff for the {curated_diverged} curated module(s) whose emitted source \
+                 did not reproduce: that is a real content change, not a transcription job"
+            ),
+        );
+    }
+    if !regressions.is_empty() {
+        still_to_do.insert(
+            0,
+            format!(
+                "explain the count(s) that fell before accepting anything: {}",
+                regressions.join(", ")
+            ),
+        );
+    }
+    if !diverged.is_empty() {
+        still_to_do.insert(
+            0,
+            format!(
+                "this installation disagrees with the row that already describes it, in {}: {}. \
+                 Either the dump is wrong or the seal is, and until that is settled nothing derived \
+                 here can be trusted",
+                if diverged.len() == 1 { "one field" } else { "several fields" },
+                diverged
+                    .iter()
+                    .map(|entry| entry.field)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
+
+    let document = QualifyJson {
+        format: QUALIFY_REPORT_FORMAT,
+        game: paths.root.display().to_string(),
+        already_audited_as: audited.map(|row| row.id),
+        compared_against: comparison_row.map(|row| row.id),
+        inputs: QualifyInputsJson {
+            executable: qualify_file_json(&paths.executable, &generation.executable),
+            shipping_cache: qualify_file_json(&paths.shipping_cache, &generation.shipping_cache),
+            binds_cache: qualify_file_json(&paths.binds_cache, &generation.binds_cache),
+            script_cache_guid: hex16(&script_cache_guid),
+            usmap: sealed.map(|candidate| QualifyFileJson {
+                path: candidate.path.display().to_string(),
+                byte_len: candidate.byte_len,
+                sha256: hex(&candidate.sha256),
+            }),
+        },
+        usmap_selection: QualifyUsmapSelectionJson {
+            sealed: sealed.map(|candidate| QualifyFileJson {
+                path: candidate.path.display().to_string(),
+                byte_len: candidate.byte_len,
+                sha256: hex(&candidate.sha256),
+            }),
+            reason: selection_reason.clone(),
+            examined: candidates
+                .iter()
+                .map(|candidate| qualify_candidate_json(candidate, native_bases.len()))
+                .collect(),
+        },
+        counts,
+        curated_records: curated,
+        row: QualifyRowJson {
+            id: draft.id.clone(),
+            fields,
+            missing: missing.clone(),
+            literal: draft.to_rust_literal(),
+        },
+        qualification: artifact,
+        unavailable,
+        diverged_from_sealed_row: diverged,
+        complete,
+        still_to_do,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+    } else {
+        print_qualify_report(&document);
+    }
+    // What the command refuses over, and what it merely reports. A row value nobody could derive is
+    // reported, because the draft says so in a way that cannot be pasted. A dump that could not be
+    // tied to this build, a count that fell, and a curated module whose source moved are refusals:
+    // each of them is a way for a green-looking row to describe a different game.
+    if let Err(reason) = selection {
+        bail!("AS_QUALIFY_USMAP: {reason}");
+    }
+    if !regressions.is_empty() {
+        bail!(
+            "AS_QUALIFY_COUNTS: {} count(s) fell against {}: {} — a digest cannot say that a parser \
+             dropped rows, so this is refused rather than sealed",
+            regressions.len(),
+            comparison_row.map_or("the previous generation", |row| row.id),
+            regressions.join(", ")
+        );
+    }
+    if curated_diverged > 0 {
+        bail!(
+            "AS_QUALIFY_CURATED: {curated_diverged} curated module(s) no longer reproduce their \
+             sealed emitted source; the content moved, not only the identity"
+        );
+    }
+    if let (Some(row), None) = (audited, &ancestry) {
+        bail!(
+            "AS_QUALIFY_ANCESTRY: this build is audited as {}, but the sealed native ancestry did \
+             not qualify against the dump this run sealed — refusing to report a draft that mixes \
+             derived values with that row's sealed ones",
+            row.id
+        );
+    }
+    Ok(())
+}
+
+/// The human rendering. Everything a person has to compare goes to stdout in the order they compare
+/// it: what was sealed, which dump and why, the counts against the previous generation, and only
+/// then the row literal.
+fn print_qualify_report(document: &QualifyJson) {
+    println!("qualifying {}", document.game);
+    if let Some(audited) = document.already_audited_as {
+        println!("  this build is already audited as {audited}; re-deriving to compare");
+    }
+    for (name, file) in [
+        ("executable    ", &document.inputs.executable),
+        ("shipping cache", &document.inputs.shipping_cache),
+        ("binds cache   ", &document.inputs.binds_cache),
+    ] {
+        println!("  {name}  {:>12} bytes  {}", file.byte_len, file.sha256);
+    }
+    println!(
+        "  script cache GUID  {}",
+        document.inputs.script_cache_guid
+    );
+    println!("USMAP");
+    match &document.usmap_selection.sealed {
+        Some(file) => println!(
+            "  sealed    {}\n            {} bytes  {}\n            {}",
+            file.path, file.byte_len, file.sha256, document.usmap_selection.reason
+        ),
+        None => println!("  none sealed: {}", document.usmap_selection.reason),
+    }
+    for candidate in &document.usmap_selection.examined {
+        println!(
+            "  examined  {}  {}  {}",
+            candidate.path, candidate.sha256, candidate.verdict
+        );
+        if let Some(absent) = candidate.class_names_absent_from_executable {
+            println!(
+                "            {absent} of {} class name(s) unnamed by the executable{}; {} of {} \
+                 native base(s) resolved",
+                candidate.class_rows.unwrap_or(0),
+                if candidate.absent_examples.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", candidate.absent_examples.join(", "))
+                },
+                candidate.native_bases_resolved.unwrap_or(0),
+                candidate.native_bases_total
+            );
+        }
+    }
+    println!("counts");
+    for count in &document.counts {
+        let previous = match count.previous {
+            Some(previous) => format!("{previous:>8}"),
+            None => "       -".to_owned(),
+        };
+        let delta = match count.delta {
+            Some(delta) => format!("{delta:+}"),
+            None => "new".to_owned(),
+        };
+        println!(
+            "  {:<48} {previous} -> {:>8}  {delta}{}",
+            count.name,
+            count.observed,
+            if count.fell { "  FELL" } else { "" }
+        );
+    }
+    println!("curated records: {}", document.curated_records.source);
+    for module in &document.curated_records.modules {
+        println!(
+            "  {}  {}  {}",
+            if module.reproduces { "ok      " } else { "DIVERGED" },
+            module.module,
+            match (&module.observed_byte_len, &module.observed_sha256) {
+                (Some(len), Some(sha)) => format!("{len} bytes / {sha}"),
+                _ => "not emitted by this cache".to_owned(),
+            }
+        );
+    }
+    if !document.unavailable.is_empty() {
+        println!("not derivable by this command");
+        for entry in &document.unavailable {
+            println!("  {}: {}", entry.field, entry.reason);
+        }
+    }
+    println!("proposed row");
+    for line in document.row.literal.lines() {
+        println!("  {line}");
+    }
+    println!("still to do");
+    for step in &document.still_to_do {
+        println!("  - {step}");
+    }
+}
+
+fn qualify_count(
+    name: &'static str,
+    previous: Option<u64>,
+    observed: u64,
+    derived_by: &str,
+) -> QualifyCountJson {
+    let comparison = gore_generation::qualify::CountComparison {
+        name,
+        previous,
+        observed,
+        witness: derived_by.to_owned(),
+    };
+    QualifyCountJson {
+        name,
+        previous,
+        observed,
+        delta: comparison.delta(),
+        fell: comparison.fell(),
+        derived_by: derived_by.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn a_dump_two_generations_share_is_stale_for_neither_of_them() {
+        // The guard asked the *first* row carrying the seal, and two audited rows deliberately
+        // share one USMAP — a build may move the executable and the script cache without moving
+        // the reflection layout. So the later of the two could not requalify against the very dump
+        // sealed for it: the answer came from its predecessor's row and reported a stale dump.
+        let sharing: Vec<_> = gore_generation::rows()
+            .iter()
+            .filter(|row| {
+                gore_generation::rows()
+                    .iter()
+                    .filter(|other| other.usmap.sha256 == row.usmap.sha256)
+                    .count()
+                    > 1
+            })
+            .collect();
+        assert!(
+            sharing.len() >= 2,
+            "this test is only meaningful while some dump is shared; the table has none"
+        );
+
+        // Every row that shares a dump must accept it as its own, whichever order the table is in.
+        for row in &sharing {
+            assert!(
+                stale_usmap_row(&row.usmap.sha256, &row.executable).is_none(),
+                "{} was told its own sealed dump belongs to another build",
+                row.id
+            );
+        }
+
+        // And a dump really is stale for an executable no row pairs it with.
+        let foreign = gore_generation::FileSeal { byte_len: 1, sha256: [0x5a; 32] };
+        let flagged = stale_usmap_row(&sharing[0].usmap.sha256, &foreign)
+            .expect("an executable no row carries must not pass");
+        assert_eq!(flagged.usmap.sha256, sharing[0].usmap.sha256);
+    }
 
     #[test]
     fn compile_module_cli_keeps_one_guard_across_pristine_selection() {
@@ -2411,10 +4457,10 @@ mod default_cli_tests {
 
         let mut hotfix: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
         hotfix["ancestry_profile"] = serde_json::Value::String(
-            gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID.into(),
+            gore_generation::ROW_G1R_24169431.native_ancestry_profile_id.into(),
         );
         hotfix["map_proof_id"] = serde_json::Value::String(
-            gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
+            gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
                 .into(),
         );
         serde_json::from_value::<TagMapSelectorJson>(hotfix.clone())
@@ -2424,12 +4470,12 @@ mod default_cli_tests {
 
         for (profile, proof) in [
             (
-                gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
-                gore_as::cache::default_ancestry::HOTFIX_24169431_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+                gore_generation::ROW_G1R_1_0_3.native_ancestry_profile_id,
+                gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id,
             ),
             (
-                gore_as::cache::default_ancestry::HOTFIX_24169431_NATIVE_ANCESTRY_PROFILE_ID,
-                gore_as::cache::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID,
+                gore_generation::ROW_G1R_24169431.native_ancestry_profile_id,
+                gore_generation::ROW_G1R_1_0_3.gameplay_tag_float32_map_proof_id,
             ),
         ] {
             let mut crossed = hotfix.clone();

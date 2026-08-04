@@ -16,6 +16,23 @@ pub enum TextureAction {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// List what the game's own .pak containers carry, so a loose-file destination can be
+    /// checked before it is written
+    Paklist {
+        /// Path to the game install dir (contains G1R/Content/Paks/…)
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Keep only entry paths containing this substring (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
+        /// Max entries to print. The result states how many matched when it stops here; 0 lists
+        /// nothing and reports only the counts
+        #[arg(long, default_value_t = 100)]
+        max: usize,
+        /// Emit one JSON document instead of the human-readable table
+        #[arg(long)]
+        json: bool,
+    },
     /// Extract a texture's top mip to a PNG
     Extract {
         /// Path to the game install dir (contains G1R/Content/Paks/…)
@@ -164,6 +181,174 @@ where
     Ok((index, built_new))
 }
 
+/// One entry of one shipped container, in both spellings that matter: where it sits relative to
+/// the install root -- which is how a loose-file destination is written -- and how the pak index
+/// itself records it, relative to that pak's own mount point.
+#[derive(Debug, PartialEq, Eq)]
+struct PakEntryRow {
+    pak: String,
+    path: String,
+    entry: String,
+    root_relative: bool,
+}
+
+/// Flatten the shipped containers into one listing, resolving each pak's mount point first. The
+/// five DialogFacials paks mount at `../../../G1R/Plugins/`, so their raw index strings name a
+/// path that does not exist at the install root; a reader comparing those against a destination
+/// would be told the wrong thing in both directions.
+fn pak_entry_rows(listings: &[gore_tex::container::PakListing]) -> Vec<PakEntryRow> {
+    let mut rows = Vec::new();
+    for listing in listings {
+        let pak = listing
+            .pak
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let prefix = gore_tex::container::mount_prefix_from_game_root(&listing.mount_point);
+        for entry in &listing.files {
+            rows.push(PakEntryRow {
+                pak: pak.clone(),
+                path: match &prefix {
+                    Some(prefix) => format!("{prefix}{entry}"),
+                    None => entry.clone(),
+                },
+                entry: entry.clone(),
+                root_relative: prefix.is_some(),
+            });
+        }
+    }
+    rows
+}
+
+/// List what the game's own containers carry, under a bound. Reading them costs a full parse of
+/// every pak index either way, so the narrowing here is a presentation decision only. A listing
+/// that stopped silently would let a caller read the first `max` entries as the whole install and
+/// conclude a path is not packed when it is -- which is the mistake that makes a loose-file
+/// replacement inert -- so both output modes label the cut.
+fn paklist(game: &std::path::Path, filter: Option<&str>, max: usize, json: bool) -> Result<()> {
+    let listings = gore_tex::container::list_game_paks(game)
+        .with_context(|| format!("reading the pak indexes under {}", game.display()))?;
+    let rows = pak_entry_rows(&listings);
+    let entry_count = rows.len();
+    // Filter first, cap second: `matched_count` is only meaningful if the cap never hides a
+    // candidate the filter would have kept. The install-relative spelling is what is matched,
+    // because that is the string the caller is holding when they ask.
+    let needle = filter.map(str::to_lowercase);
+    let matched = rows
+        .iter()
+        .filter(|row| {
+            needle
+                .as_deref()
+                .is_none_or(|needle| super::contains_case_insensitive(&row.path, needle))
+        })
+        .collect::<Vec<_>>();
+    let listed = &matched[..matched.len().min(max)];
+    let notice =
+        (listed.len() < matched.len()).then(|| list_truncation_notice(matched.len(), listed.len()));
+
+    if json {
+        let paks = listings
+            .iter()
+            .map(|listing| {
+                serde_json::json!({
+                    "pak": listing.pak.file_name().unwrap_or_default().to_string_lossy(),
+                    "mount_point": listing.mount_point,
+                    "entry_count": listing.files.len(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let entries = listed
+            .iter()
+            .map(|row| {
+                serde_json::json!({
+                    "pak": row.pak,
+                    "path": row.path,
+                    "entry": row.entry,
+                    "root_relative": row.root_relative,
+                })
+            })
+            .collect::<Vec<_>>();
+        // Two booleans because there are two questions and one answer cannot serve both.
+        // `truncated` says whether `--max` stopped the listing, and it is what `truncation_notice`
+        // belongs to. "Is this array the whole installation" is a different question -- a filter
+        // narrows without truncating -- and `complete` answers it, so neither has to be inferred
+        // by comparing counts.
+        let mut document = serde_json::json!({
+            "game": game.display().to_string(),
+            "pak_count": listings.len(),
+            "paks": paks,
+            "entry_count": entry_count,
+            "matched_count": matched.len(),
+            "listed_count": entries.len(),
+            "truncated": notice.is_some(),
+            "complete": entries.len() == entry_count,
+            "entries": entries,
+        });
+        if let Some(notice) = &notice {
+            document["truncation_notice"] = serde_json::json!(notice);
+        }
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
+    // Without this clause a filter that matched nothing prints a header, a column header and no
+    // rows -- which is exactly what an installation with no paks would print.
+    let narrowed = match filter {
+        Some(_) => format!(", {} matched --filter", matched.len()),
+        None => String::new(),
+    };
+    println!(
+        "Game paks: {} ({entry_count} entries{narrowed})",
+        listings.len()
+    );
+    // The mount point is what turns an index spelling into a path on disk, so it is printed even
+    // when the rows below are cut: six lines that explain every path in the table.
+    for listing in &listings {
+        println!(
+            "  {} — mount {} ({} entries)",
+            listing.pak.file_name().unwrap_or_default().to_string_lossy(),
+            listing.mount_point,
+            listing.files.len()
+        );
+    }
+    println!("PAK                                       PATH (relative to the install root)");
+    for row in listed {
+        println!(
+            "{:<40}  {}{}",
+            row.pak,
+            row.path,
+            if row.root_relative {
+                ""
+            } else {
+                " [relative to this pak's mount point]"
+            }
+        );
+    }
+    if let Some(notice) = &notice {
+        // The same marker the MCP server appends to a clipped result, so a reader who has learned
+        // to look for one line has learned to look for both.
+        println!("… [truncated: {notice}]");
+    }
+    Ok(())
+}
+
+/// One sentence that must answer "how much am I not seeing" and "what do I type instead". It
+/// deliberately does not hand back the `--max` that would list everything: followed on the 4,577
+/// entries the shipped install carries across its six containers, that is a 1,023,638-byte
+/// document against a 256 KiB result budget (`gore_mcp::DEFAULT_MAX_STDOUT_BYTES`), and the cut
+/// lands mid-path inside entry 1,193 -- so the 3,384 entries past it are not merely unshown, they
+/// are absent, and a caller who searches what arrived is told a path is free when it is packed.
+/// Sending a caller there is the failure this bound prevents.
+fn list_truncation_notice(matched: usize, listed: usize) -> String {
+    format!(
+        "{matched} entries matched and only the first {listed} are shown. Narrow the query with \
+         --filter, and raise --max only as far as you need: asking for all {matched} at once \
+         produces a document large enough to be cut off in transit, and a cut-off JSON array no \
+         longer parses."
+    )
+}
+
 pub fn run(action: TextureAction) -> Result<()> {
     match action {
         TextureAction::List { game, filter } => {
@@ -177,6 +362,15 @@ pub fn run(action: TextureAction) -> Result<()> {
                 println!("{}", e.asset_path);
             }
             Ok(())
+        }
+        TextureAction::Paklist {
+            game,
+            filter,
+            max,
+            json,
+        } => {
+            let game = gore_loc::config::game_root(game)?;
+            paklist(&game, filter.as_deref(), max, json)
         }
         TextureAction::Extract { game, asset, out } => {
             let game = gore_loc::config::game_root(game)?;
@@ -441,6 +635,56 @@ mod tests {
             build_id: build_id.to_owned(),
             entries: [("/Game/T_Test".to_owned(), 7)].into_iter().collect(),
         }
+    }
+
+    #[test]
+    fn a_plugin_mounted_entry_is_listed_at_the_path_it_actually_occupies() {
+        // The five shipped DialogFacials paks mount at `../../../G1R/Plugins/` and spell their
+        // entries relative to that, so the index string `G1R_DialogFacials_German/…` is not a path
+        // anything on disk has. Printing it unresolved would answer the one question this command
+        // exists for -- "is this destination already packed" -- with a string the reader cannot
+        // compare against.
+        let listings = vec![
+            gore_tex::container::PakListing {
+                pak: PathBuf::from("G1R/Content/Paks/G1R-Windows.pak"),
+                mount_point: "../../../".to_owned(),
+                files: vec!["G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_owned()],
+            },
+            gore_tex::container::PakListing {
+                pak: PathBuf::from("G1R/Content/Paks/G1R_DialogFacials_GermanG1R-Windows.pak"),
+                mount_point: "../../../G1R/Plugins/".to_owned(),
+                files: vec!["G1R_DialogFacials_German/AssetRegistry.bin".to_owned()],
+            },
+        ];
+
+        let rows = pak_entry_rows(&listings);
+
+        assert_eq!(rows[0].pak, "G1R-Windows.pak");
+        assert_eq!(rows[0].path, "G1R/Content/Slate/Cursors/Normal/Normal.PNG");
+        assert!(rows[0].root_relative);
+        assert_eq!(
+            rows[1].path,
+            "G1R/Plugins/G1R_DialogFacials_German/AssetRegistry.bin"
+        );
+        assert_eq!(rows[1].entry, "G1R_DialogFacials_German/AssetRegistry.bin");
+        assert!(rows[1].root_relative);
+    }
+
+    #[test]
+    fn an_unplaceable_mount_point_is_labelled_rather_than_silently_rebased() {
+        // This is a listing, not a gate. `pak_shadow_index` refuses a container it cannot place,
+        // because there the wrong answer is "not packed"; a reader asking what the paks hold is
+        // better served by the row and a label than by an error that hides every other entry.
+        let listings = vec![gore_tex::container::PakListing {
+            pak: PathBuf::from("Odd.pak"),
+            mount_point: "../../../../Elsewhere/".to_owned(),
+            files: vec!["Foo.txt".to_owned()],
+        }];
+
+        let rows = pak_entry_rows(&listings);
+
+        assert_eq!(rows[0].path, "Foo.txt");
+        assert!(!rows[0].root_relative);
     }
 
     #[test]

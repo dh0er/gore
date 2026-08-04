@@ -106,7 +106,7 @@ terminal/CI-only use.
 
 ## Build / run
 
-Driven by the top-level orchestrator (see [Building](../../docs/guide/building.md)):
+Driven by the top-level orchestrator (see [Building](../../docs/development.md)):
 
 ```powershell
 python build.py gore-mod-studio run          # build (if needed) + launch

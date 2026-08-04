@@ -639,6 +639,57 @@ class AppLocalizationsPl extends AppLocalizations {
   String get rotationRoll => 'Przechylenie';
 
   @override
+  String get spawnPositionSection => 'Pozycja odrodzenia (odniesienie)';
+
+  @override
+  String get positionNotReadable =>
+      'Nie udało się odczytać zapisanej pozycji tej postaci.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Gra odtwarza pozycję NPC z poziomu, a nie z zapisu gry, więc te wartości można odczytać, ale nie zmienić.';
+
+  @override
+  String get pickLocation => 'Wybierz miejsce…';
+
+  @override
+  String get pickLocationDialogTitle => 'Wybierz miejsce';
+
+  @override
+  String get applySpotRotation => 'Zastosuj też orientację miejsca';
+
+  @override
+  String get locationAreaOther => 'Inne';
+
+  @override
+  String get locationAreaCavalornValley => 'Dolina Cavalorna';
+
+  @override
+  String get locationAreaEastForest => 'Wschodni Las';
+
+  @override
+  String get locationAreaFogTower => 'Mglista Wieża';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Nielegalni mieszacze ziela';
+
+  @override
+  String get locationAreaOrcArena => 'Arena Orków';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Cmentarzysko Orków';
+
+  @override
+  String get locationAreaShipwreck => 'Wrak statku';
+
+  @override
+  String get locationAreaTundra => 'Tundra';
+
+  @override
+  String get locationCatalogUnavailable =>
+      'Nie udało się wczytać katalogu miejsc.';
+
+  @override
   String get invalid => 'Nieprawidłowe';
 
   @override
@@ -2278,6 +2329,11 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'Nie udało się wczytać pozycji NPC: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'Nie udało się wczytać ekwipunku NPC: $details';
   }
@@ -2628,4 +2684,85 @@ class AppLocalizationsPl extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Uszkodzone sloty ekwipunku';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'Ten zapis gry zawiera $count slotów ekwipunku, których identyfikator nie odpowiada już ich pozycji — w grze wyrzucenie takiego przedmiotu usuwa inny. Naprawa zmienia wyłącznie identyfikatory: żaden przedmiot nie zostanie dodany, usunięty ani zmieniony. Przy zapisie tworzona jest kopia zapasowa, jak zawsze.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Naprawa w kolejce — zapisz, aby ją zastosować.';
+
+  @override
+  String get slotRepairAction => 'Napraw';
+
+  @override
+  String get slotRepairDiscard => 'Odrzuć';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'W kolejce jest bezpośrednia zmiana slotu ekwipunku razem z operacją zajmującą całe sloty (naprawa, dodanie lub usunięcie). Druga nadpisałaby pierwszą — cofnij jedną z nich i zapisz ponownie.';
+
+  @override
+  String get backupFactFile => 'Plik';
+
+  @override
+  String get renameBackupTooltip => 'Nazwij tę kopię';
+
+  @override
+  String get renameBackupTitle => 'Nazwa kopii zapasowej';
+
+  @override
+  String get renameBackupLabel => 'Nazwa';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Wyświetlana zamiast nazwy pliku $fileName. Puste pole usuwa nazwę; sam plik nie jest zmieniany.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Usuń tę kopię zapasową';
+
+  @override
+  String get deleteBackupTitle => 'Usuń kopię zapasową';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Usunąć „$name” ($fileName)? Plik zostanie skasowany z dysku i nie da się go przywrócić.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Usuń';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Usunięto kopię zapasową: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Nie udało się usunąć kopii zapasowej: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Nie udało się nazwać kopii zapasowej: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Naprawa nie jest teraz możliwa — tego zapisu gry nie da się zapisać.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Usunięto kopię zapasową: $path — nie udało się usunąć jej nazwy: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Naprawa nie jest dostępna dla tego zapisu gry.';
 }

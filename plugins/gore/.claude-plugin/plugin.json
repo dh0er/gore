@@ -1,0 +1,33 @@
+{
+  "name": "gore",
+  "description": "Mod Gothic 1 Remake with the GORE toolkit: the MCP server that exposes every gore CLI command, plus the workflow knowledge that keeps an assistant from modding something the engine never reads.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Daniel Hoer"
+  },
+  "homepage": "https://github.com/dh0er/gore",
+  "repository": "https://github.com/dh0er/gore",
+  "license": "MIT",
+  "keywords": [
+    "gothic",
+    "modding",
+    "unreal",
+    "iostore",
+    "fmod",
+    "angelscript"
+  ],
+  "userConfig": {
+    "allow_write": {
+      "type": "boolean",
+      "title": "Change the game without confirming each time",
+      "description": "Off by default: every change to your installation is confirmed with you first. Turn this on only where nobody is watching, such as a scripted run.",
+      "default": false
+    },
+    "allow_game_launch": {
+      "type": "boolean",
+      "title": "Start the game to compile AngelScript without confirming",
+      "description": "Compiling opens a real game window and takes minutes. It also writes to the installation, so it needs the setting above as well.",
+      "default": false
+    }
+  }
+}

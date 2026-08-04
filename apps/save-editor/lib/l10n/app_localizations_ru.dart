@@ -640,6 +640,56 @@ class AppLocalizationsRu extends AppLocalizations {
   String get rotationRoll => 'Крен';
 
   @override
+  String get spawnPositionSection => 'Точка появления (справочно)';
+
+  @override
+  String get positionNotReadable =>
+      'Сохранённую позицию этого персонажа не удалось прочитать.';
+
+  @override
+  String get npcPositionReadOnly =>
+      'Игра восстанавливает позицию NPC из уровня, а не из сохранения, поэтому эти значения можно прочитать, но не изменить.';
+
+  @override
+  String get pickLocation => 'Выбрать место…';
+
+  @override
+  String get pickLocationDialogTitle => 'Выбор места';
+
+  @override
+  String get applySpotRotation => 'Также применить ориентацию точки';
+
+  @override
+  String get locationAreaOther => 'Прочее';
+
+  @override
+  String get locationAreaCavalornValley => 'Долина Кавалорна';
+
+  @override
+  String get locationAreaEastForest => 'Восточный лес';
+
+  @override
+  String get locationAreaFogTower => 'Туманная башня';
+
+  @override
+  String get locationAreaIllegalWeedMixers => 'Подпольные травники';
+
+  @override
+  String get locationAreaOrcArena => 'Орочья арена';
+
+  @override
+  String get locationAreaOrcGraveyard => 'Орочий склеп';
+
+  @override
+  String get locationAreaShipwreck => 'Место кораблекрушения';
+
+  @override
+  String get locationAreaTundra => 'Тундра';
+
+  @override
+  String get locationCatalogUnavailable => 'Не удалось загрузить каталог мест.';
+
+  @override
   String get invalid => 'Недопустимо';
 
   @override
@@ -2272,6 +2322,11 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String editorNpcPositionFailed(String details) {
+    return 'Не удалось загрузить позицию NPC: $details';
+  }
+
+  @override
   String editorNpcInventoryFailed(String details) {
     return 'Не удалось загрузить инвентарь NPC: $details';
   }
@@ -2622,4 +2677,85 @@ class AppLocalizationsRu extends AppLocalizations {
     });
     return '$_temp0';
   }
+
+  @override
+  String get slotRepairTitle => 'Повреждённые слоты инвентаря';
+
+  @override
+  String slotRepairBody(int count) {
+    return 'В этом сохранении $count слотов инвентаря, идентификатор которых больше не соответствует их позиции: в игре при выбрасывании такого предмета исчезает другой. Восстановление переписывает только идентификаторы: ни один предмет не добавляется, не удаляется и не изменяется. При сохранении, как обычно, создаётся резервная копия.';
+  }
+
+  @override
+  String get slotRepairQueued =>
+      'Восстановление добавлено — сохраните, чтобы применить.';
+
+  @override
+  String get slotRepairAction => 'Восстановить';
+
+  @override
+  String get slotRepairDiscard => 'Отменить';
+
+  @override
+  String get editorInventorySlotEditConflict =>
+      'В очереди одновременно прямое изменение слота инвентаря и операция, занимающая слоты целиком (восстановление, добавление или удаление). Вторая перезапишет первую — отмените одно из них и сохраните снова.';
+
+  @override
+  String get backupFactFile => 'Файл';
+
+  @override
+  String get renameBackupTooltip => 'Назвать эту копию';
+
+  @override
+  String get renameBackupTitle => 'Название копии';
+
+  @override
+  String get renameBackupLabel => 'Название';
+
+  @override
+  String renameBackupHelp(String fileName) {
+    return 'Показывается вместо имени файла $fileName. Пустое поле убирает название; сам файл не переименовывается.';
+  }
+
+  @override
+  String get deleteBackupTooltip => 'Удалить эту копию';
+
+  @override
+  String get deleteBackupTitle => 'Удалить копию';
+
+  @override
+  String deleteBackupBody(String name, String fileName) {
+    return 'Удалить «$name» ($fileName)? Файл будет стёрт с диска, вернуть его не получится.';
+  }
+
+  @override
+  String get deleteBackupConfirm => 'Удалить';
+
+  @override
+  String editorDeletedBackup(String path) {
+    return 'Копия удалена: $path';
+  }
+
+  @override
+  String editorDeleteBackupFailed(String details) {
+    return 'Не удалось удалить копию: $details';
+  }
+
+  @override
+  String editorRenameBackupFailed(String details) {
+    return 'Не удалось задать название копии: $details';
+  }
+
+  @override
+  String get slotRepairUnavailable =>
+      'Восстановление сейчас невозможно — в это сохранение нельзя записать.';
+
+  @override
+  String editorDeletedBackupWithLabelWarning(String path, String details) {
+    return 'Копия удалена: $path — её название убрать не удалось: $details';
+  }
+
+  @override
+  String get slotRepairNotOffered =>
+      'Для этого сохранения восстановление недоступно.';
 }
