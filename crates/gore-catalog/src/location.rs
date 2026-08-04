@@ -189,10 +189,19 @@ impl LocationCatalog {
     /// demonstrably drift: the same waypoint is `WP_ExF_…` in AngelScript and
     /// `WP_EXf_…` in a save. A case-sensitive lookup would report a spot that
     /// exists as missing, which is exactly the wrong answer for a typo-catcher.
+    ///
+    /// An exact spelling still wins over a folded one, because the cook ships two
+    /// names that differ only by case: `Box_Top` in the Castle Ruins and
+    /// `Box_top` in the Shipwreck, some 230,000 uu apart. The generator dedupes
+    /// on the exact string and keeps both, and `list` prints both — so a
+    /// fold-only lookup answers one of those printed names with the other one's
+    /// coordinates, which is worse than answering nothing. Folding the generator
+    /// instead would be worse still: it would delete a real spot.
     pub fn resolve(&self, name: &str) -> Option<&SpotEntry> {
         self.spots
             .iter()
-            .find(|spot| spot.n.eq_ignore_ascii_case(name))
+            .find(|spot| spot.n == name)
+            .or_else(|| self.spots.iter().find(|spot| spot.n.eq_ignore_ascii_case(name)))
     }
 
     /// The area with this code, compared case-insensitively.
@@ -868,6 +877,33 @@ mod tests {
             .expect("a spot every cook has");
         assert_eq!(spot.n, "FP_OC_STAND_YARD_1");
         assert_eq!(catalog.area(&spot.a).expect("labelled").label, "Old Camp");
+    }
+
+    #[test]
+    fn two_spots_that_differ_only_by_case_each_answer_with_their_own_coordinates() {
+        // The cook really ships this pair, and the catalog keeps both because they are two
+        // different places: `Box_Top` in the Castle Ruins and `Box_top` in the Shipwreck. A
+        // fold-only lookup answered the second with the first one's coordinates — a name `list`
+        // prints, resolving to somewhere else entirely, which is worse than resolving to nothing.
+        let catalog = LocationCatalog::bundled().expect("the bundled asset is valid");
+
+        let upper = catalog.resolve("Box_Top").expect("the Castle Ruins one");
+        assert_eq!(upper.n, "Box_Top");
+        assert_eq!(upper.a, "CR");
+
+        let lower = catalog.resolve("Box_top").expect("the Shipwreck one");
+        assert_eq!(lower.n, "Box_top");
+        assert_eq!(lower.a, "SW");
+
+        assert_ne!(
+            (upper.x, upper.y, upper.z),
+            (lower.x, lower.y, lower.z),
+            "if these ever coincide the test has stopped proving anything"
+        );
+
+        // And the fold still works where nothing exact matches, which is the whole reason it is
+        // there: the same waypoint is spelled differently in a script and in a save.
+        assert_eq!(catalog.resolve("BOX_TOP").map(|spot| spot.n.as_str()), Some("Box_Top"));
     }
 
     #[test]
