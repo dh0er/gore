@@ -2,13 +2,13 @@
 
 **GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
 
-[<img src="docs/images/screenshot_light.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
+[<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
 
 ## Tools
 
 | Tool | What it does | Status |
 |---|---|---|
-| **[`gore` CLI](docs/guide/README.md)** (`gore.exe`) | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
+| **[GORE CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 🚧 Work in progress |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | 🚧 Work in progress |
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
@@ -52,7 +52,9 @@ gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 
 Full walkthrough: [Getting started](docs/guide/getting-started.md).
 
-## Modding from an AI assistant
+## Vibe Modding
+
+You can mod with AI agents by installing the plugin, or by manually installing the skill and mcp tools.
 
 ### Claude plugin
 
@@ -68,7 +70,7 @@ codex plugin marketplace add C:\path\to\gore
 codex plugin add gore@gore
 ```
 
-### Manual installation (all agents)
+### Manual installation (all clients)
 
 Add the MCP server to the client configuration:
 
