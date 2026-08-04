@@ -529,10 +529,14 @@ fn apply_loadout_with_limits(
         values: BTreeMap<String, (String, String)>,
     }
     let mut rawfile_sources: BTreeMap<PathBuf, PendingRaw> = BTreeMap::new();
-    // Keyed by DESTINATION, so loadout order gives later-wins before the plan is built. This is
-    // not cosmetic: `first_duplicate_dst` rejects a plan with two writes to one path, so an
-    // un-deduped accumulator would turn an ordinary two-mod overlap into a hard apply failure.
-    let mut loose_files: BTreeMap<PathBuf, PendingPayload> = BTreeMap::new();
+    // Keyed by the CASE-FOLDED destination, so loadout order gives later-wins before the plan is
+    // built. This is not cosmetic: `first_duplicate_dst` rejects a plan with two writes to one
+    // path, and it *resolves* those paths — so on Windows two mods spelling one file differently
+    // (`Normal.PNG` against `normal.png`) would otherwise turn the ordinary two-mod overlap that
+    // `mgr analyze` reports, whose `norm_loose` folds exactly the same way, into a hard apply
+    // failure. The value carries the winning mod's own spelling, which is what gets written and
+    // recorded.
+    let mut loose_files: BTreeMap<String, (PathBuf, PendingPayload)> = BTreeMap::new();
     let mut loc: BTreeMap<String, PendingLoc> = BTreeMap::new();
     let mut audio: BTreeMap<(String, String), PendingPayload> = BTreeMap::new();
     let mut scripts: Vec<(String, String, PendingPayload)> = Vec::new();
@@ -874,11 +878,14 @@ fn apply_loadout_with_limits(
                             continue;
                         }
                         loose_files.insert(
-                            target,
-                            PendingPayload {
-                                entry: l.library_entry.clone(),
-                                rel: PathBuf::from(payload_rel),
-                            },
+                            game_path.to_lowercase(),
+                            (
+                                target,
+                                PendingPayload {
+                                    entry: l.library_entry.clone(),
+                                    rel: PathBuf::from(payload_rel),
+                                },
+                            ),
                         );
                         // later-wins
                     }
@@ -1161,7 +1168,7 @@ fn apply_loadout_with_limits(
     // Publish through the same disk-backed write path the rawfiles use, so even a multi-GiB
     // replacement never becomes a resident `Vec` and an apply error drops every candidate before
     // the game is touched.
-    for (target, source) in loose_files {
+    for (_folded, (target, source)) in loose_files {
         let drifted = crate::select_pristine_source(&target, prior)?.drifted;
         let candidate = snapshot_loose_payload(&source, limits, &mut budget)?;
         let hash = crate::content_hash_file(&candidate).map_err(crate::io(&format!(

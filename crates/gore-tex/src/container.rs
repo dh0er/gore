@@ -1075,6 +1075,30 @@ pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
     Ok(read_pak_listing(pak)?.files)
 }
 
+/// The same entries as [`list_pak_files`], re-anchored to the install root through the container's
+/// own mount point.
+///
+/// UnrealPak collapses a common leading directory into the mount point, so a pak mounted at
+/// `../../../G1R/Content/Slate/Cursors/Normal/` spells its entry `Normal.PNG` while the file it
+/// actually claims is `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. Anything comparing pak entries
+/// against game-root-relative destinations — the conflict analyzer above all — needs the second
+/// spelling, and reading the first as if it were the second both misses real overlaps and invents
+/// ones between two paks whose only shared text is a leaf name.
+///
+/// A mount point this rule cannot place is refused rather than guessed at, exactly as in
+/// [`pak_shadow_index`]: a wrong answer here is a conflict report that is confidently false.
+pub fn list_pak_files_from_game_root(pak: &Path) -> Result<Vec<String>> {
+    let listing = read_pak_listing(pak)?;
+    let prefix = mount_prefix_from_game_root(&listing.mount_point).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot place {} against the install root: mount point {:?} is not under '../../../'",
+            listing.pak.display(),
+            listing.mount_point
+        )
+    })?;
+    Ok(listing.files.iter().map(|file| format!("{prefix}{file}")).collect())
+}
+
 /// One plain `.pak`, its mount point, and every entry its directory index names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PakListing {
@@ -4521,6 +4545,43 @@ mod tests {
                 "G1R/Content/B.txt".to_string()
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The index spelling and the install-root spelling are not the same string whenever the
+    /// mount point carries anything, and UnrealPak folds a common leading directory into it as a
+    /// matter of course. Anything matching pak entries against real destinations — the conflict
+    /// analyzer above all — needs the second, and reading the first as if it were the second both
+    /// misses the overlap that matters and invents ones between paks sharing only a leaf name.
+    #[test]
+    fn entries_are_re_anchored_through_the_mount_point() {
+        let dir = unique_tmp("mountpak");
+
+        // What a cursor mod actually looks like: one entry, everything else in the mount point.
+        let deep = dir.join("cursor.pak");
+        tiny_pak(&deep, "../../../G1R/Content/Slate/Cursors/Normal/", &["Normal.PNG"]);
+        assert_eq!(list_pak_files(&deep).unwrap(), vec!["Normal.PNG".to_string()]);
+        assert_eq!(
+            list_pak_files_from_game_root(&deep).unwrap(),
+            vec!["G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_string()],
+            "this is the spelling a `files` replacement of the same cursor would use"
+        );
+
+        // A root-mounted pak already spells its entries the long way, and must not gain a prefix.
+        let root = dir.join("root.pak");
+        tiny_pak(&root, "../../../", &["G1R/Content/A.txt"]);
+        assert_eq!(
+            list_pak_files_from_game_root(&root).unwrap(),
+            vec!["G1R/Content/A.txt".to_string()]
+        );
+
+        // A mount this rule cannot place is refused rather than guessed at: a wrong answer here is
+        // a conflict report that is confidently false.
+        let odd = dir.join("odd.pak");
+        tiny_pak(&odd, "../../Engine/", &["X.bin"]);
+        let error = list_pak_files_from_game_root(&odd).expect_err("an unplaceable mount");
+        assert!(error.to_string().contains("mount point"), "{error}");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

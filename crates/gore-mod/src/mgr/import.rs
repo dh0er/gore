@@ -1825,37 +1825,29 @@ fn goremod_components(
                     targets,
                 }
             }
-            Component::FilePatch { path, targets } => {
-                // The destinations come from the manifest variant, like `TexturePatch`'s assets:
-                // the payloads are opaque bytes and reading them would prove nothing extra. Each
-                // one is re-validated against the same allowlist the record layer enforces, so an
-                // archive cannot smuggle a destination past import that deploy would refuse.
-                let mut targets = targets.clone();
-                for target in &targets {
-                    crate::validate_loose_game_path(target)?;
-                }
-                targets.sort();
-                targets.dedup();
-                ComponentInfo::FilePatch {
-                    rel: join_rel(prefix, path),
+            // Both destinations come from the payload manifest deploy actually reads, checked
+            // against the component's own declaration. The allowlist still runs on both, so an
+            // archive cannot smuggle a destination past import through either door.
+            Component::FilePatch { path, targets } => ComponentInfo::FilePatch {
+                rel: join_rel(prefix, path),
+                targets: loose_component_targets(
+                    bundle_dir,
+                    path,
                     targets,
-                }
-            }
-            Component::PakFilePatch { path, targets } => {
-                // Same destinations, same allowlist, same reason: only the deploy mechanism
-                // differs, and an archive must not be able to smuggle a destination past import
-                // through the additive door that the in-place door would refuse.
-                let mut targets = targets.clone();
-                for target in &targets {
-                    crate::validate_loose_game_path(target)?;
-                }
-                targets.sort();
-                targets.dedup();
-                ComponentInfo::PakFilePatch {
-                    rel: join_rel(prefix, path),
+                    "loose file manifest",
+                    limits,
+                )?,
+            },
+            Component::PakFilePatch { path, targets } => ComponentInfo::PakFilePatch {
+                rel: join_rel(prefix, path),
+                targets: loose_component_targets(
+                    bundle_dir,
+                    path,
                     targets,
-                }
-            }
+                    "pak file manifest",
+                    limits,
+                )?,
+            },
             Component::VoiceArchivePatch { path } => {
                 let manifest_path = Path::new(path).join("manifest.json");
                 let bytes = read_bounded_bundle_file(
@@ -1948,6 +1940,55 @@ fn goremod_components(
         });
     }
     Ok(out)
+}
+
+/// A loose-file component's destinations, read from the payload manifest inside the bundle rather
+/// than believed from the component's own `targets` list.
+///
+/// Those two can disagree, and only one of them is what deploy acts on: `apply` reads
+/// `<path>/manifest.json` and writes whatever it maps, while `mgr analyze` bucketed the declared
+/// list. A bundle whose declaration is short — hand-edited, or written by a tool with a bug — was
+/// therefore reported as claiming nothing at a path it then silently won at apply time, and the
+/// user was told the loadout was conflict-free.
+///
+/// The declared list is still validated first, so a destination smuggled in there is refused with
+/// the same allowlist error as before rather than being quietly ignored; then the two are required
+/// to agree. Refusing the mismatch outright is the only honest option, because the disagreement
+/// means the bundle does not describe what it does, and picking either side would be a guess about
+/// which half is the mistake.
+fn loose_component_targets(
+    bundle_dir: &Path,
+    path: &str,
+    declared: &[String],
+    label: &'static str,
+    limits: ImportLimits,
+) -> crate::Result<Vec<String>> {
+    for target in declared {
+        crate::validate_loose_game_path(target)?;
+    }
+
+    let manifest_path = Path::new(path).join("manifest.json");
+    let bytes =
+        read_bounded_bundle_file(bundle_dir, &manifest_path, label, limits.max_manifest_bytes)?;
+    let map: BTreeMap<String, String> = serde_json::from_slice(&bytes)?;
+    let mut actual: Vec<String> = map.keys().cloned().collect();
+    for target in &actual {
+        crate::validate_loose_game_path(target)?;
+    }
+    actual.sort();
+    actual.dedup();
+
+    let mut stated: Vec<String> = declared.to_vec();
+    stated.sort();
+    stated.dedup();
+    if stated != actual {
+        return Err(ModError::Other(format!(
+            "the {label} and the component's declared targets disagree: the manifest maps {actual:?} \
+             but the component claims {stated:?}"
+        )));
+    }
+
+    Ok(actual)
 }
 
 /// Read one regular bundle file through a hard byte cap. Metadata is checked before opening, and
@@ -2093,7 +2134,15 @@ fn classify_file(root: &Path, path: &Path, out: &mut Vec<ComponentInfo>) {
         }
     } else if lower.ends_with("_p.pak") && !path.with_extension("utoc").is_file() {
         // A pak WITH a sibling .utoc belongs to that triplet, not to a loose-pak component.
-        let targets = gore_tex::container::list_pak_files(path).unwrap_or_default();
+        //
+        // Read through the mount point, because the conflict namespace these targets land in is
+        // game-root-relative and a pak index is not: UnrealPak folds a common leading directory
+        // into the mount point, so a cursor pak names its entry `Normal.PNG` while it claims
+        // `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. Comparing the raw index against real
+        // destinations misses the overlap that matters and invents ones between two paks that
+        // merely share a leaf name.
+        let targets =
+            gore_tex::container::list_pak_files_from_game_root(path).unwrap_or_default();
         out.push(ComponentInfo::LoosePak { rel, targets });
     }
 }

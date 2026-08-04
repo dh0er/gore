@@ -266,23 +266,23 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
         .collect()
 }
 
-/// Every mod claiming one game-root-relative file, and by which route.
+/// Every mod claiming one game-root-relative file, and by which route each of them claims it.
 #[derive(Default)]
 struct LooseClaims {
-    /// A pak entry claims this path: this toolkit's `pak_files`, or a foreign `_P.pak`.
-    from_pak: bool,
-    /// An in-place `files` replacement overwrites the bytes on disk.
-    in_place: bool,
-    /// Claimant ids in loadout order, first-seen, deduped.
+    /// Ids whose pak entry claims this path: this toolkit's `pak_files`, or a foreign `_P.pak`.
+    from_pak: Vec<String>,
+    /// Ids whose in-place `files` replacement overwrites the bytes on disk.
+    in_place: Vec<String>,
+    /// Claimant ids in loadout order, first-seen, deduped. A mod reaching this path by BOTH routes
+    /// appears once here and in both route lists.
     ids: Vec<String>,
 }
 
 impl LooseClaims {
     fn claim(&mut self, from_pak: bool, id: &str) {
-        if from_pak {
-            self.from_pak = true;
-        } else {
-            self.in_place = true;
+        let route = if from_pak { &mut self.from_pak } else { &mut self.in_place };
+        if !route.iter().any(|x| x == id) {
+            route.push(id.to_string());
         }
         if !self.ids.iter().any(|x| x == id) {
             self.ids.push(id.to_string());
@@ -300,11 +300,20 @@ impl LooseClaims {
     ///   can only occur at a path NO pak previously had. Whether the engine's file reader prefers a
     ///   newly-introduced mod-pak entry over a physical file at such a path is not established
     ///   here, and `Info` is exactly the "advisory, not a proven later-wins clash" verdict.
+    ///
+    /// So a bucket reports the strongest pairing it can prove, not the weakest one present. Asking
+    /// two booleans instead used to collapse a whole bucket to `Info`: two `files` mods clobbering
+    /// each other were printed as "advisory; no winner" the moment any third mod reached the same
+    /// path through a pak — while `apply` went on silently picking a winner between them. Dropping
+    /// that pak from the loadout made the very same pair `Hard` again, which is the tell that the
+    /// verdict was a property of the bucket rather than of any pairing really in it.
     fn severity(&self) -> Severity {
-        match (self.from_pak, self.in_place) {
-            (true, true) => Severity::Info,
-            (false, _) => Severity::Hard,
-            (true, false) => Severity::Soft,
+        if self.in_place.len() >= 2 {
+            Severity::Hard
+        } else if self.from_pak.len() >= 2 {
+            Severity::Soft
+        } else {
+            Severity::Info
         }
     }
 }
@@ -524,6 +533,62 @@ mod tests {
                 Severity::Hard
             )],
             "a third mod on a different loose file must not be dragged in"
+        );
+    }
+
+    /// A third claimant arriving by the other route must not soften what the first two prove.
+    ///
+    /// Severity used to come from two per-bucket booleans, so any pak claim on the same path turned
+    /// a whole-file clobber between two `files` mods into `Info` — printed as "advisory; no winner"
+    /// while `apply` went on picking a winner between them. The tell was that dropping the pak made
+    /// the very same pair `Hard` again.
+    #[test]
+    fn a_pak_claimant_does_not_soften_a_clobber_two_files_mods_already_prove() {
+        let path = "G1R/Content/Movies/Intro.bk2";
+        let a = meta("mod-a", vec![loose(&[path])]);
+        let b = meta("mod-b", vec![loose(&[path])]);
+        let c = meta("mod-c", vec![pak_files(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true), ("mod-c", true)]);
+
+        assert_eq!(
+            analyze(&[&a, &b, &c], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b", "mod-c"],
+                Severity::Hard
+            )],
+            "two in-place claimants are a proven clobber whoever else is in the bucket"
+        );
+
+        // One mod reaching the path by both routes does it with only two mods, and is the shape
+        // that made the old booleans look reasonable: the bucket had both flags set, but the
+        // pairing that matters is still `files` against `files`.
+        let both = meta("mod-a", vec![loose(&[path]), pak_files(&[path])]);
+        let other = meta("mod-b", vec![loose(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true)]);
+        assert_eq!(
+            analyze(&[&both, &other], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b"],
+                Severity::Hard
+            )]
+        );
+
+        // And a genuinely mixed pair is still the advisory it was: one claimant per route.
+        let pak_only = meta("mod-a", vec![pak_files(&[path])]);
+        let files_only = meta("mod-b", vec![loose(&[path])]);
+        let lo = loadout_of(&[("mod-a", true), ("mod-b", true)]);
+        assert_eq!(
+            analyze(&[&pak_only, &files_only], &lo),
+            vec![conflict(
+                ConflictKind::LooseFile,
+                "g1r/content/movies/intro.bk2",
+                &["mod-a", "mod-b"],
+                Severity::Info
+            )]
         );
     }
 
