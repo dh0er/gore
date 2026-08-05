@@ -593,11 +593,16 @@ void _validateStages(
   if (stages == null) return;
   final targets = <String>{};
   for (final stage in stages) {
+    final manifestAsset = index.assetBySha256(stage.manifestAsset.sha256);
     if (stage.projectId != index.projectId ||
-        stage.stagedProjectRevision != index.projectRevision ||
+        stage.stagedProjectRevision > index.projectRevision ||
         stage.projectTargetExecutable.sha256 != index.targetExecutableSha256 ||
         stage.projectTargetExecutable.byteLength !=
             index.targetExecutableByteLength ||
+        manifestAsset == null ||
+        manifestAsset.byteLength != stage.manifestAsset.byteLength ||
+        manifestAsset.assetClass !=
+            Revision3ContentAssetClass.dataAssetStageManifest ||
         !targets.add(stage.targetPath)) {
       throw ArgumentError.value(
         stages,

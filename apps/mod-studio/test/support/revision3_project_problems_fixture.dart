@@ -15,9 +15,9 @@ const revision3ProjectProblemsMissingAudioSha256 =
 /// A closed fixture for the project Problems surface.
 ///
 /// [contentIndex] and every [dataAssetStages] entry always describe the same
-/// exact project ID and published revision. Tests can therefore exercise
-/// source availability independently without accidentally testing the view's
-/// fail-closed checkpoint mismatch handling.
+/// exact current project checkpoint. A retained stage may have been authored
+/// at an earlier revision, but its exact manifest and component assets remain
+/// present in the current content index.
 final class Revision3ProjectProblemsFixture {
   const Revision3ProjectProblemsFixture._({
     required this.contentIndex,
@@ -108,6 +108,28 @@ Revision3ProjectProblemsFixture revision3ProjectProblemsFixture({
   );
 }
 
+/// One exact current checkpoint retaining a DataAsset stage authored at the
+/// immediately preceding revision.
+Revision3ProjectProblemsFixture
+revision3ProjectProblemsRetainedDataAssetFixture({int projectRevision = 8}) {
+  if (projectRevision < 2) {
+    throw ArgumentError.value(
+      projectRevision,
+      'projectRevision',
+      'must leave an earlier authored DataAsset stage revision',
+    );
+  }
+  return _fixture(
+    projectRevision: projectRevision,
+    includeDialogGraph: false,
+    includeReferenceProblem: false,
+    includeAssetProblem: false,
+    includeVoiceProblems: false,
+    includeDataAssetStage: true,
+    dataAssetStageRevision: projectRevision - 1,
+  );
+}
+
 Revision3ProjectProblemsFixture _fixture({
   required int projectRevision,
   required bool includeDialogGraph,
@@ -115,6 +137,7 @@ Revision3ProjectProblemsFixture _fixture({
   required bool includeAssetProblem,
   required bool includeVoiceProblems,
   required bool includeDataAssetStage,
+  int? dataAssetStageRevision,
 }) {
   if (projectRevision < 1) {
     throw ArgumentError.value(
@@ -124,16 +147,40 @@ Revision3ProjectProblemsFixture _fixture({
     );
   }
 
-  final contentIndex = _contentIndex(
-    projectRevision: projectRevision,
+  if (!includeDataAssetStage && dataAssetStageRevision != null) {
+    throw ArgumentError.value(
+      dataAssetStageRevision,
+      'dataAssetStageRevision',
+      'requires a DataAsset stage',
+    );
+  }
+  final effectiveStageRevision = dataAssetStageRevision ?? projectRevision;
+  if (effectiveStageRevision < 1 || effectiveStageRevision > projectRevision) {
+    throw ArgumentError.value(
+      effectiveStageRevision,
+      'dataAssetStageRevision',
+      'must be positive and no newer than the current project revision',
+    );
+  }
+
+  final stageBasisIndex = _contentIndex(
+    projectRevision: effectiveStageRevision,
     includeDialogGraph: includeDialogGraph,
     includeReferenceProblem: includeReferenceProblem,
     includeAssetProblem: includeAssetProblem,
     includeVoiceProblems: includeVoiceProblems,
   );
   final stages = includeDataAssetStage
-      ? _matchingDataAssetStages(contentIndex)
+      ? _matchingDataAssetStages(stageBasisIndex)
       : const <AuthoringRevision3DataAssetStage>[];
+  final contentIndex = _contentIndex(
+    projectRevision: projectRevision,
+    includeDialogGraph: includeDialogGraph,
+    includeReferenceProblem: includeReferenceProblem,
+    includeAssetProblem: includeAssetProblem,
+    includeVoiceProblems: includeVoiceProblems,
+    dataAssetStages: stages,
+  );
   return Revision3ProjectProblemsFixture._(
     contentIndex: contentIndex,
     dataAssetStages: List<AuthoringRevision3DataAssetStage>.unmodifiable(
@@ -148,6 +195,8 @@ Revision3ContentIndex _contentIndex({
   required bool includeReferenceProblem,
   required bool includeAssetProblem,
   required bool includeVoiceProblems,
+  List<AuthoringRevision3DataAssetStage> dataAssetStages =
+      const <AuthoringRevision3DataAssetStage>[],
 }) {
   final json = includeDialogGraph
       ? revision3VoiceContentIndexJsonFixture(
@@ -190,7 +239,54 @@ Revision3ContentIndex _contentIndex({
   entities.sort(
     (left, right) => (left['id']! as String).compareTo(right['id']! as String),
   );
+  json['assets'] = _dataAssetContentAssets(dataAssetStages);
   return Revision3ContentIndex.fromJsonObject(json);
+}
+
+List<Map<String, Object?>> _dataAssetContentAssets(
+  List<AuthoringRevision3DataAssetStage> stages,
+) {
+  const manifestMediaType =
+      'application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1';
+  const componentMediaType =
+      'application/vnd.gore.dataasset-fixed-leaf-component;version=1';
+  final assets = <String, Map<String, Object?>>{};
+
+  void add(
+    AuthoringRevision3DataAssetContentSeal seal, {
+    required String mediaType,
+    required String assetClass,
+  }) {
+    assets[seal.sha256] = <String, Object?>{
+      'sha256': seal.sha256,
+      'byte_len': seal.byteLength,
+      'media_type': mediaType,
+      'class': assetClass,
+    };
+  }
+
+  for (final stage in stages) {
+    add(
+      stage.manifestAsset,
+      mediaType: manifestMediaType,
+      assetClass: 'data_asset_stage_manifest',
+    );
+    for (final component in <AuthoringRevision3DataAssetContentSeal>[
+      stage.patchedUasset,
+      stage.patchedUexp,
+      stage.usmap,
+      ...stage.sidecars.values,
+    ]) {
+      add(
+        component,
+        mediaType: componentMediaType,
+        assetClass: 'data_asset_stage_component',
+      );
+    }
+  }
+
+  final digests = assets.keys.toList(growable: false)..sort();
+  return <Map<String, Object?>>[for (final digest in digests) assets[digest]!];
 }
 
 Map<String, Object?> _emptyContentJson(

@@ -146,14 +146,49 @@ void main() {
     );
   });
 
-  test('rejects a DataAsset registry from another exact revision', () {
-    final current = revision3ProjectProblemsCleanFixture(projectRevision: 8);
-    final stale = revision3ProjectProblemsFilterFixture(projectRevision: 7);
+  test('accepts a retained DataAsset stage from an earlier revision', () {
+    final retained = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
+
+    final report = Revision3ProjectProblemBuilder.build(
+      retained.contentIndex,
+      dataAssetStages: retained.dataAssetStages,
+      gameConfigured: true,
+    );
+
+    expect(retained.dataAssetStage!.stagedProjectRevision, 7);
+    expect(report.dataAssetStageCount, 1);
+    expect(
+      report.problems.single.code,
+      Revision3ProjectProblemCode.dataAssetStageOfflineOnly,
+    );
+  });
+
+  test('rejects a retained stage whose manifest left current content', () {
+    final current = revision3ProjectProblemsEmptyFixture(projectRevision: 8);
+    final retained = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
 
     expect(
       () => Revision3ProjectProblemBuilder.build(
         current.contentIndex,
-        dataAssetStages: stale.dataAssetStages,
+        dataAssetStages: retained.dataAssetStages,
+        gameConfigured: true,
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('rejects a DataAsset registry from a future revision', () {
+    final current = revision3ProjectProblemsCleanFixture(projectRevision: 7);
+    final future = revision3ProjectProblemsFilterFixture(projectRevision: 8);
+
+    expect(
+      () => Revision3ProjectProblemBuilder.build(
+        current.contentIndex,
+        dataAssetStages: future.dataAssetStages,
         gameConfigured: true,
       ),
       throwsArgumentError,

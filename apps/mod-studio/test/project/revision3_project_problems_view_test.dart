@@ -130,6 +130,52 @@ void main() {
     },
   );
 
+  testWidgets('keeps a retained earlier DataAsset stage actionable', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(1280, 1200));
+    final retained = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
+    final stage = retained.dataAssetStage!;
+    String? openedTarget;
+
+    await _pumpView(
+      tester,
+      fixture: retained,
+      actions: Revision3ProjectProblemsActions(
+        openDataAssetStage: (value) => openedTarget = value,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(stage.stagedProjectRevision, 7);
+    expect(
+      find.byKey(const Key('revision3-project-problems-partial')),
+      findsNothing,
+    );
+    expect(
+      find.text(
+        'Problem ${Revision3ProjectProblemCode.dataAssetStageOfflineOnly.name}',
+      ),
+      findsWidgets,
+    );
+    final problem = _report(retained).problems.single;
+    await tester.tap(
+      find.byKey(Key('revision3-project-problem-${problem.id}')),
+    );
+    await tester.pump();
+    final action = find.byKey(
+      Key(
+        'revision3-project-problems-action-dataAssetStage-${stage.targetPath}',
+      ),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pump();
+    expect(openedTarget, stage.targetPath);
+  });
+
   testWidgets('filters by category and searches localized plus exact terms', (
     tester,
   ) async {

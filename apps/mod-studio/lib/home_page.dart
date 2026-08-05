@@ -4738,6 +4738,13 @@ class _ManagedRevision3ProjectViewState
               secondary: 'voice',
             );
           },
+          openDataAssetDetails: () => _openProjectBuildDataAssetDetails(
+            context,
+            expectedProjectRoot: buildPreviewProjectRoot,
+            expectedProjectId: buildPreviewProjectId,
+            expectedProjectRevision: buildPreviewProjectRevision,
+            expectedProjectHeadCanonicalJson: buildPreviewHead,
+          ),
           copy: l10n.localeName.startsWith('de')
               ? const Revision3ProjectBuildPlanCopy.german()
               : const Revision3ProjectBuildPlanCopy.english(),
@@ -7428,6 +7435,115 @@ class _ManagedRevision3ProjectViewState
     );
     if (await openAsset && isExactCurrentProject()) return;
     throw StateError('The exact project asset is no longer available.');
+  }
+
+  Future<void> _openProjectBuildDataAssetDetails(
+    BuildContext context, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isExactCurrentProject() => _isExactCurrentDashboardProject(
+      context,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final sourceLocation = Revision3ProjectWorkspace.currentLocationOf(context);
+    if (sourceLocation.section !=
+        Revision3ProjectWorkspaceSection.testRelease) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final sourceNavigationIdentity =
+        Revision3ProjectWorkspace.navigationIdentityOf(context);
+    bool isStillAtSourceLocation() =>
+        context.mounted &&
+        identical(
+          Revision3ProjectWorkspace.navigationIdentityOf(context),
+          sourceNavigationIdentity,
+        ) &&
+        Revision3ProjectWorkspace.currentLocationOf(context) == sourceLocation;
+    final requestEpoch = _beginDashboardOpenRequest();
+    bool isLatestRequest() => requestEpoch == _dashboardEntityOpenEpoch;
+
+    late final Revision3ContentIndex contentIndex;
+    late final List<AuthoringRevision3DataAssetStage> stages;
+    try {
+      final sources = await Future.wait<Object>([
+        loadContentIndex(),
+        loadDataAssetStages(),
+      ]);
+      contentIndex = sources[0] as Revision3ContentIndex;
+      stages = sources[1] as List<AuthoringRevision3DataAssetStage>;
+    } on Object {
+      if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+      rethrow;
+    }
+    if (!context.mounted) return;
+    if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+    if (!isExactCurrentProject() ||
+        contentIndex.projectId != expectedProjectId ||
+        contentIndex.projectRevision != expectedProjectRevision) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+
+    late final Revision3ProjectProblemReport report;
+    try {
+      report = Revision3ProjectProblemBuilder.build(
+        contentIndex,
+        dataAssetStages: stages,
+        gameConfigured: gameRoot != null,
+      );
+    } on Object {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final stageProblems = report.problems
+        .where(
+          (problem) =>
+              problem.code ==
+              Revision3ProjectProblemCode.dataAssetStageOfflineOnly,
+        )
+        .toList(growable: false);
+    if (report.projectId != expectedProjectId ||
+        report.projectRevision != expectedProjectRevision ||
+        stages.length != 1 ||
+        stageProblems.length != 1) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final problem = stageProblems.single;
+    final details = problem.details;
+    final stage = stages.single;
+    if (problem.primaryTarget.kind !=
+            Revision3ProjectProblemTargetKind.dataAssetStage ||
+        details is! Revision3DataAssetStageProblemDetails ||
+        problem.primaryTarget.identity != details.targetPath ||
+        details.targetPath != stage.targetPath ||
+        details.manifestSha256 != stage.manifestAsset.sha256) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    if (!context.mounted) return;
+    if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    await _openProblemDataAssetStage(
+      context,
+      targetPath: details.targetPath,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    if (!isLatestRequest()) return;
+    if (!context.mounted || !isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
   }
 
   Future<void> _openProblemDataAssetStage(

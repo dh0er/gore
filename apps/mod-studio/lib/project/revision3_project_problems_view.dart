@@ -1516,7 +1516,7 @@ Future<_Revision3StagesLoad> _loadStages(
     if (stages.any(
       (stage) =>
           stage.projectId != expectedProjectId ||
-          stage.stagedProjectRevision != expectedProjectRevision,
+          stage.stagedProjectRevision > expectedProjectRevision,
     )) {
       return const _Revision3StagesLoad(null);
     }

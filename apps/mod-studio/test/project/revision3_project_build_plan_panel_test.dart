@@ -10,6 +10,8 @@ import 'package:gore_mod/project/revision3_project_build_plan_panel.dart';
 import '../support/revision3_voice_fixture.dart';
 
 const _otherProjectId = '11111111111111111111111111111111';
+const _stageMediaType =
+    'application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1';
 
 void main() {
   testWidgets('loads empty preview with eight fixed domains and no authority', (
@@ -116,6 +118,79 @@ void main() {
     }
   });
 
+  test('DataAsset drill-down requires one author blocker and one stage', () {
+    final unique = _dataAssetBlockedFixture();
+    expect(
+      revision3ProjectBuildPlanHasExactDataAssetStage(
+        unique.result.plan,
+        unique.result.plan.blockers.single,
+      ),
+      isTrue,
+    );
+
+    final ambiguous = _dataAssetBlockedFixture(stageCount: 2);
+    for (final blocker in ambiguous.result.plan.blockers) {
+      expect(
+        revision3ProjectBuildPlanHasExactDataAssetStage(
+          ambiguous.result.plan,
+          blocker,
+        ),
+        isFalse,
+      );
+    }
+
+    final targetlessAggregate = _dataAssetBlockedFixture(
+      stageCount: 2,
+      readyCount: 1,
+    );
+    expect(targetlessAggregate.result.plan.blockers, hasLength(1));
+    expect(
+      revision3ProjectBuildPlanHasExactDataAssetStage(
+        targetlessAggregate.result.plan,
+        targetlessAggregate.result.plan.blockers.single,
+      ),
+      isFalse,
+    );
+
+    final toolkit = _dataAssetBlockedFixture(toolkitBlocker: true);
+    expect(
+      revision3ProjectBuildPlanHasExactDataAssetStage(
+        toolkit.result.plan,
+        toolkit.result.plan.blockers.single,
+      ),
+      isFalse,
+    );
+  });
+
+  testWidgets('keeps a toolkit DataAsset blocker visible without an action', (
+    tester,
+  ) async {
+    final fixture = _dataAssetBlockedFixture(toolkitBlocker: true);
+    await _pumpPanel(
+      tester,
+      fixture: fixture,
+      load: () async => fixture.result,
+      openDataAssetDetails: () {},
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-project-build-plan-toolkit-blockers')),
+      findsOneWidget,
+    );
+    expect(find.text('Needs toolkit support'), findsOneWidget);
+    expect(find.text('A DataAsset target is not supported.'), findsOneWidget);
+    expect(find.text('Open exact DataAsset edit'), findsNothing);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-dataasset-details-dataAssetTargetUnsupported',
+        ),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('opens exact Voice details with local busy and failure states', (
     tester,
   ) async {
@@ -209,6 +284,99 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+    'opens only the unique exact DataAsset edit with busy and safe failure states',
+    (tester) async {
+      final fixture = _dataAssetBlockedFixture();
+      final completion = Completer<void>();
+      var calls = 0;
+      var loadCalls = 0;
+      await _pumpPanel(
+        tester,
+        fixture: fixture,
+        load: () async {
+          loadCalls++;
+          return fixture.result;
+        },
+        openDataAssetDetails: () {
+          calls++;
+          return completion.future;
+        },
+      );
+      await tester.pumpAndSettle();
+      expect(loadCalls, 1);
+
+      final action = find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-dataasset-details-dataAssetSelectorMismatch',
+        ),
+      );
+      expect(action, findsOneWidget);
+      expect(find.text('Open exact DataAsset edit'), findsOneWidget);
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pump();
+      expect(calls, 1);
+      expect(tester.widget<TextButton>(action).onPressed, isNull);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      final refresh = find.byKey(
+        const Key('revision3-project-build-plan-refresh'),
+      );
+      expect(tester.widget<IconButton>(refresh).onPressed, isNull);
+      await tester.ensureVisible(refresh);
+      await tester.tap(refresh);
+      await tester.pump();
+      expect(loadCalls, 1);
+      expect(calls, 1);
+
+      completion.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextButton>(action).onPressed, isNotNull);
+      expect(tester.widget<IconButton>(refresh).onPressed, isNotNull);
+
+      await _pumpPanel(
+        tester,
+        fixture: fixture,
+        load: () async => fixture.result,
+        openDataAssetDetails: () => throw StateError(r'C:\private\dataasset'),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'The exact DataAsset edit is no longer available. Refresh this preview and try again.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining(r'C:\private'), findsNothing);
+    },
+  );
+
+  testWidgets('does not guess a DataAsset target from an aggregate blocker', (
+    tester,
+  ) async {
+    final fixture = _dataAssetBlockedFixture(stageCount: 2, readyCount: 1);
+    await _pumpPanel(
+      tester,
+      fixture: fixture,
+      load: () async => fixture.result,
+      openDataAssetDetails: () {},
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey(
+          'revision3-project-build-plan-dataasset-details-dataAssetSelectorMismatch',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(find.text('Open exact DataAsset edit'), findsNothing);
   });
 
   testWidgets('drops a pending Voice action after checkpoint replacement', (
@@ -438,11 +606,14 @@ void main() {
   testWidgets('compact German panel is overflow-safe at 200 percent text', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(360, 900);
+    tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final fixture = _blockedFixture();
+    final semantics = tester.ensureSemantics();
+    final fixture = _dataAssetBlockedFixture();
+    final completion = Completer<void>();
+    var calls = 0;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -453,6 +624,10 @@ void main() {
               child: Revision3ProjectBuildPlanPanel(
                 checkpoint: fixture.checkpoint,
                 load: () async => fixture.result,
+                openDataAssetDetails: () {
+                  calls++;
+                  return completion.future;
+                },
                 copy: const Revision3ProjectBuildPlanCopy.german(),
               ),
             ),
@@ -467,8 +642,32 @@ void main() {
     expect(find.text('Vorbereitung erforderlich'), findsOneWidget);
     expect(
       find.text('0 bereit \u00b7 1 blockiert \u00b7 1 gesamt'),
-      findsNWidgets(2),
+      findsOneWidget,
     );
+    final action = find.byKey(
+      const ValueKey(
+        'revision3-project-build-plan-dataasset-details-dataAssetSelectorMismatch',
+      ),
+    );
+    await tester.ensureVisible(action);
+    expect(action, findsOneWidget);
+    expect(action.hitTestable(), findsOneWidget);
+    await tester.tap(action);
+    await tester.pump();
+    expect(calls, 1);
+    expect(tester.widget<TextButton>(action).onPressed, isNull);
+    final progressSemantics = find.bySemanticsLabel(
+      RegExp('Exakte DataAsset-Bearbeitung wird geöffnet'),
+    );
+    expect(progressSemantics, findsOneWidget);
+    expect(
+      tester.getSemantics(progressSemantics),
+      matchesSemantics(isLiveRegion: true),
+    );
+
+    completion.complete();
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextButton>(action).onPressed, isNotNull);
 
     final technical = find.byKey(
       const Key('revision3-project-build-plan-technical'),
@@ -481,6 +680,7 @@ void main() {
       find.textContaining(fixture.result.plan.inputSeal.sha256),
       findsOneWidget,
     );
+    semantics.dispose();
   });
 }
 
@@ -489,6 +689,7 @@ Future<void> _pumpPanel(
   required _BuildPlanFixture fixture,
   required Revision3ProjectBuildPlanLoader load,
   Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails,
+  Revision3ProjectBuildPlanOpenDataAssetDetails? openDataAssetDetails,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -497,6 +698,7 @@ Future<void> _pumpPanel(
           checkpoint: fixture.checkpoint,
           load: load,
           openVoiceDetails: openVoiceDetails,
+          openDataAssetDetails: openDataAssetDetails,
         ),
       ),
     ),
@@ -673,12 +875,82 @@ _BuildPlanFixture _unqualifiedAddFixture() {
   );
 }
 
+_BuildPlanFixture _dataAssetBlockedFixture({
+  int stageCount = 1,
+  int readyCount = 0,
+  bool toolkitBlocker = false,
+}) {
+  if (stageCount != 1 && stageCount != 2) {
+    throw ArgumentError.value(stageCount, 'stageCount');
+  }
+  if (toolkitBlocker && stageCount != 1) {
+    throw ArgumentError.value(stageCount, 'stageCount');
+  }
+  if (readyCount < 0 || readyCount >= stageCount) {
+    throw ArgumentError.value(readyCount, 'readyCount');
+  }
+  final blockedCount = stageCount - readyCount;
+  final project = (jsonDecode(revision3VoiceFixtureProjectJson()) as Map)
+      .cast<String, Object?>();
+  final assets = <String, Object?>{};
+  for (var index = 0; index < stageCount; index++) {
+    final digest = List<String>.filled(64, '${7 + index}').join();
+    assets[digest] = <String, Object?>{
+      'byte_len': 1200 + index,
+      'media_type': _stageMediaType,
+    };
+  }
+  project['asset_store'] = <String, Object?>{'assets': assets};
+  final blockers = toolkitBlocker
+      ? const <Map<String, Object?>>[
+          <String, Object?>{
+            'category': 'toolkit_support',
+            'domain': 'data_assets',
+            'reason': 'data_asset_target_unsupported',
+            'affected_count': 1,
+          },
+        ]
+      : <Map<String, Object?>>[
+          const <String, Object?>{
+            'category': 'author_project',
+            'domain': 'data_assets',
+            'reason': 'data_asset_selector_mismatch',
+            'affected_count': 1,
+          },
+          if (blockedCount == 2)
+            const <String, Object?>{
+              'category': 'author_project',
+              'domain': 'data_assets',
+              'reason': 'data_asset_replacement_malformed',
+              'affected_count': 1,
+            },
+        ];
+  return _fixture(
+    projectJson: jsonEncode(project),
+    domainCounts: <String, ({int ready, int blocked})>{
+      'data_assets': (ready: readyCount, blocked: blockedCount),
+    },
+    blockers: blockers,
+  );
+}
+
 _BuildPlanFixture _fixture({
   required String projectJson,
   required Map<String, ({int ready, int blocked})> domainCounts,
   required List<Map<String, Object?>> blockers,
 }) {
   final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final assetStore = (project['asset_store']! as Map).cast<String, Object?>();
+  final assets = (assetStore['assets']! as Map).cast<String, Object?>();
+  final stageDigests =
+      assets.entries
+          .where((entry) {
+            final metadata = (entry.value! as Map).cast<String, Object?>();
+            return metadata['media_type'] == _stageMediaType;
+          })
+          .map((entry) => entry.key)
+          .toList(growable: false)
+        ..sort();
   final projectBytes = utf8.encode(projectJson);
   final projectSeal = _seal(projectBytes);
   final head = AuthoringWorkingHead.fromCanonicalJson(
@@ -725,7 +997,13 @@ _BuildPlanFixture _fixture({
   final inputProjection = <String, Object?>{
     'format': 'gore.authoring.revision3-project-build-input.v1',
     'project': projectSeal,
-    'dataasset_stage_manifests': <Object?>[],
+    'dataasset_stage_manifests': <Object?>[
+      for (final digest in stageDigests)
+        <String, Object?>{
+          'byte_len': ((assets[digest]! as Map)['byte_len']! as int),
+          'sha256': digest,
+        },
+    ],
   };
   final inputSeal = _seal(utf8.encode(jsonEncode(inputProjection)));
   final planProjection = <String, Object?>{
