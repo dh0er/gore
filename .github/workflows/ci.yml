@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -62,8 +66,10 @@ jobs:
       # now ship to users — the guide inside the CLI zip, the plugin through a
       # marketplace — so a dead link or a manifest that disagrees with its two
       # siblings is something a reader finds rather than a test.
-      - name: Docs links + plugin manifests
+      - name: Docs, plugin, and release contracts
         working-directory: .
         run: |
           python scripts/check_docs_links.py
           python scripts/check_plugin.py
+          python scripts/check_release_workflow.py
+          python -m unittest discover -s scripts -p "test_check_release_workflow.py" -v

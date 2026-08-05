@@ -257,9 +257,22 @@ void main() {
       expect(editedIndex?.projectRevision, 7);
       expect(editedNpc?.id, _npcId);
 
-      await tester.tap(
-        find.byKey(Key('revision3-story-workbench-technical-$_npcId')),
+      final profile = find.byKey(
+        Key('revision3-story-workbench-section-profile-$_npcId'),
       );
+      final technicalDetails = find.byKey(
+        Key('revision3-story-workbench-technical-$_npcId'),
+      );
+      await tester.scrollUntilVisible(
+        technicalDetails,
+        160,
+        scrollable: find.descendant(
+          of: profile,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(technicalDetails);
       await tester.pumpAndSettle();
       expect(find.text('GORE_GATE_GUARD'), findsOneWidget);
       expect(find.text('PROJECT.NPCS.GATEGUARD'), findsOneWidget);

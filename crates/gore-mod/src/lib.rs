@@ -369,6 +369,53 @@ pub struct ModManifest {
     pub components: Vec<Component>,
 }
 
+const MOD_MANIFEST_FORMAT_BASE: u32 = 1;
+const MOD_MANIFEST_FORMAT_PAK_FILE_PATCH: u32 = 2;
+
+fn component_manifest_format(component: &Component) -> u32 {
+    match component {
+        Component::Ue4ssLua { .. }
+        | Component::LocPatch { .. }
+        | Component::AudioPatch { .. }
+        | Component::TexturePatch { .. }
+        | Component::FilePatch { .. }
+        | Component::AngelScriptPatch { .. }
+        | Component::VoiceArchivePatch { .. } => MOD_MANIFEST_FORMAT_BASE,
+        Component::PakFilePatch { .. } => MOD_MANIFEST_FORMAT_PAK_FILE_PATCH,
+    }
+}
+
+fn mod_manifest_format_for_components(components: &[Component]) -> u32 {
+    components
+        .iter()
+        .map(component_manifest_format)
+        .max()
+        .unwrap_or(MOD_MANIFEST_FORMAT_BASE)
+}
+
+/// Validate the root bundle manifest's minimum-consumer contract.
+///
+/// Format 1 is the base component set and deliberately excludes [`Component::PakFilePatch`].
+/// Format 2 adds that component and therefore requires at least one such declaration. The exact
+/// correspondence is intentional: consumers must not silently interpret a newer component under
+/// an older format number, and a gratuitous format bump must not exclude otherwise-capable format-1
+/// consumers. There is no migration or fallback path for unknown or mismatched manifests.
+pub(crate) fn validate_mod_manifest_format(manifest: &ModManifest) -> Result<()> {
+    let required_format = mod_manifest_format_for_components(&manifest.components);
+    match (manifest.format, required_format) {
+        (actual, required) if actual == required => Ok(()),
+        (MOD_MANIFEST_FORMAT_BASE, MOD_MANIFEST_FORMAT_PAK_FILE_PATCH) => Err(ModError::Other(
+            "gore-mod manifest format 1 does not support pak_file_patch components".into(),
+        )),
+        (MOD_MANIFEST_FORMAT_PAK_FILE_PATCH, MOD_MANIFEST_FORMAT_BASE) => Err(ModError::Other(
+            "gore-mod manifest format 2 requires at least one pak_file_patch component".into(),
+        )),
+        (format, _) => Err(ModError::Other(format!(
+            "unsupported gore-mod manifest format {format} (want 1 or 2)"
+        ))),
+    }
+}
+
 pub struct Bundle {
     pub files: Files,
     pub manifest: ModManifest,
@@ -541,10 +588,11 @@ pub fn build_sealed_voice_bundle(
         Some(executable_generation),
     )?;
     let manifest = ModManifest {
-        format: 1,
+        format: mod_manifest_format_for_components(&components),
         mod_meta: meta,
         components,
     };
+    validate_mod_manifest_format(&manifest)?;
     files.insert(
         "gore-mod.json".into(),
         serde_json::to_vec_pretty(&manifest)?,
@@ -782,10 +830,11 @@ pub fn build_bundle_relative_to(spec: &BuildSpec, base: &Path) -> Result<Bundle>
     }
 
     let manifest = ModManifest {
-        format: 1,
+        format: mod_manifest_format_for_components(&components),
         mod_meta: spec.meta.clone(),
         components,
     };
+    validate_mod_manifest_format(&manifest)?;
     files.insert(
         "gore-mod.json".into(),
         serde_json::to_vec_pretty(&manifest)?,
@@ -841,6 +890,21 @@ fn lower_loose_section(
 
 /// Write a built bundle's files under `dir` (creating parent dirs).
 pub fn write_bundle(dir: &Path, bundle: &Bundle) -> Result<()> {
+    // Validate the typed manifest and the exact bytes that will be written before clearing an
+    // existing output tree. `Bundle` fields are public, so callers can otherwise forge a mismatch
+    // after build and turn an invalid contract into a destructive rebuild side effect.
+    validate_mod_manifest_format(&bundle.manifest)?;
+    let manifest_bytes = bundle
+        .files
+        .get("gore-mod.json")
+        .ok_or_else(|| ModError::Other("bundle is missing gore-mod.json".into()))?;
+    let serialized_manifest: ModManifest = serde_json::from_slice(manifest_bytes)?;
+    validate_mod_manifest_format(&serialized_manifest)?;
+    if manifest_bytes != &serde_json::to_vec_pretty(&bundle.manifest)? {
+        return Err(ModError::Other(
+            "bundle's gore-mod.json disagrees with its typed manifest".into(),
+        ));
+    }
     // Rebuild into a clean directory: a prior build of the same bundle may have left files that are
     // no longer part of it (e.g. a component the user removed). Deploy copies some component dirs
     // (like `ue4ss/<name>`) wholesale, so stale leftovers would still be shipped/deployed. Clear the
@@ -863,12 +927,7 @@ fn validate_sealed_voice_contract(
     manifest: &ModManifest,
     voice_manifest: &VoicePatchManifest,
 ) -> Result<BTreeSet<String>> {
-    if manifest.format != 1 {
-        return Err(ModError::Other(format!(
-            "unsupported gore-mod manifest format {} (want 1)",
-            manifest.format
-        )));
-    }
+    validate_mod_manifest_format(manifest)?;
     if !is_safe_mod_name(&manifest.mod_meta.name) {
         return Err(ModError::Other(format!(
             "invalid mod name {:?} in sealed voice bundle",
@@ -3893,6 +3952,10 @@ pub(crate) struct DeployPlan {
     /// Pure additions like `texture_triplets` (no backup; undeploy deletes the dst), but the
     /// srcs are durable library files, never temp dirs to clean up.
     pub(crate) managed_paks: Vec<(PathBuf, PathBuf)>,
+    /// Unique temporary roots backing prepared texture/PakFilePatch sources. Retaining their
+    /// guards in the plan keeps every source alive through commit while preventing concurrent
+    /// prepares in this process from deleting one another. Drop cleans every root on all exits.
+    pub(crate) temporary_roots: Vec<tempfile::TempDir>,
     /// Exact commit-time identities prepared from the source and, for a replacement, verified
     /// against the prior record. Filled by `commit_plan`, never by bundle parsing.
     additive_identities: BTreeMap<PathBuf, PlannedIdentity>,
@@ -4427,12 +4490,7 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         MAX_BUNDLE_MANIFEST_BYTES,
     )?;
     let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
-    if manifest.format != 1 {
-        return Err(ModError::Other(format!(
-            "unsupported gore-mod manifest format {} (want 1)",
-            manifest.format
-        )));
-    }
+    validate_mod_manifest_format(&manifest)?;
     // An empty bundle has nothing to apply; deploying it would only retire the active mod.
     if manifest.components.is_empty() {
         return Err(ModError::Other("bundle has no components to deploy".into()));
@@ -5579,7 +5637,7 @@ fn prepare(
                 }
             }
             Component::TexturePatch { path, assets: _ } => {
-                let triplets = prepare_texture_component(
+                let (triplets, temporary_root) = prepare_texture_component(
                     bundle_dir,
                     path,
                     &manifest.mod_meta.name,
@@ -5587,6 +5645,7 @@ fn prepare(
                     gp,
                 )?;
                 plan.texture_triplets.extend(triplets);
+                plan.temporary_roots.push(temporary_root);
             }
             Component::AngelScriptPatch { path } => {
                 if !is_safe_rel_path(path) {
@@ -5668,7 +5727,7 @@ fn prepare(
                 prepare_file_component(bundle_dir, path, gp, prev, &mut shadow, &mut plan)?;
             }
             Component::PakFilePatch { path, targets: _ } => {
-                let paks = prepare_pak_file_component(
+                let (paks, temporary_root) = prepare_pak_file_component(
                     bundle_dir,
                     path,
                     &manifest.mod_meta.name,
@@ -5676,6 +5735,7 @@ fn prepare(
                     gp,
                 )?;
                 plan.texture_triplets.extend(paks);
+                plan.temporary_roots.push(temporary_root);
             }
             Component::VoiceArchivePatch { path } => {
                 merge_voice_component(bundle_dir, path, &mut voice, &mut voice_order)?;
@@ -5832,7 +5892,7 @@ fn prepare_texture_component(
     mod_name: &str,
     comp_idx: usize,
     gp: &GamePaths,
-) -> Result<Vec<(PathBuf, PathBuf)>> {
+) -> Result<(Vec<(PathBuf, PathBuf)>, tempfile::TempDir)> {
     if !is_safe_rel_path(path) {
         return Err(ModError::Other(format!(
             "unsafe texture patch path: {path:?}"
@@ -5859,16 +5919,14 @@ fn prepare_texture_component(
         &gore_tex::paths::texture_index_path(),
         &build_id,
     );
-    // Scope temp dirs by component index too (not just pid): a bundle with >1
-    // TexturePatch must not have a later component's `remove_dir_all` wipe an earlier
-    // one's cooked tree / packed triplet (whose src paths are already queued in
-    // `plan.texture_triplets`).
-    let cook_dir = std::env::temp_dir().join(format!(
-        "gore-mod-tex-cook-{}-{}",
-        std::process::id(),
-        comp_idx
-    ));
-    let _ = std::fs::remove_dir_all(&cook_dir);
+    // Every prepare owns a fresh root. PID + component-index paths race when two deployments or
+    // parallel tests prepare the same component index: one removes the other's still-needed
+    // source before commit. The retained pack guard returned below closes that lifetime gap.
+    let cook_root = tempfile::Builder::new()
+        .prefix("gore-mod-tex-cook-")
+        .tempdir()
+        .map_err(io("mkdir texture cook dir"))?;
+    let cook_dir = cook_root.path();
     for (asset, png_rel) in &map {
         if !is_safe_rel_path(png_rel) {
             return Err(ModError::Other(format!("unsafe png path: {png_rel:?}")));
@@ -5892,14 +5950,17 @@ fn prepare_texture_component(
                 .ok_or_else(|| ModError::Other(format!("bad asset path {asset}")))?,
         );
         std::fs::create_dir_all(&dest_dir).map_err(io("mkdir cook dir"))?;
-        // Unique per-asset temp dir so concurrent deploys don't clobber each other.
-        let tmp_orig =
-            gore_tex::paths::unique_temp_dir("gore-mod-tex-orig").map_err(io("mkdir orig"))?;
+        // A guarded per-asset root prevents concurrent deploys from clobbering each other and
+        // removes a potentially large unpack tree on every early-return path.
+        let tmp_orig = tempfile::Builder::new()
+            .prefix("gore-mod-tex-orig-")
+            .tempdir()
+            .map_err(io("mkdir orig"))?;
         let orig_uasset = match index.as_ref().and_then(|i| i.entries.get(asset)) {
             Some(&pid) => {
-                gore_tex::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, &tmp_orig)
+                gore_tex::container::unpack_asset_by_id(&utoc, &usmap, pid, leaf, tmp_orig.path())
             }
-            None => gore_tex::container::unpack_asset(&utoc, &usmap, asset, &tmp_orig),
+            None => gore_tex::container::unpack_asset(&utoc, &usmap, asset, tmp_orig.path()),
         }
         .map_err(|e| ModError::Other(format!("unpack {asset}: {e}")))?;
         let ua = std::fs::read(&orig_uasset).map_err(io("read uasset"))?;
@@ -5944,9 +6005,9 @@ fn prepare_texture_component(
             std::fs::write(dest_dir.join(format!("{leaf}.ubulk")), &nb)
                 .map_err(io("write ubulk"))?;
         }
-        // The unpacked original is consumed (rewritten into cook_dir); drop its unique
-        // temp dir now so a many-texture mod doesn't leak one multi-MB dir per asset.
-        let _ = std::fs::remove_dir_all(&tmp_orig);
+        // The unpacked original has been rewritten into cook_dir; dropping its guard now keeps a
+        // many-texture mod from retaining one multi-MB tree per asset.
+        drop(tmp_orig);
     }
     // Triplet name must be unique across DISTINCT mods (so one mod's mounted pak can't
     // be clobbered by another whose name sanitizes to the same stem) AND across multiple
@@ -5958,20 +6019,21 @@ fn prepare_texture_component(
         name_hash(mod_name),
         comp_idx
     );
-    let pack_out = std::env::temp_dir().join(format!(
-        "gore-mod-tex-pack-{}-{}",
-        std::process::id(),
-        comp_idx
-    ));
-    let _ = std::fs::remove_dir_all(&pack_out);
-    std::fs::create_dir_all(&pack_out).map_err(io("mkdir pack"))?;
-    let triplet =
-        gore_tex::container::repack_to_zen(&cook_dir, &triplet_name, &pack_out, &game_dir, false)
-            .map_err(|e| ModError::Other(format!("pack: {e}")))?;
-    // The cooked tree is now packed into the triplet; drop it. (cook_dir/pack_out are
-    // pid+component scoped and cleared at the next deploy, so they don't leak per-deploy;
-    // the triplet in pack_out is consumed by apply_writes copying it into ~mods.)
-    let _ = std::fs::remove_dir_all(&cook_dir);
+    let pack_out = tempfile::Builder::new()
+        .prefix("gore-mod-tex-pack-")
+        .tempdir()
+        .map_err(io("mkdir texture pack dir"))?;
+    let triplet = gore_tex::container::repack_to_zen(
+        cook_dir,
+        &triplet_name,
+        pack_out.path(),
+        &game_dir,
+        false,
+    )
+    .map_err(|e| ModError::Other(format!("pack: {e}")))?;
+    // The cooked tree is now packed into the triplet; its guard can clean it immediately. The
+    // pack root remains retained by the returned guard until apply/commit finishes.
+    drop(cook_root);
     let mods_dir = game_dir
         .join("G1R")
         .join("Content")
@@ -5985,7 +6047,7 @@ fn prepare_texture_component(
         );
         out.push((src, dst));
     }
-    Ok(out)
+    Ok((out, pack_out))
 }
 
 /// Prepare ONE pak-file component: pack every payload in the manifest at `path` (bundle-relative)
@@ -6003,7 +6065,7 @@ fn prepare_pak_file_component(
     mod_name: &str,
     comp_idx: usize,
     gp: &GamePaths,
-) -> Result<Vec<(PathBuf, PathBuf)>> {
+) -> Result<(Vec<(PathBuf, PathBuf)>, tempfile::TempDir)> {
     if !is_safe_rel_path(path) {
         return Err(ModError::Other(format!(
             "unsafe pak file patch path: {path:?}"
@@ -6030,14 +6092,11 @@ fn prepare_pak_file_component(
         name_hash(mod_name),
         comp_idx
     );
-    let pack_out = std::env::temp_dir().join(format!(
-        "gore-mod-pak-files-{}-{}",
-        std::process::id(),
-        comp_idx
-    ));
-    let _ = std::fs::remove_dir_all(&pack_out);
-    std::fs::create_dir_all(&pack_out).map_err(io("mkdir pak-files pack dir"))?;
-    let src = pack_out.join(format!("{pak_name}.pak"));
+    let pack_out = tempfile::Builder::new()
+        .prefix("gore-mod-pak-files-")
+        .tempdir()
+        .map_err(io("mkdir pak-files pack dir"))?;
+    let src = pack_out.path().join(format!("{pak_name}.pak"));
     {
         let file = std::fs::File::create(&src)
             .map_err(io(&format!("creating loose-file pak {}", src.display())))?;
@@ -6076,7 +6135,10 @@ fn prepare_pak_file_component(
                 .map_err(|error| ModError::Other(format!("writing pak index: {error}")))?;
         }
         let file = buffered.into_inner().map_err(|error| {
-            ModError::Io(format!("flushing loose-file pak {}: {error}", src.display()))
+            ModError::Io(format!(
+                "flushing loose-file pak {}: {error}",
+                src.display()
+            ))
         })?;
         file.sync_all()
             .map_err(io(&format!("syncing loose-file pak {}", src.display())))?;
@@ -6088,7 +6150,7 @@ fn prepare_pak_file_component(
         .join("Paks")
         .join("~mods")
         .join(format!("{pak_name}.pak"));
-    Ok(vec![(src, dst)])
+    Ok((vec![(src, dst)], pack_out))
 }
 
 /// Stage a prepared plan WITHOUT touching any live game file: snapshot each target's current
@@ -6446,21 +6508,9 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
         })?;
         publish_additive(src, dst, identity, undo)?;
     }
-    // The packed triplets are now in ~mods; remove their temp pack dirs
-    // (gore-mod-tex-pack-<pid>-<idx>) so a successful deploy doesn't leave a full
-    // .utoc/.ucas/.pak behind in the system temp dir on every restart / pid change.
-    // Done only after all copies succeed (a failed copy returns above and leaves
-    // the dirs for the rollback / next run).
-    let mut pack_dirs: Vec<&std::path::Path> = plan
-        .texture_triplets
-        .iter()
-        .filter_map(|(src, _)| src.parent())
-        .collect();
-    pack_dirs.sort();
-    pack_dirs.dedup();
-    for dir in pack_dirs {
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    // Prepared pack sources remain alive for the complete commit/rollback call. Their unique
+    // `temporary_roots` guards clean them when the plan drops on either success or failure; no
+    // fixed path is removed while another concurrent plan may still depend on it.
     for (live, bytes) in &plan.writes {
         let file_undo = undo
             .files
@@ -10214,6 +10264,248 @@ mod tests {
         path
     }
 
+    fn read_test_pak_entry(pak: &Path, entry: &str) -> Vec<u8> {
+        let mut file = std::io::BufReader::new(std::fs::File::open(pak).unwrap());
+        let reader = repak::PakBuilder::new().reader(&mut file).unwrap();
+        reader.get(entry, &mut file).unwrap()
+    }
+
+    #[test]
+    fn root_manifest_format_selection_is_exact_and_byte_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("payload.bin");
+        std::fs::write(&source, b"deterministic-payload").unwrap();
+
+        let base_spec = test_loose_spec(
+            "BaseFormat",
+            vec![LooseFileReplacement {
+                game_path: "G1R/Content/Movies/Intro.bk2".into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        let base_first = build_bundle(&base_spec).unwrap();
+        let base_second = build_bundle(&base_spec).unwrap();
+        assert_eq!(base_first.manifest.format, MOD_MANIFEST_FORMAT_BASE);
+        assert_eq!(base_first.files, base_second.files);
+        assert_eq!(
+            base_first.files["gore-mod.json"],
+            serde_json::to_vec_pretty(&base_first.manifest).unwrap()
+        );
+        validate_mod_manifest_format(&base_first.manifest).unwrap();
+
+        let pak_spec = test_pak_files_spec(
+            "PakFormat",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        let pak_first = build_bundle(&pak_spec).unwrap();
+        let pak_second = build_bundle(&pak_spec).unwrap();
+        assert_eq!(
+            pak_first.manifest.format,
+            MOD_MANIFEST_FORMAT_PAK_FILE_PATCH
+        );
+        assert_eq!(pak_first.files, pak_second.files);
+        assert_eq!(
+            pak_first.files["gore-mod.json"],
+            serde_json::to_vec_pretty(&pak_first.manifest).unwrap()
+        );
+        validate_mod_manifest_format(&pak_first.manifest).unwrap();
+    }
+
+    #[test]
+    fn manifest_format_rejects_component_mismatches_and_unknown_versions() {
+        let manifest = |format, components| ModManifest {
+            format,
+            mod_meta: ModMeta {
+                name: "ContractProbe".into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            components,
+        };
+        let pak = || Component::PakFilePatch {
+            path: "pak_files".into(),
+            targets: vec![TEST_CURSOR.into()],
+        };
+
+        validate_mod_manifest_format(&manifest(1, vec![])).unwrap();
+        validate_mod_manifest_format(&manifest(2, vec![pak()])).unwrap();
+
+        let old_format = validate_mod_manifest_format(&manifest(1, vec![pak()]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            old_format.contains("format 1") && old_format.contains("pak_file_patch"),
+            "unexpected error: {old_format}"
+        );
+
+        let gratuitous_bump = validate_mod_manifest_format(&manifest(2, vec![]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            gratuitous_bump.contains("format 2")
+                && gratuitous_bump.contains("requires")
+                && gratuitous_bump.contains("pak_file_patch"),
+            "unexpected error: {gratuitous_bump}"
+        );
+
+        for format in [0, 3, u32::MAX] {
+            let unknown = validate_mod_manifest_format(&manifest(format, vec![pak()]))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                unknown.contains(&format.to_string()) && unknown.contains("want 1 or 2"),
+                "unexpected error for {format}: {unknown}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_bundle_rejects_a_forged_format_before_clearing_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("payload.bin");
+        std::fs::write(&source, b"payload").unwrap();
+        let spec = test_pak_files_spec(
+            "ForgedFormat",
+            vec![LooseFileReplacement {
+                game_path: TEST_CURSOR.into(),
+                source_path: source.display().to_string(),
+            }],
+        );
+        let mut bundle = build_bundle(&spec).unwrap();
+        bundle.manifest.format = 1;
+        bundle.files.insert(
+            "gore-mod.json".into(),
+            serde_json::to_vec_pretty(&bundle.manifest).unwrap(),
+        );
+
+        let output = dir.path().join("existing-output");
+        std::fs::create_dir(&output).unwrap();
+        let sentinel = output.join("sentinel.txt");
+        std::fs::write(&sentinel, b"keep").unwrap();
+
+        let error = write_bundle(&output, &bundle).unwrap_err().to_string();
+        assert!(
+            error.contains("format 1") && error.contains("pak_file_patch"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn parallel_pak_prepares_keep_unique_exact_sources_until_plan_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let make_bundle = |folder: &str, name: &str, target: &str, payload: &[u8]| {
+            let root = dir.path().join(folder);
+            std::fs::create_dir_all(&root).unwrap();
+            let source = root.join("payload.bin");
+            std::fs::write(&source, payload).unwrap();
+            let spec = test_pak_files_spec(
+                name,
+                vec![LooseFileReplacement {
+                    game_path: target.into(),
+                    source_path: source.display().to_string(),
+                }],
+            );
+            let bundle = root.join("bundle");
+            write_bundle(&bundle, &build_bundle(&spec).unwrap()).unwrap();
+            bundle
+        };
+        let first_bundle = make_bundle("first", "ParallelAlpha", TEST_CURSOR, b"alpha-payload");
+        let second_target = "G1R/Content/Movies/Intro.bk2";
+        let second_bundle = make_bundle("second", "ParallelBeta", second_target, b"beta-payload");
+        let game = dir.path().join("game");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let first_barrier = barrier.clone();
+        let first_game = game.clone();
+        let first = std::thread::spawn(move || {
+            first_barrier.wait();
+            prepare_pak_file_component(
+                &first_bundle,
+                "pak_files",
+                "ParallelAlpha",
+                0,
+                &resolve_game_paths(&first_game),
+            )
+        });
+        let second_barrier = barrier.clone();
+        let second_game = game.clone();
+        let second = std::thread::spawn(move || {
+            second_barrier.wait();
+            prepare_pak_file_component(
+                &second_bundle,
+                "pak_files",
+                "ParallelBeta",
+                0,
+                &resolve_game_paths(&second_game),
+            )
+        });
+        barrier.wait();
+
+        let (first_files, first_root) = first.join().unwrap().unwrap();
+        let (second_files, second_root) = second.join().unwrap().unwrap();
+        let (first_source, first_destination) = &first_files[0];
+        let (second_source, second_destination) = &second_files[0];
+        assert_ne!(first_root.path(), second_root.path());
+        assert!(first_source.exists());
+        assert!(second_source.exists());
+        assert_eq!(
+            read_test_pak_entry(first_source, TEST_CURSOR),
+            b"alpha-payload"
+        );
+        assert_eq!(
+            read_test_pak_entry(second_source, second_target),
+            b"beta-payload"
+        );
+
+        let first_name = format!(
+            "zzz_ParallelAlpha_{}_0_files_P.pak",
+            name_hash("ParallelAlpha")
+        );
+        let second_name = format!(
+            "zzz_ParallelBeta_{}_0_files_P.pak",
+            name_hash("ParallelBeta")
+        );
+        assert_eq!(first_source.file_name().unwrap(), first_name.as_str());
+        assert_eq!(first_destination.file_name().unwrap(), first_name.as_str());
+        assert_eq!(second_source.file_name().unwrap(), second_name.as_str());
+        assert_eq!(
+            second_destination.file_name().unwrap(),
+            second_name.as_str()
+        );
+
+        // A repeated prepare gets another owned root while preserving exact published bytes/name.
+        let first_bundle = dir.path().join("first/bundle");
+        let (repeat_files, repeat_root) = prepare_pak_file_component(
+            &first_bundle,
+            "pak_files",
+            "ParallelAlpha",
+            0,
+            &resolve_game_paths(&game),
+        )
+        .unwrap();
+        assert_ne!(first_root.path(), repeat_root.path());
+        assert_eq!(
+            std::fs::read(first_source).unwrap(),
+            std::fs::read(&repeat_files[0].0).unwrap()
+        );
+        assert_eq!(first_destination, &repeat_files[0].1);
+
+        let roots = [
+            first_root.path().to_path_buf(),
+            second_root.path().to_path_buf(),
+            repeat_root.path().to_path_buf(),
+        ];
+        drop((first_root, second_root, repeat_root));
+        for root in roots {
+            assert!(!root.exists(), "temporary root leaked: {}", root.display());
+        }
+    }
+
     /// The additive route is DECLARED, never inferred from the install. `pak_files` gets its own
     /// component, its own bundle subdir and its own manifest, so one bundle keeps one footprint on
     /// every machine — the two sections may even name the same destination, said twice on purpose.
@@ -10235,6 +10527,7 @@ mod tests {
         }];
 
         let bundle = build_bundle(&spec).unwrap();
+        assert_eq!(bundle.manifest.format, MOD_MANIFEST_FORMAT_PAK_FILE_PATCH);
         assert!(matches!(
             bundle.manifest.components.as_slice(),
             [
@@ -12458,7 +12751,7 @@ mod tests {
         std::fs::write(
             &manifest_path,
             serde_json::to_vec(&serde_json::json!({
-                "format": 2,
+                "format": 3,
                 "mod": {"name": "Future", "version": "", "author": ""},
                 "components": []
             }))
@@ -12469,9 +12762,66 @@ mod tests {
         assert!(
             future
                 .to_string()
-                .contains("unsupported gore-mod manifest format 2"),
+                .contains("unsupported gore-mod manifest format 3 (want 1 or 2)"),
             "unexpected error: {future}"
         );
+        assert!(
+            !game.exists(),
+            "an unknown format must fail before resolving or writing the game tree"
+        );
+    }
+
+    #[test]
+    fn deploy_rejects_format_component_mismatches_before_any_effect() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle");
+        let game = dir.path().join("game-must-not-exist");
+        std::fs::create_dir_all(&bundle).unwrap();
+
+        let write_manifest = |manifest: &ModManifest| {
+            std::fs::write(
+                bundle.join("gore-mod.json"),
+                serde_json::to_vec_pretty(manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        let meta = ModMeta {
+            name: "Mismatch".into(),
+            version: String::new(),
+            author: String::new(),
+        };
+
+        write_manifest(&ModManifest {
+            format: 1,
+            mod_meta: meta.clone(),
+            components: vec![Component::PakFilePatch {
+                path: "missing-pak-files".into(),
+                targets: vec![TEST_CURSOR.into()],
+            }],
+        });
+        let old_format = deploy(&bundle, &game).unwrap_err().to_string();
+        assert!(
+            old_format.contains("format 1") && old_format.contains("pak_file_patch"),
+            "unexpected error: {old_format}"
+        );
+        assert!(!game.exists());
+
+        write_manifest(&ModManifest {
+            format: 2,
+            mod_meta: meta,
+            components: vec![Component::FilePatch {
+                path: "missing-files".into(),
+                targets: vec![TEST_CURSOR.into()],
+            }],
+        });
+        let gratuitous_bump = deploy(&bundle, &game).unwrap_err().to_string();
+        assert!(
+            gratuitous_bump.contains("format 2")
+                && gratuitous_bump.contains("requires")
+                && gratuitous_bump.contains("pak_file_patch"),
+            "unexpected error: {gratuitous_bump}"
+        );
+        assert!(!game.exists());
     }
 
     #[cfg(any(unix, windows))]

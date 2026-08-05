@@ -24,6 +24,23 @@ fn write_loc_spec(dir: &Path, name: &str, loc_id: &str, value: &str) -> PathBuf 
     path
 }
 
+/// Write a BuildSpec for one additive `pak_files` payload. This stays entirely inside the test's
+/// temporary tree; the resulting manager apply only writes to a synthetic game root.
+fn write_pak_file_spec(dir: &Path, name: &str, game_path: &str, value: &[u8]) -> PathBuf {
+    let payload = dir.join(format!("{name}.bin"));
+    std::fs::write(&payload, value).unwrap();
+    let spec = serde_json::json!({
+        "meta": { "name": name, "version": "2.0", "author": "test" },
+        "pak_files": [{
+            "game_path": game_path,
+            "source_path": payload.display().to_string(),
+        }],
+    });
+    let path = dir.join(format!("{name}.spec.json"));
+    std::fs::write(&path, serde_json::to_vec_pretty(&spec).unwrap()).unwrap();
+    path
+}
+
 /// Build a bundle from `spec` into `<out>/<name>` via `gore mod build`, returning
 /// the bundle dir path.
 fn build_bundle(out: &Path, name: &str, spec: &Path) -> PathBuf {
@@ -271,6 +288,147 @@ fn mgr_enable_unknown_id_errors() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("does-not-exist"));
+}
+
+/// Real CLI path for format-2 additive file mods: build -> manager import/loadout -> analyze ->
+/// apply -> reorder -> reapply -> reset. All writes land in a temporary synthetic game tree. The
+/// archive assertions prove deterministic manager slot/filesystem behavior, not Unreal mount
+/// priority, gameplay, installation support, or runtime behavior.
+#[test]
+fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
+    let tmp = TempDir::new().unwrap();
+    let lib = tmp.path().join("library");
+    let loadout = tmp.path().join("loadout.json");
+    let built = tmp.path().join("built");
+    let game = tmp.path().join("game");
+    let mods = game.join("G1R/Content/Paks/~mods");
+    std::fs::create_dir_all(&mods).unwrap();
+    let unrelated = mods.join("user-owned.pak");
+    std::fs::write(&unrelated, b"KEEP").unwrap();
+
+    let target = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+    let alpha_spec = write_pak_file_spec(tmp.path(), "AlphaPak", target, b"ALPHA-CURSOR");
+    let bravo_spec = write_pak_file_spec(tmp.path(), "BravoPak", target, b"BRAVO-CURSOR");
+    let alpha_bundle = build_bundle(&built, "AlphaPak", &alpha_spec);
+    let bravo_bundle = build_bundle(&built, "BravoPak", &bravo_spec);
+    let alpha = import(&lib, &loadout, &alpha_bundle);
+    let bravo = import(&lib, &loadout, &bravo_bundle);
+
+    for id in [&alpha, &bravo] {
+        Command::cargo_bin("gore")
+            .unwrap()
+            .args(["mgr", "enable", id, "--loadout", loadout.to_str().unwrap()])
+            .assert()
+            .success();
+    }
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "analyze",
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(target.to_ascii_lowercase()))
+        .stdout(predicates::str::contains(&alpha))
+        .stdout(predicates::str::contains(&bravo))
+        .stdout(predicates::str::contains("winner"));
+
+    let apply = || {
+        Command::cargo_bin("gore")
+            .unwrap()
+            .args([
+                "mgr",
+                "apply",
+                "--game",
+                game.to_str().unwrap(),
+                "--library",
+                lib.to_str().unwrap(),
+                "--loadout",
+                loadout.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("applied 2 mod(s)"));
+    };
+    let manager_paks = || {
+        let mut paths = std::fs::read_dir(&mods)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("zzz_gm") && name.ends_with("_files_P.pak")
+                    })
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    };
+    let find_slot = |paths: &[PathBuf], slot: usize, id: &str| {
+        let prefix = format!("zzz_gm{slot:03}_{id}_");
+        paths
+            .iter()
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&prefix))
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("missing {prefix:?} in {paths:?}"))
+    };
+
+    apply();
+    let first = manager_paks();
+    assert_eq!(first.len(), 2);
+    let alpha_slot_0 = find_slot(&first, 0, &alpha);
+    let bravo_slot_1 = find_slot(&first, 1, &bravo);
+    let alpha_archive = std::fs::read(&alpha_slot_0).unwrap();
+    let bravo_archive = std::fs::read(&bravo_slot_1).unwrap();
+    assert_ne!(alpha_archive, bravo_archive);
+    for pak in [&alpha_slot_0, &bravo_slot_1] {
+        assert_eq!(
+            gore_tex::container::list_pak_files(pak).unwrap(),
+            vec![target.to_string()]
+        );
+    }
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "order",
+            &bravo,
+            "0",
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("position 0"));
+    apply();
+    let reordered = manager_paks();
+    assert_eq!(reordered.len(), 2);
+    let bravo_slot_0 = find_slot(&reordered, 0, &bravo);
+    let alpha_slot_1 = find_slot(&reordered, 1, &alpha);
+    assert_eq!(std::fs::read(&bravo_slot_0).unwrap(), bravo_archive);
+    assert_eq!(std::fs::read(&alpha_slot_1).unwrap(), alpha_archive);
+    assert!(!alpha_slot_0.exists(), "old alpha slot must be removed");
+    assert!(!bravo_slot_1.exists(), "old bravo slot must be removed");
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args(["mgr", "reset", "--game", game.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("undeployed"));
+    assert!(manager_paks().is_empty());
+    assert_eq!(std::fs::read(&unrelated).unwrap(), b"KEEP");
 }
 
 /// Full apply against a temp game tree with a real, decodable `.lcache`. `#[ignore]`d

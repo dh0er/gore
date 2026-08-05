@@ -148,6 +148,9 @@ python build.py <project> build|run|dist|installer|test
 python build.py all test
 ```
 
+Release tags and manual smoke builds run the [same CI quality gates](docs/development.md#release-quality-gates)
+on the exact commit before any product build.
+
 Details, repo layout, and the crate table: [Building](docs/development.md).
 
 ## License

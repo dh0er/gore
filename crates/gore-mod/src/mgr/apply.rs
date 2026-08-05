@@ -595,7 +595,7 @@ fn apply_loadout_with_limits(
                     )?;
                     // Cook + pack a Zen triplet; `meta.id` gives cross-mod uniqueness of the pak name,
                     // `tex_comp_idx` gives per-component uniqueness within a mod.
-                    let triplets = crate::prepare_texture_component(
+                    let (triplets, temporary_root) = crate::prepare_texture_component(
                         snapshot.bundle_root(),
                         rel,
                         &l.meta.id,
@@ -603,6 +603,7 @@ fn apply_loadout_with_limits(
                         &gp,
                     )?;
                     plan.texture_triplets.extend(triplets);
+                    plan.temporary_roots.push(temporary_root);
                     tex_comp_idx += 1;
                 }
                 ComponentInfo::Triplet { rel_base, .. } => {
@@ -908,7 +909,7 @@ fn apply_loadout_with_limits(
                     // `slot_stem` prefixes foreign paks — so a name built from the mod id alone
                     // freezes the winner by id, and reordering the loadout changes nothing on disk
                     // while `mgr analyze` goes on naming the last enabled claimant the winner.
-                    let paks = crate::prepare_pak_file_component(
+                    let (paks, temporary_root) = crate::prepare_pak_file_component(
                         snapshot.bundle_root(),
                         rel,
                         &format!("gm{:03}_{}", l.idx, l.meta.id),
@@ -916,6 +917,7 @@ fn apply_loadout_with_limits(
                         &gp,
                     )?;
                     plan.texture_triplets.extend(paks);
+                    plan.temporary_roots.push(temporary_root);
                     pak_files_comp_idx += 1;
                 }
                 ComponentInfo::VoiceArchivePatch { rel, .. } => {
@@ -1933,6 +1935,32 @@ mod tests {
                     fs::create_dir_all(dir.join("files")).unwrap();
                     fs::write(
                         dir.join("files/manifest.json"),
+                        serde_json::to_vec(&manifest).unwrap(),
+                    )
+                    .unwrap();
+                    fs::write(dir.join(&payload_rel), bytes).unwrap();
+                },
+            )
+        }
+
+        /// Add one manager-library `PakFilePatch`. The payload manifest is the same shape as a
+        /// loose `FilePatch`; apply must materialize it as an additive manager-owned pak instead of
+        /// replacing the destination in place.
+        fn add_pak_file_mod(&self, id: &str, name: &str, game_path: &str, bytes: &[u8]) -> String {
+            let payload_rel = "pak_files/0_payload".to_string();
+            let manifest: BTreeMap<String, String> =
+                BTreeMap::from([(game_path.to_string(), payload_rel.clone())]);
+            self.add_mod(
+                id,
+                name,
+                vec![ComponentInfo::PakFilePatch {
+                    rel: "pak_files".into(),
+                    targets: vec![game_path.into()],
+                }],
+                |dir| {
+                    fs::create_dir_all(dir.join("pak_files")).unwrap();
+                    fs::write(
+                        dir.join("pak_files/manifest.json"),
                         serde_json::to_vec(&manifest).unwrap(),
                     )
                     .unwrap();
@@ -3224,6 +3252,214 @@ mod tests {
         let after = crate::read_record(&g.root).unwrap().unwrap().record;
         assert_eq!(after.mod_name, "SoloMod");
         assert_eq!(after.owner, "");
+    }
+
+    /// A single imported-format-2 shape can carry the replace-only `FilePatch` route and the
+    /// additive `PakFilePatch` route together. Manager apply records both exact destinations;
+    /// undeploy restores the former and deletes the latter while preserving unrelated files.
+    /// The test is hermetic filesystem/receipt evidence only, not an Unreal/runtime claim.
+    #[test]
+    fn mixed_file_and_pak_file_patch_share_one_receipt_and_clean_undeploy() {
+        let game = FakeGame::new();
+        let loose_target = "G1R/Content/Movies/Intro.bk2";
+        let pak_target = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+        let live = game.loose_file(loose_target);
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        fs::write(&live, b"PRISTINE-INTRO").unwrap();
+        let unrelated = game.mods().join("user-owned.pak");
+        fs::write(&unrelated, b"KEEP").unwrap();
+
+        let loose_payload = "files/0_payload";
+        let pak_payload = "pak_files/0_payload";
+        let id = game.add_mod(
+            "mod-mixed",
+            "Mixed",
+            vec![
+                ComponentInfo::FilePatch {
+                    rel: "files".into(),
+                    targets: vec![loose_target.into()],
+                },
+                ComponentInfo::PakFilePatch {
+                    rel: "pak_files".into(),
+                    targets: vec![pak_target.into()],
+                },
+            ],
+            |dir| {
+                fs::create_dir_all(dir.join("files")).unwrap();
+                fs::create_dir_all(dir.join("pak_files")).unwrap();
+                let loose_manifest =
+                    BTreeMap::from([(loose_target.to_string(), loose_payload.to_string())]);
+                let pak_manifest =
+                    BTreeMap::from([(pak_target.to_string(), pak_payload.to_string())]);
+                fs::write(
+                    dir.join("files/manifest.json"),
+                    serde_json::to_vec(&loose_manifest).unwrap(),
+                )
+                .unwrap();
+                fs::write(
+                    dir.join("pak_files/manifest.json"),
+                    serde_json::to_vec(&pak_manifest).unwrap(),
+                )
+                .unwrap();
+                fs::write(dir.join(loose_payload), b"MODDED-INTRO").unwrap();
+                fs::write(dir.join(pak_payload), b"PACKED-CURSOR").unwrap();
+            },
+        );
+
+        let report = apply_loadout(&game.root, &game.lib, &loadout(&[(&id, true)])).unwrap();
+        assert_eq!(report.applied, vec!["Mixed"]);
+        assert!(
+            report.warnings.is_empty(),
+            "warnings: {:?}",
+            report.warnings
+        );
+        assert_eq!(fs::read(&live).unwrap(), b"MODDED-INTRO");
+        assert_eq!(fs::read(crate::bak_path(&live)).unwrap(), b"PRISTINE-INTRO");
+
+        let manager_name = format!("gm000_{id}");
+        let pak_name = format!(
+            "zzz_{manager_name}_{}_0_files_P.pak",
+            crate::name_hash(&manager_name)
+        );
+        let pak = game.mods().join(pak_name);
+        assert_eq!(
+            gore_tex::container::list_pak_files(&pak).unwrap(),
+            vec![pak_target.to_string()]
+        );
+        let record = crate::read_record(&game.root).unwrap().unwrap().record;
+        assert_eq!(record.owner, "manager");
+        assert_eq!(record.loadout, loadout(&[(&id, true)]).entries);
+        assert!(record.backups.iter().any(|(recorded_live, backup, _)| {
+            crate::same_path(&live, recorded_live)
+                && crate::same_path(&crate::bak_path(&live), backup)
+        }));
+        assert!(record
+            .texture_triplets
+            .iter()
+            .any(|recorded| crate::same_path(&pak, recorded)));
+        assert!(record
+            .deployed_hashes
+            .keys()
+            .any(|recorded| crate::same_path(&live, recorded)));
+        assert!(record
+            .deployed_hashes
+            .keys()
+            .any(|recorded| crate::same_path(&pak, recorded)));
+
+        assert!(undeploy_all(&game.root).unwrap());
+        assert_eq!(fs::read(&live).unwrap(), b"PRISTINE-INTRO");
+        assert!(!crate::bak_path(&live).exists());
+        assert!(!pak.exists());
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
+        assert!(!crate::record_path(&game.root).exists());
+    }
+
+    /// Two `PakFilePatch` mods are rebuilt into the enabled loadout's exact gm000/gm001 slots.
+    /// Reordering swaps their archive bytes into the corresponding new slots, reapplying a
+    /// narrowed loadout removes every stale archive, and undeploy removes only manager-owned paks.
+    /// This proves deterministic filesystem/receipt behavior only; it does not qualify Unreal
+    /// mount priority or runtime behavior.
+    #[test]
+    fn pak_file_patch_reorder_reapply_and_undeploy_are_deterministic() {
+        let game = FakeGame::new();
+        let target = "G1R/Content/Slate/Cursors/Normal/Normal.PNG";
+        let alpha = game.add_pak_file_mod("mod-alpha", "Alpha", target, b"ALPHA-CURSOR");
+        let bravo = game.add_pak_file_mod("mod-bravo", "Bravo", target, b"BRAVO-CURSOR");
+        let unrelated = game.mods().join("user-owned.pak");
+        fs::write(&unrelated, b"KEEP").unwrap();
+
+        let pak_name = |slot: usize, id: &str, component: usize| {
+            let manager_name = format!("gm{slot:03}_{id}");
+            format!(
+                "zzz_{manager_name}_{}_{}_files_P.pak",
+                crate::name_hash(&manager_name),
+                component
+            )
+        };
+        let manager_paks = || {
+            let mut names = fs::read_dir(game.mods())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("zzz_gm") && name.ends_with("_files_P.pak"))
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+
+        let alpha_slot_0 = pak_name(0, &alpha, 0);
+        let bravo_slot_1 = pak_name(1, &bravo, 1);
+        apply_loadout(
+            &game.root,
+            &game.lib,
+            &loadout(&[(&alpha, true), (&bravo, true)]),
+        )
+        .unwrap();
+        assert_eq!(
+            manager_paks(),
+            vec![alpha_slot_0.clone(), bravo_slot_1.clone()]
+        );
+        let alpha_archive = fs::read(game.mods().join(&alpha_slot_0)).unwrap();
+        let bravo_archive = fs::read(game.mods().join(&bravo_slot_1)).unwrap();
+        assert_ne!(
+            alpha_archive, bravo_archive,
+            "different payloads must produce distinguishable archives"
+        );
+        for name in [&alpha_slot_0, &bravo_slot_1] {
+            assert_eq!(
+                gore_tex::container::list_pak_files(&game.mods().join(name)).unwrap(),
+                vec![target.to_string()],
+                "the additive archive must claim the declared game path"
+            );
+        }
+
+        // Reorder: each mod gets the new enabled slot and component ordinal. The archive bytes
+        // follow the mod, while every old slot path is removed by the transactional reapply.
+        let bravo_slot_0 = pak_name(0, &bravo, 0);
+        let alpha_slot_1 = pak_name(1, &alpha, 1);
+        apply_loadout(
+            &game.root,
+            &game.lib,
+            &loadout(&[(&bravo, true), (&alpha, true)]),
+        )
+        .unwrap();
+        assert_eq!(
+            manager_paks(),
+            vec![bravo_slot_0.clone(), alpha_slot_1.clone()]
+        );
+        assert_eq!(
+            fs::read(game.mods().join(&bravo_slot_0)).unwrap(),
+            bravo_archive
+        );
+        assert_eq!(
+            fs::read(game.mods().join(&alpha_slot_1)).unwrap(),
+            alpha_archive
+        );
+        assert!(!game.mods().join(&alpha_slot_0).exists());
+        assert!(!game.mods().join(&bravo_slot_1).exists());
+
+        // Disable the former first entry. Alpha compacts back to gm000/ordinal 0 and no archive
+        // from the previous two-mod deployment survives.
+        apply_loadout(
+            &game.root,
+            &game.lib,
+            &loadout(&[(&bravo, false), (&alpha, true)]),
+        )
+        .unwrap();
+        assert_eq!(manager_paks(), vec![alpha_slot_0.clone()]);
+        assert_eq!(
+            fs::read(game.mods().join(&alpha_slot_0)).unwrap(),
+            alpha_archive
+        );
+        assert!(!game.mods().join(&bravo_slot_0).exists());
+        assert!(!game.mods().join(&alpha_slot_1).exists());
+
+        assert!(undeploy_all(&game.root).unwrap());
+        assert!(
+            manager_paks().is_empty(),
+            "undeploy must remove every owned pak"
+        );
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
+        assert!(!crate::record_path(&game.root).exists());
     }
 
     /// Re-applying after disabling a mod recomputes from pristine: the disabled mod's pak is gone

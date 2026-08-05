@@ -2174,6 +2174,7 @@ class _ManagedRevision3ProjectViewState
   late Revision3ItemsViewController _itemsViewController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   late Revision3ProjectCompilerCheckController _projectCompilerController;
+  late Revision3ProjectProblemsController _projectProblemsController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
   late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
@@ -2676,6 +2677,7 @@ class _ManagedRevision3ProjectViewState
       gameRoot: gameRoot,
       requiresReopen: project.requiresReopen,
     );
+    _projectProblemsController = Revision3ProjectProblemsController();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
@@ -2741,12 +2743,14 @@ class _ManagedRevision3ProjectViewState
     _itemsViewController = Revision3ItemsViewController();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
+    _projectProblemsController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
     _projectCompilerController = Revision3ProjectCompilerCheckController(
       checkpoint: _projectCompilerCheckpoint,
       gameRoot: gameRoot,
       requiresReopen: project.requiresReopen,
     );
+    _projectProblemsController = Revision3ProjectProblemsController();
     _scopedContentBrowserController.dispose();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
@@ -2853,6 +2857,7 @@ class _ManagedRevision3ProjectViewState
     _itemsViewController.dispose();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
+    _projectProblemsController.dispose();
     _scopedContentBrowserController.dispose();
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
@@ -4628,7 +4633,10 @@ class _ManagedRevision3ProjectViewState
     final buildPreviewHead = checkpoint.checkpointIdentity;
     final externalChecksEnabled = _managedProjectMutationAllowed();
     return AnimatedBuilder(
-      animation: _projectCompilerController,
+      animation: Listenable.merge([
+        _projectCompilerController,
+        _projectProblemsController,
+      ]),
       builder: (context, _) => Revision3TestReleaseWorkspace(
         projectId: checkpoint.projectId,
         projectRevision: checkpoint.projectRevision,
@@ -4662,11 +4670,8 @@ class _ManagedRevision3ProjectViewState
           problemsHeading: l10n.managedTestReleaseProblemsHeading,
           voiceContinuationHeading: l10n.managedTestReleaseVoiceHeading,
         ),
-        projectStructure: Revision3TestReleaseCheck(
-          state: Revision3TestReleaseCheckState.notEvaluated,
-          title: l10n.managedTestReleaseProjectStructureTitle,
-          description: l10n.managedTestReleaseProjectStructureDescription,
-          actionLabel: l10n.managedTestReleaseProjectStructureAction,
+        projectStructure: _projectStructureCheck(
+          l10n,
           onPressed: () => navigate(
             Revision3ProjectWorkspaceSection.testRelease,
             secondary: 'problems',
@@ -4738,6 +4743,13 @@ class _ManagedRevision3ProjectViewState
               secondary: 'voice',
             );
           },
+          openDataAssetDetails: () => _openProjectBuildDataAssetDetails(
+            context,
+            expectedProjectRoot: buildPreviewProjectRoot,
+            expectedProjectId: buildPreviewProjectId,
+            expectedProjectRevision: buildPreviewProjectRevision,
+            expectedProjectHeadCanonicalJson: buildPreviewHead,
+          ),
           copy: l10n.localeName.startsWith('de')
               ? const Revision3ProjectBuildPlanCopy.german()
               : const Revision3ProjectBuildPlanCopy.english(),
@@ -4759,6 +4771,70 @@ class _ManagedRevision3ProjectViewState
         voiceContinuationBuilder: (context) =>
             _buildVoiceReadiness(context, l10n),
       ),
+    );
+  }
+
+  Revision3TestReleaseCheck _projectStructureCheck(
+    AppLocalizations l10n, {
+    required VoidCallback onPressed,
+  }) {
+    final expected = Revision3ProjectProblemsCheckpoint(
+      projectRoot: project.root.path,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectHeadCanonicalJson: project.head.canonicalJson,
+    );
+    final snapshot = _projectProblemsController.snapshot;
+    var state = Revision3TestReleaseCheckState.checking;
+    Revision3TestReleaseEvidence? evidence;
+
+    if (snapshot.belongsTo(expected)) {
+      switch (snapshot.state) {
+        case Revision3ProjectProblemsLoadState.detached ||
+            Revision3ProjectProblemsLoadState.loading:
+          state = Revision3TestReleaseCheckState.checking;
+        case Revision3ProjectProblemsLoadState.unavailable:
+          state = Revision3TestReleaseCheckState.unavailable;
+        case Revision3ProjectProblemsLoadState.ready:
+          final assessment = snapshot.referenceIntegrity;
+          if (assessment == null ||
+              assessment.scope !=
+                  Revision3ProjectProblemScope.referenceIntegrity ||
+              assessment.evidence !=
+                  Revision3ProjectProblemEvidence.exactContentIndex) {
+            state = Revision3TestReleaseCheckState.unavailable;
+            break;
+          }
+          state = switch (assessment.readiness) {
+            Revision3ProjectProblemReadiness.clear =>
+              Revision3TestReleaseCheckState.passed,
+            Revision3ProjectProblemReadiness.issues =>
+              Revision3TestReleaseCheckState.needsAttention,
+            _ => Revision3TestReleaseCheckState.unavailable,
+          };
+          if (state == Revision3TestReleaseCheckState.passed ||
+              state == Revision3TestReleaseCheckState.needsAttention) {
+            evidence = Revision3TestReleaseEvidence(
+              projectId: expected.projectId,
+              projectRevision: expected.projectRevision,
+              checkpointIdentity: expected.projectHeadCanonicalJson,
+              scope: Revision3TestReleaseEvidenceScope.projectStructure,
+              summary: l10n.managedProblemsEvidenceContent,
+            );
+          }
+      }
+    }
+
+    return Revision3TestReleaseCheck(
+      state: state,
+      title: l10n.managedTestReleaseProjectStructureTitle,
+      description: _projectProblemScopeDescription(
+        l10n,
+        Revision3ProjectProblemScope.referenceIntegrity,
+      ),
+      evidence: evidence,
+      actionLabel: l10n.managedTestReleaseProjectStructureAction,
+      onPressed: onPressed,
     );
   }
 
@@ -4811,6 +4887,7 @@ class _ManagedRevision3ProjectViewState
       loadDataAssetStages: loadDataAssetStages,
       gameConfigured: gameConfigured,
       copy: _projectProblemsCopy(l10n),
+      controller: _projectProblemsController,
       actions: Revision3ProjectProblemsActions(
         openEntity: (entityId) => _openProblemEntity(
           context,
@@ -7430,6 +7507,115 @@ class _ManagedRevision3ProjectViewState
     throw StateError('The exact project asset is no longer available.');
   }
 
+  Future<void> _openProjectBuildDataAssetDetails(
+    BuildContext context, {
+    required String expectedProjectRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String expectedProjectHeadCanonicalJson,
+  }) async {
+    bool isExactCurrentProject() => _isExactCurrentDashboardProject(
+      context,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final sourceLocation = Revision3ProjectWorkspace.currentLocationOf(context);
+    if (sourceLocation.section !=
+        Revision3ProjectWorkspaceSection.testRelease) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final sourceNavigationIdentity =
+        Revision3ProjectWorkspace.navigationIdentityOf(context);
+    bool isStillAtSourceLocation() =>
+        context.mounted &&
+        identical(
+          Revision3ProjectWorkspace.navigationIdentityOf(context),
+          sourceNavigationIdentity,
+        ) &&
+        Revision3ProjectWorkspace.currentLocationOf(context) == sourceLocation;
+    final requestEpoch = _beginDashboardOpenRequest();
+    bool isLatestRequest() => requestEpoch == _dashboardEntityOpenEpoch;
+
+    late final Revision3ContentIndex contentIndex;
+    late final List<AuthoringRevision3DataAssetStage> stages;
+    try {
+      final sources = await Future.wait<Object>([
+        loadContentIndex(),
+        loadDataAssetStages(),
+      ]);
+      contentIndex = sources[0] as Revision3ContentIndex;
+      stages = sources[1] as List<AuthoringRevision3DataAssetStage>;
+    } on Object {
+      if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+      rethrow;
+    }
+    if (!context.mounted) return;
+    if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+    if (!isExactCurrentProject() ||
+        contentIndex.projectId != expectedProjectId ||
+        contentIndex.projectRevision != expectedProjectRevision) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+
+    late final Revision3ProjectProblemReport report;
+    try {
+      report = Revision3ProjectProblemBuilder.build(
+        contentIndex,
+        dataAssetStages: stages,
+        gameConfigured: gameRoot != null,
+      );
+    } on Object {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final stageProblems = report.problems
+        .where(
+          (problem) =>
+              problem.code ==
+              Revision3ProjectProblemCode.dataAssetStageOfflineOnly,
+        )
+        .toList(growable: false);
+    if (report.projectId != expectedProjectId ||
+        report.projectRevision != expectedProjectRevision ||
+        stages.length != 1 ||
+        stageProblems.length != 1) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    final problem = stageProblems.single;
+    final details = problem.details;
+    final stage = stages.single;
+    if (problem.primaryTarget.kind !=
+            Revision3ProjectProblemTargetKind.dataAssetStage ||
+        details is! Revision3DataAssetStageProblemDetails ||
+        problem.primaryTarget.identity != details.targetPath ||
+        details.targetPath != stage.targetPath ||
+        details.manifestSha256 != stage.manifestAsset.sha256) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    if (!context.mounted) return;
+    if (!isLatestRequest() || !isStillAtSourceLocation()) return;
+    if (!isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+    await _openProblemDataAssetStage(
+      context,
+      targetPath: details.targetPath,
+      expectedProjectRoot: expectedProjectRoot,
+      expectedProjectId: expectedProjectId,
+      expectedProjectRevision: expectedProjectRevision,
+      expectedProjectHeadCanonicalJson: expectedProjectHeadCanonicalJson,
+    );
+    if (!isLatestRequest()) return;
+    if (!context.mounted || !isExactCurrentProject()) {
+      throw StateError('The exact DataAsset problem is no longer available.');
+    }
+  }
+
   Future<void> _openProblemDataAssetStage(
     BuildContext context, {
     required String targetPath,
@@ -7524,11 +7710,41 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
   editOverview: l10n.managedStoryWorkbenchEditOverview,
   editNpcProfile: l10n.managedStoryWorkbenchEditNpcProfile,
-  npcDialogVoiceNextStepTitle:
-      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepTitle,
-  npcDialogVoiceNextStepDescription:
-      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepDescription,
-  continueToNpcDialogVoice: l10n.managedStoryWorkbenchContinueToNpcDialogVoice,
+  npcDraftSetupTitle: l10n.managedStoryWorkbenchNpcDraftSetupTitle,
+  npcDraftSetupDescription: l10n.managedStoryWorkbenchNpcDraftSetupDescription,
+  npcDraftSetupCharacterDetailsTitle:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsTitle,
+  npcDraftSetupFirstGreetingTitle:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingTitle,
+  npcDraftSetupCompleteStatus:
+      l10n.managedStoryWorkbenchNpcDraftSetupCompleteStatus,
+  npcDraftSetupNextStatus: l10n.managedStoryWorkbenchNpcDraftSetupNextStatus,
+  npcDraftSetupOpenStatus: l10n.managedStoryWorkbenchNpcDraftSetupOpenStatus,
+  npcDraftSetupCharacterDetailsComplete:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsComplete,
+  npcDraftSetupCharacterDetailsUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsUnavailable,
+  npcDraftSetupFirstGreetingPending:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingPending,
+  npcDraftSetupFirstGreetingDetailsUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingDetailsUnavailable,
+  npcDraftSetupRecommendedNext:
+      l10n.managedStoryWorkbenchNpcDraftSetupRecommendedNext,
+  npcDraftSetupWriteFirstGreeting:
+      l10n.managedStoryWorkbenchNpcDraftSetupWriteFirstGreeting,
+  npcDraftSetupReviewDialogVoice:
+      l10n.managedStoryWorkbenchNpcDraftSetupReviewDialogVoice,
+  npcDraftSetupActionUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupActionUnavailable,
+  npcDraftSetupBoundary: l10n.managedStoryWorkbenchNpcDraftSetupBoundary,
+  npcDraftSetupGreetingLinkCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupGreetingLinkCount,
+  npcDraftSetupTextLanguageCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupTextLanguageCount,
+  npcDraftSetupVoiceTakeCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupVoiceTakeCount,
+  npcDraftSetupSelectedVoiceCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupSelectedVoiceCount,
   editStory: l10n.managedStoryWorkbenchEditStory,
   editLogic: l10n.managedStoryWorkbenchEditLogic,
   inspectQuest: l10n.managedStoryWorkbenchInspectQuest,

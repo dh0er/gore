@@ -1,11 +1,21 @@
 import 'package:flutter/material.dart';
 
 import 'revision3_content_index.dart';
+import 'revision3_npc_draft_setup.dart';
+import 'revision3_project_problems.dart';
 
 typedef Revision3StoryWorkbenchAction = Future<void> Function();
 
 String _englishReferenceProblemCount(int count) =>
     '$count unresolved project reference${count == 1 ? '' : 's'}';
+String _englishNpcGreetingLinkCount(int count) =>
+    '$count authored greeting link${count == 1 ? '' : 's'}';
+String _englishNpcTextLanguageCount(int count) =>
+    '$count text language${count == 1 ? '' : 's'}';
+String _englishNpcVoiceTakeCount(int count) =>
+    '$count Voice take${count == 1 ? '' : 's'}';
+String _englishNpcSelectedVoiceCount(int count) =>
+    '$count selected Voice take${count == 1 ? '' : 's'}';
 
 /// Author-facing copy for the bounded Quest/NPC workbench.
 ///
@@ -29,10 +39,26 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.problemsChecksTab,
     required this.editOverview,
     this.editNpcProfile = 'Edit name & archetype',
-    this.npcDialogVoiceNextStepTitle = 'Next step: Dialog & Voice',
-    this.npcDialogVoiceNextStepDescription =
-        'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.',
-    this.continueToNpcDialogVoice = 'Continue to Dialog & Voice',
+    required this.npcDraftSetupTitle,
+    required this.npcDraftSetupDescription,
+    required this.npcDraftSetupCharacterDetailsTitle,
+    required this.npcDraftSetupFirstGreetingTitle,
+    required this.npcDraftSetupCompleteStatus,
+    required this.npcDraftSetupNextStatus,
+    required this.npcDraftSetupOpenStatus,
+    required this.npcDraftSetupCharacterDetailsComplete,
+    required this.npcDraftSetupCharacterDetailsUnavailable,
+    required this.npcDraftSetupFirstGreetingPending,
+    required this.npcDraftSetupFirstGreetingDetailsUnavailable,
+    required this.npcDraftSetupRecommendedNext,
+    required this.npcDraftSetupWriteFirstGreeting,
+    required this.npcDraftSetupReviewDialogVoice,
+    required this.npcDraftSetupActionUnavailable,
+    required this.npcDraftSetupBoundary,
+    required this.npcDraftSetupGreetingLinkCount,
+    required this.npcDraftSetupTextLanguageCount,
+    required this.npcDraftSetupVoiceTakeCount,
+    required this.npcDraftSetupSelectedVoiceCount,
     required this.editStory,
     required this.editLogic,
     required this.inspectQuest,
@@ -88,10 +114,33 @@ final class Revision3StoryEntityWorkbenchCopy {
        problemsChecksTab = 'Problems & Checks',
        editOverview = 'Edit name & objectives',
        editNpcProfile = 'Edit name & archetype',
-       npcDialogVoiceNextStepTitle = 'Next step: Dialog & Voice',
-       npcDialogVoiceNextStepDescription =
-           'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.',
-       continueToNpcDialogVoice = 'Continue to Dialog & Voice',
+       npcDraftSetupTitle = 'Write this Character',
+       npcDraftSetupDescription =
+           'This view tracks the exact Character details and first authored greeting as two project steps in the current revision.',
+       npcDraftSetupCharacterDetailsTitle = '1. Character details',
+       npcDraftSetupFirstGreetingTitle = '2. First greeting',
+       npcDraftSetupCompleteStatus = 'Saved in project',
+       npcDraftSetupNextStatus = 'Recommended next step',
+       npcDraftSetupOpenStatus = 'Still open',
+       npcDraftSetupCharacterDetailsComplete =
+           'The exact Character name and reviewed archetype parents are present in this project revision.',
+       npcDraftSetupCharacterDetailsUnavailable =
+           'The exact current Character details could not be verified.',
+       npcDraftSetupFirstGreetingPending =
+           'Link the first authored greeting in Dialog & Voice.',
+       npcDraftSetupFirstGreetingDetailsUnavailable =
+           'Text and Voice coverage for the first greeting could not be verified in this exact project revision.',
+       npcDraftSetupRecommendedNext = 'Recommended next step',
+       npcDraftSetupWriteFirstGreeting = 'Write first greeting',
+       npcDraftSetupReviewDialogVoice = 'Review greetings in Dialog & Voice',
+       npcDraftSetupActionUnavailable =
+           'Dialog & Voice is unavailable for this exact project revision.',
+       npcDraftSetupBoundary =
+           'Draft setup tracks current authored project content only. A greeting link is not a playable dialog topic and does not prove publication history, build, or runtime behavior.',
+       npcDraftSetupGreetingLinkCount = _englishNpcGreetingLinkCount,
+       npcDraftSetupTextLanguageCount = _englishNpcTextLanguageCount,
+       npcDraftSetupVoiceTakeCount = _englishNpcVoiceTakeCount,
+       npcDraftSetupSelectedVoiceCount = _englishNpcSelectedVoiceCount,
        editStory = 'Edit description & connections',
        editLogic = 'Edit states & transitions',
        inspectQuest = 'Open source & compiler checks',
@@ -114,7 +163,7 @@ final class Revision3StoryEntityWorkbenchCopy {
        noReferenceProblems = 'No unresolved project references',
        referenceProblemCount = _englishReferenceProblemCount,
        referenceScopeNotice =
-           'Reference status only; this is not build or runtime readiness.',
+           'Direct references of this draft only; problems in child Dialog & Voice content are not included. This is not build or runtime readiness.',
        technicalDetails = 'Technical details',
        questKindLabel = 'Quest draft',
        npcKindLabel = 'NPC draft',
@@ -149,9 +198,26 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String problemsChecksTab;
   final String editOverview;
   final String editNpcProfile;
-  final String npcDialogVoiceNextStepTitle;
-  final String npcDialogVoiceNextStepDescription;
-  final String continueToNpcDialogVoice;
+  final String npcDraftSetupTitle;
+  final String npcDraftSetupDescription;
+  final String npcDraftSetupCharacterDetailsTitle;
+  final String npcDraftSetupFirstGreetingTitle;
+  final String npcDraftSetupCompleteStatus;
+  final String npcDraftSetupNextStatus;
+  final String npcDraftSetupOpenStatus;
+  final String npcDraftSetupCharacterDetailsComplete;
+  final String npcDraftSetupCharacterDetailsUnavailable;
+  final String npcDraftSetupFirstGreetingPending;
+  final String npcDraftSetupFirstGreetingDetailsUnavailable;
+  final String npcDraftSetupRecommendedNext;
+  final String npcDraftSetupWriteFirstGreeting;
+  final String npcDraftSetupReviewDialogVoice;
+  final String npcDraftSetupActionUnavailable;
+  final String npcDraftSetupBoundary;
+  final String Function(int count) npcDraftSetupGreetingLinkCount;
+  final String Function(int count) npcDraftSetupTextLanguageCount;
+  final String Function(int count) npcDraftSetupVoiceTakeCount;
+  final String Function(int count) npcDraftSetupSelectedVoiceCount;
   final String editStory;
   final String editLogic;
   final String inspectQuest;
@@ -699,6 +765,10 @@ class _Revision3StoryEntityWorkbenchState
 
   List<Widget> _npcProfile(BuildContext context) {
     final entity = widget.entity;
+    final setup = Revision3NpcDraftSetup.fromIndex(
+      index: widget.index,
+      npc: entity,
+    );
     return <Widget>[
       _SectionHeading(widget.copy.profileTab),
       _Fact(label: widget.copy.npcDisplayNameLabel, value: entity.displayName),
@@ -714,19 +784,23 @@ class _Revision3StoryEntityWorkbenchState
         onPressed: widget.actions.editNpcProfile,
       ),
       const SizedBox(height: 12),
-      if (widget.npcDialogVoice != null) ...[
-        _NpcDialogVoiceNextStepCard(
-          key: Key(
-            'revision3-story-workbench-npc-dialog-next-step-${entity.id}',
-          ),
-          title: widget.copy.npcDialogVoiceNextStepTitle,
-          description: widget.copy.npcDialogVoiceNextStepDescription,
-          actionLabel: widget.copy.continueToNpcDialogVoice,
-          onPressed: () =>
-              _selectSection(Revision3StoryWorkbenchSection.dialogVoice),
+      _NpcDraftSetupOverview(
+        key: Key(
+          'revision3-npc-draft-setup-${setup.projectId}-${setup.projectRevision}-${setup.npcId}-${setup.npcRevision}',
         ),
-        const SizedBox(height: 12),
-      ],
+        setup: setup,
+        copy: widget.copy,
+        actionDisabledReason: !setup.characterDetailsComplete
+            ? widget.copy.npcDraftSetupCharacterDetailsUnavailable
+            : widget.npcDialogVoice == null
+            ? widget.copy.npcDraftSetupActionUnavailable
+            : null,
+        onPressed:
+            !setup.characterDetailsComplete || widget.npcDialogVoice == null
+            ? null
+            : () => _selectSection(Revision3StoryWorkbenchSection.dialogVoice),
+      ),
+      const SizedBox(height: 12),
       _NpcPlannedCapabilities(copy: widget.copy),
       const SizedBox(height: 4),
       _TechnicalDetails(entity: entity, copy: widget.copy),
@@ -809,20 +883,15 @@ class _Revision3StoryEntityWorkbenchState
 
   List<Widget> _problems(BuildContext context) {
     final entity = widget.entity;
-    final brokenEntityReferences = entity.references
-        .where(
-          (reference) =>
-              reference.resolution !=
-              Revision3ContentReferenceResolution.resolved,
-        )
-        .toList(growable: false);
-    final brokenAssetReferences = entity.assetReferences
-        .where(
-          (reference) =>
-              reference.resolution !=
-              Revision3ContentAssetReferenceResolution.resolved,
-        )
-        .toList(growable: false);
+    final problems =
+        Revision3ProjectProblemBuilder.buildReferenceProblemsForSourceEntity(
+          widget.index,
+          sourceEntityId: entity.id,
+        );
+    // Strict current NPC/Quest projections require every direct reference to
+    // resolve, so this is normally empty. Keep the visible count canonical,
+    // but do not silently expand it to problems owned by child Dialog/Voice
+    // entities; that requires a separately modeled ownership scope.
     return <Widget>[
       _SectionHeading(widget.copy.problemsChecksTab),
       _AtomicActionCard(
@@ -846,33 +915,12 @@ class _Revision3StoryEntityWorkbenchState
       Semantics(
         liveRegion: true,
         child: Text(
-          entity.problemCount == 0
+          problems.isEmpty
               ? widget.copy.noReferenceProblems
-              : widget.copy.referenceProblemCount(entity.problemCount),
+              : widget.copy.referenceProblemCount(problems.length),
           style: Theme.of(context).textTheme.titleSmall,
         ),
       ),
-      if (entity.problemCount != 0) ...[
-        const SizedBox(height: 8),
-        for (final reference in brokenEntityReferences)
-          _WorkbenchReferenceTile(
-            icon: Icons.link_off_outlined,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle:
-                '${reference.resolution.wireName} / ${reference.target.expectedKind.displayName} / ${reference.target.entityId}',
-            ok: false,
-            statusSemanticLabel: widget.copy.referenceUnresolvedLabel,
-          ),
-        for (final reference in brokenAssetReferences)
-          _WorkbenchReferenceTile(
-            icon: Icons.inventory_2_outlined,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle:
-                '${reference.resolution.wireName} / ${reference.logicalName ?? reference.sha256} / ${reference.expectedMediaType}',
-            ok: false,
-            statusSemanticLabel: widget.copy.referenceUnresolvedLabel,
-          ),
-      ],
       const SizedBox(height: 12),
       Card(
         child: Padding(
@@ -968,58 +1016,282 @@ class _AtomicActionCard extends StatelessWidget {
   );
 }
 
-class _NpcDialogVoiceNextStepCard extends StatelessWidget {
-  const _NpcDialogVoiceNextStepCard({
-    required this.title,
-    required this.description,
-    required this.actionLabel,
+class _NpcDraftSetupOverview extends StatelessWidget {
+  const _NpcDraftSetupOverview({
+    required this.setup,
+    required this.copy,
+    required this.actionDisabledReason,
     required this.onPressed,
     super.key,
   });
 
-  final String title;
-  final String description;
-  final String actionLabel;
-  final VoidCallback onPressed;
+  final Revision3NpcDraftSetup setup;
+  final Revision3StoryEntityWorkbenchCopy copy;
+  final String? actionDisabledReason;
+  final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => Card(
-    margin: EdgeInsets.zero,
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final npcId = setup.npcId;
+    final firstGreetingSupplement = setup.firstGreetingComplete
+        ? !setup.firstGreetingDetailsAvailable
+              ? copy.npcDraftSetupFirstGreetingDetailsUnavailable
+              : <String>[
+                  copy.npcDraftSetupTextLanguageCount(
+                    setup.firstGreetingTextLanguageCount,
+                  ),
+                  copy.npcDraftSetupVoiceTakeCount(
+                    setup.firstGreetingVoiceTakeCount,
+                  ),
+                  if (setup.firstGreetingSelectedVoiceTakeCount > 0)
+                    copy.npcDraftSetupSelectedVoiceCount(
+                      setup.firstGreetingSelectedVoiceTakeCount,
+                    ),
+                ].join(' · ')
+        : null;
+    final steps = <_NpcDraftSetupStepData>[
+      _NpcDraftSetupStepData(
+        kind: Revision3NpcDraftSetupStepKind.characterDetails,
+        title: copy.npcDraftSetupCharacterDetailsTitle,
+        detail: setup.characterDetailsComplete
+            ? copy.npcDraftSetupCharacterDetailsComplete
+            : copy.npcDraftSetupCharacterDetailsUnavailable,
+      ),
+      _NpcDraftSetupStepData(
+        kind: Revision3NpcDraftSetupStepKind.firstGreeting,
+        title: copy.npcDraftSetupFirstGreetingTitle,
+        detail: copy.npcDraftSetupGreetingLinkCount(setup.greetingLinkCount),
+        supplement: setup.firstGreetingComplete
+            ? firstGreetingSupplement
+            : copy.npcDraftSetupFirstGreetingPending,
+      ),
+    ];
+    return Material(
+      color: scheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              copy.npcDraftSetupTitle,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(copy.npcDraftSetupDescription),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final cardWidth = constraints.maxWidth >= 720
+                    ? (constraints.maxWidth - 12) / 2
+                    : constraints.maxWidth;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: <Widget>[
+                    for (final step in steps)
+                      SizedBox(
+                        width: cardWidth,
+                        child: _NpcDraftSetupStepCard(
+                          npcId: npcId,
+                          step: step,
+                          complete: setup.complete(step.kind),
+                          recommended:
+                              step.kind == setup.recommendedStep &&
+                              !setup.complete(step.kind),
+                          copy: copy,
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            Container(
+              key: Key('revision3-npc-draft-setup-next-$npcId'),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text(
+                    copy.npcDraftSetupRecommendedNext,
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton(
+                    key: Key(
+                      'revision3-npc-draft-setup-recommended-dialog-voice-$npcId',
+                    ),
+                    onPressed: onPressed,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: <Widget>[
+                          const Icon(Icons.arrow_forward),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              setup.firstGreetingComplete
+                                  ? copy.npcDraftSetupReviewDialogVoice
+                                  : copy.npcDraftSetupWriteFirstGreeting,
+                              textAlign: TextAlign.start,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (actionDisabledReason case final reason?) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      reason,
+                      key: Key(
+                        'revision3-npc-draft-setup-next-disabled-reason-$npcId',
+                      ),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              copy.npcDraftSetupBoundary,
+              key: Key('revision3-npc-draft-setup-boundary-$npcId'),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _NpcDraftSetupStepData {
+  const _NpcDraftSetupStepData({
+    required this.kind,
+    required this.title,
+    required this.detail,
+    this.supplement,
+  });
+
+  final Revision3NpcDraftSetupStepKind kind;
+  final String title;
+  final String detail;
+  final String? supplement;
+}
+
+class _NpcDraftSetupStepCard extends StatelessWidget {
+  const _NpcDraftSetupStepCard({
+    required this.npcId,
+    required this.step,
+    required this.complete,
+    required this.recommended,
+    required this.copy,
+  });
+
+  final String npcId;
+  final _NpcDraftSetupStepData step;
+  final bool complete;
+  final bool recommended;
+  final Revision3StoryEntityWorkbenchCopy copy;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final status = complete
+        ? copy.npcDraftSetupCompleteStatus
+        : recommended
+        ? copy.npcDraftSetupNextStatus
+        : copy.npcDraftSetupOpenStatus;
+    final semanticsLabel = <String>[
+      step.title,
+      status,
+      step.detail,
+      ?step.supplement,
+    ].join('. ');
+    return Semantics(
+      container: true,
+      excludeSemantics: true,
+      label: semanticsLabel,
+      child: Material(
+        key: Key('revision3-npc-draft-setup-step-${step.kind.name}-$npcId'),
+        color: complete
+            ? scheme.secondaryContainer.withValues(alpha: 0.45)
+            : scheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: recommended ? scheme.primary : scheme.outlineVariant,
+            width: recommended ? 2 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.chat_bubble_outline),
-              const SizedBox(width: 12),
+            children: <Widget>[
+              Icon(
+                complete ? Icons.check_circle : Icons.radio_button_unchecked,
+                color: complete ? scheme.secondary : scheme.primary,
+              ),
+              const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleSmall,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      step.title,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      status,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: complete ? scheme.secondary : scheme.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(step.detail),
+                    if (step.supplement case final supplement?) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        supplement,
+                        key:
+                            step.kind ==
+                                Revision3NpcDraftSetupStepKind.firstGreeting
+                            ? Key(
+                                'revision3-npc-draft-setup-first-greeting-facts-$npcId',
+                              )
+                            : null,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(description),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: onPressed,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Text(actionLabel, textAlign: TextAlign.center),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Keeps future NPC domains discoverable without making authors navigate into

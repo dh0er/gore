@@ -24,16 +24,28 @@ gore mgr remove <ID>                      # drop from library and loadout
 triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
 replacements. `list` prints the entry ids the other commands take.
 
+### GORE bundle format gate
+
+Recognizing a root `gore-mod.json` commits import to the closed
+[bundle-format contract](bundles.md#bundle-format-and-reader-contract): format
+1 must not contain `pak_file_patch`, while format 2 must contain at least one.
+The manager rejects either mismatch and every unknown format before interpreting
+component payloads or publishing the library entry. It does not migrate the
+manifest, drop a component, or retry the rejected GORE bundle as a foreign mod.
+
 ## Order and enablement
 
 ```powershell
 gore mgr enable  <ID>
 gore mgr disable <ID>
-gore mgr order   <ID> <POS>    # 0 mounts first, and loses conflicts
+gore mgr order   <ID> <POS>    # 0 is composed first
 ```
 
-Position `0` mounts first; later entries win conflicts. `<POS>` is clamped to
-the last slot.
+Position `0` is composed first; later entries are selected or reported as the
+intended conflict winners. `<POS>` is clamped to the last slot. For additive
+paks, this ordering controls the filenames the manager writes; it is not by
+itself proof of Unreal's runtime mount priority. At most 1,000 entries may be
+enabled at once, matching the closed `gm000` through `gm999` filename range.
 
 ## Conflicts
 
@@ -48,6 +60,12 @@ which mod wins each one.
 Voice collisions on `(archive, archive_path)` are case-insensitive, soft, and
 order-dependent: the later mod wins while retaining the winning spelling and
 operation.
+
+Two pak components claiming the same game path are also a soft, ordered
+conflict: the manager reports the later claimant as the intended winner while
+retaining both paks. A pak claim against an in-place `files` claim is only
+advisory because their runtime precedence is not established by conflict
+analysis.
 
 Script mods that do not declare their CDO targets are treated as opaque — the
 manager cannot prove what they touch, so it cannot rule out a conflict with
@@ -67,6 +85,15 @@ patch on top of whatever happened to be installed, which is what makes
 disabling a mod in the middle of the order safe.
 
 `reset` restores the pristine install.
+
+### Evidence boundary
+
+Applying, reordering, and resetting against an offline synthetic game root can
+prove deterministic files, owned cleanup, and receipt state. Those checks do
+not prove that Unreal mounts one pak ahead of another, that the game reads the
+selected bytes, or that any runtime behavior changed. They grant no authority
+to modify a real installation, launch the game, or read or mutate a save; those
+steps require separate qualified safety gates.
 
 ## Flag summary
 

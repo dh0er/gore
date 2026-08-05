@@ -366,6 +366,63 @@ void main() {
   });
 
   testWidgets(
+    'route identity invalidates async handoffs even after navigating back',
+    (tester) async {
+      _setSurface(tester, const Size(1000, 800));
+      late BuildContext retainedContext;
+      await _pumpWorkspace(
+        tester,
+        destinations: _destinations(
+          pageBuilder: (section) => (context, location) {
+            if (section == Revision3ProjectWorkspaceSection.home) {
+              retainedContext = context;
+            }
+            return Center(
+              child: Text(
+                '${section.name} page / '
+                'secondary:${location.secondary ?? 'none'}',
+              ),
+            );
+          },
+        ),
+      );
+
+      final initialIdentity = Revision3ProjectWorkspace.navigationIdentityOf(
+        retainedContext,
+      );
+      expect(
+        Revision3ProjectWorkspace.currentLocationOf(retainedContext),
+        const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.home,
+        ),
+      );
+
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.content);
+      final contentIdentity = Revision3ProjectWorkspace.navigationIdentityOf(
+        retainedContext,
+      );
+      expect(identical(contentIdentity, initialIdentity), isFalse);
+      expect(
+        Revision3ProjectWorkspace.currentLocationOf(retainedContext).section,
+        Revision3ProjectWorkspaceSection.content,
+      );
+
+      await _tapTab(tester, Revision3ProjectWorkspaceSection.home);
+      final returnedIdentity = Revision3ProjectWorkspace.navigationIdentityOf(
+        retainedContext,
+      );
+      expect(identical(returnedIdentity, initialIdentity), isFalse);
+      expect(identical(returnedIdentity, contentIdentity), isFalse);
+      expect(
+        Revision3ProjectWorkspace.currentLocationOf(retainedContext),
+        const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.home,
+        ),
+      );
+    },
+  );
+
+  testWidgets(
     'exact context navigation and primary switches retain secondary route',
     (tester) async {
       _setSurface(tester, const Size(1000, 800));

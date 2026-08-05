@@ -336,7 +336,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Não há referências de projeto não resolvidas",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 referência de projeto não resolvida} other{{count} referências de projeto não resolvidas}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Indica apenas o status das referências; não confirma que o projeto esteja pronto para compilação ou execução.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Apenas referências diretas deste rascunho; os problemas dos conteúdos dependentes de Diálogo e Voz não estão incluídos. Isso não confirma que o projeto esteja pronto para compilação ou execução.",
   "managedStoryWorkbenchTechnicalDetails": "Detalhes técnicos",
   "managedStoryWorkbenchQuestKindLabel": "Rascunho de missão",
   "managedStoryWorkbenchNpcKindLabel": "Rascunho de NPC",

@@ -281,6 +281,29 @@ final class Revision3ProjectProblemReport {
 /// explicit capability boundaries. It intentionally does not infer Voice
 /// readiness, compiler success, buildability, or game behavior.
 abstract final class Revision3ProjectProblemBuilder {
+  /// Projects the canonical unresolved references owned by one exact source
+  /// entity in [contentIndex].
+  ///
+  /// An unknown source is rejected instead of being presented as problem-free.
+  /// The returned diagnostics are the same typed objects, target contracts, and
+  /// order used by [build]; no setup, DataAsset, or readiness claim is added.
+  static List<Revision3ProjectProblem> buildReferenceProblemsForSourceEntity(
+    Revision3ContentIndex contentIndex, {
+    required String sourceEntityId,
+  }) {
+    final source = contentIndex.entityById(sourceEntityId);
+    if (source == null) {
+      throw ArgumentError.value(
+        sourceEntityId,
+        'sourceEntityId',
+        'must identify an entity in the exact content index',
+      );
+    }
+    final problems = _referenceProblemsForSourceEntity(source)
+      ..sort(_compareProblems);
+    return List<Revision3ProjectProblem>.unmodifiable(problems);
+  }
+
   static Revision3ProjectProblemReport build(
     Revision3ContentIndex contentIndex, {
     List<AuthoringRevision3DataAssetStage>? dataAssetStages,
@@ -290,20 +313,7 @@ abstract final class Revision3ProjectProblemBuilder {
     final problems = <Revision3ProjectProblem>[];
 
     for (final entity in contentIndex.entities) {
-      for (final reference in entity.references) {
-        if (reference.resolution ==
-            Revision3ContentReferenceResolution.resolved) {
-          continue;
-        }
-        problems.add(_entityReferenceProblem(entity, reference));
-      }
-      for (final reference in entity.assetReferences) {
-        if (reference.resolution ==
-            Revision3ContentAssetReferenceResolution.resolved) {
-          continue;
-        }
-        problems.add(_assetReferenceProblem(entity, reference));
-      }
+      problems.addAll(_referenceProblemsForSourceEntity(entity));
     }
 
     if (!gameConfigured) {
@@ -442,6 +452,26 @@ abstract final class Revision3ProjectProblemBuilder {
       assessments: assessments,
     );
   }
+}
+
+List<Revision3ProjectProblem> _referenceProblemsForSourceEntity(
+  Revision3ContentEntity source,
+) {
+  final problems = <Revision3ProjectProblem>[];
+  for (final reference in source.references) {
+    if (reference.resolution == Revision3ContentReferenceResolution.resolved) {
+      continue;
+    }
+    problems.add(_entityReferenceProblem(source, reference));
+  }
+  for (final reference in source.assetReferences) {
+    if (reference.resolution ==
+        Revision3ContentAssetReferenceResolution.resolved) {
+      continue;
+    }
+    problems.add(_assetReferenceProblem(source, reference));
+  }
+  return problems;
 }
 
 Revision3ProjectProblem _entityReferenceProblem(
@@ -593,11 +623,16 @@ void _validateStages(
   if (stages == null) return;
   final targets = <String>{};
   for (final stage in stages) {
+    final manifestAsset = index.assetBySha256(stage.manifestAsset.sha256);
     if (stage.projectId != index.projectId ||
-        stage.stagedProjectRevision != index.projectRevision ||
+        stage.stagedProjectRevision > index.projectRevision ||
         stage.projectTargetExecutable.sha256 != index.targetExecutableSha256 ||
         stage.projectTargetExecutable.byteLength !=
             index.targetExecutableByteLength ||
+        manifestAsset == null ||
+        manifestAsset.byteLength != stage.manifestAsset.byteLength ||
+        manifestAsset.assetClass !=
+            Revision3ContentAssetClass.dataAssetStageManifest ||
         !targets.add(stage.targetPath)) {
       throw ArgumentError.value(
         stages,

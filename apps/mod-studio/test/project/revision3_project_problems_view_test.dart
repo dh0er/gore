@@ -61,6 +61,9 @@ void main() {
   ) async {
     await _setSurface(tester, const Size(900, 650));
     final fixture = revision3ProjectProblemsEmptyFixture();
+    final controller = Revision3ProjectProblemsController();
+    addTearDown(controller.dispose);
+    final retryContent = Completer<Revision3ContentIndex>();
     var contentCalls = 0;
     var stageCalls = 0;
 
@@ -70,12 +73,13 @@ void main() {
       loadContent: () async {
         contentCalls++;
         if (contentCalls == 1) throw StateError(r'C:\private\project');
-        return fixture.contentIndex;
+        return retryContent.future;
       },
       loadStages: () async {
         stageCalls++;
         return fixture.dataAssetStages;
       },
+      controller: controller,
     );
     await tester.pumpAndSettle();
 
@@ -84,8 +88,19 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('private'), findsNothing);
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.unavailable,
+    );
+    expect(controller.snapshot.referenceIntegrity, isNull);
 
     await tester.tap(find.byKey(const Key('revision3-project-problems-retry')));
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    expect(controller.snapshot.referenceIntegrity, isNull);
+    retryContent.complete(fixture.contentIndex);
     await tester.pumpAndSettle();
 
     expect(contentCalls, 2);
@@ -94,6 +109,12 @@ void main() {
       find.byKey(const Key('revision3-project-problems-empty')),
       findsOneWidget,
     );
+    expect(controller.snapshot.state, Revision3ProjectProblemsLoadState.ready);
+    expect(
+      controller.snapshot.referenceIntegrity?.readiness,
+      Revision3ProjectProblemReadiness.clear,
+    );
+    expect(controller.snapshot.referenceIntegrity?.problemCount, 0);
   });
 
   testWidgets(
@@ -101,10 +122,13 @@ void main() {
     (tester) async {
       await _setSurface(tester, const Size(900, 650));
       final fixture = revision3ProjectProblemsCleanFixture();
+      final controller = Revision3ProjectProblemsController();
+      addTearDown(controller.dispose);
       await _pumpView(
         tester,
         fixture: fixture,
         loadStages: () async => throw StateError('registry offline'),
+        controller: controller,
       );
       await tester.pumpAndSettle();
 
@@ -127,8 +151,127 @@ void main() {
         find.byKey(const Key('revision3-project-problems-error')),
         findsNothing,
       );
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.ready,
+      );
+      expect(
+        controller.snapshot.referenceIntegrity?.readiness,
+        Revision3ProjectProblemReadiness.clear,
+      );
+      expect(
+        controller.snapshot.referenceIntegrity?.evidence,
+        Revision3ProjectProblemEvidence.exactContentIndex,
+      );
+      expect(controller.snapshot.referenceIntegrity?.problemCount, 0);
     },
   );
+
+  testWidgets(
+    'refresh clears ready evidence and disposal rejects its late completion',
+    (tester) async {
+      await _setSurface(tester, const Size(900, 650));
+      final fixture = revision3ProjectProblemsEmptyFixture();
+      final controller = Revision3ProjectProblemsController();
+      addTearDown(controller.dispose);
+      final refreshedContent = Completer<Revision3ContentIndex>();
+      final refreshedStages =
+          Completer<List<AuthoringRevision3DataAssetStage>>();
+      var contentCalls = 0;
+      var stageCalls = 0;
+
+      await _pumpView(
+        tester,
+        fixture: fixture,
+        controller: controller,
+        loadContent: () => contentCalls++ == 0
+            ? Future.value(fixture.contentIndex)
+            : refreshedContent.future,
+        loadStages: () => stageCalls++ == 0
+            ? Future.value(fixture.dataAssetStages)
+            : refreshedStages.future,
+      );
+      await tester.pumpAndSettle();
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.ready,
+      );
+      expect(controller.snapshot.referenceIntegrity, isNotNull);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-project-problems-refresh')),
+      );
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.loading,
+      );
+      expect(controller.snapshot.referenceIntegrity, isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.detached,
+      );
+      expect(controller.snapshot.checkpoint, isNull);
+
+      refreshedContent.complete(fixture.contentIndex);
+      refreshedStages.complete(fixture.dataAssetStages);
+      await tester.pump();
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.detached,
+      );
+      expect(contentCalls, 2);
+      expect(stageCalls, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('keeps a retained earlier DataAsset stage actionable', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(1280, 1200));
+    final retained = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
+    final stage = retained.dataAssetStage!;
+    String? openedTarget;
+
+    await _pumpView(
+      tester,
+      fixture: retained,
+      actions: Revision3ProjectProblemsActions(
+        openDataAssetStage: (value) => openedTarget = value,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(stage.stagedProjectRevision, 7);
+    expect(
+      find.byKey(const Key('revision3-project-problems-partial')),
+      findsNothing,
+    );
+    expect(
+      find.text(
+        'Problem ${Revision3ProjectProblemCode.dataAssetStageOfflineOnly.name}',
+      ),
+      findsWidgets,
+    );
+    final problem = _report(retained).problems.single;
+    await tester.tap(
+      find.byKey(Key('revision3-project-problem-${problem.id}')),
+    );
+    await tester.pump();
+    final action = find.byKey(
+      Key(
+        'revision3-project-problems-action-dataAssetStage-${stage.targetPath}',
+      ),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pump();
+    expect(openedTarget, stage.targetPath);
+  });
 
   testWidgets('filters by category and searches localized plus exact terms', (
     tester,
@@ -136,10 +279,26 @@ void main() {
     await _setSurface(tester, const Size(1280, 720));
     final fixture = revision3ProjectProblemsFilterFixture();
     final report = _report(fixture);
-    await _pumpView(tester, fixture: fixture);
+    final controller = Revision3ProjectProblemsController();
+    addTearDown(controller.dispose);
+    await _pumpView(tester, fixture: fixture, controller: controller);
     await tester.pumpAndSettle();
 
     expect(_problemTiles(), findsNWidgets(report.problems.length));
+    expect(controller.snapshot.state, Revision3ProjectProblemsLoadState.ready);
+    expect(
+      controller.snapshot.referenceIntegrity?.readiness,
+      Revision3ProjectProblemReadiness.issues,
+    );
+    expect(
+      controller.snapshot.referenceIntegrity?.problemCount,
+      report.problems
+          .where(
+            (problem) =>
+                problem.category == Revision3ProjectProblemCategory.references,
+          )
+          .length,
+    );
 
     await tester.tap(
       find.byKey(const Key('revision3-project-problems-filter-dataAssets')),
@@ -275,6 +434,8 @@ void main() {
       var stageCalls = 0;
       var revision = 7;
       late StateSetter rebuild;
+      final controller = Revision3ProjectProblemsController();
+      addTearDown(controller.dispose);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -295,6 +456,7 @@ void main() {
                       : currentStages.future,
                   gameConfigured: true,
                   copy: _copy,
+                  controller: controller,
                 );
               },
             ),
@@ -302,8 +464,23 @@ void main() {
         ),
       );
       await tester.pump();
+      expect(
+        controller.snapshot.checkpoint,
+        Revision3ProjectProblemsCheckpoint(
+          projectRoot: 'managed-root',
+          projectId: current.projectId,
+          projectRevision: 7,
+          projectHeadCanonicalJson: 'head-7',
+        ),
+      );
       rebuild(() => revision = 8);
       await tester.pump();
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.loading,
+      );
+      expect(controller.snapshot.checkpoint?.projectRevision, 8);
+      expect(controller.snapshot.referenceIntegrity, isNull);
 
       currentContent.complete(current.contentIndex);
       currentStages.complete(current.dataAssetStages);
@@ -321,10 +498,191 @@ void main() {
         findsOneWidget,
       );
       expect(_problemTiles(), findsNothing);
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.ready,
+      );
+      expect(controller.snapshot.checkpoint?.projectRevision, 8);
+      expect(
+        controller.snapshot.referenceIntegrity?.readiness,
+        Revision3ProjectProblemReadiness.clear,
+      );
       expect(contentCalls, 2);
       expect(stageCalls, 2);
     },
   );
+
+  testWidgets('ignores a delayed old root at the same id revision and head', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(900, 650));
+    final stale = revision3ProjectProblemsFilterFixture();
+    final current = revision3ProjectProblemsEmptyFixture();
+    final staleContent = Completer<Revision3ContentIndex>();
+    final staleStages = Completer<List<AuthoringRevision3DataAssetStage>>();
+    final currentContent = Completer<Revision3ContentIndex>();
+    final currentStages = Completer<List<AuthoringRevision3DataAssetStage>>();
+    final controller = Revision3ProjectProblemsController();
+    addTearDown(controller.dispose);
+    var contentCalls = 0;
+    var stageCalls = 0;
+    var root = r'C:\mods\problems-old-root';
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Revision3ProjectProblemsView(
+                projectRoot: root,
+                projectId: current.projectId,
+                projectRevision: current.projectRevision,
+                projectHeadCanonicalJson: 'same-head',
+                loadContent: () => contentCalls++ == 0
+                    ? staleContent.future
+                    : currentContent.future,
+                loadDataAssetStages: () => stageCalls++ == 0
+                    ? staleStages.future
+                    : currentStages.future,
+                gameConfigured: true,
+                copy: _copy,
+                controller: controller,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(controller.snapshot.checkpoint?.projectRoot, root);
+
+    rebuild(() => root = r'C:\mods\problems-new-root');
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    expect(controller.snapshot.checkpoint?.projectRoot, root);
+    expect(controller.snapshot.referenceIntegrity, isNull);
+
+    staleContent.complete(stale.contentIndex);
+    staleStages.complete(stale.dataAssetStages);
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    expect(controller.snapshot.checkpoint?.projectRoot, root);
+
+    currentContent.complete(current.contentIndex);
+    currentStages.complete(current.dataAssetStages);
+    await tester.pumpAndSettle();
+    expect(controller.snapshot.state, Revision3ProjectProblemsLoadState.ready);
+    expect(controller.snapshot.checkpoint?.projectRoot, root);
+    expect(
+      controller.snapshot.referenceIntegrity?.readiness,
+      Revision3ProjectProblemReadiness.clear,
+    );
+    expect(contentCalls, 2);
+    expect(stageCalls, 2);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('newer attachment rejects a still-mounted older completion', (
+    tester,
+  ) async {
+    await _setSurface(tester, const Size(900, 650));
+    final stale = revision3ProjectProblemsFilterFixture();
+    final current = revision3ProjectProblemsEmptyFixture();
+    final staleContent = Completer<Revision3ContentIndex>();
+    final staleStages = Completer<List<AuthoringRevision3DataAssetStage>>();
+    final currentContent = Completer<Revision3ContentIndex>();
+    final currentStages = Completer<List<AuthoringRevision3DataAssetStage>>();
+    final controller = Revision3ProjectProblemsController();
+    addTearDown(controller.dispose);
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    var showNewer = false;
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Stack(
+                children: [
+                  Revision3ProjectProblemsView(
+                    key: const ValueKey('older'),
+                    projectRoot: 'managed-root',
+                    projectId: stale.projectId,
+                    projectRevision: stale.projectRevision,
+                    projectHeadCanonicalJson: 'head-${stale.projectRevision}',
+                    loadContent: () => staleContent.future,
+                    loadDataAssetStages: () => staleStages.future,
+                    gameConfigured: true,
+                    copy: _copy,
+                    controller: controller,
+                  ),
+                  if (showNewer)
+                    Revision3ProjectProblemsView(
+                      key: const ValueKey('newer'),
+                      projectRoot: 'managed-root',
+                      projectId: current.projectId,
+                      projectRevision: current.projectRevision,
+                      projectHeadCanonicalJson:
+                          'head-${current.projectRevision}',
+                      loadContent: () => currentContent.future,
+                      loadDataAssetStages: () => currentStages.future,
+                      gameConfigured: true,
+                      copy: _copy,
+                      controller: controller,
+                    ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    final notificationsBeforeReplacement = notifications;
+
+    rebuild(() => showNewer = true);
+    await tester.pump();
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    expect(notifications, greaterThan(notificationsBeforeReplacement));
+
+    staleContent.complete(stale.contentIndex);
+    staleStages.complete(stale.dataAssetStages);
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectProblemsLoadState.loading,
+    );
+    expect(controller.snapshot.referenceIntegrity, isNull);
+
+    currentContent.complete(current.contentIndex);
+    currentStages.complete(current.dataAssetStages);
+    await tester.pumpAndSettle();
+    expect(controller.snapshot.state, Revision3ProjectProblemsLoadState.ready);
+    expect(
+      controller.snapshot.referenceIntegrity?.readiness,
+      Revision3ProjectProblemReadiness.clear,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('passes exact entity, DataAsset stage, and asset identifiers', (
     tester,
@@ -615,6 +973,8 @@ void main() {
       var contentCalls = 0;
       var stageCalls = 0;
       late StateSetter rebuild;
+      final controller = Revision3ProjectProblemsController();
+      addTearDown(controller.dispose);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -637,6 +997,7 @@ void main() {
                   },
                   gameConfigured: true,
                   copy: _copy,
+                  controller: controller,
                   actions: Revision3ProjectProblemsActions(
                     openEntity: (_) => actionCalls++,
                   ),
@@ -647,6 +1008,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.ready,
+      );
+      expect(controller.snapshot.checkpoint?.projectRoot, root);
 
       final first = _report(fixture).problems.first;
       await tester.tap(
@@ -665,6 +1031,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(contentCalls, 2);
       expect(stageCalls, 2);
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectProblemsLoadState.ready,
+      );
+      expect(controller.snapshot.checkpoint?.projectRoot, root);
 
       await tester.tap(staleAction);
       await tester.pumpAndSettle();
@@ -688,6 +1059,7 @@ Future<void> _pumpView(
   bool gameConfigured = true,
   Revision3ProjectProblemsActions actions =
       const Revision3ProjectProblemsActions(),
+  Revision3ProjectProblemsController? controller,
 }) => tester.pumpWidget(
   _host(
     fixture: fixture,
@@ -695,6 +1067,7 @@ Future<void> _pumpView(
     loadStages: loadStages,
     gameConfigured: gameConfigured,
     actions: actions,
+    controller: controller,
   ),
 );
 
@@ -705,6 +1078,7 @@ Widget _host({
   bool gameConfigured = true,
   Revision3ProjectProblemsActions actions =
       const Revision3ProjectProblemsActions(),
+  Revision3ProjectProblemsController? controller,
 }) => MaterialApp(
   home: Scaffold(
     body: Revision3ProjectProblemsView(
@@ -717,6 +1091,7 @@ Widget _host({
       gameConfigured: gameConfigured,
       copy: _copy,
       actions: actions,
+      controller: controller,
     ),
   ),
 );

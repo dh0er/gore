@@ -140,6 +140,18 @@ dialog-runtime, production-build, deployment, live-game, or DataAsset authority,
 and it is not a promise that future or non-Steam builds are compatible without
 their own reviewed row.
 
+Native Story/NPC catalog refusals for an unsupported generation may include the
+optional, bounded `error.details` object
+`{"kind":"unsupported_generation","actual":{...},"supported":[...]}`. This
+is a closed diagnostic contract: `actual` is the observed executable/Shipping/
+Binds seal triple and `supported` contains at most 16 complete registered
+triples. Some refusal paths cannot retain that observed triple and therefore
+omit `details`; absence remains valid. Dart accepts only the exact schema on the
+matching unsupported-generation command/code pairs and treats malformed or
+inconsistent details as `MALFORMED_NATIVE_RESPONSE`. The object contains no
+native paths and grants no build, deployment, publication, runtime, or broader
+generation authority.
+
 Publication is bound to the exact project root, project ID, revision, and head.
 A changed checkpoint or a session that requires reopen locks the wizard rather
 than applying stale intent. On success the managed session publishes the

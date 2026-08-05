@@ -95,14 +95,33 @@ class Revision3ProjectWorkspace extends StatefulWidget {
     BuildContext context,
     Revision3ProjectWorkspaceLocation location,
   ) {
+    _stateOf(context)._selectLocation(location);
+  }
+
+  /// Returns the currently selected exact route for a descendant operation.
+  static Revision3ProjectWorkspaceLocation currentLocationOf(
+    BuildContext context,
+  ) {
+    final state = _stateOf(context);
+    return state._locationFor(state._selected);
+  }
+
+  /// Opaque identity that changes whenever the selected route changes.
+  ///
+  /// Async handoffs can retain this value to yield to newer user navigation,
+  /// including a route change away and back to the original location.
+  static Object navigationIdentityOf(BuildContext context) =>
+      _stateOf(context)._navigationIdentity;
+
+  static _Revision3ProjectWorkspaceState _stateOf(BuildContext context) {
     final state = context
         .findAncestorStateOfType<_Revision3ProjectWorkspaceState>();
     if (state == null) {
       throw FlutterError(
-        'Revision3ProjectWorkspace.navigate requires a descendant context.',
+        'Revision3ProjectWorkspace requires a descendant context.',
       );
     }
-    state._selectLocation(location);
+    return state;
   }
 
   @override
@@ -120,6 +139,7 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace>
   final Map<Revision3ProjectWorkspaceSection, String?> _secondaryRoutes = {
     Revision3ProjectWorkspaceSection.home: null,
   };
+  Object _navigationIdentity = Object();
   late final TabController _tabController;
   final Map<Revision3ProjectWorkspaceSection, GlobalKey> _tabVisibilityKeys = {
     for (final section in Revision3ProjectWorkspaceSection.values)
@@ -155,6 +175,7 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace>
     _secondaryRoutes
       ..clear()
       ..[Revision3ProjectWorkspaceSection.home] = null;
+    _navigationIdentity = Object();
     _tabController.index = Revision3ProjectWorkspaceSection.home.index;
     _scheduleTabVisible(Revision3ProjectWorkspaceSection.home);
   }
@@ -177,6 +198,7 @@ class _Revision3ProjectWorkspaceState extends State<Revision3ProjectWorkspace>
       return;
     }
     setState(() {
+      _navigationIdentity = Object();
       _selected = location.section;
       _secondaryRoutes[location.section] = location.secondary;
       _mounted.add(location.section);

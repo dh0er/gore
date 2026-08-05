@@ -7,6 +7,8 @@ import '../core/mod_ffi.dart';
 typedef Revision3ProjectBuildPlanLoader =
     Future<AuthoringRevision3ProjectBuildPlanResult> Function();
 typedef Revision3ProjectBuildPlanOpenVoiceDetails = FutureOr<void> Function();
+typedef Revision3ProjectBuildPlanOpenDataAssetDetails =
+    FutureOr<void> Function();
 
 typedef Revision3ProjectBuildPlanCountCopy = String Function(int count);
 typedef Revision3ProjectBuildPlanProgressCopy =
@@ -188,8 +190,11 @@ final class Revision3ProjectBuildPlanCopy {
     required this.affectedCount,
     required this.blockerReason,
     required this.openVoiceDetailsLabel,
+    required this.openDataAssetDetailsLabel,
     required this.actionFailedMessage,
     required this.actionInProgressSemanticsLabel,
+    required this.dataAssetActionFailedMessage,
+    required this.dataAssetActionInProgressSemanticsLabel,
     required this.technicalDetailsTitle,
     required this.technicalDetailsBody,
     required this.inputSealLabel,
@@ -231,9 +236,13 @@ final class Revision3ProjectBuildPlanCopy {
       affectedCount = _englishAffectedCount,
       blockerReason = _englishBlockerReason,
       openVoiceDetailsLabel = 'Show exact Voice problems',
+      openDataAssetDetailsLabel = 'Open exact DataAsset edit',
       actionFailedMessage =
           'The exact Voice problems are no longer available. Refresh this preview and try again.',
       actionInProgressSemanticsLabel = 'Opening exact Voice problems',
+      dataAssetActionFailedMessage =
+          'The exact DataAsset edit is no longer available. Refresh this preview and try again.',
+      dataAssetActionInProgressSemanticsLabel = 'Opening exact DataAsset edit',
       technicalDetailsTitle = 'Technical verification',
       technicalDetailsBody =
           'Deterministic seals bind this preview to its exact inputs and result.',
@@ -275,9 +284,14 @@ final class Revision3ProjectBuildPlanCopy {
       affectedCount = _germanAffectedCount,
       blockerReason = _germanBlockerReason,
       openVoiceDetailsLabel = 'Exakte Voice-Probleme anzeigen',
+      openDataAssetDetailsLabel = 'Exakte DataAsset-Bearbeitung öffnen',
       actionFailedMessage =
           'Die exakten Voice-Probleme sind nicht mehr aktuell. Aktualisiere diese Vorschau und versuche es erneut.',
       actionInProgressSemanticsLabel = 'Exakte Voice-Probleme werden geöffnet',
+      dataAssetActionFailedMessage =
+          'Die exakte DataAsset-Bearbeitung ist nicht mehr aktuell. Aktualisiere diese Vorschau und versuche es erneut.',
+      dataAssetActionInProgressSemanticsLabel =
+          'Exakte DataAsset-Bearbeitung wird geöffnet',
       technicalDetailsTitle = 'Technische Verifikation',
       technicalDetailsBody =
           'Deterministische Siegel binden diese Vorschau an ihre exakten Eingaben und ihr Ergebnis.',
@@ -311,8 +325,11 @@ final class Revision3ProjectBuildPlanCopy {
   final Revision3ProjectBuildPlanCountCopy affectedCount;
   final Revision3ProjectBuildPlanReasonCopy blockerReason;
   final String openVoiceDetailsLabel;
+  final String openDataAssetDetailsLabel;
   final String actionFailedMessage;
   final String actionInProgressSemanticsLabel;
+  final String dataAssetActionFailedMessage;
+  final String dataAssetActionInProgressSemanticsLabel;
   final String technicalDetailsTitle;
   final String technicalDetailsBody;
   final String inputSealLabel;
@@ -329,6 +346,7 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
     required this.checkpoint,
     required this.load,
     this.openVoiceDetails,
+    this.openDataAssetDetails,
     this.copy = const Revision3ProjectBuildPlanCopy.english(),
     super.key,
   });
@@ -336,6 +354,7 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
   final Revision3ProjectBuildPlanCheckpoint checkpoint;
   final Revision3ProjectBuildPlanLoader load;
   final Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails;
+  final Revision3ProjectBuildPlanOpenDataAssetDetails? openDataAssetDetails;
   final Revision3ProjectBuildPlanCopy copy;
 
   @override
@@ -343,11 +362,13 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
       _Revision3ProjectBuildPlanPanelState();
 }
 
+enum _Revision3ProjectBuildPlanDetailsAction { voice, dataAsset }
+
 class _Revision3ProjectBuildPlanPanelState
     extends State<Revision3ProjectBuildPlanPanel> {
   late final Revision3ProjectBuildPlanController _controller;
   int _actionEpoch = 0;
-  bool _openingVoiceDetails = false;
+  _Revision3ProjectBuildPlanDetailsAction? _openingDetails;
   String? _actionError;
 
   @override
@@ -365,7 +386,7 @@ class _Revision3ProjectBuildPlanPanelState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.checkpoint != widget.checkpoint) {
       _actionEpoch++;
-      _openingVoiceDetails = false;
+      _openingDetails = null;
       _actionError = null;
     }
     _controller.synchronize(checkpoint: widget.checkpoint, load: widget.load);
@@ -379,32 +400,40 @@ class _Revision3ProjectBuildPlanPanelState
   }
 
   Future<void> _refresh() async {
+    if (_openingDetails != null) return;
     _actionEpoch++;
     if (mounted) {
       setState(() {
-        _openingVoiceDetails = false;
+        _openingDetails = null;
         _actionError = null;
       });
     }
     await _controller.refresh();
   }
 
-  Future<void> _openVoiceDetails(
-    Revision3ProjectBuildPlanCheckpoint checkpoint,
-  ) async {
-    final action = widget.openVoiceDetails;
-    if (action == null || _openingVoiceDetails) return;
+  Future<void> _openDetails(
+    Revision3ProjectBuildPlanCheckpoint checkpoint, {
+    required FutureOr<void> Function() action,
+    required _Revision3ProjectBuildPlanDetailsAction kind,
+  }) async {
+    if (_openingDetails != null) return;
+    final failureMessage = switch (kind) {
+      _Revision3ProjectBuildPlanDetailsAction.voice =>
+        widget.copy.actionFailedMessage,
+      _Revision3ProjectBuildPlanDetailsAction.dataAsset =>
+        widget.copy.dataAssetActionFailedMessage,
+    };
     try {
       _requireCurrentReadyCheckpoint(checkpoint);
     } catch (_) {
       if (mounted && widget.checkpoint == checkpoint) {
-        setState(() => _actionError = widget.copy.actionFailedMessage);
+        setState(() => _actionError = failureMessage);
       }
       return;
     }
     final epoch = ++_actionEpoch;
     setState(() {
-      _openingVoiceDetails = true;
+      _openingDetails = kind;
       _actionError = null;
     });
     try {
@@ -413,11 +442,11 @@ class _Revision3ProjectBuildPlanPanelState
       _requireCurrentReadyCheckpoint(checkpoint);
     } catch (_) {
       if (_isCurrentAction(epoch, checkpoint)) {
-        setState(() => _actionError = widget.copy.actionFailedMessage);
+        setState(() => _actionError = failureMessage);
       }
     } finally {
       if (_isCurrentAction(epoch, checkpoint)) {
-        setState(() => _openingVoiceDetails = false);
+        setState(() => _openingDetails = null);
       }
     }
   }
@@ -467,9 +496,10 @@ class _Revision3ProjectBuildPlanPanelState
             children: [
               _BuildPlanHeader(
                 copy: widget.copy,
-                loading:
+                refreshDisabled:
                     snapshot.state ==
-                    Revision3ProjectBuildPlanLoadState.loading,
+                        Revision3ProjectBuildPlanLoadState.loading ||
+                    _openingDetails != null,
                 refresh: _refresh,
               ),
               const SizedBox(height: 10),
@@ -492,8 +522,20 @@ class _Revision3ProjectBuildPlanPanelState
                   copy: widget.copy,
                   openVoiceDetails: widget.openVoiceDetails == null
                       ? null
-                      : () => _openVoiceDetails(snapshot.checkpoint),
-                  openingVoiceDetails: _openingVoiceDetails,
+                      : () => _openDetails(
+                          snapshot.checkpoint,
+                          action: widget.openVoiceDetails!,
+                          kind: _Revision3ProjectBuildPlanDetailsAction.voice,
+                        ),
+                  openDataAssetDetails: widget.openDataAssetDetails == null
+                      ? null
+                      : () => _openDetails(
+                          snapshot.checkpoint,
+                          action: widget.openDataAssetDetails!,
+                          kind:
+                              _Revision3ProjectBuildPlanDetailsAction.dataAsset,
+                        ),
+                  openingDetails: _openingDetails,
                   actionError: _actionError,
                 ),
               },
@@ -508,12 +550,12 @@ class _Revision3ProjectBuildPlanPanelState
 class _BuildPlanHeader extends StatelessWidget {
   const _BuildPlanHeader({
     required this.copy,
-    required this.loading,
+    required this.refreshDisabled,
     required this.refresh,
   });
 
   final Revision3ProjectBuildPlanCopy copy;
-  final bool loading;
+  final bool refreshDisabled;
   final VoidCallback refresh;
 
   @override
@@ -540,7 +582,7 @@ class _BuildPlanHeader extends StatelessWidget {
       IconButton(
         key: const Key('revision3-project-build-plan-refresh'),
         tooltip: copy.refreshTooltip,
-        onPressed: loading ? null : refresh,
+        onPressed: refreshDisabled ? null : refresh,
         icon: const Icon(Icons.refresh),
       ),
     ],
@@ -640,14 +682,16 @@ class _BuildPlanReport extends StatelessWidget {
     required this.result,
     required this.copy,
     required this.openVoiceDetails,
-    required this.openingVoiceDetails,
+    required this.openDataAssetDetails,
+    required this.openingDetails,
     required this.actionError,
   });
 
   final AuthoringRevision3ProjectBuildPlanResult result;
   final Revision3ProjectBuildPlanCopy copy;
   final VoidCallback? openVoiceDetails;
-  final bool openingVoiceDetails;
+  final VoidCallback? openDataAssetDetails;
+  final _Revision3ProjectBuildPlanDetailsAction? openingDetails;
   final String? actionError;
 
   @override
@@ -698,10 +742,12 @@ class _BuildPlanReport extends StatelessWidget {
             icon: Icons.edit_note_outlined,
             title: copy.authorBlockersTitle,
             description: copy.authorBlockersBody,
+            plan: plan,
             blockers: authorBlockers,
             copy: copy,
             openVoiceDetails: openVoiceDetails,
-            openingVoiceDetails: openingVoiceDetails,
+            openDataAssetDetails: openDataAssetDetails,
+            openingDetails: openingDetails,
           ),
         ],
         if (toolkitBlockers.isNotEmpty) ...[
@@ -711,10 +757,12 @@ class _BuildPlanReport extends StatelessWidget {
             icon: Icons.construction_outlined,
             title: copy.toolkitBlockersTitle,
             description: copy.toolkitBlockersBody,
+            plan: plan,
             blockers: toolkitBlockers,
             copy: copy,
             openVoiceDetails: openVoiceDetails,
-            openingVoiceDetails: openingVoiceDetails,
+            openDataAssetDetails: openDataAssetDetails,
+            openingDetails: openingDetails,
           ),
         ],
         if (actionError case final actionError?) ...[
@@ -888,20 +936,24 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.description,
+    required this.plan,
     required this.blockers,
     required this.copy,
     required this.openVoiceDetails,
-    required this.openingVoiceDetails,
+    required this.openDataAssetDetails,
+    required this.openingDetails,
     super.key,
   });
 
   final IconData icon;
   final String title;
   final String description;
+  final AuthoringRevision3ProjectBuildPlan plan;
   final List<AuthoringRevision3ProjectBuildBlocker> blockers;
   final Revision3ProjectBuildPlanCopy copy;
   final VoidCallback? openVoiceDetails;
-  final bool openingVoiceDetails;
+  final VoidCallback? openDataAssetDetails;
+  final _Revision3ProjectBuildPlanDetailsAction? openingDetails;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -936,14 +988,7 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
             _BuildPlanBlockerRow(
               blocker: blockers[index],
               copy: copy,
-              openVoiceDetails:
-                  openVoiceDetails != null &&
-                      revision3ProjectBuildPlanHasExactVoiceDetails(
-                        blockers[index].reason,
-                      )
-                  ? openVoiceDetails
-                  : null,
-              openingVoiceDetails: openingVoiceDetails,
+              action: _detailsAction(blockers[index]),
             ),
             if (index != blockers.length - 1) const Divider(height: 12),
           ],
@@ -951,20 +996,69 @@ class _BuildPlanBlockerGroup extends StatelessWidget {
       ),
     ),
   );
+
+  _BuildPlanBlockerAction? _detailsAction(
+    AuthoringRevision3ProjectBuildBlocker blocker,
+  ) {
+    if (openVoiceDetails != null &&
+        revision3ProjectBuildPlanHasExactVoiceDetails(blocker.reason)) {
+      const kind = _Revision3ProjectBuildPlanDetailsAction.voice;
+      return _BuildPlanBlockerAction(
+        key:
+            'revision3-project-build-plan-voice-details-${blocker.reason.name}',
+        open: openVoiceDetails!,
+        label: copy.openVoiceDetailsLabel,
+        inProgressSemanticsLabel: copy.actionInProgressSemanticsLabel,
+        opening: openingDetails == kind,
+        busy: openingDetails != null,
+      );
+    }
+    if (openDataAssetDetails != null &&
+        revision3ProjectBuildPlanHasExactDataAssetStage(plan, blocker)) {
+      const kind = _Revision3ProjectBuildPlanDetailsAction.dataAsset;
+      return _BuildPlanBlockerAction(
+        key:
+            'revision3-project-build-plan-dataasset-details-${blocker.reason.name}',
+        open: openDataAssetDetails!,
+        label: copy.openDataAssetDetailsLabel,
+        inProgressSemanticsLabel: copy.dataAssetActionInProgressSemanticsLabel,
+        opening: openingDetails == kind,
+        busy: openingDetails != null,
+      );
+    }
+    return null;
+  }
+}
+
+@immutable
+final class _BuildPlanBlockerAction {
+  const _BuildPlanBlockerAction({
+    required this.key,
+    required this.open,
+    required this.label,
+    required this.inProgressSemanticsLabel,
+    required this.opening,
+    required this.busy,
+  });
+
+  final String key;
+  final VoidCallback open;
+  final String label;
+  final String inProgressSemanticsLabel;
+  final bool opening;
+  final bool busy;
 }
 
 class _BuildPlanBlockerRow extends StatelessWidget {
   const _BuildPlanBlockerRow({
     required this.blocker,
     required this.copy,
-    required this.openVoiceDetails,
-    required this.openingVoiceDetails,
+    required this.action,
   });
 
   final AuthoringRevision3ProjectBuildBlocker blocker;
   final Revision3ProjectBuildPlanCopy copy;
-  final VoidCallback? openVoiceDetails;
-  final bool openingVoiceDetails;
+  final _BuildPlanBlockerAction? action;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -989,25 +1083,21 @@ class _BuildPlanBlockerRow extends StatelessWidget {
           ),
         ],
       ),
-      if (openVoiceDetails != null) ...[
+      if (action case final action?) ...[
         const SizedBox(height: 4),
         Semantics(
-          liveRegion: openingVoiceDetails,
-          label: openingVoiceDetails
-              ? copy.actionInProgressSemanticsLabel
-              : null,
+          liveRegion: action.opening,
+          label: action.opening ? action.inProgressSemanticsLabel : null,
           child: TextButton.icon(
-            key: ValueKey(
-              'revision3-project-build-plan-voice-details-${blocker.reason.name}',
-            ),
-            onPressed: openingVoiceDetails ? null : openVoiceDetails,
-            icon: openingVoiceDetails
+            key: ValueKey(action.key),
+            onPressed: action.busy ? null : action.open,
+            icon: action.opening
                 ? const SizedBox.square(
                     dimension: 16,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.arrow_forward),
-            label: Text(copy.openVoiceDetailsLabel),
+            label: Text(action.label),
           ),
         ),
       ],
@@ -1028,6 +1118,36 @@ bool revision3ProjectBuildPlanHasExactVoiceDetails(
     true,
   _ => false,
 };
+
+/// True only when one exact author-owned DataAsset blocker can refer to the
+/// plan's sole retained stage. The stage target itself remains Store-owned and
+/// must be resolved again through the exact Problems projection before opening.
+@visibleForTesting
+bool revision3ProjectBuildPlanHasExactDataAssetStage(
+  AuthoringRevision3ProjectBuildPlan plan,
+  AuthoringRevision3ProjectBuildBlocker blocker,
+) {
+  if (blocker.category !=
+          AuthoringRevision3ProjectBuildBlockerCategory.authorProject ||
+      blocker.domain != AuthoringRevision3ProjectBuildDomain.dataAssets ||
+      blocker.affectedCount != 1) {
+    return false;
+  }
+  final summary = plan.domain(AuthoringRevision3ProjectBuildDomain.dataAssets);
+  if (summary.contentCount != 1 ||
+      summary.readyCount != 0 ||
+      summary.blockedCount != 1) {
+    return false;
+  }
+  final dataAssetBlockers = plan.blockers
+      .where(
+        (candidate) =>
+            candidate.domain == AuthoringRevision3ProjectBuildDomain.dataAssets,
+      )
+      .toList(growable: false);
+  return dataAssetBlockers.length == 1 &&
+      identical(dataAssetBlockers.single, blocker);
+}
 
 class _TechnicalSeals extends StatelessWidget {
   const _TechnicalSeals({required this.plan, required this.copy});

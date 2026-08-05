@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Нет неразрешённых ссылок в проекте",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 неразрешённая ссылка в проекте} few{{count} неразрешённые ссылки в проекте} many{{count} неразрешённых ссылок в проекте} other{{count} неразрешённой ссылки в проекте}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Это только статус ссылок; он не означает готовности к сборке или запуску.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Только прямые ссылки этого черновика; проблемы дочерних материалов диалогов и озвучки не включены. Это не означает готовности к сборке или запуску.",
   "managedStoryWorkbenchTechnicalDetails": "Технические сведения",
   "managedStoryWorkbenchQuestKindLabel": "Черновик задания",
   "managedStoryWorkbenchNpcKindLabel": "Черновик NPC",

@@ -150,6 +150,179 @@ final class Revision3ProjectProblemsCopy {
   final String actionInProgressSemanticsLabel;
 }
 
+/// Exact managed-project checkpoint represented by a Problems load.
+@immutable
+final class Revision3ProjectProblemsCheckpoint {
+  const Revision3ProjectProblemsCheckpoint({
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+  }) : assert(projectRoot != ''),
+       assert(projectId != ''),
+       assert(projectRevision >= 0),
+       assert(projectHeadCanonicalJson != '');
+
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Revision3ProjectProblemsCheckpoint &&
+      projectRoot == other.projectRoot &&
+      projectId == other.projectId &&
+      projectRevision == other.projectRevision &&
+      projectHeadCanonicalJson == other.projectHeadCanonicalJson;
+
+  @override
+  int get hashCode => Object.hash(
+    projectRoot,
+    projectId,
+    projectRevision,
+    projectHeadCanonicalJson,
+  );
+}
+
+/// Publication state of the canonical Problems reference assessment.
+enum Revision3ProjectProblemsLoadState { detached, loading, ready, unavailable }
+
+/// Narrow, read-only output from one canonical Problems view.
+///
+/// A ready snapshot exposes only the reference-integrity assessment that came
+/// from the exact report rendered by the view. It grants no mutation, build,
+/// deployment, or runtime authority and deliberately does not mirror the
+/// report's unrelated setup or DataAsset scopes.
+@immutable
+final class Revision3ProjectProblemsSnapshot {
+  const Revision3ProjectProblemsSnapshot._({
+    required this.state,
+    this.checkpoint,
+    this.referenceIntegrity,
+  }) : assert(
+         state == Revision3ProjectProblemsLoadState.detached
+             ? checkpoint == null && referenceIntegrity == null
+             : checkpoint != null,
+       ),
+       assert(
+         state == Revision3ProjectProblemsLoadState.ready
+             ? referenceIntegrity != null
+             : referenceIntegrity == null,
+       );
+
+  const Revision3ProjectProblemsSnapshot._detached()
+    : this._(state: Revision3ProjectProblemsLoadState.detached);
+
+  factory Revision3ProjectProblemsSnapshot._loading(
+    Revision3ProjectProblemsCheckpoint checkpoint,
+  ) => Revision3ProjectProblemsSnapshot._(
+    state: Revision3ProjectProblemsLoadState.loading,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3ProjectProblemsSnapshot._unavailable(
+    Revision3ProjectProblemsCheckpoint checkpoint,
+  ) => Revision3ProjectProblemsSnapshot._(
+    state: Revision3ProjectProblemsLoadState.unavailable,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3ProjectProblemsSnapshot._ready(
+    Revision3ProjectProblemsCheckpoint checkpoint,
+    Revision3ProjectProblemReport report,
+  ) {
+    final assessment = report.assessments.singleWhere(
+      (candidate) =>
+          candidate.scope == Revision3ProjectProblemScope.referenceIntegrity,
+    );
+    assert(
+      assessment.evidence == Revision3ProjectProblemEvidence.exactContentIndex,
+    );
+    assert(
+      assessment.readiness == Revision3ProjectProblemReadiness.clear ||
+          assessment.readiness == Revision3ProjectProblemReadiness.issues,
+    );
+    return Revision3ProjectProblemsSnapshot._(
+      state: Revision3ProjectProblemsLoadState.ready,
+      checkpoint: checkpoint,
+      referenceIntegrity: assessment,
+    );
+  }
+
+  final Revision3ProjectProblemsLoadState state;
+  final Revision3ProjectProblemsCheckpoint? checkpoint;
+  final Revision3ProjectProblemAssessment? referenceIntegrity;
+
+  bool belongsTo(Revision3ProjectProblemsCheckpoint expected) =>
+      checkpoint == expected;
+}
+
+/// Observes one mounted Problems view without owning its loaders or report.
+///
+/// The attachment token prevents a replaced or disposed child from publishing
+/// into a newer view's status channel.
+final class Revision3ProjectProblemsController extends ChangeNotifier {
+  Object? _attachment;
+  Revision3ProjectProblemsSnapshot _snapshot =
+      const Revision3ProjectProblemsSnapshot._detached();
+  int _attachmentGeneration = 0;
+  bool _disposed = false;
+
+  Revision3ProjectProblemsSnapshot get snapshot => _snapshot;
+
+  void _attach(Object attachment) {
+    if (_disposed) {
+      throw StateError('A disposed Problems controller cannot attach.');
+    }
+    // Flutter can mount a keyed replacement before disposing the old child.
+    // The newer token atomically supersedes it; every later publication and
+    // detach from the old child then fails the identity check below.
+    _attachment = attachment;
+    _attachmentGeneration++;
+    _snapshot = const Revision3ProjectProblemsSnapshot._detached();
+  }
+
+  void _publish(
+    Object attachment,
+    Revision3ProjectProblemsSnapshot snapshot, {
+    required bool notify,
+  }) {
+    if (_disposed || !identical(_attachment, attachment)) return;
+    _snapshot = snapshot;
+    if (notify) {
+      notifyListeners();
+    } else {
+      _notifyAfterBuild(_attachmentGeneration);
+    }
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    final generation = ++_attachmentGeneration;
+    _snapshot = const Revision3ProjectProblemsSnapshot._detached();
+    _notifyAfterBuild(generation);
+  }
+
+  void _notifyAfterBuild(int generation) {
+    scheduleMicrotask(() {
+      if (_disposed || generation != _attachmentGeneration) return;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _attachmentGeneration++;
+    _snapshot = const Revision3ProjectProblemsSnapshot._detached();
+    super.dispose();
+  }
+}
+
 /// Read-only Problems surface for one exact managed revision-3 checkpoint.
 ///
 /// The two sources are loaded independently so one unavailable projection does
@@ -166,6 +339,7 @@ final class Revision3ProjectProblemsView extends StatefulWidget {
     required this.gameConfigured,
     required this.copy,
     this.actions = const Revision3ProjectProblemsActions(),
+    this.controller,
     super.key,
   }) : assert(projectRoot != ''),
        assert(projectId != ''),
@@ -185,6 +359,7 @@ final class Revision3ProjectProblemsView extends StatefulWidget {
   final bool gameConfigured;
   final Revision3ProjectProblemsCopy copy;
   final Revision3ProjectProblemsActions actions;
+  final Revision3ProjectProblemsController? controller;
 
   @override
   State<Revision3ProjectProblemsView> createState() =>
@@ -201,16 +376,18 @@ class _Revision3ProjectProblemsViewState
   bool _failed = false;
   int _loadEpoch = 0;
 
-  _Revision3ProblemsCheckpoint get _checkpoint => _Revision3ProblemsCheckpoint(
-    projectRoot: widget.projectRoot,
-    projectId: widget.projectId,
-    projectRevision: widget.projectRevision,
-    projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
-  );
+  Revision3ProjectProblemsCheckpoint get _checkpoint =>
+      Revision3ProjectProblemsCheckpoint(
+        projectRoot: widget.projectRoot,
+        projectId: widget.projectId,
+        projectRevision: widget.projectRevision,
+        projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
+      );
 
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     _search.addListener(_searchChanged);
     _startLoad(notify: false);
   }
@@ -218,7 +395,12 @@ class _Revision3ProjectProblemsViewState
   @override
   void didUpdateWidget(covariant Revision3ProjectProblemsView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final oldCheckpoint = _Revision3ProblemsCheckpoint(
+    final controllerChanged = oldWidget.controller != widget.controller;
+    if (controllerChanged) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
+    final oldCheckpoint = Revision3ProjectProblemsCheckpoint(
       projectRoot: oldWidget.projectRoot,
       projectId: oldWidget.projectId,
       projectRevision: oldWidget.projectRevision,
@@ -229,12 +411,19 @@ class _Revision3ProjectProblemsViewState
       _category = null;
       _selectedProblemId = null;
       _startLoad(notify: false);
+      return;
+    }
+    if (oldWidget.gameConfigured != widget.gameConfigured) {
+      _rebuildLoadedReport();
+    } else if (controllerChanged) {
+      _publishCurrentSnapshot(notify: false);
     }
   }
 
   @override
   void dispose() {
     _loadEpoch++;
+    widget.controller?._detach(this);
     _search
       ..removeListener(_searchChanged)
       ..dispose();
@@ -260,6 +449,10 @@ class _Revision3ProjectProblemsViewState
     } else {
       markLoading();
     }
+    _publishSnapshot(
+      Revision3ProjectProblemsSnapshot._loading(checkpoint),
+      notify: notify,
+    );
 
     unawaited(
       _finishLoad(
@@ -273,7 +466,7 @@ class _Revision3ProjectProblemsViewState
 
   Future<void> _finishLoad({
     required int epoch,
-    required _Revision3ProblemsCheckpoint checkpoint,
+    required Revision3ProjectProblemsCheckpoint checkpoint,
     required Revision3ProblemsViewContentLoader contentLoader,
     required Revision3ProblemsViewDataAssetStageLoader stageLoader,
   }) async {
@@ -299,6 +492,10 @@ class _Revision3ProjectProblemsViewState
         _loading = false;
         _failed = true;
       });
+      _publishSnapshot(
+        Revision3ProjectProblemsSnapshot._unavailable(checkpoint),
+        notify: true,
+      );
       return;
     }
 
@@ -315,15 +512,41 @@ class _Revision3ProjectProblemsViewState
       }
     }
 
-    setState(() {
-      _sources = _Revision3ProblemsSources(
-        checkpoint: checkpoint,
-        content: content.value!,
-        stages: exactStages,
+    Revision3ProjectProblemReport report;
+    try {
+      report = Revision3ProjectProblemBuilder.build(
+        content.value!,
+        dataAssetStages: exactStages,
+        gameConfigured: widget.gameConfigured,
       );
+    } catch (_) {
+      setState(() {
+        _sources = null;
+        _loading = false;
+        _failed = true;
+      });
+      _publishSnapshot(
+        Revision3ProjectProblemsSnapshot._unavailable(checkpoint),
+        notify: true,
+      );
+      return;
+    }
+
+    final sources = _Revision3ProblemsSources(
+      checkpoint: checkpoint,
+      content: content.value!,
+      stages: exactStages,
+      report: report,
+    );
+    setState(() {
+      _sources = sources;
       _loading = false;
       _failed = false;
     });
+    _publishSnapshot(
+      Revision3ProjectProblemsSnapshot._ready(checkpoint, report),
+      notify: true,
+    );
   }
 
   @override
@@ -356,11 +579,7 @@ class _Revision3ProjectProblemsViewState
         ),
       );
     }
-    final report = Revision3ProjectProblemBuilder.build(
-      sources.content,
-      dataAssetStages: sources.stages,
-      gameConfigured: widget.gameConfigured,
-    );
+    final report = sources.report;
     final visible = _visibleProblems(report);
     final selected = _selectedProblem(visible);
     return _Revision3ProblemsLoaded(
@@ -383,7 +602,7 @@ class _Revision3ProjectProblemsViewState
   }
 
   Revision3ProjectProblemsActions _actionsAtCheckpoint(
-    _Revision3ProblemsCheckpoint checkpoint,
+    Revision3ProjectProblemsCheckpoint checkpoint,
   ) {
     final actions = widget.actions;
     final openEntity = actions.openEntity;
@@ -416,7 +635,7 @@ class _Revision3ProjectProblemsViewState
   }
 
   Future<void> _invokeAtCheckpoint(
-    _Revision3ProblemsCheckpoint checkpoint,
+    Revision3ProjectProblemsCheckpoint checkpoint,
     Revision3ProblemsViewAction action,
   ) async {
     _requireCurrentReport(checkpoint);
@@ -424,7 +643,7 @@ class _Revision3ProjectProblemsViewState
     _requireCurrentReport(checkpoint);
   }
 
-  void _requireCurrentReport(_Revision3ProblemsCheckpoint checkpoint) {
+  void _requireCurrentReport(Revision3ProjectProblemsCheckpoint checkpoint) {
     if (!mounted ||
         checkpoint != _checkpoint ||
         _sources?.checkpoint != checkpoint) {
@@ -462,6 +681,52 @@ class _Revision3ProjectProblemsViewState
     }
     return visible.isEmpty ? null : visible.first;
   }
+
+  void _rebuildLoadedReport() {
+    final sources = _sources;
+    if (sources == null || sources.checkpoint != _checkpoint) {
+      _publishCurrentSnapshot(notify: false);
+      return;
+    }
+    try {
+      final report = Revision3ProjectProblemBuilder.build(
+        sources.content,
+        dataAssetStages: sources.stages,
+        gameConfigured: widget.gameConfigured,
+      );
+      _sources = sources.withReport(report);
+      _publishSnapshot(
+        Revision3ProjectProblemsSnapshot._ready(sources.checkpoint, report),
+        notify: false,
+      );
+    } catch (_) {
+      _sources = null;
+      _loading = false;
+      _failed = true;
+      _publishSnapshot(
+        Revision3ProjectProblemsSnapshot._unavailable(_checkpoint),
+        notify: false,
+      );
+    }
+  }
+
+  void _publishCurrentSnapshot({required bool notify}) {
+    final sources = _sources;
+    final snapshot = _loading
+        ? Revision3ProjectProblemsSnapshot._loading(_checkpoint)
+        : _failed || sources == null || sources.checkpoint != _checkpoint
+        ? Revision3ProjectProblemsSnapshot._unavailable(_checkpoint)
+        : Revision3ProjectProblemsSnapshot._ready(
+            sources.checkpoint,
+            sources.report,
+          );
+    _publishSnapshot(snapshot, notify: notify);
+  }
+
+  void _publishSnapshot(
+    Revision3ProjectProblemsSnapshot snapshot, {
+    required bool notify,
+  }) => widget.controller?._publish(this, snapshot, notify: notify);
 }
 
 final class _Revision3ProblemsSources {
@@ -469,41 +734,21 @@ final class _Revision3ProblemsSources {
     required this.checkpoint,
     required this.content,
     required this.stages,
+    required this.report,
   });
 
-  final _Revision3ProblemsCheckpoint checkpoint;
+  final Revision3ProjectProblemsCheckpoint checkpoint;
   final Revision3ContentIndex content;
   final List<AuthoringRevision3DataAssetStage>? stages;
-}
+  final Revision3ProjectProblemReport report;
 
-@immutable
-final class _Revision3ProblemsCheckpoint {
-  const _Revision3ProblemsCheckpoint({
-    required this.projectRoot,
-    required this.projectId,
-    required this.projectRevision,
-    required this.projectHeadCanonicalJson,
-  });
-
-  final String projectRoot;
-  final String projectId;
-  final int projectRevision;
-  final String projectHeadCanonicalJson;
-
-  @override
-  bool operator ==(Object other) =>
-      other is _Revision3ProblemsCheckpoint &&
-      projectRoot == other.projectRoot &&
-      projectId == other.projectId &&
-      projectRevision == other.projectRevision &&
-      projectHeadCanonicalJson == other.projectHeadCanonicalJson;
-
-  @override
-  int get hashCode => Object.hash(
-    projectRoot,
-    projectId,
-    projectRevision,
-    projectHeadCanonicalJson,
+  _Revision3ProblemsSources withReport(
+    Revision3ProjectProblemReport nextReport,
+  ) => _Revision3ProblemsSources(
+    checkpoint: checkpoint,
+    content: content,
+    stages: stages,
+    report: nextReport,
   );
 }
 
@@ -1516,7 +1761,7 @@ Future<_Revision3StagesLoad> _loadStages(
     if (stages.any(
       (stage) =>
           stage.projectId != expectedProjectId ||
-          stage.stagedProjectRevision != expectedProjectRevision,
+          stage.stagedProjectRevision > expectedProjectRevision,
     )) {
       return const _Revision3StagesLoad(null);
     }

@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 
+import '../support/revision3_npc_fixture.dart';
+
 const _root = r'C:\Projects\NpcInspection.goreproj';
 const _projectId = '00000000000000000000000000000031';
 const _npcId = '00000000000000000000000000000051';
@@ -327,6 +329,51 @@ void main() {
       expect(result.plan.knownParentLabel, isNull);
     },
   );
+
+  test('maps every supported parent label and rejects an unknown seal', () {
+    const generations = <({int byteLength, String sha256, String? expectedLabel})>[
+      (
+        byteLength: 171698176,
+        sha256:
+            'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+        expectedLabel: 'Asghan',
+      ),
+      (
+        byteLength: 171704320,
+        sha256:
+            'b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d',
+        expectedLabel: 'Asghan',
+      ),
+      (
+        byteLength: 171787776,
+        sha256:
+            'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c',
+        expectedLabel: 'Asghan',
+      ),
+      (
+        byteLength: 171787776,
+        sha256:
+            'fb2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c',
+        expectedLabel: null,
+      ),
+    ];
+    for (final generation in generations) {
+      final projectJson = revision3NpcInspectionProjectJson(
+        executableByteLength: generation.byteLength,
+        executableSha256: generation.sha256,
+      );
+      final result = revision3NpcInspectionResult(
+        head: revision3NpcFixtureHead(projectJson),
+        projectJson: projectJson,
+      );
+
+      expect(
+        result.plan.knownParentLabel,
+        generation.expectedLabel,
+        reason: generation.sha256,
+      );
+    }
+  });
 
   test(
     'rejects response authority, identity, seal, and field-order drift',

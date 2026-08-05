@@ -8,14 +8,16 @@
 //! supported ones. This is a string grep, it is ugly, and it is exactly the friction the compiler
 //! used to supply and cannot supply across a language boundary.
 //!
-//! Deliberately not covered: `revision3_npc_source_inspection.dart`'s `knownParentLabel`, which
-//! gates on the first generation's executable alone and already returns `null` on the second. That
-//! is a pre-existing defect with a decision in it — whether a later-generation user should see a
-//! parent label at all — and asserting it here would encode an answer nobody has given.
+//! The NPC source-inspection label must delegate to the same closed executable predicate as NPC
+//! drafting. Otherwise a newly admitted row can author and verify an NPC while silently losing its
+//! friendly saved-parent label in the UI.
 
 const PROJECT_BOOTSTRAP: &str =
     include_str!("../../../apps/mod-studio/lib/project/revision3_project_bootstrap.dart");
-const NPC_DRAFT: &str = include_str!("../../../apps/mod-studio/lib/project/revision3_npc_draft.dart");
+const NPC_DRAFT: &str =
+    include_str!("../../../apps/mod-studio/lib/project/revision3_npc_draft.dart");
+const NPC_SOURCE_INSPECTION: &str =
+    include_str!("../../../apps/mod-studio/lib/project/revision3_npc_source_inspection.dart");
 
 fn encode_hex(bytes: &[u8; 32]) -> String {
     let mut hex = String::with_capacity(64);
@@ -71,5 +73,16 @@ fn dart_generation_tables_cover_every_row() {
         "revision3_project_bootstrap.dart declares {declared} supported generations and the table \
          has {}",
         gore_generation::rows().len()
+    );
+
+    assert!(
+        NPC_SOURCE_INSPECTION.contains("_authoringRevision3NpcIsSupportedExecutable("),
+        "revision3_npc_source_inspection.dart must reuse the exact NPC generation predicate before \
+         showing a friendly saved-parent label"
+    );
+    assert!(
+        !NPC_SOURCE_INSPECTION.contains("_authoringRevision3NpcExecutableByteLengthV"),
+        "revision3_npc_source_inspection.dart carries a private generation gate; reuse the shared \
+         exact NPC executable predicate so later rows cannot lose their friendly parent label"
     );
 }

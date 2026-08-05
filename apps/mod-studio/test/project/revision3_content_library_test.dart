@@ -57,12 +57,23 @@ void main() {
       find.byKey(Key('revision3-story-workbench-tab-profile-$_npcId')),
       findsOneWidget,
     );
-    expect(
-      find.byKey(
-        const Key('revision3-story-workbench-npc-planned-capabilities'),
-      ),
-      findsOneWidget,
+    final profile = find.byKey(
+      Key('revision3-story-workbench-section-profile-$_npcId'),
     );
+    final plannedCapabilities = find.byKey(
+      const Key('revision3-story-workbench-npc-planned-capabilities'),
+    );
+    await tester.scrollUntilVisible(
+      plannedCapabilities,
+      160,
+      scrollable: find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(plannedCapabilities, findsOneWidget);
     expect(find.text('Story, Routine, Inventory'), findsOneWidget);
     expect(
       find.text(

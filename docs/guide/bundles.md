@@ -43,6 +43,30 @@ the CDO patch. Each section maps to the domain guide of the same name:
 [items](items.md), [text](text-and-dialogs.md), [audio](audio.md),
 [voice](voice.md), [textures](textures.md), [scripts](scripts.md).
 
+## Bundle format and reader contract
+
+The build spec is authoring input. The built bundle's root `gore-mod.json` has
+a separate, closed `format` contract that tells a consumer which component set
+it must understand:
+
+| `gore-mod.json` format | Valid component shape | When the current writer uses it |
+|---|---|---|
+| `1` | every current component except `pak_file_patch` | the spec has no `pak_files` entries |
+| `2` | the format-1 set plus at least one `pak_file_patch` | the spec has one or more `pak_files` entries |
+
+Formats 1 and 2 are both current. A newer writer does not upgrade an ordinary
+format-1 bundle merely because it knows format 2; it writes format 2 if and
+only if the bundle actually carries `pak_file_patch`.
+
+Direct deploy and Mod Manager import validate this relationship before component
+paths or payload contracts are interpreted or anything is activated. They reject
+an unknown format, format 1 containing `pak_file_patch`, and format 2 without it.
+A rejected bundle is not migrated, downgraded, stripped of the unknown
+component, or retried as a foreign mod. Use a consumer that supports the
+declared format, or rebuild from the source spec; do not hand-edit the format
+number. The version inside `voice/manifest.json` is an independent
+voice-payload contract.
+
 ## Build, deploy, undeploy
 
 ```powershell
@@ -88,11 +112,11 @@ eight cursor PNGs are exactly that case — see
 
 - **`files`** writes the destination on disk, in place. It reaches a path only
   the filesystem carries.
-- **`pak_files`** packs your files into an override `.pak` of your own and
-  installs it in `~mods\`, the same virtual namespace the game's paks mount
-  into. It is what reaches a shadowed path, and it does not need the destination
-  to exist on disk — everything under `G1R/Config` is packed and has no loose
-  copy at all.
+- **`pak_files`** packs your files into an additive `.pak` of your own, installs
+  it in `~mods\`, and declares the virtual game path each entry claims. The
+  destination need not exist as a loose file on disk — everything under
+  `G1R/Config` is packed and has no loose copy at all. Offline verification proves
+  the archive and deployment receipt, not which entry the game selects at runtime.
 
 One command tells you which you are looking at:
 
@@ -132,12 +156,19 @@ contract a property of the machine that deployed it rather than of the mod.
 Two mods replacing the same loose file is a **hard** conflict in
 [`gore mgr analyze`](mod-manager.md): the loser keeps nothing. An apply still
 succeeds — the later mod in load order wins the whole file. Two mods claiming
-one path through `pak_files` is milder: mount order settles it, and the loser
-loses only that entry.
+one path through `pak_files` is milder: the manager keeps both additive paks,
+orders their filenames by loadout position, and reports the later claimant as
+the intended winner for that entry.
 
 Whether the game honors a replaced loose file at runtime is still a per-file
 question wherever no pak shadows it; the toolkit only guarantees the replacement
 and its restore.
+
+The deterministic pak filenames, filesystem changes, and deploy receipts are
+offline ownership evidence only. They do **not** prove Unreal's mount priority,
+that the game reads the intended entry, or any runtime/gameplay result. They
+also grant no authority for a real installation, game launch, save access, or
+save mutation; each of those needs its own qualified safety gate.
 
 ## Dialog topics
 

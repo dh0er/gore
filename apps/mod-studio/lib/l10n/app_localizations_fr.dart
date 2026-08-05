@@ -2086,7 +2086,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'État des références uniquement ; il ne garantit pas que le projet est prêt à être compilé ou exécuté.';
+      'Références directes de ce brouillon uniquement ; les problèmes des contenus Dialogue et voix enfants ne sont pas inclus. Cela ne garantit pas que le projet est prêt à être compilé ou exécuté.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Détails techniques';
@@ -2868,16 +2868,112 @@ class AppLocalizationsFr extends AppLocalizations {
   String get managedStoryWorkbenchEditNpcProfile => 'Edit name & archetype';
 
   @override
-  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle =>
-      'Next step: Dialog & Voice';
+  String get managedStoryWorkbenchNpcDraftSetupTitle => 'Write this Character';
 
   @override
-  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription =>
-      'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.';
+  String get managedStoryWorkbenchNpcDraftSetupDescription =>
+      'This view tracks the exact Character details and first authored greeting as two project steps in the current revision.';
 
   @override
-  String get managedStoryWorkbenchContinueToNpcDialogVoice =>
-      'Continue to Dialog & Voice';
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsTitle =>
+      '1. Character details';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupFirstGreetingTitle =>
+      '2. First greeting';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupCompleteStatus =>
+      'Saved in project';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupNextStatus =>
+      'Recommended next step';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupOpenStatus => 'Still open';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsComplete =>
+      'The exact Character name and reviewed archetype parents are present in this project revision.';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsUnavailable =>
+      'The exact current Character details could not be verified.';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupFirstGreetingPending =>
+      'Link the first authored greeting in Dialog & Voice.';
+
+  @override
+  String
+  get managedStoryWorkbenchNpcDraftSetupFirstGreetingDetailsUnavailable =>
+      'Text and Voice coverage for the first greeting could not be verified in this exact project revision.';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupRecommendedNext =>
+      'Recommended next step';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupWriteFirstGreeting =>
+      'Write first greeting';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupReviewDialogVoice =>
+      'Review greetings in Dialog & Voice';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupActionUnavailable =>
+      'Dialog & Voice is unavailable for this exact project revision.';
+
+  @override
+  String get managedStoryWorkbenchNpcDraftSetupBoundary =>
+      'Draft setup tracks current authored project content only. A greeting link is not a playable dialog topic and does not prove publication history, build, or runtime behavior.';
+
+  @override
+  String managedStoryWorkbenchNpcDraftSetupGreetingLinkCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count authored greeting links',
+      one: '1 authored greeting link',
+      zero: 'No authored greeting links',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String managedStoryWorkbenchNpcDraftSetupTextLanguageCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count text languages',
+      one: '1 text language',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String managedStoryWorkbenchNpcDraftSetupVoiceTakeCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count Voice takes',
+      one: '1 Voice take',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String managedStoryWorkbenchNpcDraftSetupSelectedVoiceCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count selected Voice takes',
+      one: '1 selected Voice take',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get managedStoryWorkbenchNpcDisplayNameLabel => 'Character name';

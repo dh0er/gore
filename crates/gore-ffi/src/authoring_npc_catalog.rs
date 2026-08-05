@@ -452,6 +452,42 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_generation_details_are_exact_path_free_and_optional() {
+        let supported = known_supported_generations();
+        let mut actual = supported[0].clone();
+        actual.binds_cache.byte_len += 1;
+        let detailed = map_story_catalog_error(CatalogError::UnsupportedGeneration {
+            supported: supported.clone(),
+            actual: Box::new(actual.clone()),
+        })
+        .response();
+
+        assert_eq!(
+            detailed["error"]["code"],
+            "AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION"
+        );
+        assert_eq!(
+            detailed["error"]["details"],
+            json!({
+                "kind": "unsupported_generation",
+                "actual": actual,
+                "supported": supported,
+            })
+        );
+        assert_eq!(detailed["error"].as_object().unwrap().len(), 3);
+        assert!(!detailed.to_string().contains("path"));
+
+        let without_details =
+            map_npc_catalog_error(NpcCatalogError::UnsupportedGeneration).response();
+        assert_eq!(
+            without_details["error"]["code"],
+            "AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION"
+        );
+        assert!(without_details["error"].get("details").is_none());
+        assert_eq!(without_details["error"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
     fn recovery_and_missing_paths_are_sanitized() {
         let root = tempfile::tempdir().unwrap();
         let game = root.path().join("private-game-root");

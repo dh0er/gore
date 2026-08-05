@@ -414,12 +414,38 @@ fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_story_catalog::Sha256Digest;
+    use gore_story_catalog::{known_supported_generations, Sha256Digest};
     use std::collections::BTreeMap;
     use std::fs;
 
     fn trusted() -> &'static str {
         include_str!("../tests/fixtures/story_catalog_v1.json").trim_end_matches(['\r', '\n'])
+    }
+
+    fn unsupported_generation_details_for(
+        executable: &[u8],
+        shipping_cache: &[u8],
+        binds_cache: &[u8],
+    ) -> Value {
+        json!({
+            "kind": "unsupported_generation",
+            "actual": {
+                "edition": "g1r-steam",
+                "executable": {
+                    "byte_len": executable.len(),
+                    "sha256": hex_sha256(executable),
+                },
+                "shipping_cache": {
+                    "byte_len": shipping_cache.len(),
+                    "sha256": hex_sha256(shipping_cache),
+                },
+                "binds_cache": {
+                    "byte_len": binds_cache.len(),
+                    "sha256": hex_sha256(binds_cache),
+                },
+            },
+            "supported": known_supported_generations(),
+        })
     }
 
     #[test]
@@ -515,9 +541,12 @@ mod tests {
         let executable = root.path().join("fixture-game.exe");
         let shipping_cache = root.path().join("fixture-shipping.cache");
         let binds_cache = root.path().join("fixture-binds.cache");
-        fs::write(&executable, b"fixture executable").unwrap();
-        fs::write(&shipping_cache, b"fixture shipping cache").unwrap();
-        fs::write(&binds_cache, b"fixture binds cache").unwrap();
+        let executable_bytes = b"fixture executable";
+        let shipping_bytes = b"fixture shipping cache";
+        let binds_bytes = b"fixture binds cache";
+        fs::write(&executable, executable_bytes).unwrap();
+        fs::write(&shipping_cache, shipping_bytes).unwrap();
+        fs::write(&binds_cache, binds_bytes).unwrap();
         let payload = json!({
             "executable": executable.to_string_lossy(),
             "shipping_cache": shipping_cache.to_string_lossy(),
@@ -533,6 +562,10 @@ mod tests {
             response["error"]["code"],
             "AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION"
         );
+        assert_eq!(
+            response["error"]["details"],
+            unsupported_generation_details_for(executable_bytes, shipping_bytes, binds_bytes)
+        );
         assert!(!response
             .to_string()
             .contains(root.path().to_string_lossy().as_ref()));
@@ -547,7 +580,7 @@ mod tests {
             .to_string()
             .contains(root.path().to_string_lossy().as_ref()));
 
-        fs::write(&binds_cache, b"fixture binds cache").unwrap();
+        fs::write(&binds_cache, binds_bytes).unwrap();
         let binds_alias = root.path().join("fixture-binds-alias.cache");
         fs::hard_link(&binds_cache, &binds_alias).unwrap();
         let unsafe_input = build_story_catalog_v1(payload);
@@ -631,23 +664,30 @@ mod tests {
         let g1r = game.join("G1R");
         fs::create_dir_all(g1r.join("Binaries/Win64")).unwrap();
         fs::create_dir_all(g1r.join("Script")).unwrap();
+        let executable_bytes = b"fixture exe";
+        let shipping_bytes = b"fixture pristine";
+        let binds_bytes = b"fixture binds";
         fs::write(
             g1r.join("Binaries/Win64/G1R-Win64-Shipping.exe"),
-            b"fixture exe",
+            executable_bytes,
         )
         .unwrap();
         fs::write(
             g1r.join("Script/PrecompiledScript_Shipping.Cache"),
-            b"fixture pristine",
+            shipping_bytes,
         )
         .unwrap();
-        fs::write(g1r.join("Script/Binds.Cache"), b"fixture binds").unwrap();
+        fs::write(g1r.join("Script/Binds.Cache"), binds_bytes).unwrap();
         let response = build_story_catalog_for_game_root_v1(json!({
             "game_root": game.to_string_lossy(),
         }));
         assert_eq!(
             response["error"]["code"],
             "AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION"
+        );
+        assert_eq!(
+            response["error"]["details"],
+            unsupported_generation_details_for(executable_bytes, shipping_bytes, binds_bytes)
         );
         assert!(!response
             .to_string()

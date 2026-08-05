@@ -16,8 +16,14 @@ const _v2ExecutableSha256 =
     'b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d';
 const _v2ShippingSha256 =
     '757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385';
-const _bindsSha256 =
+const _v1V2BindsSha256 =
     '46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea';
+const _v3ExecutableSha256 =
+    'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
+const _v3ShippingSha256 =
+    '36124f1cdd4caae555423581aa40631af0ac80d5cef42528382739f932b0e728';
+const _v3BindsSha256 =
+    '854f58a695d0170144957f085c1e8c0f9ef40b271e35e90f79ffbccff8d999c5';
 
 void main() {
   late AuthoringStoryCatalogGeneration generation;
@@ -211,19 +217,40 @@ void main() {
     },
   );
 
-  test('accepts the exact V1/V2 triples and rejects hybrids', () async {
+  test('accepts the exact V1/V2/V3 triples and rejects hybrids', () async {
     final v1 = await _trustedGeneration(
       executableByteLength: 171698176,
       executableSha256: _v1ExecutableSha256,
       shippingCacheSha256: _v1ShippingSha256,
     );
+    final v3 = await _trustedGeneration(
+      executableByteLength: 171787776,
+      executableSha256: _v3ExecutableSha256,
+      shippingCacheByteLength: 124352336,
+      shippingCacheSha256: _v3ShippingSha256,
+      bindsCacheByteLength: 5908587,
+      bindsCacheSha256: _v3BindsSha256,
+    );
     expect(_create(v1).target.executableSha256, _v1ExecutableSha256);
     expect(_create(generation).target.executableSha256, _v2ExecutableSha256);
+    expect(_create(v3).target.executableSha256, _v3ExecutableSha256);
 
     final hybrids = <AuthoringStoryCatalogGeneration>[
       await _trustedGeneration(executableByteLength: 171698176),
       await _trustedGeneration(shippingCacheSha256: _v1ShippingSha256),
       await _trustedGeneration(bindsCacheSha256: _repeat('9', 64)),
+      await _trustedGeneration(
+        executableByteLength: 171787776,
+        executableSha256: _v3ExecutableSha256,
+      ),
+      await _trustedGeneration(
+        shippingCacheByteLength: 124352336,
+        shippingCacheSha256: _v3ShippingSha256,
+      ),
+      await _trustedGeneration(
+        bindsCacheByteLength: 5908587,
+        bindsCacheSha256: _v3BindsSha256,
+      ),
     ];
     for (final hybrid in hybrids) {
       expect(
@@ -254,15 +281,17 @@ Revision3ProjectBootstrap _create(
 Future<AuthoringStoryCatalogGeneration> _trustedGeneration({
   int executableByteLength = 171704320,
   String executableSha256 = _v2ExecutableSha256,
+  int shippingCacheByteLength = 123394250,
   String shippingCacheSha256 = _v2ShippingSha256,
-  String bindsCacheSha256 = _bindsSha256,
+  int bindsCacheByteLength = 5903938,
+  String bindsCacheSha256 = _v1V2BindsSha256,
 }) async {
   const gameRoot = r'C:\Games\Gothic 1 Remake';
   final generation = <String, Object?>{
     'edition': 'g1r-steam',
     'executable': _seal(executableSha256, executableByteLength),
-    'shipping_cache': _seal(shippingCacheSha256, 123394250),
-    'binds_cache': _seal(bindsCacheSha256, 5903938),
+    'shipping_cache': _seal(shippingCacheSha256, shippingCacheByteLength),
+    'binds_cache': _seal(bindsCacheSha256, bindsCacheByteLength),
   };
   final catalogSeal = _seal(_repeat('4', 64), 5611);
   final catalogJson = jsonEncode(<String, Object?>{

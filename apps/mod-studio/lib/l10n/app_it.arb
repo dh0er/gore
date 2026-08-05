@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Nessun riferimento di progetto irrisolto",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 riferimento di progetto irrisolto} other{{count} riferimenti di progetto irrisolti}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Indica solo lo stato dei riferimenti; non garantisce che il progetto sia pronto per la compilazione o l’esecuzione.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Solo riferimenti diretti di questa bozza; i problemi dei contenuti Dialogo e voce dipendenti non sono inclusi. Non garantisce che il progetto sia pronto per la compilazione o l’esecuzione.",
   "managedStoryWorkbenchTechnicalDetails": "Dettagli tecnici",
   "managedStoryWorkbenchQuestKindLabel": "Bozza missione",
   "managedStoryWorkbenchNpcKindLabel": "Bozza PNG",

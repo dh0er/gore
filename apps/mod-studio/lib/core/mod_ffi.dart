@@ -53,6 +53,11 @@ part '../project/revision3_voice_target.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
+const _maxUnsupportedGenerationSupportedEntries = 16;
+const _authoringStoryCatalogUnsupportedGenerationCode =
+    'AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION';
+const _authoringNpcCatalogUnsupportedGenerationCode =
+    'AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION';
 const _maxVoiceOggPathBytes = 32 * 1024;
 const _maxVoiceOggInspectRequestBytes = _maxVoiceOggPathBytes * 6 + 256;
 const _maxVoiceOggBytes = 64 * 1024 * 1024;
@@ -225,16 +230,20 @@ class ModFfi {
         reason: 'field error.message is invalid',
       );
     }
-    Map<String, Object?>? details;
+    ModFfiErrorDetails? details;
     if (error.containsKey('details')) {
-      final raw = error['details'];
-      if (raw is! Map) {
+      try {
+        details = _modFfiErrorDetailsFromNative(
+          command: cmd,
+          code: code,
+          raw: error['details'],
+        );
+      } on FormatException {
         throw ModFfiException._malformed(
           command: cmd,
           reason: 'field error.details is invalid',
         );
       }
-      details = Map<String, Object?>.unmodifiable(raw.cast<String, Object?>());
     }
     throw ModFfiException(
       command: cmd,
@@ -2754,6 +2763,91 @@ void _requireOwnedScriptCompileOutputOnDisk({
   }
 }
 
+sealed class ModFfiErrorDetails {
+  const ModFfiErrorDetails._();
+}
+
+final class ModFfiUnsupportedGenerationDetails extends ModFfiErrorDetails {
+  ModFfiUnsupportedGenerationDetails._({
+    required this.actual,
+    required List<AuthoringStoryCatalogGeneration> supported,
+  }) : supported = List<AuthoringStoryCatalogGeneration>.unmodifiable(
+         supported,
+       ),
+       super._();
+
+  final AuthoringStoryCatalogGeneration actual;
+  final List<AuthoringStoryCatalogGeneration> supported;
+}
+
+ModFfiErrorDetails _modFfiErrorDetailsFromNative({
+  required String command,
+  required String code,
+  required Object? raw,
+}) {
+  final isStoryCatalogError =
+      code == _authoringStoryCatalogUnsupportedGenerationCode &&
+      (command == 'authoring_story_catalog_v1_build' ||
+          command == 'authoring_story_catalog_v1_build_for_game_root');
+  final isNpcCatalogError =
+      code == _authoringNpcCatalogUnsupportedGenerationCode &&
+      command == 'authoring_npc_archetype_catalog_v1_build_for_game_root';
+  if (!isStoryCatalogError && !isNpcCatalogError) {
+    throw const FormatException(
+      'structured native error details are not valid for this command and code',
+    );
+  }
+
+  final json = _authoringRequiredObject(raw, 'native error details');
+  _authoringExactFields(json, const {
+    'kind',
+    'actual',
+    'supported',
+  }, 'native error details');
+  if (json['kind'] != 'unsupported_generation') {
+    throw const FormatException('native error details kind is invalid');
+  }
+
+  final actual = AuthoringStoryCatalogGeneration._fromJson(
+    _authoringRequiredObject(
+      json['actual'],
+      'native error details actual generation',
+    ),
+  );
+  final rawSupported = json['supported'];
+  if (rawSupported is! List ||
+      rawSupported.isEmpty ||
+      rawSupported.length > _maxUnsupportedGenerationSupportedEntries) {
+    throw const FormatException(
+      'native error details supported generations are invalid',
+    );
+  }
+
+  final supported = <AuthoringStoryCatalogGeneration>[];
+  for (var index = 0; index < rawSupported.length; index++) {
+    final generation = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        rawSupported[index],
+        'native error details supported generation $index',
+      ),
+    );
+    if (_authoringStoryCatalogSameGeneration(actual, generation) ||
+        supported.any(
+          (entry) => _authoringStoryCatalogSameGeneration(entry, generation),
+        )) {
+      throw const FormatException(
+        'native error details generations are inconsistent',
+      );
+    }
+    supported.add(generation);
+  }
+
+  return ModFfiUnsupportedGenerationDetails._(
+    actual: actual,
+    supported: supported,
+  );
+}
+
 class ModFfiException implements Exception {
   const ModFfiException({
     required this.command,
@@ -2776,10 +2870,8 @@ class ModFfiException implements Exception {
   final String code;
   final String message;
 
-  /// Bounded structured facts behind the refusal, when the backend had any. An unsupported game
-  /// generation carries `{kind, actual, supported}` here so a screen can show which of the three
-  /// sealed inputs moved instead of repeating one sentence.
-  final Map<String, Object?>? details;
+  /// Bounded, command-bound facts behind the refusal, when the backend had any.
+  final ModFfiErrorDetails? details;
 
   @override
   String toString() => '$command: $message [$code]';

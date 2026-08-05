@@ -5,7 +5,9 @@ name: Release
 #   gore-mod-studio-vX.Y.Z   -> gore-mod-studio (Flutter app, WinSparkle updater)
 #   gore-mod-manager-vX.Y.Z  -> gore-mod-manager (Flutter app, WinSparkle updater)
 #   gore-cli-vX.Y.Z          -> gore-cli (Rust binary)
-# Each job gates on its tag prefix, so one tag builds exactly one product.
+# Each job gates on its tag prefix, so one tag builds exactly one product. A
+# reusable call to the normal CI workflow must pass on this exact commit before
+# any product can build, sign, upload, publish, or update an appcast feed.
 #
 # Every updater reads a fixed-tag feed release — `gore-save-editor-appcast`,
 # `gore-mod-studio-appcast`, `gore-mod-manager-appcast` — whose single
@@ -31,6 +33,7 @@ on:
       project:
         description: "Smoke-build a project without publishing"
         type: choice
+        required: true
         options: [gore-save-editor, gore-mod-studio, gore-mod-manager, gore-cli]
 
 permissions:
@@ -55,8 +58,20 @@ env:
   AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
 
 jobs:
+  quality-gates:
+    name: CI quality gates
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   gore-save-editor:
-    if: startsWith(github.ref_name, 'gore-save-editor-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-save-editor')
+    needs: quality-gates
+    if: >-
+      (github.event_name == 'push' &&
+        github.ref_type == 'tag' &&
+        startsWith(github.ref_name, 'gore-save-editor-v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.project == 'gore-save-editor')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +187,13 @@ jobs:
             dist/gore-save-editor/appcast-windows.xml --clobber
 
   gore-mod-studio:
-    if: startsWith(github.ref_name, 'gore-mod-studio-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod-studio')
+    needs: quality-gates
+    if: >-
+      (github.event_name == 'push' &&
+        github.ref_type == 'tag' &&
+        startsWith(github.ref_name, 'gore-mod-studio-v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.project == 'gore-mod-studio')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -282,7 +303,13 @@ jobs:
             dist/gore-mod-studio/appcast-windows.xml --clobber
 
   gore-mod-manager:
-    if: startsWith(github.ref_name, 'gore-mod-manager-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-mod-manager')
+    needs: quality-gates
+    if: >-
+      (github.event_name == 'push' &&
+        github.ref_type == 'tag' &&
+        startsWith(github.ref_name, 'gore-mod-manager-v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.project == 'gore-mod-manager')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -392,7 +419,13 @@ jobs:
             dist/gore-mod-manager/appcast-windows.xml --clobber
 
   gore-cli:
-    if: startsWith(github.ref_name, 'gore-cli-v') || (github.event_name == 'workflow_dispatch' && inputs.project == 'gore-cli')
+    needs: quality-gates
+    if: >-
+      (github.event_name == 'push' &&
+        github.ref_type == 'tag' &&
+        startsWith(github.ref_name, 'gore-cli-v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+        inputs.project == 'gore-cli')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Aucune référence de projet non résolue",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 référence de projet non résolue} other{{count} références de projet non résolues}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "État des références uniquement ; il ne garantit pas que le projet est prêt à être compilé ou exécuté.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Références directes de ce brouillon uniquement ; les problèmes des contenus Dialogue et voix enfants ne sont pas inclus. Cela ne garantit pas que le projet est prêt à être compilé ou exécuté.",
   "managedStoryWorkbenchTechnicalDetails": "Détails techniques",
   "managedStoryWorkbenchQuestKindLabel": "Brouillon de quête",
   "managedStoryWorkbenchNpcKindLabel": "Brouillon de PNJ",

@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Manager-owned filenames encode enabled loadout positions as `gm000` through `gm999`.
+/// Keeping the enabled set within that closed range preserves lexicographic slot order.
+const MAX_ENABLED_ENTRIES: usize = 1_000;
+
 /// The persisted loadout. `entries` is ordered — position IS the mount order.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Loadout {
@@ -32,6 +36,7 @@ impl Loadout {
     /// Validate every persisted id, including disabled slots. Disabled entries are still saved and
     /// may later be enabled, so they must never carry an absolute/traversing library path.
     pub(crate) fn validate(&self) -> crate::Result<()> {
+        let mut enabled_entries = 0usize;
         for (index, entry) in self.entries.iter().enumerate() {
             super::model::validate_library_id(&entry.id).map_err(|error| {
                 crate::ModError::Other(format!(
@@ -39,6 +44,14 @@ impl Loadout {
                     entry.id
                 ))
             })?;
+            if entry.enabled {
+                enabled_entries += 1;
+                if enabled_entries > MAX_ENABLED_ENTRIES {
+                    return Err(crate::ModError::Other(format!(
+                        "loadout enables more than {MAX_ENABLED_ENTRIES} entries; manager slot filenames support gm000 through gm999"
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -197,5 +210,43 @@ mod tests {
         };
         assert!(save(&path, &loadout).is_err());
         assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn loadout_rejects_more_enabled_entries_than_slot_names_can_order() {
+        let entries = |enabled| {
+            (0..=MAX_ENABLED_ENTRIES)
+                .map(|index| LoadoutEntry {
+                    id: format!("mod-{index}"),
+                    enabled,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let at_limit = Loadout {
+            format: 1,
+            entries: entries(true)[..MAX_ENABLED_ENTRIES].to_vec(),
+        };
+        at_limit.validate().unwrap();
+
+        let over_limit = Loadout {
+            format: 1,
+            entries: entries(true),
+        };
+        let error = over_limit.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("more than 1000"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("gm000 through gm999"),
+            "unexpected error: {error}"
+        );
+
+        let disabled_entries = Loadout {
+            format: 1,
+            entries: entries(false),
+        };
+        disabled_entries.validate().unwrap();
     }
 }
