@@ -442,7 +442,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "Seul le plan est vérifié ici ; la création du bundle vocal hors ligne reste une action distincte.",
   "managedVoiceBuildReadinessConfigureGameGuidance": "Le plan exact du bundle vocal est vérifié. Une installation du jeu doit encore être configurée pour rendre disponible l’action distincte du bundle hors ligne.",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Les DataAssets préparés apparaissent dans les problèmes, mais aucune preuve de build complet du projet n’existe encore.",
+  "managedTestReleaseDataAssetsDescription": "Vérifie uniquement le domaine exact et actuel des DataAssets préparés, déjà validé par l’aperçu de build du projet. Cela ne couvre pas les ressources nouvelles ou structurelles, les fichiers jouables, l’installation, le déploiement, les modifications du jeu ou des fichiers de sauvegarde, le comportement à l’exécution ni le contenu du monde.",
   "managedTestReleaseDataAssetsAction": "Examiner les DataAssets",
   "managedTestReleasePlayableBuildTitle": "Fichiers jouables",
   "managedTestReleasePlayableBuildDescription": "Créez un build jouable vérifié à partir de cette version enregistrée précise du projet.",

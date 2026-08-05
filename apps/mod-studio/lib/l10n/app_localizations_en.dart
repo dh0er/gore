@@ -3679,7 +3679,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Staged DataAssets are visible in Problems, but no complete project-wide build evidence exists yet.';
+      'Checks only the exact current staged DataAssets domain already verified by Project build preview. It does not cover new or structural assets, playable files, installation, deployment, game or save changes, runtime behavior, or World content.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Review DataAssets';

@@ -2176,6 +2176,8 @@ class _ManagedRevision3ProjectViewState
   late Revision3ProjectCompilerCheckController _projectCompilerController;
   late Revision3ProjectProblemsController _projectProblemsController;
   late Revision3VoiceBuildReadinessController _voiceBuildReadinessController;
+  late Revision3ProjectBuildPlanDataAssetsController
+  _projectBuildPlanDataAssetsController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
   late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
@@ -2680,6 +2682,8 @@ class _ManagedRevision3ProjectViewState
     );
     _projectProblemsController = Revision3ProjectProblemsController();
     _voiceBuildReadinessController = Revision3VoiceBuildReadinessController();
+    _projectBuildPlanDataAssetsController =
+        Revision3ProjectBuildPlanDataAssetsController();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
@@ -2747,6 +2751,7 @@ class _ManagedRevision3ProjectViewState
     _projectCompilerController.dispose();
     _projectProblemsController.dispose();
     _voiceBuildReadinessController.dispose();
+    _projectBuildPlanDataAssetsController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
     _projectCompilerController = Revision3ProjectCompilerCheckController(
       checkpoint: _projectCompilerCheckpoint,
@@ -2755,6 +2760,8 @@ class _ManagedRevision3ProjectViewState
     );
     _projectProblemsController = Revision3ProjectProblemsController();
     _voiceBuildReadinessController = Revision3VoiceBuildReadinessController();
+    _projectBuildPlanDataAssetsController =
+        Revision3ProjectBuildPlanDataAssetsController();
     _scopedContentBrowserController.dispose();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
@@ -2863,6 +2870,7 @@ class _ManagedRevision3ProjectViewState
     _projectCompilerController.dispose();
     _projectProblemsController.dispose();
     _voiceBuildReadinessController.dispose();
+    _projectBuildPlanDataAssetsController.dispose();
     _scopedContentBrowserController.dispose();
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
@@ -4642,6 +4650,7 @@ class _ManagedRevision3ProjectViewState
         _projectCompilerController,
         _projectProblemsController,
         _voiceBuildReadinessController,
+        _projectBuildPlanDataAssetsController,
       ]),
       builder: (context, _) => Revision3TestReleaseWorkspace(
         projectId: checkpoint.projectId,
@@ -4711,11 +4720,8 @@ class _ManagedRevision3ProjectViewState
             secondary: 'voice',
           ),
         ),
-        dataAssets: Revision3TestReleaseCheck(
-          state: Revision3TestReleaseCheckState.notEvaluated,
-          title: l10n.managedTestReleaseDataAssetsTitle,
-          description: l10n.managedTestReleaseDataAssetsDescription,
-          actionLabel: l10n.managedTestReleaseDataAssetsAction,
+        dataAssets: _dataAssetsBuildPreviewCheck(
+          l10n,
           onPressed: () => navigate(
             Revision3ProjectWorkspaceSection.content,
             secondary: Revision3ContentWorkspaceView.dataAssets.secondaryRoute,
@@ -4723,11 +4729,13 @@ class _ManagedRevision3ProjectViewState
         ),
         buildPreviewBuilder: (_) => Revision3ProjectBuildPlanPanel(
           checkpoint: Revision3ProjectBuildPlanCheckpoint(
+            projectRoot: buildPreviewProjectRoot,
             projectId: checkpoint.projectId,
             projectRevision: checkpoint.projectRevision,
             checkpointIdentity: checkpoint.checkpointIdentity,
           ),
           load: planProjectBuild,
+          dataAssetsController: _projectBuildPlanDataAssetsController,
           openVoiceDetails: () {
             final current = currentManagedProject;
             if (!context.mounted ||
@@ -4893,6 +4901,66 @@ class _ManagedRevision3ProjectViewState
       description: l10n.managedTestReleaseVoiceDescription,
       evidence: evidence,
       actionLabel: l10n.managedTestReleaseVoiceAction,
+      onPressed: onPressed,
+    );
+  }
+
+  Revision3TestReleaseCheck _dataAssetsBuildPreviewCheck(
+    AppLocalizations l10n, {
+    required VoidCallback onPressed,
+  }) {
+    final expected = Revision3ProjectBuildPlanCheckpoint(
+      projectRoot: project.root.path,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      checkpointIdentity: project.head.canonicalJson,
+    );
+    final snapshot = _projectBuildPlanDataAssetsController.snapshot;
+    var state = project.requiresReopen
+        ? Revision3TestReleaseCheckState.unavailable
+        : Revision3TestReleaseCheckState.checking;
+    Revision3TestReleaseEvidence? evidence;
+
+    if (!project.requiresReopen && snapshot.belongsTo(expected)) {
+      switch (snapshot.state) {
+        case Revision3ProjectBuildPlanDataAssetsLoadState.detached ||
+            Revision3ProjectBuildPlanDataAssetsLoadState.loading:
+          state = Revision3TestReleaseCheckState.checking;
+        case Revision3ProjectBuildPlanDataAssetsLoadState.unavailable:
+          state = Revision3TestReleaseCheckState.unavailable;
+        case Revision3ProjectBuildPlanDataAssetsLoadState.ready:
+          final dataAssets = snapshot.dataAssets;
+          if (dataAssets == null ||
+              dataAssets.domain !=
+                  AuthoringRevision3ProjectBuildDomain.dataAssets) {
+            state = Revision3TestReleaseCheckState.unavailable;
+            break;
+          }
+          state = switch (dataAssets.status) {
+            AuthoringRevision3ProjectBuildDomainStatus.notPresent ||
+            AuthoringRevision3ProjectBuildDomainStatus.ready =>
+              Revision3TestReleaseCheckState.passed,
+            AuthoringRevision3ProjectBuildDomainStatus.blocked =>
+              Revision3TestReleaseCheckState.needsAttention,
+          };
+          evidence = Revision3TestReleaseEvidence(
+            projectId: expected.projectId,
+            projectRevision: expected.projectRevision,
+            checkpointIdentity: expected.checkpointIdentity,
+            scope: Revision3TestReleaseEvidenceScope.dataAssets,
+            summary:
+                '${l10n.managedTestReleaseDataAssetsTitle}: '
+                '${state == Revision3TestReleaseCheckState.passed ? l10n.managedTestReleaseStatusChecked : l10n.managedTestReleaseStatusNeedsAttention}',
+          );
+      }
+    }
+
+    return Revision3TestReleaseCheck(
+      state: state,
+      title: l10n.managedTestReleaseDataAssetsTitle,
+      description: l10n.managedTestReleaseDataAssetsDescription,
+      evidence: evidence,
+      actionLabel: l10n.managedTestReleaseDataAssetsAction,
       onPressed: onPressed,
     );
   }

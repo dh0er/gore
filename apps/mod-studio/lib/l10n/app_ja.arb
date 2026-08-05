@@ -442,7 +442,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "ここではプランだけを確認します。オフライン Voice バンドルの作成は別の操作です。",
   "managedVoiceBuildReadinessConfigureGameGuidance": "Voice バンドルの正確なプランは確認済みです。別のオフラインバンドル操作を使用するには、ゲームのインストールを設定する必要があります。",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "準備された DataAsset は問題一覧に表示されますが、プロジェクト全体の完全なビルド根拠はまだありません。",
+  "managedTestReleaseDataAssetsDescription": "プロジェクトのビルドプレビューで検証済みの、現在の正確なステージ済み DataAssets ドメインだけを確認します。新規または構造的なアセット、プレイ可能ファイル、インストール、デプロイ、ゲームやセーブの変更、実行時の挙動、World コンテンツは対象外です。",
   "managedTestReleaseDataAssetsAction": "DataAsset を確認",
   "managedTestReleasePlayableBuildTitle": "プレイ可能なファイル",
   "managedTestReleasePlayableBuildDescription": "この保存済みプロジェクトバージョンから、確認済みのプレイ可能なビルドを作成します。",

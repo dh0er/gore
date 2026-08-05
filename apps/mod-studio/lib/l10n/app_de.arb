@@ -1101,7 +1101,7 @@
   "managedTestReleaseVoiceDescription": "Prüft nur den exakten aktuellen Plan für ein Voice-Bundle aus vorhandenen Archiveinträgen. Text- oder Übersetzungsabdeckung, Wiedergabe, Build-Ausgabe, Bereitstellung und Laufzeit werden nicht geprüft.",
   "managedTestReleaseVoiceAction": "Voice-Bundle prüfen",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Vorgemerkte DataAssets erscheinen in der Problemliste, aber es gibt noch keinen vollständigen projektweiten Build-Nachweis.",
+  "managedTestReleaseDataAssetsDescription": "Prüft nur den exakten aktuellen Bereich bereits vorgemerkter DataAssets, den die Projekt-Bauvorschau verifiziert hat. Neue oder strukturelle Assets, spielbare Dateien, Installation, Bereitstellung, Spiel- oder Spielstandsänderungen, Laufzeitverhalten und Weltinhalte sind nicht abgedeckt.",
   "managedTestReleaseDataAssetsAction": "DataAssets prüfen",
   "managedTestReleasePlayableBuildTitle": "Spielbare Dateien",
   "managedTestReleasePlayableBuildDescription": "Erstelle aus genau dieser gespeicherten Projektversion einen geprüften spielbaren Build.",

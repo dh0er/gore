@@ -10,6 +10,7 @@ import 'package:gore_mod/project/revision3_project_build_plan_panel.dart';
 import '../support/revision3_voice_fixture.dart';
 
 const _otherProjectId = '11111111111111111111111111111111';
+const _projectRoot = r'C:\managed\project-build-preview';
 const _stageMediaType =
     'application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1';
 
@@ -62,6 +63,238 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(calls, 2);
+  });
+
+  testWidgets(
+    'publishes only the exact DataAssets domain without a second load',
+    (tester) async {
+      final fixture = _dataAssetBlockedFixture(readyCount: 1);
+      final completion = Completer<AuthoringRevision3ProjectBuildPlanResult>();
+      final controller = Revision3ProjectBuildPlanDataAssetsController();
+      addTearDown(controller.dispose);
+      var calls = 0;
+
+      await _pumpPanel(
+        tester,
+        fixture: fixture,
+        load: () {
+          calls++;
+          return completion.future;
+        },
+        dataAssetsController: controller,
+      );
+      await tester.pump();
+
+      expect(calls, 1);
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectBuildPlanDataAssetsLoadState.loading,
+      );
+      expect(controller.snapshot.checkpoint, fixture.checkpoint);
+      expect(controller.snapshot.dataAssets, isNull);
+
+      completion.complete(fixture.result);
+      await tester.pumpAndSettle();
+
+      final dataAssets = controller.snapshot.dataAssets;
+      expect(calls, 1);
+      expect(
+        controller.snapshot.state,
+        Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+      );
+      expect(
+        dataAssets?.domain,
+        AuthoringRevision3ProjectBuildDomain.dataAssets,
+      );
+      expect(
+        dataAssets?.status,
+        AuthoringRevision3ProjectBuildDomainStatus.ready,
+      );
+      expect(dataAssets?.contentCount, 1);
+      expect(dataAssets?.readyCount, 1);
+      expect(dataAssets?.blockedCount, 0);
+    },
+  );
+
+  testWidgets('refresh clears DataAssets evidence before failure and retry', (
+    tester,
+  ) async {
+    final fixture = _dataAssetBlockedFixture();
+    final failedRefresh = Completer<AuthoringRevision3ProjectBuildPlanResult>();
+    final controller = Revision3ProjectBuildPlanDataAssetsController();
+    addTearDown(controller.dispose);
+    var calls = 0;
+
+    await _pumpPanel(
+      tester,
+      fixture: fixture,
+      dataAssetsController: controller,
+      load: () {
+        calls++;
+        return switch (calls) {
+          1 || 3 => Future.value(fixture.result),
+          _ => failedRefresh.future,
+        };
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-project-build-plan-refresh')),
+    );
+    await tester.pump();
+    expect(calls, 2);
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.loading,
+    );
+    expect(controller.snapshot.dataAssets, isNull);
+
+    failedRefresh.completeError(StateError(r'C:\private\dataassets'));
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.unavailable,
+    );
+    expect(controller.snapshot.dataAssets, isNull);
+
+    await tester.tap(
+      find.byKey(const Key('revision3-project-build-plan-retry')),
+    );
+    await tester.pumpAndSettle();
+    expect(calls, 3);
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+    );
+  });
+
+  testWidgets(
+    'observer replacement transfers current output without reloading',
+    (tester) async {
+      final fixture = _emptyFixture();
+      final first = Revision3ProjectBuildPlanDataAssetsController();
+      final second = Revision3ProjectBuildPlanDataAssetsController();
+      addTearDown(first.dispose);
+      addTearDown(second.dispose);
+      var observer = first;
+      var calls = 0;
+      late StateSetter updateHost;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                updateHost = setState;
+                return SingleChildScrollView(
+                  child: Revision3ProjectBuildPlanPanel(
+                    checkpoint: fixture.checkpoint,
+                    load: () async {
+                      calls++;
+                      return fixture.result;
+                    },
+                    dataAssetsController: observer,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+      expect(
+        first.snapshot.state,
+        Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+      );
+
+      updateHost(() => observer = second);
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(
+        first.snapshot.state,
+        Revision3ProjectBuildPlanDataAssetsLoadState.detached,
+      );
+      expect(
+        second.snapshot.state,
+        Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+      );
+      expect(second.snapshot.checkpoint, fixture.checkpoint);
+    },
+  );
+
+  testWidgets('root drift disposal and late completions fail closed', (
+    tester,
+  ) async {
+    final first = _emptyFixture(projectRoot: r'C:\managed\first');
+    final second = _emptyFixture(projectRoot: r'C:\managed\second');
+    final firstLoad = Completer<AuthoringRevision3ProjectBuildPlanResult>();
+    final secondLoad = Completer<AuthoringRevision3ProjectBuildPlanResult>();
+    final controller = Revision3ProjectBuildPlanDataAssetsController();
+    addTearDown(controller.dispose);
+    var current = first;
+    var calls = 0;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              return Revision3ProjectBuildPlanPanel(
+                checkpoint: current.checkpoint,
+                load: () {
+                  calls++;
+                  return calls == 1 ? firstLoad.future : secondLoad.future;
+                },
+                dataAssetsController: controller,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(calls, 1);
+
+    updateHost(() => current = second);
+    await tester.pump();
+    expect(calls, 2);
+    expect(controller.snapshot.checkpoint?.projectRoot, r'C:\managed\second');
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.loading,
+    );
+
+    firstLoad.complete(first.result);
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.loading,
+    );
+    expect(controller.snapshot.checkpoint, second.checkpoint);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.detached,
+    );
+
+    secondLoad.complete(second.result);
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.detached,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('groups author blockers separately from toolkit gaps', (
@@ -579,7 +812,10 @@ void main() {
 
   testWidgets('rejects a result for another exact checkpoint', (tester) async {
     final fixture = _emptyFixture();
+    final controller = Revision3ProjectBuildPlanDataAssetsController();
+    addTearDown(controller.dispose);
     final wrongCheckpoint = Revision3ProjectBuildPlanCheckpoint(
+      projectRoot: fixture.checkpoint.projectRoot,
       projectId: _otherProjectId,
       projectRevision: 8,
       checkpointIdentity: fixture.head.canonicalJson,
@@ -590,6 +826,7 @@ void main() {
           body: Revision3ProjectBuildPlanPanel(
             checkpoint: wrongCheckpoint,
             load: () async => fixture.result,
+            dataAssetsController: controller,
           ),
         ),
       ),
@@ -601,6 +838,11 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('No production content yet'), findsNothing);
+    expect(
+      controller.snapshot.state,
+      Revision3ProjectBuildPlanDataAssetsLoadState.unavailable,
+    );
+    expect(controller.snapshot.dataAssets, isNull);
   });
 
   testWidgets('compact German panel is overflow-safe at 200 percent text', (
@@ -690,6 +932,7 @@ Future<void> _pumpPanel(
   required Revision3ProjectBuildPlanLoader load,
   Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails,
   Revision3ProjectBuildPlanOpenDataAssetDetails? openDataAssetDetails,
+  Revision3ProjectBuildPlanDataAssetsController? dataAssetsController,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -699,6 +942,7 @@ Future<void> _pumpPanel(
           load: load,
           openVoiceDetails: openVoiceDetails,
           openDataAssetDetails: openDataAssetDetails,
+          dataAssetsController: dataAssetsController,
         ),
       ),
     ),
@@ -707,11 +951,13 @@ Future<void> _pumpPanel(
 
 final class _BuildPlanFixture {
   const _BuildPlanFixture({
+    required this.projectRoot,
     required this.projectJson,
     required this.head,
     required this.result,
   });
 
+  final String projectRoot;
   final String projectJson;
   final AuthoringWorkingHead head;
   final AuthoringRevision3ProjectBuildPlanResult result;
@@ -719,6 +965,7 @@ final class _BuildPlanFixture {
   Revision3ProjectBuildPlanCheckpoint get checkpoint {
     final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
     return Revision3ProjectBuildPlanCheckpoint(
+      projectRoot: projectRoot,
       projectId: project['project_id']! as String,
       projectRevision: project['revision']! as int,
       checkpointIdentity: head.canonicalJson,
@@ -726,10 +973,11 @@ final class _BuildPlanFixture {
   }
 }
 
-_BuildPlanFixture _emptyFixture() {
+_BuildPlanFixture _emptyFixture({String projectRoot = _projectRoot}) {
   final projectJson = revision3VoiceFixtureProjectJson();
   return _fixture(
     projectJson: projectJson,
+    projectRoot: projectRoot,
     domainCounts: const <String, ({int ready, int blocked})>{},
     blockers: const <Map<String, Object?>>[],
   );
@@ -886,7 +1134,7 @@ _BuildPlanFixture _dataAssetBlockedFixture({
   if (toolkitBlocker && stageCount != 1) {
     throw ArgumentError.value(stageCount, 'stageCount');
   }
-  if (readyCount < 0 || readyCount >= stageCount) {
+  if (readyCount < 0 || readyCount > stageCount) {
     throw ArgumentError.value(readyCount, 'readyCount');
   }
   final blockedCount = stageCount - readyCount;
@@ -901,7 +1149,9 @@ _BuildPlanFixture _dataAssetBlockedFixture({
     };
   }
   project['asset_store'] = <String, Object?>{'assets': assets};
-  final blockers = toolkitBlocker
+  final blockers = blockedCount == 0
+      ? const <Map<String, Object?>>[]
+      : toolkitBlocker
       ? const <Map<String, Object?>>[
           <String, Object?>{
             'category': 'toolkit_support',
@@ -938,6 +1188,7 @@ _BuildPlanFixture _fixture({
   required String projectJson,
   required Map<String, ({int ready, int blocked})> domainCounts,
   required List<Map<String, Object?>> blockers,
+  String projectRoot = _projectRoot,
 }) {
   final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
   final assetStore = (project['asset_store']! as Map).cast<String, Object?>();
@@ -1046,6 +1297,7 @@ _BuildPlanFixture _fixture({
     },
   };
   return _BuildPlanFixture(
+    projectRoot: projectRoot,
     projectJson: projectJson,
     head: head,
     result: AuthoringRevision3ProjectBuildPlanResult.fromJson(

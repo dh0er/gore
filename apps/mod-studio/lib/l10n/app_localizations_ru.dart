@@ -3699,7 +3699,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Подготовленные DataAsset отображаются в списке проблем, но полного подтверждения сборки всего проекта ещё нет.';
+      'Проверяет только точный текущий домен подготовленных DataAssets, уже подтверждённый предварительным просмотром сборки проекта. Проверка не охватывает новые или структурные ресурсы, игровые файлы, установку, развёртывание, изменения игры или сохранений, поведение во время выполнения и содержимое мира.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Просмотреть DataAsset';

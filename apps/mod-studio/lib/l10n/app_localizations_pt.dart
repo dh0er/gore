@@ -3699,7 +3699,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Os DataAssets preparados aparecem nos Problemas, mas ainda não existe evidência de uma compilação completa do projeto.';
+      'Verifica apenas o domínio DataAssets preparado, exato e atual, já validado pela pré-visualização da compilação do projeto. Não abrange recursos novos ou estruturais, ficheiros jogáveis, instalação, distribuição, alterações ao jogo ou aos ficheiros guardados, comportamento em execução nem conteúdo do mundo.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Rever DataAssets';
@@ -5273,7 +5273,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Os DataAssets preparados aparecem em Problemas, mas ainda não há evidência de uma compilação completa do projeto.';
+      'Verifica somente o domínio DataAssets preparado, exato e atual, já validado pela prévia da compilação do projeto. Não abrange assets novos ou estruturais, arquivos jogáveis, instalação, implantação, alterações no jogo ou em saves, comportamento em execução nem conteúdo de mundo.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Revisar DataAssets';

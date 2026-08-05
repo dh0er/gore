@@ -1284,7 +1284,7 @@
   "managedTestReleaseVoiceDescription": "Checks only the exact current existing-member Voice bundle plan. It does not check text or translation coverage, playback, build output, deployment, or runtime.",
   "managedTestReleaseVoiceAction": "Open Voice bundle check",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Staged DataAssets are visible in Problems, but no complete project-wide build evidence exists yet.",
+  "managedTestReleaseDataAssetsDescription": "Checks only the exact current staged DataAssets domain already verified by Project build preview. It does not cover new or structural assets, playable files, installation, deployment, game or save changes, runtime behavior, or World content.",
   "managedTestReleaseDataAssetsAction": "Review DataAssets",
   "managedTestReleasePlayableBuildTitle": "Playable files",
   "managedTestReleasePlayableBuildDescription": "Create a checked playable build from this exact saved project version.",

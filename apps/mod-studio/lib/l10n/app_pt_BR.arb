@@ -427,7 +427,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "Aqui, apenas o plano é verificado; criar o pacote de vozes offline continua sendo uma ação separada.",
   "managedVoiceBuildReadinessConfigureGameGuidance": "O plano exato do pacote de vozes foi verificado. Ainda é necessário configurar uma instalação do jogo para disponibilizar a ação separada do pacote offline.",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Os DataAssets preparados aparecem em Problemas, mas ainda não há evidência de uma compilação completa do projeto.",
+  "managedTestReleaseDataAssetsDescription": "Verifica somente o domínio DataAssets preparado, exato e atual, já validado pela prévia da compilação do projeto. Não abrange assets novos ou estruturais, arquivos jogáveis, instalação, implantação, alterações no jogo ou em saves, comportamento em execução nem conteúdo de mundo.",
   "managedTestReleaseDataAssetsAction": "Revisar DataAssets",
   "managedTestReleasePlayableBuildTitle": "Arquivos jogáveis",
   "managedTestReleasePlayableBuildDescription": "Crie uma compilação jogável verificada a partir desta versão exata salva do projeto.",

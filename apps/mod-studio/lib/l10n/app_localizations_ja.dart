@@ -3642,7 +3642,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      '準備された DataAsset は問題一覧に表示されますが、プロジェクト全体の完全なビルド根拠はまだありません。';
+      'プロジェクトのビルドプレビューで検証済みの、現在の正確なステージ済み DataAssets ドメインだけを確認します。新規または構造的なアセット、プレイ可能ファイル、インストール、デプロイ、ゲームやセーブの変更、実行時の挙動、World コンテンツは対象外です。';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'DataAsset を確認';

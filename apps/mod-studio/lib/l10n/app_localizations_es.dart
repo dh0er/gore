@@ -3710,7 +3710,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Los DataAssets preparados aparecen en Problemas, pero todavía no existe evidencia de una compilación completa del proyecto.';
+      'Comprueba solo el dominio exacto actual de DataAssets preparados que ya verificó la vista previa de compilación del proyecto. No cubre recursos nuevos o estructurales, archivos jugables, instalación, despliegue, cambios en el juego o partidas guardadas, comportamiento en ejecución ni contenido del mundo.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Revisar DataAssets';

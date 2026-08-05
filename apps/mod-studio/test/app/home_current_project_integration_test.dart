@@ -5796,6 +5796,22 @@ void main() {
       final workspace = tester.widget<Revision3TestReleaseWorkspace>(
         find.byType(Revision3TestReleaseWorkspace),
       );
+      expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.dataAssets.evidence?.scope,
+        Revision3TestReleaseEvidenceScope.dataAssets,
+      );
+      expect(workspace.dataAssets.evidence?.projectId, managed.projectId);
+      expect(workspace.dataAssets.evidence?.projectRevision, 3);
+      expect(
+        workspace.dataAssets.evidence?.checkpointIdentity,
+        managed.head.canonicalJson,
+      );
+      expect(workspace.dataAssets.evidence?.summary, 'DataAssets: Checked');
+      expect(
+        workspace.dataAssets.description,
+        contains('exact current staged DataAssets domain'),
+      );
       expect(workspace.playableBuild.evidence, isNull);
       expect(workspace.playableBuild.onPressed, isNull);
       expect(workspace.deployment.evidence, isNull);
@@ -5816,6 +5832,293 @@ void main() {
       expect(managed.projectBuildPlanCalls, 1);
     },
   );
+
+  testWidgets(
+    'DataAssets check mirrors loading then the mounted ready domain once',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3ProjectProblemsRetainedDataAssetFixture(
+        projectRevision: 8,
+      );
+      final planned = Completer<AuthoringRevision3ProjectBuildPlanResult>();
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory(r'C:\mods\dataassets-status-ready'),
+        projectId: fixture.projectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onDataAssetList: (_) => fixture.dataAssetStages,
+        onProjectBuildPlan: (_) => planned.future,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final destination = find.byKey(
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      await tester.ensureVisible(destination);
+      await tester.tap(destination);
+      await tester.pump();
+
+      var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(
+        workspace.dataAssets.state,
+        Revision3TestReleaseCheckState.checking,
+      );
+      expect(workspace.dataAssets.evidence, isNull);
+      expect(managed.projectBuildPlanCalls, 1);
+
+      planned.complete(
+        _readyDataAssetProjectBuildPlanResult(
+          head: managed.head,
+          fixture: fixture,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.dataAssets.evidence?.scope,
+        Revision3TestReleaseEvidenceScope.dataAssets,
+      );
+      expect(workspace.dataAssets.evidence?.projectId, fixture.projectId);
+      expect(
+        workspace.dataAssets.evidence?.projectRevision,
+        fixture.projectRevision,
+      );
+      expect(
+        workspace.dataAssets.evidence?.checkpointIdentity,
+        managed.head.canonicalJson,
+      );
+      expect(workspace.dataAssets.evidence?.summary, 'DataAssets: Checked');
+      expect(managed.projectBuildPlanCalls, 1);
+      expect(workspace.playableBuild.evidence, isNull);
+      expect(workspace.deployment.evidence, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('DataAssets check makes a mismatched plan unavailable', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
+    final managed = _FakeProjectBuildPlanManagedLease(
+      root: Directory(r'C:\mods\dataassets-status-mismatch'),
+      projectId: fixture.projectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex,
+      onDataAssetList: (_) => fixture.dataAssetStages,
+      onProjectBuildPlan: (_) => _readyDataAssetProjectBuildPlanResult(
+        head: _head(fixture.projectRevision + 1),
+        fixture: fixture,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedTestRelease(tester);
+
+    final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(
+      workspace.dataAssets.state,
+      Revision3TestReleaseCheckState.unavailable,
+    );
+    expect(workspace.dataAssets.evidence, isNull);
+    expect(managed.projectBuildPlanCalls, 1);
+    expect(workspace.playableBuild.evidence, isNull);
+    expect(workspace.deployment.evidence, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'DataAssets check clears evidence across same-revision head drift',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3ProjectProblemsRetainedDataAssetFixture(
+        projectRevision: 8,
+      );
+      final replacementLoad =
+          Completer<AuthoringRevision3ProjectBuildPlanResult>();
+      var delayReplacement = false;
+      final managed = _FakeProjectBuildPlanManagedLease(
+        root: Directory(r'C:\mods\dataassets-status-head-drift'),
+        projectId: fixture.projectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onDataAssetList: (_) => fixture.dataAssetStages,
+        onProjectBuildPlan: (lease) => delayReplacement
+            ? replacementLoad.future
+            : _readyDataAssetProjectBuildPlanResult(
+                head: lease.head,
+                fixture: fixture,
+              ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedTestRelease(tester);
+      var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+      expect(managed.projectBuildPlanCalls, 1);
+
+      delayReplacement = true;
+      final replacementHead = _head(fixture.projectRevision + 1);
+      managed.head = replacementHead;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: replacementHead,
+        requiresReopen: false,
+      );
+      await tester.pump();
+      await tester.pump();
+
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(
+        workspace.dataAssets.state,
+        Revision3TestReleaseCheckState.checking,
+      );
+      expect(workspace.dataAssets.evidence, isNull);
+      expect(managed.projectBuildPlanCalls, 2);
+
+      replacementLoad.complete(
+        _readyDataAssetProjectBuildPlanResult(
+          head: replacementHead,
+          fixture: fixture,
+        ),
+      );
+      await tester.pumpAndSettle();
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.dataAssets.evidence?.checkpointIdentity,
+        replacementHead.canonicalJson,
+      );
+      expect(managed.projectBuildPlanCalls, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('DataAssets check replans after requires-reopen recovery', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = revision3ProjectProblemsRetainedDataAssetFixture(
+      projectRevision: 8,
+    );
+    final managed = _FakeProjectBuildPlanManagedLease(
+      root: Directory(r'C:\mods\dataassets-status-reopen'),
+      projectId: fixture.projectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex,
+      onDataAssetList: (_) => fixture.dataAssetStages,
+      onProjectBuildPlan: (lease) => _readyDataAssetProjectBuildPlanResult(
+        head: lease.head,
+        fixture: fixture,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedTestRelease(tester);
+    var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+    expect(managed.projectBuildPlanCalls, 1);
+
+    managed.requiresReopenValue = true;
+    (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+      root: managed.root,
+      projectId: managed.projectId,
+      projectRevision: managed.projectRevision,
+      head: managed.head,
+      requiresReopen: true,
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(Revision3TestReleaseWorkspace), findsNothing);
+    expect(managed.projectBuildPlanCalls, 1);
+
+    managed.requiresReopenValue = false;
+    (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+      root: managed.root,
+      projectId: managed.projectId,
+      projectRevision: managed.projectRevision,
+      head: managed.head,
+      requiresReopen: false,
+    );
+    await tester.pumpAndSettle();
+    if (find.byType(Revision3TestReleaseWorkspace).evaluate().isEmpty) {
+      await _navigateManagedTestRelease(tester);
+    }
+    workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(workspace.dataAssets.state, Revision3TestReleaseCheckState.passed);
+    expect(
+      workspace.dataAssets.evidence?.scope,
+      Revision3TestReleaseEvidenceScope.dataAssets,
+    );
+    expect(managed.projectBuildPlanCalls, 2);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'build preview opens exact Voice problems without enabling release authority',
@@ -5946,6 +6249,25 @@ void main() {
     await tester.pumpAndSettle();
     await _navigateManagedTestRelease(tester);
     await tester.pumpAndSettle();
+
+    final statusWorkspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(
+      statusWorkspace.dataAssets.state,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(
+      statusWorkspace.dataAssets.evidence?.scope,
+      Revision3TestReleaseEvidenceScope.dataAssets,
+    );
+    expect(
+      statusWorkspace.dataAssets.evidence?.summary,
+      'DataAssets: Needs attention',
+    );
+    expect(managed.projectBuildPlanCalls, 1);
+    expect(statusWorkspace.playableBuild.evidence, isNull);
+    expect(statusWorkspace.deployment.evidence, isNull);
 
     final panel = tester.widget<Revision3ProjectBuildPlanPanel>(
       find.byType(Revision3ProjectBuildPlanPanel),
@@ -19487,6 +19809,22 @@ AuthoringRevision3ProjectBuildPlanResult
 _blockedDataAssetProjectBuildPlanResult({
   required AuthoringWorkingHead head,
   required Revision3ProjectProblemsFixture fixture,
+}) => _dataAssetProjectBuildPlanResult(
+  head: head,
+  fixture: fixture,
+  ready: false,
+);
+
+AuthoringRevision3ProjectBuildPlanResult _readyDataAssetProjectBuildPlanResult({
+  required AuthoringWorkingHead head,
+  required Revision3ProjectProblemsFixture fixture,
+}) =>
+    _dataAssetProjectBuildPlanResult(head: head, fixture: fixture, ready: true);
+
+AuthoringRevision3ProjectBuildPlanResult _dataAssetProjectBuildPlanResult({
+  required AuthoringWorkingHead head,
+  required Revision3ProjectProblemsFixture fixture,
+  required bool ready,
 }) {
   final stage = fixture.dataAssetStage!;
   final projectJson = jsonEncode(<String, Object?>{
@@ -19548,26 +19886,32 @@ _blockedDataAssetProjectBuildPlanResult({
     ])
       <String, Object?>{
         'domain': domain,
-        'status': domain == 'data_assets' ? 'blocked' : 'not_present',
+        'status': domain == 'data_assets'
+            ? ready
+                  ? 'ready'
+                  : 'blocked'
+            : 'not_present',
         'content_count': domain == 'data_assets' ? 1 : 0,
-        'ready_count': 0,
-        'blocked_count': domain == 'data_assets' ? 1 : 0,
+        'ready_count': domain == 'data_assets' && ready ? 1 : 0,
+        'blocked_count': domain == 'data_assets' && !ready ? 1 : 0,
       },
   ];
-  final blockers = <Object?>[
-    <String, Object?>{
-      'category': 'author_project',
-      'domain': 'data_assets',
-      'reason': 'data_asset_selector_mismatch',
-      'affected_count': 1,
-    },
-  ];
+  final blockers = ready
+      ? <Object?>[]
+      : <Object?>[
+          <String, Object?>{
+            'category': 'author_project',
+            'domain': 'data_assets',
+            'reason': 'data_asset_selector_mismatch',
+            'affected_count': 1,
+          },
+        ];
   final projection = <String, Object?>{
     'format': 'gore.authoring.revision3-project-build-plan.v1',
     'schema_revision': 1,
     'project_id': fixture.projectId,
     'project_revision': fixture.projectRevision,
-    'outcome': 'blocked',
+    'outcome': ready ? 'coverage_complete' : 'blocked',
     'production_content_count': 1,
     'input_seal': inputSeal,
     'domains': domains,
@@ -19587,7 +19931,7 @@ _blockedDataAssetProjectBuildPlanResult({
         'schema_revision': 1,
         'project_id': fixture.projectId,
         'project_revision': fixture.projectRevision,
-        'outcome': 'blocked',
+        'outcome': ready ? 'coverage_complete' : 'blocked',
         'production_content_count': 1,
         'input_seal': inputSeal,
         'plan_seal': seal(utf8.encode(jsonEncode(projection))),

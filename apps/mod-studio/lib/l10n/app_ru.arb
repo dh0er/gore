@@ -442,7 +442,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "Здесь проверяется только план; создание автономного голосового пакета остаётся отдельным действием.",
   "managedVoiceBuildReadinessConfigureGameGuidance": "Точный план голосового пакета проверен. Чтобы стало доступно отдельное действие создания автономного пакета, по-прежнему требуется настроенная установка игры.",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Подготовленные DataAsset отображаются в списке проблем, но полного подтверждения сборки всего проекта ещё нет.",
+  "managedTestReleaseDataAssetsDescription": "Проверяет только точный текущий домен подготовленных DataAssets, уже подтверждённый предварительным просмотром сборки проекта. Проверка не охватывает новые или структурные ресурсы, игровые файлы, установку, развёртывание, изменения игры или сохранений, поведение во время выполнения и содержимое мира.",
   "managedTestReleaseDataAssetsAction": "Просмотреть DataAsset",
   "managedTestReleasePlayableBuildTitle": "Игровые файлы",
   "managedTestReleasePlayableBuildDescription": "Создайте проверенную игровую сборку из этой точной сохранённой версии проекта.",
