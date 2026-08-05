@@ -336,7 +336,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "没有未解决的项目引用",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 个未解决的项目引用} other{{count} 个未解决的项目引用}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "仅表示引用状态；不代表已可构建或运行。",
+  "managedStoryWorkbenchReferenceScopeNotice": "仅显示此草稿的直接引用；不包括其下属对话和语音内容的问题。这不代表已可构建或运行。",
   "managedStoryWorkbenchTechnicalDetails": "技术详情",
   "managedStoryWorkbenchQuestKindLabel": "任务草稿",
   "managedStoryWorkbenchNpcKindLabel": "NPC 草稿",

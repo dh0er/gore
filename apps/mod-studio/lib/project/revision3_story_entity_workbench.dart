@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'revision3_content_index.dart';
 import 'revision3_npc_draft_setup.dart';
+import 'revision3_project_problems.dart';
 
 typedef Revision3StoryWorkbenchAction = Future<void> Function();
 
@@ -162,7 +163,7 @@ final class Revision3StoryEntityWorkbenchCopy {
        noReferenceProblems = 'No unresolved project references',
        referenceProblemCount = _englishReferenceProblemCount,
        referenceScopeNotice =
-           'Reference status only; this is not build or runtime readiness.',
+           'Direct references of this draft only; problems in child Dialog & Voice content are not included. This is not build or runtime readiness.',
        technicalDetails = 'Technical details',
        questKindLabel = 'Quest draft',
        npcKindLabel = 'NPC draft',
@@ -882,20 +883,15 @@ class _Revision3StoryEntityWorkbenchState
 
   List<Widget> _problems(BuildContext context) {
     final entity = widget.entity;
-    final brokenEntityReferences = entity.references
-        .where(
-          (reference) =>
-              reference.resolution !=
-              Revision3ContentReferenceResolution.resolved,
-        )
-        .toList(growable: false);
-    final brokenAssetReferences = entity.assetReferences
-        .where(
-          (reference) =>
-              reference.resolution !=
-              Revision3ContentAssetReferenceResolution.resolved,
-        )
-        .toList(growable: false);
+    final problems =
+        Revision3ProjectProblemBuilder.buildReferenceProblemsForSourceEntity(
+          widget.index,
+          sourceEntityId: entity.id,
+        );
+    // Strict current NPC/Quest projections require every direct reference to
+    // resolve, so this is normally empty. Keep the visible count canonical,
+    // but do not silently expand it to problems owned by child Dialog/Voice
+    // entities; that requires a separately modeled ownership scope.
     return <Widget>[
       _SectionHeading(widget.copy.problemsChecksTab),
       _AtomicActionCard(
@@ -919,33 +915,12 @@ class _Revision3StoryEntityWorkbenchState
       Semantics(
         liveRegion: true,
         child: Text(
-          entity.problemCount == 0
+          problems.isEmpty
               ? widget.copy.noReferenceProblems
-              : widget.copy.referenceProblemCount(entity.problemCount),
+              : widget.copy.referenceProblemCount(problems.length),
           style: Theme.of(context).textTheme.titleSmall,
         ),
       ),
-      if (entity.problemCount != 0) ...[
-        const SizedBox(height: 8),
-        for (final reference in brokenEntityReferences)
-          _WorkbenchReferenceTile(
-            icon: Icons.link_off_outlined,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle:
-                '${reference.resolution.wireName} / ${reference.target.expectedKind.displayName} / ${reference.target.entityId}',
-            ok: false,
-            statusSemanticLabel: widget.copy.referenceUnresolvedLabel,
-          ),
-        for (final reference in brokenAssetReferences)
-          _WorkbenchReferenceTile(
-            icon: Icons.inventory_2_outlined,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle:
-                '${reference.resolution.wireName} / ${reference.logicalName ?? reference.sha256} / ${reference.expectedMediaType}',
-            ok: false,
-            statusSemanticLabel: widget.copy.referenceUnresolvedLabel,
-          ),
-      ],
       const SizedBox(height: 12),
       Card(
         child: Padding(

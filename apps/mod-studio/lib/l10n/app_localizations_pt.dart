@@ -2072,7 +2072,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Apenas indica o estado das referências; não confirma a prontidão para compilação ou execução.';
+      'Apenas referências diretas deste rascunho; os problemas dos conteúdos dependentes de Diálogo e Voz não estão incluídos. Isto não confirma a prontidão para compilação ou execução.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Detalhes técnicos';
@@ -4951,7 +4951,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Indica apenas o status das referências; não confirma que o projeto esteja pronto para compilação ou execução.';
+      'Apenas referências diretas deste rascunho; os problemas dos conteúdos dependentes de Diálogo e Voz não estão incluídos. Isso não confirma que o projeto esteja pronto para compilação ou execução.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Detalhes técnicos';

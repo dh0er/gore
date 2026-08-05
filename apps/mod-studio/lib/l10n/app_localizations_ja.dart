@@ -2031,7 +2031,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      '参照状態のみを示します。ビルドや実行の準備完了を示すものではありません。';
+      'このドラフトの直接参照のみを示します。配下のダイアログ／音声コンテンツの問題は含まれません。ビルドや実行の準備完了を示すものではありません。';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => '技術情報';

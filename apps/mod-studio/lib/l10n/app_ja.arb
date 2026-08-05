@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "未解決のプロジェクト参照はありません",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{未解決のプロジェクト参照が1件あります} other{未解決のプロジェクト参照が{count}件あります}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "参照状態のみを示します。ビルドや実行の準備完了を示すものではありません。",
+  "managedStoryWorkbenchReferenceScopeNotice": "このドラフトの直接参照のみを示します。配下のダイアログ／音声コンテンツの問題は含まれません。ビルドや実行の準備完了を示すものではありません。",
   "managedStoryWorkbenchTechnicalDetails": "技術情報",
   "managedStoryWorkbenchQuestKindLabel": "クエストの下書き",
   "managedStoryWorkbenchNpcKindLabel": "NPCの下書き",

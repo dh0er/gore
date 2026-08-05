@@ -3539,7 +3539,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedStoryWorkbenchReferenceScopeNotice.
   ///
   /// In en, this message translates to:
-  /// **'Reference status only; this is not build or runtime readiness.'**
+  /// **'Direct references of this draft only; problems in child Dialog & Voice content are not included. This is not build or runtime readiness.'**
   String get managedStoryWorkbenchReferenceScopeNotice;
 
   /// No description provided for @managedStoryWorkbenchTechnicalDetails.

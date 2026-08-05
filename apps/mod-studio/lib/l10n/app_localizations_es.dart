@@ -2081,7 +2081,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Solo indica el estado de las referencias; no confirma que esté listo para compilarse ni ejecutarse.';
+      'Solo referencias directas de este borrador; no se incluyen los problemas del contenido dependiente de Diálogo y voz. Esto no confirma que esté listo para compilarse ni ejecutarse.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Detalles técnicos';

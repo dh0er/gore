@@ -2070,7 +2070,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'To tylko stan odwołań; nie oznacza gotowości do kompilacji ani uruchomienia.';
+      'Tylko bezpośrednie odwołania tego szkicu; problemy podrzędnych treści dialogowych i głosowych nie są uwzględniane. Nie oznacza to gotowości do kompilacji ani uruchomienia.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Szczegóły techniczne';

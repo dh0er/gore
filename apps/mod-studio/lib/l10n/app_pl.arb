@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Brak nierozwiązanych odwołań w projekcie",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 nierozwiązane odwołanie w projekcie} few{{count} nierozwiązane odwołania w projekcie} many{{count} nierozwiązanych odwołań w projekcie} other{{count} nierozwiązanego odwołania w projekcie}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "To tylko stan odwołań; nie oznacza gotowości do kompilacji ani uruchomienia.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Tylko bezpośrednie odwołania tego szkicu; problemy podrzędnych treści dialogowych i głosowych nie są uwzględniane. Nie oznacza to gotowości do kompilacji ani uruchomienia.",
   "managedStoryWorkbenchTechnicalDetails": "Szczegóły techniczne",
   "managedStoryWorkbenchQuestKindLabel": "Wersja robocza zadania",
   "managedStoryWorkbenchNpcKindLabel": "Wersja robocza NPC",

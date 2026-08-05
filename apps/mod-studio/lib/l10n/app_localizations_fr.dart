@@ -2086,7 +2086,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'État des références uniquement ; il ne garantit pas que le projet est prêt à être compilé ou exécuté.';
+      'Références directes de ce brouillon uniquement ; les problèmes des contenus Dialogue et voix enfants ne sont pas inclus. Cela ne garantit pas que le projet est prêt à être compilé ou exécuté.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Détails techniques';

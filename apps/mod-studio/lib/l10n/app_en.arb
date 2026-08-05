@@ -824,7 +824,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "No unresolved project references",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 unresolved project reference} other{{count} unresolved project references}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Reference status only; this is not build or runtime readiness.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Direct references of this draft only; problems in child Dialog & Voice content are not included. This is not build or runtime readiness.",
   "managedStoryWorkbenchTechnicalDetails": "Technical details",
   "managedStoryWorkbenchQuestKindLabel": "Quest draft",
   "managedStoryWorkbenchNpcKindLabel": "NPC draft",

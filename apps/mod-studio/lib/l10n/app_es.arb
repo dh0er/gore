@@ -351,7 +351,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "No hay referencias de proyecto sin resolver",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 referencia de proyecto sin resolver} other{{count} referencias de proyecto sin resolver}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Solo indica el estado de las referencias; no confirma que esté listo para compilarse ni ejecutarse.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Solo referencias directas de este borrador; no se incluyen los problemas del contenido dependiente de Diálogo y voz. Esto no confirma que esté listo para compilarse ni ejecutarse.",
   "managedStoryWorkbenchTechnicalDetails": "Detalles técnicos",
   "managedStoryWorkbenchQuestKindLabel": "Borrador de misión",
   "managedStoryWorkbenchNpcKindLabel": "Borrador de PNJ",

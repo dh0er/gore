@@ -2059,7 +2059,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Reference status only; this is not build or runtime readiness.';
+      'Direct references of this draft only; problems in child Dialog & Voice content are not included. This is not build or runtime readiness.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Technical details';

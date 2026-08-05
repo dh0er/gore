@@ -2008,7 +2008,8 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get managedStoryWorkbenchReferenceScopeNotice => '仅表示引用状态；不代表已可构建或运行。';
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      '仅显示此草稿的直接引用；不包括其下属对话和语音内容的问题。这不代表已可构建或运行。';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => '技术详情';
@@ -4802,7 +4803,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get managedStoryWorkbenchReferenceScopeNotice => '仅表示引用状态；不代表已可构建或运行。';
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      '仅显示此草稿的直接引用；不包括其下属对话和语音内容的问题。这不代表已可构建或运行。';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => '技术详情';

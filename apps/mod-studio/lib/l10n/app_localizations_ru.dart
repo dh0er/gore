@@ -2074,7 +2074,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Это только статус ссылок; он не означает готовности к сборке или запуску.';
+      'Только прямые ссылки этого черновика; проблемы дочерних материалов диалогов и озвучки не включены. Это не означает готовности к сборке или запуску.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Технические сведения';

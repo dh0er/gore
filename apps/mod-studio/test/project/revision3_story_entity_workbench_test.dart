@@ -103,6 +103,49 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'Problems tab uses the exact source projection without technical fallback',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 720));
+      final index = _fixture();
+
+      for (final entityId in <String>[_questId, _npcId]) {
+        await _pumpWorkbench(
+          tester,
+          index: index,
+          entityId: entityId,
+          selectedSection: Revision3StoryWorkbenchSection.problemsChecks,
+        );
+
+        expect(find.text('No unresolved project references'), findsOneWidget);
+        expect(
+          find.textContaining('Direct references of this draft only'),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining('child Dialog & Voice content are not included'),
+          findsOneWidget,
+        );
+        expect(find.text('resolved'), findsNothing);
+        expect(find.textContaining('script_module'), findsNothing);
+        expect(find.textContaining(_questId), findsNothing);
+        expect(find.textContaining(_npcId), findsNothing);
+        expect(find.textContaining(_collisionSha), findsNothing);
+        expect(find.textContaining(_collisionMediaType), findsNothing);
+        expect(
+          find.byKey(
+            Key(
+              'revision3-story-workbench-action-inspect-'
+              '${index.entityById(entityId)!.kind.wireName}-$entityId',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
   testWidgets('fallback Overview invokes both Quest context editors', (
     tester,
   ) async {

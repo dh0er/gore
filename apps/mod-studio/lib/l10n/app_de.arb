@@ -641,7 +641,7 @@
   "managedStoryWorkbenchNoReferenceProblems": "Keine ungelösten Projektreferenzen",
   "managedStoryWorkbenchReferenceProblemCount": "{count, plural, =1{1 ungelöste Projektreferenz} other{{count} ungelöste Projektreferenzen}}",
   "@managedStoryWorkbenchReferenceProblemCount": {"placeholders": {"count": {"type": "int"}}},
-  "managedStoryWorkbenchReferenceScopeNotice": "Nur Referenzstatus; dies ist keine Build- oder Laufzeitbereitschaft.",
+  "managedStoryWorkbenchReferenceScopeNotice": "Nur direkte Referenzen dieses Entwurfs; Probleme untergeordneter Dialog- und Voice-Inhalte sind nicht enthalten. Dies ist keine Build- oder Laufzeitbereitschaft.",
   "managedStoryWorkbenchTechnicalDetails": "Technische Details",
   "managedStoryWorkbenchQuestKindLabel": "Quest-Entwurf",
   "managedStoryWorkbenchNpcKindLabel": "NPC-Entwurf",

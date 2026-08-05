@@ -2091,7 +2091,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceScopeNotice =>
-      'Nur Referenzstatus; dies ist keine Build- oder Laufzeitbereitschaft.';
+      'Nur direkte Referenzen dieses Entwurfs; Probleme untergeordneter Dialog- und Voice-Inhalte sind nicht enthalten. Dies ist keine Build- oder Laufzeitbereitschaft.';
 
   @override
   String get managedStoryWorkbenchTechnicalDetails => 'Technische Details';
