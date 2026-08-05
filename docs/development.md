@@ -49,6 +49,49 @@ that directory) plus the mod-studio and mod-manager `analyze` + `test` steps.
 Per-project build and run details live in each component's own README, e.g.
 [`apps/save-editor/README.md`](../apps/save-editor/README.md).
 
+## Release quality gates
+
+The normal [CI workflow](../.github/workflows/ci.yml) is also a reusable
+workflow. Both a prefixed release-tag push and a manual `workflow_dispatch`
+smoke build call that workflow from the exact same commit as the Release
+workflow. It must finish successfully before the selected product can build,
+sign, upload an Actions artifact, publish a GitHub release, or update an appcast
+feed.
+
+That shared gate runs all of the following against the selected commit:
+
+- the complete Rust workspace tests and Save Editor `pub get`, analysis, and
+  tests through `python test.py all` from `apps/save-editor`;
+- Mod Studio `pub get`, analysis, and tests;
+- Mod Manager `pub get`, analysis, and tests;
+- documentation-link and cross-client plugin-manifest checks; and
+- the Release-workflow contract validator and its failure-path unit tests.
+
+Run the workflow-specific checks locally from the repository root with:
+
+```powershell
+python scripts/check_release_workflow.py
+python -m unittest discover -s scripts -p "test_check_release_workflow.py" -v
+```
+
+Each product job has an ordinary dependency on the reusable CI job. A failed,
+cancelled, or skipped gate therefore skips the product job; there is no
+`always()` bypass. This ordering deliberately blocks the product build,
+signing, and artifact upload themselves, rather than checking only immediately
+before publication.
+
+A manual smoke build runs the same gate and then builds, signs, and uploads only
+the selected product as an Actions artifact. It never creates or updates a
+GitHub release and never updates an appcast feed, even when the selected
+dispatch ref is a tag. Those external publication steps require a matching tag
+**push** event.
+
+Passing these gates is offline source, test, analysis, documentation-contract,
+and build evidence only. It does not prove that an installer was executed, an
+app or the game was launched, a game installation was modified or restored, a
+save was safe, or any gameplay/runtime behavior worked. It grants no install,
+game-write, save-write, deployment, or runtime authority.
+
 `python build.py gore-cli dist` also stages the user guide into the CLI zip:
 every `docs/guide/*.md` is copied to `docs/` beside `gore.exe`, and links that
 leave the guide tree (component READMEs, crates, `docs/reference/`) are rewritten
