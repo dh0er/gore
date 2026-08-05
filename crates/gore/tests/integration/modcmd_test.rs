@@ -62,6 +62,25 @@ fn spec_dir_with_bank(root: &Path, bank: &str) -> std::path::PathBuf {
     dir
 }
 
+fn spec_dir_with_pak_file(root: &Path) -> std::path::PathBuf {
+    let dir = root.join("authoring-pak");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("spec.json"),
+        br#"{
+  "meta": { "name": "PakFormat", "version": "1.0.0", "author": "tester" },
+  "pak_files": [ {
+    "game_path": "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+    "source_path": "cursor.bin"
+  } ]
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("cursor.bin"), b"pak-route-payload").unwrap();
+    dir
+}
+
 #[test]
 fn a_bank_written_as_a_full_path_fails_the_build_instead_of_the_deploy() {
     // What this rules out: `build` printing "built bundle: … (4 components, 9 files)" for a spec
@@ -123,10 +142,66 @@ fn a_spec_relative_asset_is_found_from_an_unrelated_working_directory() {
         .assert()
         .success();
 
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("MyMod/gore-mod.json")).unwrap()).unwrap();
+    assert_eq!(manifest["format"], 1);
     assert_eq!(
         std::fs::read(out.join("MyMod/audio/0_SFX_bank__Click.wav")).unwrap(),
         b"WAV-BYTES",
         "the asset beside the spec must be the asset that lands in the bundle"
+    );
+}
+
+#[test]
+fn a_pak_file_build_emits_format_two_with_deterministic_manifest_bytes() {
+    let tmp = TempDir::new().unwrap();
+    let spec_dir = spec_dir_with_pak_file(tmp.path());
+    let elsewhere = tmp.path().join("cwd");
+    let first_out = tmp.path().join("first-out");
+    let second_out = tmp.path().join("second-out");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    for out in [&first_out, &second_out] {
+        gore(tmp.path())
+            .current_dir(&elsewhere)
+            .arg("mod")
+            .arg("build")
+            .arg("--spec")
+            .arg(spec_dir.join("spec.json"))
+            .arg("-o")
+            .arg(out)
+            .assert()
+            .success();
+    }
+
+    let first_root = first_out.join("PakFormat");
+    let second_root = second_out.join("PakFormat");
+    let first_manifest = std::fs::read(first_root.join("gore-mod.json")).unwrap();
+    let second_manifest = std::fs::read(second_root.join("gore-mod.json")).unwrap();
+    assert_eq!(first_manifest, second_manifest);
+
+    let manifest: serde_json::Value = serde_json::from_slice(&first_manifest).unwrap();
+    assert_eq!(manifest["format"], 2);
+    assert_eq!(manifest["components"][0]["type"], "pak_file_patch");
+    assert_eq!(manifest["components"][0]["path"], "pak_files");
+
+    let route_manifest: std::collections::BTreeMap<String, String> =
+        serde_json::from_slice(&std::fs::read(first_root.join("pak_files/manifest.json")).unwrap())
+            .unwrap();
+    let payload = route_manifest
+        .get("G1R/Content/Slate/Cursors/Normal/Normal.PNG")
+        .expect("declared target has one payload");
+    assert_eq!(
+        std::fs::read(first_root.join(payload)).unwrap(),
+        b"pak-route-payload"
+    );
+    assert_eq!(
+        std::fs::read(first_root.join("pak_files/manifest.json")).unwrap(),
+        std::fs::read(second_root.join("pak_files/manifest.json")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(first_root.join(payload)).unwrap(),
+        std::fs::read(second_root.join(payload)).unwrap()
     );
 }
 

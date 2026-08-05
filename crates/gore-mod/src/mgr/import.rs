@@ -1686,12 +1686,10 @@ fn detect(
             limits.max_manifest_bytes,
         )?;
         let manifest: ModManifest = serde_json::from_slice(&bytes)?;
-        if manifest.format != 1 {
-            return Err(ModError::Other(format!(
-                "unsupported gore-mod.json format {} (expected 1)",
-                manifest.format
-            )));
-        }
+        // The bundle format is a capability contract, not merely a serde shape. Validate it
+        // before interpreting any component path or payload contract so a format/component
+        // mismatch never reaches manager metadata or activation.
+        crate::validate_mod_manifest_format(&manifest)?;
         let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
         let prefix = rel_str(staging, &bundle_dir); // "" when the bundle is the staging root
         let comps = goremod_components(&bundle_dir, &prefix, &manifest, &raw, limits)?;
@@ -2141,8 +2139,7 @@ fn classify_file(root: &Path, path: &Path, out: &mut Vec<ComponentInfo>) {
         // `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. Comparing the raw index against real
         // destinations misses the overlap that matters and invents ones between two paks that
         // merely share a leaf name.
-        let targets =
-            gore_tex::container::list_pak_files_from_game_root(path).unwrap_or_default();
+        let targets = gore_tex::container::list_pak_files_from_game_root(path).unwrap_or_default();
         out.push(ComponentInfo::LoosePak { rel, targets });
     }
 }
@@ -2343,6 +2340,98 @@ mod tests {
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
         bdir
+    }
+
+    /// A real format-2 bundle carrying both loose replacement mechanisms. Keeping the two
+    /// destinations distinct makes it possible to prove that import preserves each route's exact
+    /// footprint instead of merging or inferring them.
+    fn mk_mixed_file_bundle(root: &Path, name: &str) -> PathBuf {
+        fs::create_dir_all(root).unwrap();
+        let loose = root.join("intro.bk2");
+        let packed = root.join("Normal.PNG");
+        fs::write(&loose, b"LOOSE-INTRO").unwrap();
+        fs::write(&packed, b"PACKED-CURSOR").unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: "2.0".into(),
+                author: "tester".into(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![LooseFileReplacement {
+                game_path: "G1R/Content/Movies/Intro.bk2".into(),
+                source_path: loose.display().to_string(),
+            }],
+            pak_files: vec![LooseFileReplacement {
+                game_path: "G1R/Content/Slate/Cursors/Normal/Normal.PNG".into(),
+                source_path: packed.display().to_string(),
+            }],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        };
+        let bdir = root.join(name);
+        write_bundle(&bdir, &build_bundle(&spec).unwrap()).unwrap();
+        bdir
+    }
+
+    #[test]
+    fn import_format_2_mixed_file_routes_preserves_targets_and_refuses_tampering() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = mk_mixed_file_bundle(&temp.path().join("valid-source"), "MixedRoutes");
+        let meta = import(&temp.path().join("valid-library"), &bundle).unwrap();
+        assert!(
+            matches!(
+                meta.components.as_slice(),
+                [
+                    ComponentInfo::FilePatch { rel: loose_rel, targets: loose_targets },
+                    ComponentInfo::PakFilePatch { rel: pak_rel, targets: pak_targets },
+                ] if loose_rel == "files"
+                    && loose_targets == &["G1R/Content/Movies/Intro.bk2".to_string()]
+                    && pak_rel == "pak_files"
+                    && pak_targets
+                        == &["G1R/Content/Slate/Cursors/Normal/Normal.PNG".to_string()]
+            ),
+            "components: {:?}",
+            meta.components
+        );
+
+        // The sidecar footprint and the payload manifest are one contract for BOTH mechanisms.
+        // Mutating either payload manifest while leaving gore-mod.json unchanged must fail before
+        // the staged entry can be activated.
+        for (route, original, replacement) in [
+            (
+                "files",
+                "G1R/Content/Movies/Intro.bk2",
+                "G1R/Content/Movies/Outro.bk2",
+            ),
+            (
+                "pak_files",
+                "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+                "G1R/Content/Movies/Outro.bk2",
+            ),
+        ] {
+            let source_root = temp.path().join(format!("tampered-{route}-source"));
+            let tampered = mk_mixed_file_bundle(&source_root, &format!("Tampered-{route}"));
+            let payload_manifest = tampered.join(route).join("manifest.json");
+            let mut map: BTreeMap<String, String> =
+                serde_json::from_slice(&fs::read(&payload_manifest).unwrap()).unwrap();
+            let payload = map.remove(original).unwrap();
+            map.insert(replacement.into(), payload);
+            fs::write(&payload_manifest, serde_json::to_vec_pretty(&map).unwrap()).unwrap();
+
+            let library = temp.path().join(format!("tampered-{route}-library"));
+            let error = import(&library, &tampered).unwrap_err().to_string();
+            assert!(
+                error.contains("declared targets disagree"),
+                "unexpected {route} error: {error}"
+            );
+            assert_failed_import_left_nothing(&library);
+        }
     }
 
     /// The library sidecar has to carry a loose-file component's DESTINATIONS, because that is the
@@ -2972,26 +3061,51 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_goremod_manifest_format_before_activation() {
+    fn rejects_format_component_mismatches_and_unknown_formats_before_activation() {
         let temp = tempfile::tempdir().unwrap();
-        let bundle = mk_goremod_bundle(temp.path());
-        let manifest_path = bundle.join("gore-mod.json");
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["format"] = serde_json::json!(2);
-        fs::write(
-            &manifest_path,
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
+        let cases = [
+            (
+                "format-2-without-pak",
+                2,
+                false,
+                "requires at least one pak_file_patch",
+            ),
+            (
+                "format-1-with-pak",
+                1,
+                true,
+                "format 1 does not support pak_file_patch",
+            ),
+            (
+                "unknown-format",
+                99,
+                false,
+                "unsupported gore-mod manifest format 99",
+            ),
+        ];
+        for (case, format, with_pak, expected) in cases {
+            let source_root = temp.path().join(format!("{case}-source"));
+            fs::create_dir_all(&source_root).unwrap();
+            let bundle = if with_pak {
+                mk_mixed_file_bundle(&source_root, case)
+            } else {
+                mk_goremod_bundle(&source_root)
+            };
+            let manifest_path = bundle.join("gore-mod.json");
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+            manifest["format"] = serde_json::json!(format);
+            fs::write(
+                &manifest_path,
+                serde_json::to_vec_pretty(&manifest).unwrap(),
+            )
+            .unwrap();
 
-        let library = temp.path().join("lib");
-        let error = import(&library, &bundle).unwrap_err().to_string();
-        assert!(
-            error.contains("unsupported gore-mod.json format 2"),
-            "unexpected error: {error}"
-        );
-        assert_failed_import_left_nothing(&library);
+            let library = temp.path().join(format!("{case}-library"));
+            let error = import(&library, &bundle).unwrap_err().to_string();
+            assert!(error.contains(expected), "unexpected {case} error: {error}");
+            assert_failed_import_left_nothing(&library);
+        }
     }
 
     fn assert_goremod_components(meta: &ModEntryMeta, want_prefix: &str) {
