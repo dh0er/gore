@@ -2174,6 +2174,7 @@ class _ManagedRevision3ProjectViewState
   late Revision3ItemsViewController _itemsViewController;
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   late Revision3ProjectCompilerCheckController _projectCompilerController;
+  late Revision3ProjectProblemsController _projectProblemsController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
   late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
@@ -2676,6 +2677,7 @@ class _ManagedRevision3ProjectViewState
       gameRoot: gameRoot,
       requiresReopen: project.requiresReopen,
     );
+    _projectProblemsController = Revision3ProjectProblemsController();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
@@ -2741,12 +2743,14 @@ class _ManagedRevision3ProjectViewState
     _itemsViewController = Revision3ItemsViewController();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
+    _projectProblemsController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
     _projectCompilerController = Revision3ProjectCompilerCheckController(
       checkpoint: _projectCompilerCheckpoint,
       gameRoot: gameRoot,
       requiresReopen: project.requiresReopen,
     );
+    _projectProblemsController = Revision3ProjectProblemsController();
     _scopedContentBrowserController.dispose();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
@@ -2853,6 +2857,7 @@ class _ManagedRevision3ProjectViewState
     _itemsViewController.dispose();
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
+    _projectProblemsController.dispose();
     _scopedContentBrowserController.dispose();
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
@@ -4628,7 +4633,10 @@ class _ManagedRevision3ProjectViewState
     final buildPreviewHead = checkpoint.checkpointIdentity;
     final externalChecksEnabled = _managedProjectMutationAllowed();
     return AnimatedBuilder(
-      animation: _projectCompilerController,
+      animation: Listenable.merge([
+        _projectCompilerController,
+        _projectProblemsController,
+      ]),
       builder: (context, _) => Revision3TestReleaseWorkspace(
         projectId: checkpoint.projectId,
         projectRevision: checkpoint.projectRevision,
@@ -4662,11 +4670,8 @@ class _ManagedRevision3ProjectViewState
           problemsHeading: l10n.managedTestReleaseProblemsHeading,
           voiceContinuationHeading: l10n.managedTestReleaseVoiceHeading,
         ),
-        projectStructure: Revision3TestReleaseCheck(
-          state: Revision3TestReleaseCheckState.notEvaluated,
-          title: l10n.managedTestReleaseProjectStructureTitle,
-          description: l10n.managedTestReleaseProjectStructureDescription,
-          actionLabel: l10n.managedTestReleaseProjectStructureAction,
+        projectStructure: _projectStructureCheck(
+          l10n,
           onPressed: () => navigate(
             Revision3ProjectWorkspaceSection.testRelease,
             secondary: 'problems',
@@ -4769,6 +4774,70 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
+  Revision3TestReleaseCheck _projectStructureCheck(
+    AppLocalizations l10n, {
+    required VoidCallback onPressed,
+  }) {
+    final expected = Revision3ProjectProblemsCheckpoint(
+      projectRoot: project.root.path,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectHeadCanonicalJson: project.head.canonicalJson,
+    );
+    final snapshot = _projectProblemsController.snapshot;
+    var state = Revision3TestReleaseCheckState.checking;
+    Revision3TestReleaseEvidence? evidence;
+
+    if (snapshot.belongsTo(expected)) {
+      switch (snapshot.state) {
+        case Revision3ProjectProblemsLoadState.detached ||
+            Revision3ProjectProblemsLoadState.loading:
+          state = Revision3TestReleaseCheckState.checking;
+        case Revision3ProjectProblemsLoadState.unavailable:
+          state = Revision3TestReleaseCheckState.unavailable;
+        case Revision3ProjectProblemsLoadState.ready:
+          final assessment = snapshot.referenceIntegrity;
+          if (assessment == null ||
+              assessment.scope !=
+                  Revision3ProjectProblemScope.referenceIntegrity ||
+              assessment.evidence !=
+                  Revision3ProjectProblemEvidence.exactContentIndex) {
+            state = Revision3TestReleaseCheckState.unavailable;
+            break;
+          }
+          state = switch (assessment.readiness) {
+            Revision3ProjectProblemReadiness.clear =>
+              Revision3TestReleaseCheckState.passed,
+            Revision3ProjectProblemReadiness.issues =>
+              Revision3TestReleaseCheckState.needsAttention,
+            _ => Revision3TestReleaseCheckState.unavailable,
+          };
+          if (state == Revision3TestReleaseCheckState.passed ||
+              state == Revision3TestReleaseCheckState.needsAttention) {
+            evidence = Revision3TestReleaseEvidence(
+              projectId: expected.projectId,
+              projectRevision: expected.projectRevision,
+              checkpointIdentity: expected.projectHeadCanonicalJson,
+              scope: Revision3TestReleaseEvidenceScope.projectStructure,
+              summary: l10n.managedProblemsEvidenceContent,
+            );
+          }
+      }
+    }
+
+    return Revision3TestReleaseCheck(
+      state: state,
+      title: l10n.managedTestReleaseProjectStructureTitle,
+      description: _projectProblemScopeDescription(
+        l10n,
+        Revision3ProjectProblemScope.referenceIntegrity,
+      ),
+      evidence: evidence,
+      actionLabel: l10n.managedTestReleaseProjectStructureAction,
+      onPressed: onPressed,
+    );
+  }
+
   Widget _buildVoiceReadiness(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
     final externalActionsEnabled = _managedProjectMutationAllowed();
@@ -4818,6 +4887,7 @@ class _ManagedRevision3ProjectViewState
       loadDataAssetStages: loadDataAssetStages,
       gameConfigured: gameConfigured,
       copy: _projectProblemsCopy(l10n),
+      controller: _projectProblemsController,
       actions: Revision3ProjectProblemsActions(
         openEntity: (entityId) => _openProblemEntity(
           context,
