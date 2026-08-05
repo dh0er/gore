@@ -158,12 +158,38 @@ Map<String, Object?> _validStoryCatalogResponse({
   },
 };
 
-Map<String, Object?> _storyCatalogGeneration() => <String, Object?>{
+Map<String, Object?> _storyCatalogGeneration({
+  int executableByteLength = 171698176,
+  String executableSealByte = '1',
+}) => <String, Object?>{
   'edition': 'g1r-steam',
-  'executable': _catalogContentSeal('1', 171698176),
+  'executable': _catalogContentSeal(executableSealByte, executableByteLength),
   'shipping_cache': _catalogContentSeal('2', 123394250),
   'binds_cache': _catalogContentSeal('3', 5903938),
 };
+
+Map<String, Object?> _unsupportedGenerationDetails({int supportedCount = 1}) =>
+    <String, Object?>{
+      'kind': 'unsupported_generation',
+      'actual': _storyCatalogGeneration(executableSealByte: 'f'),
+      'supported': <Object?>[
+        for (var index = 0; index < supportedCount; index++)
+          _storyCatalogGeneration(executableByteLength: 171698176 + index),
+      ],
+    };
+
+Map<String, Object?> _nativeErrorResponse({
+  required String code,
+  Object? details,
+  bool includeDetails = true,
+}) {
+  final error = <String, Object?>{
+    'code': code,
+    'message': 'unsupported installed generation',
+  };
+  if (includeDetails) error['details'] = details;
+  return <String, Object?>{'ok': false, 'error': error};
+}
 
 String _storyCatalogBuildRaw() => jsonEncode(<String, Object?>{
   'format': 'story_catalog',
@@ -481,10 +507,235 @@ void main() {
       expect(error.command, 'audio_extract');
       expect(error.code, 'NOT_FOUND');
       expect(error.message, 'sample not found: DIA_HERO_1');
+      expect(error.details, isNull);
       expect(
         error.toString(),
         'audio_extract: sample not found: DIA_HERO_1 [NOT_FOUND]',
       );
+    },
+  );
+
+  test(
+    'Story unsupported-generation details are typed, bounded, and immutable',
+    () async {
+      const code = 'AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION';
+      final directError = await _captureModFfiException(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: <String, Map<String, Object?>>{
+              'authoring_story_catalog_v1_build': _nativeErrorResponse(
+                code: code,
+                details: _unsupportedGenerationDetails(supportedCount: 16),
+              ),
+            },
+          ),
+        ).authoringStoryCatalogV1Build(
+          executable: _storyCatalogExecutable,
+          shippingCache: _storyCatalogShippingCache,
+          bindsCache: _storyCatalogBindsCache,
+        ),
+      );
+      final rootError = await _captureModFfiException(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: <String, Map<String, Object?>>{
+              'authoring_story_catalog_v1_build_for_game_root':
+                  _nativeErrorResponse(
+                    code: code,
+                    details: _unsupportedGenerationDetails(),
+                  ),
+            },
+          ),
+        ).authoringStoryCatalogV1BuildForGameRoot(
+          gameRoot: _storyCatalogGameRoot,
+        ),
+      );
+
+      final details = directError.details;
+      expect(details, isA<ModFfiUnsupportedGenerationDetails>());
+      final unsupported = details! as ModFfiUnsupportedGenerationDetails;
+      expect(unsupported.actual.edition, 'g1r-steam');
+      expect(unsupported.actual.executable.sha256, List.filled(64, 'f').join());
+      expect(unsupported.supported, hasLength(16));
+      expect(unsupported.supported.first.executable.byteLength, 171698176);
+      expect(unsupported.supported.last.executable.byteLength, 171698191);
+      expect(() => unsupported.supported.clear(), throwsUnsupportedError);
+      expect(rootError.details, isA<ModFfiUnsupportedGenerationDetails>());
+      expect(
+        directError.toString(),
+        'authoring_story_catalog_v1_build: unsupported installed generation '
+        '[$code]',
+      );
+      expect(
+        directError.toString(),
+        isNot(contains(List.filled(64, 'f').join())),
+      );
+    },
+  );
+
+  test('unsupported-generation errors may omit details', () async {
+    const code = 'AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION';
+    final error = await _captureModFfiException(
+      ModFfi(
+        FakeGoreCoreFfiService(
+          responses: <String, Map<String, Object?>>{
+            'authoring_story_catalog_v1_build': _nativeErrorResponse(
+              code: code,
+              includeDetails: false,
+            ),
+          },
+        ),
+      ).authoringStoryCatalogV1Build(
+        executable: _storyCatalogExecutable,
+        shippingCache: _storyCatalogShippingCache,
+        bindsCache: _storyCatalogBindsCache,
+      ),
+    );
+
+    expect(error.code, code);
+    expect(error.details, isNull);
+  });
+
+  test(
+    'present unsupported-generation details require the exact closed schema',
+    () async {
+      const code = 'AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION';
+      final missingActual = _unsupportedGenerationDetails()..remove('actual');
+      final extraField = _unsupportedGenerationDetails()..['extra'] = true;
+      final unknownKind = _unsupportedGenerationDetails()..['kind'] = 'other';
+      final emptySupported = _unsupportedGenerationDetails()
+        ..['supported'] = <Object?>[];
+      final tooManySupported = _unsupportedGenerationDetails(
+        supportedCount: 17,
+      );
+      final duplicateSupported = _unsupportedGenerationDetails(
+        supportedCount: 2,
+      );
+      final duplicateList = duplicateSupported['supported']! as List<Object?>;
+      duplicateList[1] = jsonDecode(jsonEncode(duplicateList[0]));
+      final actualIsSupported = _unsupportedGenerationDetails();
+      actualIsSupported['actual'] = jsonDecode(
+        jsonEncode((actualIsSupported['supported']! as List<Object?>).single),
+      );
+      final invalidSeal = _unsupportedGenerationDetails();
+      (((invalidSeal['actual']! as Map<String, Object?>)['executable']!
+              as Map<String, Object?>))['byte_len'] =
+          0;
+      final uppercaseSeal = _unsupportedGenerationDetails();
+      (((uppercaseSeal['actual']! as Map<String, Object?>)['executable']!
+          as Map<String, Object?>))['sha256'] = List.filled(
+        64,
+        'A',
+      ).join();
+      final nonStringGenerationKey = _unsupportedGenerationDetails();
+      nonStringGenerationKey['actual'] = <Object?, Object?>{7: 'hostile'};
+      final malformedDetails = <Object?>[
+        null,
+        'not an object',
+        <Object?, Object?>{7: 'hostile'},
+        missingActual,
+        extraField,
+        unknownKind,
+        emptySupported,
+        tooManySupported,
+        duplicateSupported,
+        actualIsSupported,
+        invalidSeal,
+        uppercaseSeal,
+        nonStringGenerationKey,
+        <String, Object?>{
+          ..._unsupportedGenerationDetails(),
+          'supported': 'not a list',
+        },
+        <String, Object?>{
+          ..._unsupportedGenerationDetails(),
+          'supported': <Object?>[7],
+        },
+      ];
+
+      for (final details in malformedDetails) {
+        final error = await _captureModFfiException(
+          ModFfi(
+            FakeGoreCoreFfiService(
+              responses: <String, Map<String, Object?>>{
+                'authoring_story_catalog_v1_build': _nativeErrorResponse(
+                  code: code,
+                  details: details,
+                ),
+              },
+            ),
+          ).authoringStoryCatalogV1Build(
+            executable: _storyCatalogExecutable,
+            shippingCache: _storyCatalogShippingCache,
+            bindsCache: _storyCatalogBindsCache,
+          ),
+        );
+
+        expect(error.code, ModFfiException.malformedNativeResponseCode);
+        expect(
+          error.message,
+          'malformed native response: field error.details is invalid',
+        );
+        expect(error.details, isNull);
+        expect(error.toString(), isNot(contains('hostile')));
+      }
+    },
+  );
+
+  test(
+    'unsupported-generation details are bound to matching command and code',
+    () async {
+      const storyCode = 'AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION';
+      const npcCode = 'AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION';
+      final wrongStoryCode = await _captureModFfiException(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: <String, Map<String, Object?>>{
+              'authoring_story_catalog_v1_build': _nativeErrorResponse(
+                code: npcCode,
+                details: _unsupportedGenerationDetails(),
+              ),
+            },
+          ),
+        ).authoringStoryCatalogV1Build(
+          executable: _storyCatalogExecutable,
+          shippingCache: _storyCatalogShippingCache,
+          bindsCache: _storyCatalogBindsCache,
+        ),
+      );
+      final wrongCommand = await _captureModFfiException(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: <String, Map<String, Object?>>{
+              'audio_extract': _nativeErrorResponse(
+                code: storyCode,
+                details: _unsupportedGenerationDetails(),
+              ),
+            },
+          ),
+        ).audioExtract('speech.fsb', 'DIA_HERO_1'),
+      );
+      final wrongStoryCommand = await _captureModFfiException(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: <String, Map<String, Object?>>{
+              'authoring_story_catalog_v1_read': _nativeErrorResponse(
+                code: storyCode,
+                details: _unsupportedGenerationDetails(),
+              ),
+            },
+          ),
+        ).authoringStoryCatalogV1Read(catalogJson: _storyCatalogRequest),
+      );
+
+      for (final error in <ModFfiException>[
+        wrongStoryCode,
+        wrongCommand,
+        wrongStoryCommand,
+      ]) {
+        expect(error.code, ModFfiException.malformedNativeResponseCode);
+        expect(error.details, isNull);
+      }
     },
   );
 

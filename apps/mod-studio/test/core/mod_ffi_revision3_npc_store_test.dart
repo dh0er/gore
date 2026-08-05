@@ -17,6 +17,9 @@ const _executableSha256 =
 const _hotfixExecutableByteLength = 171704320;
 const _hotfixExecutableSha256 =
     'b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d';
+const _build24340829ExecutableByteLength = 171787776;
+const _build24340829ExecutableSha256 =
+    'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
 
 String _headJson(String byte) => jsonEncode(<String, Object?>{
   'store_format': 1,
@@ -192,40 +195,59 @@ void main() {
   });
 
   test(
-    'hotfix generation crosses with the identical curated parent evidence',
+    'later generations cross with the identical curated parent evidence',
     () {
-      final projectJson = _projectJson(
-        executableByteLength: _hotfixExecutableByteLength,
-        executableSha256: _hotfixExecutableSha256,
-      );
-      final request = _request(projectJson: projectJson);
-      final fixture = Revision3NpcFixture.fromBasis(
-        basisHead: request.expectedHead,
-        basisProjectJson: projectJson,
-        request: request,
-      );
-
-      final prepared = AuthoringRevision3NpcDraftPreparation.fromJson(
-        fixture.response(),
-        currentProjectJson: projectJson,
-        request: request,
-      );
-      final project = (jsonDecode(prepared.projectJson) as Map)
-          .cast<String, Object?>();
-      final entities = (project['entities']! as Map).cast<String, Object?>();
-      final npc = (entities[_npcId]! as Map).cast<String, Object?>();
-      final payload = (npc['payload']! as Map).cast<String, Object?>();
-      final data = (payload['data']! as Map).cast<String, Object?>();
-      final input = (data['input']! as Map).cast<String, Object?>();
-      expect(input['target'], project['target']);
-      for (final field in const <String>[
-        'parent_character_definition',
-        'parent_ai_agent_config',
-        'parent_spawn_definition',
+      for (final generation in const <({int byteLength, String sha256})>[
+        (
+          byteLength: _hotfixExecutableByteLength,
+          sha256: _hotfixExecutableSha256,
+        ),
+        (
+          byteLength: _build24340829ExecutableByteLength,
+          sha256: _build24340829ExecutableSha256,
+        ),
       ]) {
-        final parent = (input[field]! as Map).cast<String, Object?>();
-        expect(parent['generation'], project['target']);
-        expect(parent['catalog_layer'], revision3NpcFixtureCatalogLayer);
+        final projectJson = _projectJson(
+          executableByteLength: generation.byteLength,
+          executableSha256: generation.sha256,
+        );
+        final request = _request(projectJson: projectJson);
+        final fixture = Revision3NpcFixture.fromBasis(
+          basisHead: request.expectedHead,
+          basisProjectJson: projectJson,
+          request: request,
+        );
+
+        final prepared = AuthoringRevision3NpcDraftPreparation.fromJson(
+          fixture.response(),
+          currentProjectJson: projectJson,
+          request: request,
+        );
+        final project = (jsonDecode(prepared.projectJson) as Map)
+            .cast<String, Object?>();
+        final entities = (project['entities']! as Map).cast<String, Object?>();
+        final npc = (entities[_npcId]! as Map).cast<String, Object?>();
+        final payload = (npc['payload']! as Map).cast<String, Object?>();
+        final data = (payload['data']! as Map).cast<String, Object?>();
+        final input = (data['input']! as Map).cast<String, Object?>();
+        expect(input['target'], project['target'], reason: generation.sha256);
+        for (final field in const <String>[
+          'parent_character_definition',
+          'parent_ai_agent_config',
+          'parent_spawn_definition',
+        ]) {
+          final parent = (input[field]! as Map).cast<String, Object?>();
+          expect(
+            parent['generation'],
+            project['target'],
+            reason: generation.sha256,
+          );
+          expect(
+            parent['catalog_layer'],
+            revision3NpcFixtureCatalogLayer,
+            reason: generation.sha256,
+          );
+        }
       }
     },
   );
@@ -243,6 +265,23 @@ void main() {
       ),
       (byteLength: _executableByteLength, sha256: _hotfixExecutableSha256),
       (byteLength: _hotfixExecutableByteLength, sha256: _executableSha256),
+      (
+        byteLength: _build24340829ExecutableByteLength - 1,
+        sha256: _build24340829ExecutableSha256,
+      ),
+      (
+        byteLength: _build24340829ExecutableByteLength,
+        sha256:
+            '${_build24340829ExecutableSha256.substring(0, 63)}${_build24340829ExecutableSha256.endsWith('0') ? '1' : '0'}',
+      ),
+      (
+        byteLength: _hotfixExecutableByteLength,
+        sha256: _build24340829ExecutableSha256,
+      ),
+      (
+        byteLength: _build24340829ExecutableByteLength,
+        sha256: _hotfixExecutableSha256,
+      ),
     ];
 
     for (final generation in unsupported) {

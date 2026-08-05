@@ -57,6 +57,43 @@ void main() {
     },
   );
 
+  test(
+    'NPC unsupported-generation details are typed while omission stays valid',
+    () async {
+      const code = 'AUTHORING_NPC_CATALOG_UNSUPPORTED_GENERATION';
+      final typedError = await _captureModFfiException(
+        _call(<String, Object?>{
+          'ok': false,
+          'error': <String, Object?>{
+            'code': code,
+            'message': 'unsupported installed generation',
+            'details': _unsupportedGenerationDetails(),
+          },
+        }),
+      );
+      final omittedError = await _captureModFfiException(
+        _call(<String, Object?>{
+          'ok': false,
+          'error': <String, Object?>{
+            'code': code,
+            'message': 'unsupported installed generation',
+          },
+        }),
+      );
+
+      expect(typedError.code, code);
+      expect(typedError.details, isA<ModFfiUnsupportedGenerationDetails>());
+      final details = typedError.details! as ModFfiUnsupportedGenerationDetails;
+      expect(details.actual.executable.sha256, _hex('f'));
+      expect(details.supported, hasLength(1));
+      expect(details.supported.single.executable.sha256, _hex('1'));
+      expect(() => details.supported.clear(), throwsUnsupportedError);
+      expect(typedError.toString(), isNot(contains(_hex('f'))));
+      expect(omittedError.code, code);
+      expect(omittedError.details, isNull);
+    },
+  );
+
   test('NPC catalog rejects outer confusion and loose raw JSON', () async {
     final mutations = <void Function(Map<String, Object?>)>[
       (response) => response['extra'] = true,
@@ -288,25 +325,46 @@ Future<AuthoringNpcArchetypeCatalogBuildResult> _call(
   ),
 ).authoringNpcArchetypeCatalogV1BuildForGameRoot(gameRoot: _gameRoot);
 
+Future<ModFfiException> _captureModFfiException(Future<Object?> call) async {
+  try {
+    await call;
+  } on ModFfiException catch (error) {
+    return error;
+  }
+  fail('expected ModFfiException');
+}
+
+Map<String, Object?> _unsupportedGenerationDetails() => <String, Object?>{
+  'kind': 'unsupported_generation',
+  'actual': _generation(executableSealDigit: 'f'),
+  'supported': <Object?>[_generation()],
+};
+
+Map<String, Object?> _generation({String executableSealDigit = '1'}) =>
+    <String, Object?>{
+      'edition': 'g1r-steam',
+      'executable': _fixedSeal(executableSealDigit, 171698176),
+      'shipping_cache': _fixedSeal('2', 123394250),
+      'binds_cache': _fixedSeal('3', 5903938),
+    };
+
 Map<String, Object?> _validResponse() {
-  final generation = <String, Object?>{
-    'edition': 'g1r-steam',
-    'executable': <String, Object?>{
+  final generation = _generation()
+    ..['executable'] = <String, Object?>{
       'byte_len': 171698176,
       'sha256':
           'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
-    },
-    'shipping_cache': <String, Object?>{
+    }
+    ..['shipping_cache'] = <String, Object?>{
       'byte_len': 123394250,
       'sha256':
           '1018f1cfe6b99a650eecb33afb96752d691d2088ead27808971b812f04ecb4c2',
-    },
-    'binds_cache': <String, Object?>{
+    }
+    ..['binds_cache'] = <String, Object?>{
       'byte_len': 5903938,
       'sha256':
           '46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea',
-    },
-  };
+    };
   final sourceIdentity = <String, Object?>{
     'shipping_cache': _deepCopy(generation['shipping_cache']!),
     'binds_cache': _deepCopy(generation['binds_cache']!),

@@ -14,11 +14,17 @@ import 'package:gore_mod/scripts/domain/script_compile_install_state_provider.da
 
 import '../support/revision3_npc_fixture.dart';
 
+const _build24340829ExecutableSha256 =
+    'ab2c8d9e286a437bc5343748faf40959a77e9dc7c542ff9361f1ffaeca5c811c';
+
 void main() {
   testWidgets(
     'loads one exact NPC and shows only saved evidence plus four blockers',
     (tester) async {
-      final projectJson = revision3NpcInspectionProjectJson();
+      final projectJson = revision3NpcInspectionProjectJson(
+        executableByteLength: 171787776,
+        executableSha256: _build24340829ExecutableSha256,
+      );
       final head = revision3NpcFixtureHead(projectJson);
       final inspection = revision3NpcInspectionResult(
         head: head,

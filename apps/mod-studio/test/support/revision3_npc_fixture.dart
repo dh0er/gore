@@ -27,7 +27,8 @@ typedef _Revision3NpcFixtureSelection = ({
   _Revision3NpcFixtureParent spawnDefinition,
 });
 
-/// Frozen values emitted by the native pinned Story-catalog V1 projection.
+/// Frozen values emitted by the native pinned Story-catalog projection shared
+/// by every currently registered generation.
 /// Selector strings are intentionally literal rather than shared with the
 /// Dart verifier so an endian/domain regression cannot make both sides pass.
 const Map<String, _Revision3NpcFixtureSelection>
@@ -503,6 +504,9 @@ String revision3NpcInspectionProjectJson({
   String projectId = revision3NpcInspectionProjectId,
   int revision = 7,
   String name = 'NPC inspection fixture',
+  int executableByteLength = 171698176,
+  String executableSha256 =
+      'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
 }) => jsonEncode(<String, Object?>{
   'format': 2,
   'schema_revision': 3,
@@ -515,9 +519,8 @@ String revision3NpcInspectionProjectJson({
   },
   'target': <String, Object?>{
     'executable': <String, Object?>{
-      'byte_len': 171698176,
-      'sha256':
-          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+      'byte_len': executableByteLength,
+      'sha256': executableSha256,
     },
   },
   'authoring_locales': <Object?>[],

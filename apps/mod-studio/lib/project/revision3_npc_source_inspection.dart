@@ -225,12 +225,13 @@ final class AuthoringRevision3NpcInspectionInput {
   }
 
   String? get knownParentLabel {
-    if (target.executable.byteLength !=
-            _authoringRevision3NpcExecutableByteLengthV1 ||
-        target.executable.sha256 != _authoringRevision3NpcExecutableSha256V1) {
+    if (!_authoringRevision3NpcIsSupportedExecutable(
+      target.executable.byteLength,
+      target.executable.sha256,
+    )) {
       return null;
     }
-    for (final entry in _authoringRevision3NpcSelectionEvidenceV1.entries) {
+    for (final entry in _authoringRevision3NpcSelectionEvidence.entries) {
       final evidence = entry.value;
       if (_npcInspectionKnownParent(
             parentCharacterDefinition,

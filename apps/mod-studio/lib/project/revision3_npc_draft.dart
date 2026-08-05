@@ -90,11 +90,6 @@ _authoringRevision3NpcSelectionEvidence = {
   ),
 };
 
-// Kept for the existing source-inspection part; all currently registered
-// generations use this exact same curated evidence projection.
-const _authoringRevision3NpcSelectionEvidenceV1 =
-    _authoringRevision3NpcSelectionEvidence;
-
 final _authoringRevision3NpcCatalogIdPattern = RegExp(
   r'^[a-z0-9._-]+(?::[a-z0-9._-]+){2,}$',
 );
@@ -667,15 +662,23 @@ _authoringRevision3NpcGeneration(Object? value, String context) {
   );
 }
 
+bool _authoringRevision3NpcIsSupportedExecutable(
+  int byteLength,
+  String sha256,
+) =>
+    (byteLength == _authoringRevision3NpcExecutableByteLengthV1 &&
+        sha256 == _authoringRevision3NpcExecutableSha256V1) ||
+    (byteLength == _authoringRevision3NpcExecutableByteLengthV2 &&
+        sha256 == _authoringRevision3NpcExecutableSha256V2) ||
+    (byteLength == _authoringRevision3NpcExecutableByteLengthV3 &&
+        sha256 == _authoringRevision3NpcExecutableSha256V3);
+
 bool _authoringRevision3NpcIsSupportedGeneration(
   ({Map<String, Object?> json, int byteLength, String sha256}) generation,
-) =>
-    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV1 &&
-        generation.sha256 == _authoringRevision3NpcExecutableSha256V1) ||
-    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV2 &&
-        generation.sha256 == _authoringRevision3NpcExecutableSha256V2) ||
-    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV3 &&
-        generation.sha256 == _authoringRevision3NpcExecutableSha256V3);
+) => _authoringRevision3NpcIsSupportedExecutable(
+  generation.byteLength,
+  generation.sha256,
+);
 
 void _authoringRevision3NpcRequireExactDelta(
   Map<String, Object?> base,

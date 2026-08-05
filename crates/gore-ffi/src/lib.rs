@@ -1731,6 +1731,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unsupported_generation_details_are_closed_exact_and_bounded() {
+        let supported = gore_story_catalog::known_supported_generations();
+        let mut actual = supported[0].clone();
+        actual.executable.byte_len += 1;
+
+        let details = unsupported_generation_details(&supported, &actual);
+        assert_eq!(
+            details,
+            json!({
+                "kind": "unsupported_generation",
+                "actual": actual,
+                "supported": supported,
+            })
+        );
+        assert_eq!(details.as_object().unwrap().len(), 3);
+        assert!(serde_json::to_string(&details).unwrap().len() <= MAX_ERROR_DETAILS_BYTES);
+
+        let many_supported = vec![
+            gore_story_catalog::known_supported_generations()[0].clone();
+            MAX_ERROR_DETAILS_SUPPORTED_ENTRIES + 3
+        ];
+        let bounded = unsupported_generation_details(&many_supported, &actual);
+        assert_eq!(
+            bounded["supported"].as_array().unwrap().len(),
+            MAX_ERROR_DETAILS_SUPPORTED_ENTRIES
+        );
+    }
+
+    #[test]
+    fn structured_error_details_are_optional_and_dropped_whole_when_invalid_or_oversized() {
+        let accepted =
+            err_with_details("FIXTURE", "fixture", json!({"kind": "fixture", "value": 1}));
+        assert_eq!(
+            accepted["error"]["details"],
+            json!({"kind": "fixture", "value": 1})
+        );
+
+        for rejected in [
+            Value::Null,
+            json!(["not", "an", "object"]),
+            json!({"padding": "x".repeat(MAX_ERROR_DETAILS_BYTES)}),
+        ] {
+            let response = err_with_details("FIXTURE", "fixture", rejected);
+            assert_eq!(
+                response,
+                json!({"ok": false, "error": {"code": "FIXTURE", "message": "fixture"}})
+            );
+        }
+    }
+
+    #[test]
     fn live_texture_index_store_retains_two_overlapping_exact_generations() {
         let store = LiveTextureIndexStore::default();
         assert!(store.get_exact("generation-a").is_none());
