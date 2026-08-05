@@ -3068,44 +3068,47 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+  String get managedVoiceBuildReadinessTitle => 'Проверка голосового пакета';
 
   @override
-  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+  String get managedVoiceBuildReadinessRefresh =>
+      'Обновить проверку голосового пакета';
 
   @override
   String get managedVoiceBuildReadinessChecking =>
-      'Checking exact Voice readiness';
+      'Проверка точного плана голосового пакета';
 
   @override
   String get managedVoiceBuildReadinessLoadError =>
-      'Voice readiness could not be verified for the current project. No build is available from this result.';
+      'Не удалось проверить точный план голосового пакета для текущего проекта. Этот результат не содержит свидетельств по плану пакета.';
 
   @override
-  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+  String get managedVoiceBuildReadinessReadyTitle =>
+      'План голосового пакета проверен';
 
   @override
-  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+  String get managedVoiceBuildReadinessBlockedTitle =>
+      'План голосового пакета требует внимания';
 
   @override
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
-    return '$readySlots of $totalSlots Voice slots are ready.';
+    return '$readySlots из $totalSlots существующих слотов Voice соответствуют этому плану пакета.';
   }
 
   @override
   String get managedVoiceBuildReadinessBlockedBoundary =>
-      'No bundle was created and deployment was not performed.';
+      'Пакет не создан, развёртывание не выполнялось.';
 
   @override
   String get managedVoiceBuildReadinessBuildBundle => 'Build bundle';
 
   @override
   String get managedVoiceBuildReadinessBuildReleaseGuidance =>
-      'Voice content is ready. Open Build & Release to create the offline bundle.';
+      'Здесь проверяется только план; создание автономного голосового пакета остаётся отдельным действием.';
 
   @override
   String get managedVoiceBuildReadinessConfigureGameGuidance =>
-      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+      'Точный план голосового пакета проверен. Чтобы стало доступно отдельное действие создания автономного пакета, по-прежнему требуется настроенная установка игры.';
 
   @override
   String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
@@ -3548,7 +3551,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedTestReleaseProblemsHeading => 'Проблемы для решения';
 
   @override
-  String get managedTestReleaseVoiceHeading => 'Проверка сборки озвучки';
+  String get managedTestReleaseVoiceHeading => 'Проверка голосового пакета';
 
   @override
   String get managedTestReleaseProjectStructureTitle => 'Структура проекта';
@@ -3682,14 +3685,14 @@ class AppLocalizationsRu extends AppLocalizations {
       'дополнительных сообщений компилятора скрыто';
 
   @override
-  String get managedTestReleaseVoiceTitle => 'Текст и озвучка';
+  String get managedTestReleaseVoiceTitle => 'Проверка голосового пакета';
 
   @override
   String get managedTestReleaseVoiceDescription =>
-      'Используйте ниже проверку сборки озвучки для текущей сохранённой версии проекта.';
+      'Проверяет только точный текущий план голосового пакета для существующих элементов. Не проверяет полноту текста или переводов, воспроизведение, результаты сборки, развёртывание или работу во время выполнения.';
 
   @override
-  String get managedTestReleaseVoiceAction => 'Проверить озвучку';
+  String get managedTestReleaseVoiceAction => 'Открыть проверку пакета';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';

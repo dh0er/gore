@@ -2175,6 +2175,7 @@ class _ManagedRevision3ProjectViewState
   late Revision3DataAssetStagePanelController _dataAssetStagePanelController;
   late Revision3ProjectCompilerCheckController _projectCompilerController;
   late Revision3ProjectProblemsController _projectProblemsController;
+  late Revision3VoiceBuildReadinessController _voiceBuildReadinessController;
   late Revision3ScopedContentBrowserController _scopedContentBrowserController;
   late Revision3ProjectGlobalUndoCoordinator _globalUndoCoordinator;
   late FocusNode _globalSearchQueryFocusNode;
@@ -2678,6 +2679,7 @@ class _ManagedRevision3ProjectViewState
       requiresReopen: project.requiresReopen,
     );
     _projectProblemsController = Revision3ProjectProblemsController();
+    _voiceBuildReadinessController = Revision3VoiceBuildReadinessController();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
     );
@@ -2744,6 +2746,7 @@ class _ManagedRevision3ProjectViewState
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
     _projectProblemsController.dispose();
+    _voiceBuildReadinessController.dispose();
     _dataAssetStagePanelController = Revision3DataAssetStagePanelController();
     _projectCompilerController = Revision3ProjectCompilerCheckController(
       checkpoint: _projectCompilerCheckpoint,
@@ -2751,6 +2754,7 @@ class _ManagedRevision3ProjectViewState
       requiresReopen: project.requiresReopen,
     );
     _projectProblemsController = Revision3ProjectProblemsController();
+    _voiceBuildReadinessController = Revision3VoiceBuildReadinessController();
     _scopedContentBrowserController.dispose();
     _scopedContentBrowserController = Revision3ScopedContentBrowserController(
       projectIdentity: (project.root.path, project.projectId),
@@ -2858,6 +2862,7 @@ class _ManagedRevision3ProjectViewState
     _dataAssetStagePanelController.dispose();
     _projectCompilerController.dispose();
     _projectProblemsController.dispose();
+    _voiceBuildReadinessController.dispose();
     _scopedContentBrowserController.dispose();
     _globalUndoCoordinator.dispose();
     _globalSearchQueryFocusNode.dispose();
@@ -4636,6 +4641,7 @@ class _ManagedRevision3ProjectViewState
       animation: Listenable.merge([
         _projectCompilerController,
         _projectProblemsController,
+        _voiceBuildReadinessController,
       ]),
       builder: (context, _) => Revision3TestReleaseWorkspace(
         projectId: checkpoint.projectId,
@@ -4698,11 +4704,8 @@ class _ManagedRevision3ProjectViewState
                   );
                 },
         ),
-        voice: Revision3TestReleaseCheck(
-          state: Revision3TestReleaseCheckState.notEvaluated,
-          title: l10n.managedTestReleaseVoiceTitle,
-          description: l10n.managedTestReleaseVoiceDescription,
-          actionLabel: l10n.managedTestReleaseVoiceAction,
+        voice: _voiceBundleCheck(
+          l10n,
           onPressed: () => navigate(
             Revision3ProjectWorkspaceSection.testRelease,
             secondary: 'voice',
@@ -4838,16 +4841,75 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
+  Revision3TestReleaseCheck _voiceBundleCheck(
+    AppLocalizations l10n, {
+    required VoidCallback onPressed,
+  }) {
+    final expected = Revision3VoiceBuildReadinessCheckpoint(
+      projectRoot: project.root.path,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      checkpointIdentity: project.head.canonicalJson,
+    );
+    final snapshot = _voiceBuildReadinessController.snapshot;
+    var state = project.requiresReopen
+        ? Revision3TestReleaseCheckState.unavailable
+        : Revision3TestReleaseCheckState.checking;
+    Revision3TestReleaseEvidence? evidence;
+
+    if (!project.requiresReopen && snapshot.belongsTo(expected)) {
+      switch (snapshot.state) {
+        case Revision3VoiceBuildReadinessLoadState.detached ||
+            Revision3VoiceBuildReadinessLoadState.loading:
+          state = Revision3TestReleaseCheckState.checking;
+        case Revision3VoiceBuildReadinessLoadState.unavailable:
+          state = Revision3TestReleaseCheckState.unavailable;
+        case Revision3VoiceBuildReadinessLoadState.ready:
+          state = switch (snapshot.planOutcome) {
+            AuthoringRevision3VoiceBuildPlanOutcome.ready =>
+              Revision3TestReleaseCheckState.passed,
+            AuthoringRevision3VoiceBuildPlanOutcome.blocked =>
+              Revision3TestReleaseCheckState.needsAttention,
+            null => Revision3TestReleaseCheckState.unavailable,
+          };
+          if (state == Revision3TestReleaseCheckState.passed ||
+              state == Revision3TestReleaseCheckState.needsAttention) {
+            evidence = Revision3TestReleaseEvidence(
+              projectId: expected.projectId,
+              projectRevision: expected.projectRevision,
+              checkpointIdentity: expected.checkpointIdentity,
+              scope: Revision3TestReleaseEvidenceScope.voice,
+              summary:
+                  '${l10n.managedTestReleaseVoiceTitle}: '
+                  '${state == Revision3TestReleaseCheckState.passed ? l10n.managedTestReleaseStatusChecked : l10n.managedTestReleaseStatusNeedsAttention}',
+            );
+          }
+      }
+    }
+
+    return Revision3TestReleaseCheck(
+      state: state,
+      title: l10n.managedTestReleaseVoiceTitle,
+      description: l10n.managedTestReleaseVoiceDescription,
+      evidence: evidence,
+      actionLabel: l10n.managedTestReleaseVoiceAction,
+      onPressed: onPressed,
+    );
+  }
+
   Widget _buildVoiceReadiness(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
     final externalActionsEnabled = _managedProjectMutationAllowed();
     return Revision3VoiceBuildReadinessPanel(
+      projectRoot: project.root.path,
       projectId: project.projectId,
       projectRevision: project.projectRevision,
       checkpointIdentity: project.head.canonicalJson,
       plan: planVoiceBuild,
+      controller: _voiceBuildReadinessController,
       copy: _voiceBuildReadinessCopy(l10n),
       gameConfigured: gameConfigured,
+      requiresReopen: project.requiresReopen,
       onResolveVoiceTarget: gameConfigured && externalActionsEnabled
           ? ({required initialLineId, required initialLocale}) =>
                 _openVoiceTargetResolver(

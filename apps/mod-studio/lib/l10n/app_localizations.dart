@@ -5127,43 +5127,43 @@ abstract class AppLocalizations {
   /// No description provided for @managedVoiceBuildReadinessTitle.
   ///
   /// In en, this message translates to:
-  /// **'Voice readiness'**
+  /// **'Voice bundle check'**
   String get managedVoiceBuildReadinessTitle;
 
   /// No description provided for @managedVoiceBuildReadinessRefresh.
   ///
   /// In en, this message translates to:
-  /// **'Refresh Voice readiness'**
+  /// **'Refresh Voice bundle check'**
   String get managedVoiceBuildReadinessRefresh;
 
   /// No description provided for @managedVoiceBuildReadinessChecking.
   ///
   /// In en, this message translates to:
-  /// **'Checking exact Voice readiness'**
+  /// **'Checking the exact Voice bundle plan'**
   String get managedVoiceBuildReadinessChecking;
 
   /// No description provided for @managedVoiceBuildReadinessLoadError.
   ///
   /// In en, this message translates to:
-  /// **'Voice readiness could not be verified for the current project. No build is available from this result.'**
+  /// **'The exact Voice bundle plan could not be verified for the current project. No bundle-plan evidence is available from this result.'**
   String get managedVoiceBuildReadinessLoadError;
 
   /// No description provided for @managedVoiceBuildReadinessReadyTitle.
   ///
   /// In en, this message translates to:
-  /// **'Voice is ready'**
+  /// **'Voice bundle plan checked'**
   String get managedVoiceBuildReadinessReadyTitle;
 
   /// No description provided for @managedVoiceBuildReadinessBlockedTitle.
   ///
   /// In en, this message translates to:
-  /// **'Voice needs attention'**
+  /// **'Voice bundle plan needs attention'**
   String get managedVoiceBuildReadinessBlockedTitle;
 
   /// No description provided for @managedVoiceBuildReadinessCount.
   ///
   /// In en, this message translates to:
-  /// **'{readySlots} of {totalSlots} Voice slots are ready.'**
+  /// **'{readySlots} of {totalSlots} existing Voice slots pass this bundle plan.'**
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots);
 
   /// No description provided for @managedVoiceBuildReadinessBlockedBoundary.
@@ -5181,13 +5181,13 @@ abstract class AppLocalizations {
   /// No description provided for @managedVoiceBuildReadinessBuildReleaseGuidance.
   ///
   /// In en, this message translates to:
-  /// **'Voice content is ready. Open Build & Release to create the offline bundle.'**
+  /// **'This checks only the plan; creating the offline Voice bundle remains a separate action.'**
   String get managedVoiceBuildReadinessBuildReleaseGuidance;
 
   /// No description provided for @managedVoiceBuildReadinessConfigureGameGuidance.
   ///
   /// In en, this message translates to:
-  /// **'Voice content is ready. Configure the game installation before creating an offline bundle.'**
+  /// **'The exact Voice bundle plan is checked. A configured game installation is still required before the separate offline bundle action is available.'**
   String get managedVoiceBuildReadinessConfigureGameGuidance;
 
   /// No description provided for @managedVoiceBuildReadinessHideBlockers.
@@ -5901,7 +5901,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedTestReleaseVoiceHeading.
   ///
   /// In en, this message translates to:
-  /// **'Voice build check'**
+  /// **'Voice bundle check'**
   String get managedTestReleaseVoiceHeading;
 
   /// No description provided for @managedTestReleaseProjectStructureTitle.
@@ -6123,19 +6123,19 @@ abstract class AppLocalizations {
   /// No description provided for @managedTestReleaseVoiceTitle.
   ///
   /// In en, this message translates to:
-  /// **'Text & Voice'**
+  /// **'Voice bundle check'**
   String get managedTestReleaseVoiceTitle;
 
   /// No description provided for @managedTestReleaseVoiceDescription.
   ///
   /// In en, this message translates to:
-  /// **'Use the Voice build check below for the current saved project version.'**
+  /// **'Checks only the exact current existing-member Voice bundle plan. It does not check text or translation coverage, playback, build output, deployment, or runtime.'**
   String get managedTestReleaseVoiceDescription;
 
   /// No description provided for @managedTestReleaseVoiceAction.
   ///
   /// In en, this message translates to:
-  /// **'Check Voice'**
+  /// **'Open Voice bundle check'**
   String get managedTestReleaseVoiceAction;
 
   /// No description provided for @managedTestReleaseDataAssetsTitle.

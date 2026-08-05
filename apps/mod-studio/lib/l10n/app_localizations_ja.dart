@@ -3019,44 +3019,43 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+  String get managedVoiceBuildReadinessTitle => 'Voice バンドルの確認';
 
   @override
-  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+  String get managedVoiceBuildReadinessRefresh => 'Voice バンドルの確認を更新';
 
   @override
-  String get managedVoiceBuildReadinessChecking =>
-      'Checking exact Voice readiness';
+  String get managedVoiceBuildReadinessChecking => 'Voice バンドルの正確なプランを確認中';
 
   @override
   String get managedVoiceBuildReadinessLoadError =>
-      'Voice readiness could not be verified for the current project. No build is available from this result.';
+      '現在のプロジェクトについて Voice バンドルの正確なプランを確認できませんでした。この結果からバンドルプランの証拠は得られません。';
 
   @override
-  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+  String get managedVoiceBuildReadinessReadyTitle => 'Voice バンドルプランを確認済み';
 
   @override
-  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+  String get managedVoiceBuildReadinessBlockedTitle => 'Voice バンドルプランに対応が必要です';
 
   @override
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
-    return '$readySlots of $totalSlots Voice slots are ready.';
+    return '既存の Voice スロット $totalSlots 件中 $readySlots 件がこのバンドルプランを満たしています。';
   }
 
   @override
   String get managedVoiceBuildReadinessBlockedBoundary =>
-      'No bundle was created and deployment was not performed.';
+      'バンドルは作成されておらず、デプロイも行われていません。';
 
   @override
   String get managedVoiceBuildReadinessBuildBundle => 'Build bundle';
 
   @override
   String get managedVoiceBuildReadinessBuildReleaseGuidance =>
-      'Voice content is ready. Open Build & Release to create the offline bundle.';
+      'ここではプランだけを確認します。オフライン Voice バンドルの作成は別の操作です。';
 
   @override
   String get managedVoiceBuildReadinessConfigureGameGuidance =>
-      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+      'Voice バンドルの正確なプランは確認済みです。別のオフラインバンドル操作を使用するには、ゲームのインストールを設定する必要があります。';
 
   @override
   String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
@@ -3499,7 +3498,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get managedTestReleaseProblemsHeading => '解決が必要な問題';
 
   @override
-  String get managedTestReleaseVoiceHeading => '音声ビルドの確認';
+  String get managedTestReleaseVoiceHeading => 'Voice バンドルの確認';
 
   @override
   String get managedTestReleaseProjectStructureTitle => 'プロジェクト構造';
@@ -3629,14 +3628,14 @@ class AppLocalizationsJa extends AppLocalizations {
   String get managedProjectCompilerOmittedDiagnostics => '件の追加コンパイラーメッセージを省略';
 
   @override
-  String get managedTestReleaseVoiceTitle => 'テキストと音声';
+  String get managedTestReleaseVoiceTitle => 'Voice バンドルの確認';
 
   @override
   String get managedTestReleaseVoiceDescription =>
-      '下の音声ビルド確認を使用して、現在保存されているプロジェクトバージョンを確認します。';
+      '既存メンバー用 Voice バンドルの現在の正確なプランだけを確認します。テキストや翻訳の網羅性、再生、ビルド出力、デプロイ、ランタイムは確認しません。';
 
   @override
-  String get managedTestReleaseVoiceAction => '音声を確認';
+  String get managedTestReleaseVoiceAction => 'Voice バンドルの確認を開く';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';

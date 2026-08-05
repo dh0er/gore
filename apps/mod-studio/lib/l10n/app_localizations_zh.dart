@@ -2997,44 +2997,42 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+  String get managedVoiceBuildReadinessTitle => '语音包检查';
 
   @override
-  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+  String get managedVoiceBuildReadinessRefresh => '刷新语音包检查';
 
   @override
-  String get managedVoiceBuildReadinessChecking =>
-      'Checking exact Voice readiness';
+  String get managedVoiceBuildReadinessChecking => '正在检查精确的语音包计划';
 
   @override
   String get managedVoiceBuildReadinessLoadError =>
-      'Voice readiness could not be verified for the current project. No build is available from this result.';
+      '无法验证当前项目的精确语音包计划。此结果不提供语音包计划证据。';
 
   @override
-  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+  String get managedVoiceBuildReadinessReadyTitle => '语音包计划已检查';
 
   @override
-  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+  String get managedVoiceBuildReadinessBlockedTitle => '语音包计划需要注意';
 
   @override
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
-    return '$readySlots of $totalSlots Voice slots are ready.';
+    return '$totalSlots 个现有 Voice 槽中有 $readySlots 个符合此语音包计划。';
   }
 
   @override
-  String get managedVoiceBuildReadinessBlockedBoundary =>
-      'No bundle was created and deployment was not performed.';
+  String get managedVoiceBuildReadinessBlockedBoundary => '未创建任何语音包，也未执行部署。';
 
   @override
   String get managedVoiceBuildReadinessBuildBundle => 'Build bundle';
 
   @override
   String get managedVoiceBuildReadinessBuildReleaseGuidance =>
-      'Voice content is ready. Open Build & Release to create the offline bundle.';
+      '这里只检查计划；创建离线语音包仍是单独的操作。';
 
   @override
   String get managedVoiceBuildReadinessConfigureGameGuidance =>
-      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+      '精确的语音包计划已检查。要使用单独的离线语音包操作，仍需配置游戏安装。';
 
   @override
   String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
@@ -3476,7 +3474,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedTestReleaseProblemsHeading => '需要解决的问题';
 
   @override
-  String get managedTestReleaseVoiceHeading => '配音构建检查';
+  String get managedTestReleaseVoiceHeading => '语音包检查';
 
   @override
   String get managedTestReleaseProjectStructureTitle => '项目结构';
@@ -3601,13 +3599,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedProjectCompilerOmittedDiagnostics => '条其他编译器消息已省略';
 
   @override
-  String get managedTestReleaseVoiceTitle => '文本与配音';
+  String get managedTestReleaseVoiceTitle => '语音包检查';
 
   @override
-  String get managedTestReleaseVoiceDescription => '请使用下方的配音构建检查来检查当前保存的项目版本。';
+  String get managedTestReleaseVoiceDescription =>
+      '仅检查现有成员语音包的当前精确计划；不检查文本或翻译覆盖率、播放、构建输出、部署或运行时。';
 
   @override
-  String get managedTestReleaseVoiceAction => '检查配音';
+  String get managedTestReleaseVoiceAction => '打开语音包检查';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';
@@ -4871,6 +4870,41 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedStoryWorkbenchReferenceUnresolvedLabel => '引用未解析';
 
   @override
+  String get managedVoiceBuildReadinessTitle => '语音包检查';
+
+  @override
+  String get managedVoiceBuildReadinessRefresh => '刷新语音包检查';
+
+  @override
+  String get managedVoiceBuildReadinessChecking => '正在检查精确的语音包计划';
+
+  @override
+  String get managedVoiceBuildReadinessLoadError =>
+      '无法验证当前项目的精确语音包计划。此结果不提供语音包计划证据。';
+
+  @override
+  String get managedVoiceBuildReadinessReadyTitle => '语音包计划已检查';
+
+  @override
+  String get managedVoiceBuildReadinessBlockedTitle => '语音包计划需要注意';
+
+  @override
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
+    return '$totalSlots 个现有 Voice 槽中有 $readySlots 个符合此语音包计划。';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessBlockedBoundary => '未创建任何语音包，也未执行部署。';
+
+  @override
+  String get managedVoiceBuildReadinessBuildReleaseGuidance =>
+      '这里只检查计划；创建离线语音包仍是单独的操作。';
+
+  @override
+  String get managedVoiceBuildReadinessConfigureGameGuidance =>
+      '精确的语音包计划已检查。要使用单独的离线语音包操作，仍需配置游戏安装。';
+
+  @override
   String get managedWorkspaceTextVoiceLabel => '文本与配音';
 
   @override
@@ -4928,7 +4962,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedTestReleaseProblemsHeading => '需要解决的问题';
 
   @override
-  String get managedTestReleaseVoiceHeading => '配音构建检查';
+  String get managedTestReleaseVoiceHeading => '语音包检查';
 
   @override
   String get managedTestReleaseProjectStructureTitle => '项目结构';
@@ -5053,13 +5087,14 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedProjectCompilerOmittedDiagnostics => '条其他编译器消息已省略';
 
   @override
-  String get managedTestReleaseVoiceTitle => '文本与配音';
+  String get managedTestReleaseVoiceTitle => '语音包检查';
 
   @override
-  String get managedTestReleaseVoiceDescription => '请使用下方的配音构建检查来检查当前保存的项目版本。';
+  String get managedTestReleaseVoiceDescription =>
+      '仅检查现有成员语音包的当前精确计划；不检查文本或翻译覆盖率、播放、构建输出、部署或运行时。';
 
   @override
-  String get managedTestReleaseVoiceAction => '检查配音';
+  String get managedTestReleaseVoiceAction => '打开语音包检查';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';

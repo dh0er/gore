@@ -3068,44 +3068,48 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
-  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+  String get managedVoiceBuildReadinessTitle =>
+      'Verificação do pacote de vozes';
 
   @override
-  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+  String get managedVoiceBuildReadinessRefresh =>
+      'Atualizar verificação do pacote de vozes';
 
   @override
   String get managedVoiceBuildReadinessChecking =>
-      'Checking exact Voice readiness';
+      'A verificar o plano exato do pacote de vozes';
 
   @override
   String get managedVoiceBuildReadinessLoadError =>
-      'Voice readiness could not be verified for the current project. No build is available from this result.';
+      'Não foi possível verificar o plano exato do pacote de vozes para o projeto atual. Este resultado não fornece evidência do plano do pacote.';
 
   @override
-  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+  String get managedVoiceBuildReadinessReadyTitle =>
+      'Plano do pacote de vozes verificado';
 
   @override
-  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+  String get managedVoiceBuildReadinessBlockedTitle =>
+      'O plano do pacote de vozes requer atenção';
 
   @override
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
-    return '$readySlots of $totalSlots Voice slots are ready.';
+    return '$readySlots de $totalSlots slots de Voice existentes cumprem este plano do pacote.';
   }
 
   @override
   String get managedVoiceBuildReadinessBlockedBoundary =>
-      'No bundle was created and deployment was not performed.';
+      'Não foi criado qualquer pacote nem efetuada qualquer implementação.';
 
   @override
   String get managedVoiceBuildReadinessBuildBundle => 'Build bundle';
 
   @override
   String get managedVoiceBuildReadinessBuildReleaseGuidance =>
-      'Voice content is ready. Open Build & Release to create the offline bundle.';
+      'Aqui é verificado apenas o plano; criar o pacote de vozes offline continua a ser uma ação separada.';
 
   @override
   String get managedVoiceBuildReadinessConfigureGameGuidance =>
-      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+      'O plano exato do pacote de vozes foi verificado. Ainda é necessário configurar uma instalação do jogo para disponibilizar a ação separada do pacote offline.';
 
   @override
   String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
@@ -3548,8 +3552,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get managedTestReleaseProblemsHeading => 'Problemas a resolver';
 
   @override
-  String get managedTestReleaseVoiceHeading =>
-      'Verificação da compilação de vozes';
+  String get managedTestReleaseVoiceHeading => 'Verificação do pacote de vozes';
 
   @override
   String get managedTestReleaseProjectStructureTitle => 'Estrutura do projeto';
@@ -3682,14 +3685,14 @@ class AppLocalizationsPt extends AppLocalizations {
       'mensagens adicionais do compilador omitidas';
 
   @override
-  String get managedTestReleaseVoiceTitle => 'Texto e vozes';
+  String get managedTestReleaseVoiceTitle => 'Verificação do pacote de vozes';
 
   @override
   String get managedTestReleaseVoiceDescription =>
-      'Utilize abaixo a verificação da compilação de vozes para a versão atualmente guardada do projeto.';
+      'Verifica apenas o plano atual exato do pacote de vozes para membros existentes. Não verifica cobertura de texto ou tradução, reprodução, saída de compilação, implementação ou execução.';
 
   @override
-  String get managedTestReleaseVoiceAction => 'Verificar vozes';
+  String get managedTestReleaseVoiceAction => 'Abrir verificação do pacote';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';
@@ -5024,6 +5027,47 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Referência não resolvida';
 
   @override
+  String get managedVoiceBuildReadinessTitle =>
+      'Verificação do pacote de vozes';
+
+  @override
+  String get managedVoiceBuildReadinessRefresh =>
+      'Atualizar verificação do pacote de vozes';
+
+  @override
+  String get managedVoiceBuildReadinessChecking =>
+      'Verificando o plano exato do pacote de vozes';
+
+  @override
+  String get managedVoiceBuildReadinessLoadError =>
+      'Não foi possível verificar o plano exato do pacote de vozes para o projeto atual. Este resultado não fornece evidência do plano do pacote.';
+
+  @override
+  String get managedVoiceBuildReadinessReadyTitle =>
+      'Plano do pacote de vozes verificado';
+
+  @override
+  String get managedVoiceBuildReadinessBlockedTitle =>
+      'O plano do pacote de vozes requer atenção';
+
+  @override
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
+    return '$readySlots de $totalSlots slots de Voice existentes cumprem este plano do pacote.';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessBlockedBoundary =>
+      'Nenhum pacote foi criado e nenhuma implantação foi realizada.';
+
+  @override
+  String get managedVoiceBuildReadinessBuildReleaseGuidance =>
+      'Aqui, apenas o plano é verificado; criar o pacote de vozes offline continua sendo uma ação separada.';
+
+  @override
+  String get managedVoiceBuildReadinessConfigureGameGuidance =>
+      'O plano exato do pacote de vozes foi verificado. Ainda é necessário configurar uma instalação do jogo para disponibilizar a ação separada do pacote offline.';
+
+  @override
   String get managedWorkspaceTextVoiceLabel => 'Texto e vozes';
 
   @override
@@ -5082,8 +5126,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get managedTestReleaseProblemsHeading => 'Problemas a resolver';
 
   @override
-  String get managedTestReleaseVoiceHeading =>
-      'Verificação da compilação de vozes';
+  String get managedTestReleaseVoiceHeading => 'Verificação do pacote de vozes';
 
   @override
   String get managedTestReleaseProjectStructureTitle => 'Estrutura do projeto';
@@ -5216,14 +5259,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'mensagens adicionais do compilador omitidas';
 
   @override
-  String get managedTestReleaseVoiceTitle => 'Texto e vozes';
+  String get managedTestReleaseVoiceTitle => 'Verificação do pacote de vozes';
 
   @override
   String get managedTestReleaseVoiceDescription =>
-      'Use abaixo a verificação da compilação de vozes para a versão atualmente salva do projeto.';
+      'Verifica apenas o plano atual exato do pacote de vozes para membros existentes. Não verifica cobertura de texto ou tradução, reprodução, saída de compilação, implantação ou execução.';
 
   @override
-  String get managedTestReleaseVoiceAction => 'Verificar vozes';
+  String get managedTestReleaseVoiceAction => 'Abrir verificação do pacote';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';

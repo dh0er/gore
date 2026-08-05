@@ -10,6 +10,7 @@ import '../support/revision3_voice_fixture.dart';
 
 const _projectId = '11111111111111111111111111111111';
 const _otherProjectId = '22222222222222222222222222222222';
+const _projectRoot = r'C:\mods\voice-readiness';
 
 final _head = AuthoringWorkingHead.fromCanonicalJson(
   jsonEncode(<String, Object?>{
@@ -50,17 +51,20 @@ void main() {
       find.byKey(const Key('revision3-voice-readiness-loading')),
       findsOneWidget,
     );
-    expect(find.textContaining('Voice slots are ready'), findsNothing);
+    expect(
+      find.textContaining('existing Voice slots pass this bundle plan'),
+      findsNothing,
+    );
 
     planned.complete(_readyPlan());
     await tester.pumpAndSettle();
 
-    expect(find.text('Voice is ready'), findsOneWidget);
-    expect(find.text('2 of 2 Voice slots are ready.'), findsOneWidget);
+    expect(find.text('Voice bundle plan checked'), findsOneWidget);
     expect(
-      find.textContaining('Configure the game installation'),
+      find.text('2 of 2 existing Voice slots pass this bundle plan.'),
       findsOneWidget,
     );
+    expect(find.textContaining('configured game installation'), findsOneWidget);
     expect(
       find.byKey(const Key('revision3-voice-readiness-build')),
       findsNothing,
@@ -93,8 +97,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Voice needs attention'), findsOneWidget);
-    expect(find.text('0 of 2 Voice slots are ready.'), findsOneWidget);
+    expect(find.text('Voice bundle plan needs attention'), findsOneWidget);
+    expect(
+      find.text('0 of 2 existing Voice slots pass this bundle plan.'),
+      findsOneWidget,
+    );
     expect(find.text('Show 2 blockers'), findsOneWidget);
     expect(find.text('Resolve this Voice target.'), findsNothing);
 
@@ -149,6 +156,7 @@ void main() {
               return Column(
                 children: [
                   Revision3VoiceBuildReadinessPanel(
+                    projectRoot: _projectRoot,
                     projectId: _projectId,
                     projectRevision: 7,
                     checkpointIdentity: _head.canonicalJson,
@@ -227,7 +235,12 @@ void main() {
       gameConfigured: true,
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('Open Build & Release'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'creating the offline Voice bundle remains a separate action',
+      ),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const Key('revision3-voice-readiness-build')),
       findsNothing,
@@ -262,6 +275,7 @@ void main() {
             builder: (context, setState) {
               updateHost = setState;
               return Revision3VoiceBuildReadinessPanel(
+                projectRoot: _projectRoot,
                 projectId: projectId,
                 projectRevision: projectRevision,
                 checkpointIdentity: _head.canonicalJson,
@@ -321,6 +335,7 @@ void main() {
   testWidgets('same-revision canonical-head change reloads exact readiness', (
     tester,
   ) async {
+    final controller = Revision3VoiceBuildReadinessController();
     final first = Completer<AuthoringRevision3VoiceBuildPlanResult>();
     final second = Completer<AuthoringRevision3VoiceBuildPlanResult>();
     var calls = 0;
@@ -334,9 +349,11 @@ void main() {
             builder: (context, setState) {
               updateHost = setState;
               return Revision3VoiceBuildReadinessPanel(
+                projectRoot: _projectRoot,
                 projectId: _projectId,
                 projectRevision: 7,
                 checkpointIdentity: checkpointIdentity,
+                controller: controller,
                 plan: () {
                   calls += 1;
                   return calls == 1 ? first.future : second.future;
@@ -352,6 +369,15 @@ void main() {
     updateHost(() => checkpointIdentity = _otherHead.canonicalJson);
     await tester.pump();
     expect(calls, 2);
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.loading,
+    );
+    expect(controller.snapshot.planOutcome, isNull);
+    expect(
+      controller.snapshot.checkpoint?.checkpointIdentity,
+      _otherHead.canonicalJson,
+    );
 
     first.complete(_readyPlan());
     await tester.pump();
@@ -359,10 +385,18 @@ void main() {
       find.byKey(const Key('revision3-voice-readiness-loading')),
       findsOneWidget,
     );
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.loading,
+    );
 
     second.complete(_readyPlan(head: _otherHead));
     await tester.pumpAndSettle();
-    expect(find.text('Voice is ready'), findsOneWidget);
+    expect(find.text('Voice bundle plan checked'), findsOneWidget);
+    expect(
+      controller.snapshot.planOutcome,
+      AuthoringRevision3VoiceBuildPlanOutcome.ready,
+    );
     expect(
       find.byKey(const Key('revision3-voice-readiness-error')),
       findsNothing,
@@ -385,6 +419,7 @@ void main() {
             builder: (context, setState) {
               updateHost = setState;
               return Revision3VoiceBuildReadinessPanel(
+                projectRoot: _projectRoot,
                 projectId: _projectId,
                 projectRevision: 7,
                 checkpointIdentity: checkpointIdentity,
@@ -426,14 +461,16 @@ void main() {
 
     replacement.complete(_readyPlan(head: _otherHead));
     await tester.pumpAndSettle();
-    expect(find.text('Voice is ready'), findsOneWidget);
+    expect(find.text('Voice bundle plan checked'), findsOneWidget);
   });
 
   testWidgets('rejects a plan from another canonical head', (tester) async {
+    final controller = Revision3VoiceBuildReadinessController();
     await _pumpPanel(
       tester,
       checkpointIdentity: _otherHead.canonicalJson,
       plan: () async => _readyPlan(),
+      controller: controller,
     );
     await tester.pumpAndSettle();
 
@@ -441,14 +478,314 @@ void main() {
       find.byKey(const Key('revision3-voice-readiness-error')),
       findsOneWidget,
     );
-    expect(find.text('Voice is ready'), findsNothing);
+    expect(find.text('Voice bundle plan checked'), findsNothing);
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.unavailable,
+    );
+    expect(controller.snapshot.planOutcome, isNull);
   });
+
+  testWidgets(
+    'controller observes one panel plan and ignores game or build affordances',
+    (tester) async {
+      final controller = Revision3VoiceBuildReadinessController();
+      final planned = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      var planCalls = 0;
+
+      Future<AuthoringRevision3VoiceBuildPlanResult> plan() {
+        planCalls += 1;
+        return planned.future;
+      }
+
+      await _pumpPanel(tester, plan: plan, controller: controller);
+
+      expect(planCalls, 1);
+      expect(
+        controller.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.loading,
+      );
+      expect(
+        controller.snapshot.checkpoint,
+        Revision3VoiceBuildReadinessCheckpoint(
+          projectRoot: _projectRoot,
+          projectId: _projectId,
+          projectRevision: 7,
+          checkpointIdentity: _head.canonicalJson,
+        ),
+      );
+
+      planned.complete(_readyPlan());
+      await tester.pumpAndSettle();
+      expect(
+        controller.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.ready,
+      );
+      expect(
+        controller.snapshot.planOutcome,
+        AuthoringRevision3VoiceBuildPlanOutcome.ready,
+      );
+
+      await _pumpPanel(
+        tester,
+        plan: plan,
+        controller: controller,
+        gameConfigured: true,
+        onBuild: () {},
+      );
+      await tester.pump();
+
+      expect(planCalls, 1);
+      expect(
+        controller.snapshot.planOutcome,
+        AuthoringRevision3VoiceBuildPlanOutcome.ready,
+      );
+    },
+  );
+
+  testWidgets('refresh clears evidence before failure and retry', (
+    tester,
+  ) async {
+    final controller = Revision3VoiceBuildReadinessController();
+    final refresh = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    final retry = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    var calls = 0;
+
+    await _pumpPanel(
+      tester,
+      controller: controller,
+      plan: () {
+        calls += 1;
+        return switch (calls) {
+          1 => Future.value(_readyPlan()),
+          2 => refresh.future,
+          _ => retry.future,
+        };
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.planOutcome,
+      AuthoringRevision3VoiceBuildPlanOutcome.ready,
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-voice-readiness-refresh')),
+    );
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.loading,
+    );
+    expect(controller.snapshot.planOutcome, isNull);
+
+    refresh.completeError(StateError('private failure detail'));
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.unavailable,
+    );
+    expect(controller.snapshot.planOutcome, isNull);
+
+    await tester.tap(find.byKey(const Key('revision3-voice-readiness-retry')));
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.loading,
+    );
+
+    retry.complete(_blockedPlan());
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.planOutcome,
+      AuthoringRevision3VoiceBuildPlanOutcome.blocked,
+    );
+  });
+
+  testWidgets('requires-reopen clears evidence and recovery replans', (
+    tester,
+  ) async {
+    final controller = Revision3VoiceBuildReadinessController();
+    final recovered = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+    var requiresReopen = false;
+    var calls = 0;
+    late StateSetter updateHost;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHost = setState;
+              return Revision3VoiceBuildReadinessPanel(
+                projectRoot: _projectRoot,
+                projectId: _projectId,
+                projectRevision: 7,
+                checkpointIdentity: _head.canonicalJson,
+                controller: controller,
+                requiresReopen: requiresReopen,
+                plan: () {
+                  calls += 1;
+                  return calls == 1
+                      ? Future.value(_readyPlan())
+                      : recovered.future;
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.planOutcome,
+      AuthoringRevision3VoiceBuildPlanOutcome.ready,
+    );
+    expect(calls, 1);
+
+    updateHost(() => requiresReopen = true);
+    await tester.pump();
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.unavailable,
+    );
+    expect(controller.snapshot.planOutcome, isNull);
+    expect(calls, 1);
+    expect(
+      find.byKey(const Key('revision3-voice-readiness-error')),
+      findsOneWidget,
+    );
+
+    updateHost(() => requiresReopen = false);
+    await tester.pump();
+    expect(calls, 2);
+    expect(
+      controller.snapshot.state,
+      Revision3VoiceBuildReadinessLoadState.loading,
+    );
+
+    recovered.complete(_readyPlan());
+    await tester.pumpAndSettle();
+    expect(
+      controller.snapshot.planOutcome,
+      AuthoringRevision3VoiceBuildPlanOutcome.ready,
+    );
+  });
+
+  testWidgets(
+    'controller replacement, root drift, disposal, and late loads fail closed',
+    (tester) async {
+      final firstController = Revision3VoiceBuildReadinessController();
+      final secondController = Revision3VoiceBuildReadinessController();
+      final first = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      final second = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      final afterDispose = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      var controller = firstController;
+      var projectRoot = _projectRoot;
+      var calls = 0;
+      late StateSetter updateHost;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                updateHost = setState;
+                return Revision3VoiceBuildReadinessPanel(
+                  projectRoot: projectRoot,
+                  projectId: _projectId,
+                  projectRevision: 7,
+                  checkpointIdentity: _head.canonicalJson,
+                  controller: controller,
+                  plan: () {
+                    calls += 1;
+                    return switch (calls) {
+                      1 => first.future,
+                      2 => second.future,
+                      _ => afterDispose.future,
+                    };
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        firstController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.loading,
+      );
+
+      updateHost(() => controller = secondController);
+      await tester.pump();
+      expect(
+        firstController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.detached,
+      );
+      expect(
+        secondController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.loading,
+      );
+      expect(calls, 1);
+
+      updateHost(() => projectRoot = r'C:\mods\voice-readiness-replaced');
+      await tester.pump();
+      expect(calls, 2);
+      expect(
+        secondController.snapshot.checkpoint?.projectRoot,
+        r'C:\mods\voice-readiness-replaced',
+      );
+
+      first.complete(_readyPlan());
+      await tester.pump();
+      expect(
+        secondController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.loading,
+      );
+      expect(secondController.snapshot.planOutcome, isNull);
+
+      second.complete(_readyPlan());
+      await tester.pumpAndSettle();
+      expect(
+        secondController.snapshot.planOutcome,
+        AuthoringRevision3VoiceBuildPlanOutcome.ready,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-voice-readiness-refresh')),
+      );
+      await tester.pump();
+      expect(
+        secondController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.loading,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(
+        secondController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.detached,
+      );
+      expect(secondController.snapshot.planOutcome, isNull);
+
+      afterDispose.complete(_readyPlan());
+      await tester.pumpAndSettle();
+      expect(
+        secondController.snapshot.state,
+        Revision3VoiceBuildReadinessLoadState.detached,
+      );
+      firstController.dispose();
+      secondController.dispose();
+    },
+  );
 }
 
 Future<void> _pumpPanel(
   WidgetTester tester, {
   required Future<AuthoringRevision3VoiceBuildPlanResult> Function() plan,
   String projectId = _projectId,
+  String projectRoot = _projectRoot,
   int projectRevision = 7,
   String? checkpointIdentity,
   FutureOr<void> Function({
@@ -463,10 +800,13 @@ Future<void> _pumpPanel(
   onManageVoiceTakes,
   FutureOr<void> Function()? onBuild,
   bool gameConfigured = false,
+  bool requiresReopen = false,
+  Revision3VoiceBuildReadinessController? controller,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
       body: Revision3VoiceBuildReadinessPanel(
+        projectRoot: projectRoot,
         projectId: projectId,
         projectRevision: projectRevision,
         checkpointIdentity: checkpointIdentity ?? _head.canonicalJson,
@@ -475,6 +815,8 @@ Future<void> _pumpPanel(
         onManageVoiceTakes: onManageVoiceTakes,
         onBuild: onBuild,
         gameConfigured: gameConfigured,
+        requiresReopen: requiresReopen,
+        controller: controller,
       ),
     ),
   ),
