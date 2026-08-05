@@ -5279,6 +5279,382 @@ void main() {
   );
 
   testWidgets(
+    'Voice bundle check mirrors loading then the mounted ready plan once',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final planned = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-status-ready'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePlan: (_) => planned.future,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final destination = find.byKey(
+        const Key('revision3-project-workspace-tab-test-release'),
+      );
+      await tester.ensureVisible(destination);
+      await tester.tap(destination);
+      await tester.pump();
+
+      var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.checking);
+      expect(workspace.voice.evidence, isNull);
+      expect(managed.voicePlanCalls, 1);
+
+      planned.complete(_readyVoicePlan(managed));
+      await tester.pumpAndSettle();
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.voice.evidence?.scope,
+        Revision3TestReleaseEvidenceScope.voice,
+      );
+      expect(
+        workspace.voice.evidence?.projectId,
+        revision3VoiceContentProjectId,
+      );
+      expect(workspace.voice.evidence?.projectRevision, 7);
+      expect(
+        workspace.voice.evidence?.checkpointIdentity,
+        managed.head.canonicalJson,
+      );
+      expect(workspace.voice.evidence?.summary, 'Voice bundle check: Checked');
+      expect(workspace.voice.title, 'Voice bundle check');
+      expect(
+        workspace.voice.description,
+        contains('does not check text or translation coverage'),
+      );
+      expect(find.text('Voice bundle check'), findsWidgets);
+      expect(managed.voicePlanCalls, 1);
+      expect(workspace.playableBuild.evidence, isNull);
+      expect(workspace.deployment.evidence, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Voice bundle check maps a blocked plan to needs attention', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-status-blocked'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) =>
+          revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+      onVoicePlan: _unresolvedVoicePlan,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedTestRelease(tester);
+
+    final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(
+      workspace.voice.state,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(
+      workspace.voice.evidence?.scope,
+      Revision3TestReleaseEvidenceScope.voice,
+    );
+    expect(
+      workspace.voice.evidence?.summary,
+      'Voice bundle check: Needs attention',
+    );
+    expect(managed.voicePlanCalls, 1);
+    expect(workspace.playableBuild.evidence, isNull);
+    expect(workspace.deployment.evidence, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Voice bundle check treats zero slots as needs attention', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-status-empty'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) => _contentIndex(
+        projectId: lease.projectId,
+        revision: lease.projectRevision,
+      ),
+      onVoicePlan: _noSlotsVoicePlan,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedTestRelease(tester);
+
+    final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(
+      workspace.voice.state,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(
+      workspace.voice.evidence?.scope,
+      Revision3TestReleaseEvidenceScope.voice,
+    );
+    expect(find.text('No Voice setups exist in this project.'), findsNothing);
+    expect(managed.voicePlanCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Voice bundle check makes a failed plan unavailable', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-status-unavailable'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) =>
+          revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+      onVoicePlan: (_) => throw StateError(r'C:\private\voice-plan'),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedTestRelease(tester);
+
+    final workspace = tester.widget<Revision3TestReleaseWorkspace>(
+      find.byType(Revision3TestReleaseWorkspace),
+    );
+    expect(workspace.voice.state, Revision3TestReleaseCheckState.unavailable);
+    expect(workspace.voice.evidence, isNull);
+    expect(find.textContaining('private'), findsNothing);
+    expect(managed.voicePlanCalls, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Voice bundle check drops evidence while reopen is required and replans',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-status-reopen'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePlan: _readyVoicePlan,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedTestRelease(tester);
+      var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.passed);
+      expect(managed.voicePlanCalls, 1);
+
+      managed.requiresReopenValue = true;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: managed.head,
+        requiresReopen: true,
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(Revision3TestReleaseWorkspace), findsNothing);
+      expect(managed.voicePlanCalls, 1);
+
+      managed.requiresReopenValue = false;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: managed.head,
+        requiresReopen: false,
+      );
+      await tester.pumpAndSettle();
+      if (find.byType(Revision3TestReleaseWorkspace).evaluate().isEmpty) {
+        await _navigateManagedTestRelease(tester);
+      }
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.voice.evidence?.scope,
+        Revision3TestReleaseEvidenceScope.voice,
+      );
+      expect(managed.voicePlanCalls, 2);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Voice bundle check clears old evidence across same-revision head drift',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final oldRefresh = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      final newHeadLoad = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+      var delayPlans = false;
+      var delayedCall = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-status-head-drift'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePlan: (lease) {
+          if (!delayPlans) return _readyVoicePlan(lease);
+          delayedCall += 1;
+          return delayedCall == 1 ? oldRefresh.future : newHeadLoad.future;
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedTestRelease(tester);
+      var workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.passed);
+      final oldPlan = _readyVoicePlan(managed);
+
+      delayPlans = true;
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('revision3-voice-readiness-refresh')),
+          )
+          .onPressed!();
+      await tester.pump();
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.checking);
+      expect(workspace.voice.evidence, isNull);
+
+      final replacementHead = _head(8);
+      managed.head = replacementHead;
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: replacementHead,
+        requiresReopen: false,
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(
+        tester
+            .widget<Revision3VoiceBuildReadinessPanel>(
+              find.byType(Revision3VoiceBuildReadinessPanel),
+            )
+            .checkpointIdentity,
+        replacementHead.canonicalJson,
+      );
+      expect(managed.voicePlanCalls, 2);
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.checking);
+      expect(workspace.voice.evidence, isNull);
+
+      oldRefresh.complete(oldPlan);
+      await tester.pump();
+      await tester.pump();
+      expect(managed.voicePlanCalls, 3);
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.checking);
+      expect(workspace.voice.evidence, isNull);
+
+      newHeadLoad.complete(_readyVoicePlan(managed));
+      await tester.pumpAndSettle();
+      workspace = tester.widget<Revision3TestReleaseWorkspace>(
+        find.byType(Revision3TestReleaseWorkspace),
+      );
+      expect(workspace.voice.state, Revision3TestReleaseCheckState.passed);
+      expect(
+        workspace.voice.evidence?.checkpointIdentity,
+        replacementHead.canonicalJson,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Test and Release runs the project compiler through the coordinator only',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -5508,7 +5884,10 @@ void main() {
         find.byKey(const Key('revision3-voice-readiness-panel')),
         findsOneWidget,
       );
-      expect(find.text('0 of 1 Voice slots are ready.'), findsOneWidget);
+      expect(
+        find.text('0 of 1 existing Voice slots pass this bundle plan.'),
+        findsOneWidget,
+      );
       expect(managed.projectBuildPlanCalls, 1);
       expect(managed.voicePlanCalls, 1);
 
@@ -7968,7 +8347,10 @@ void main() {
         find.byKey(const Key('revision3-voice-readiness-panel')),
         findsOneWidget,
       );
-      expect(find.text('0 of 1 Voice slots are ready.'), findsOneWidget);
+      expect(
+        find.text('0 of 1 existing Voice slots pass this bundle plan.'),
+        findsOneWidget,
+      );
       expect(find.text(revision3VoiceContentLineId), findsNothing);
       final toggle = find.byKey(
         const Key('revision3-voice-readiness-toggle-blockers'),
@@ -8063,7 +8445,7 @@ void main() {
   });
 
   testWidgets(
-    'German managed Home localizes Voice readiness and the plan-first build',
+    'German managed Home localizes the Voice bundle check and plan-first build',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final gameRoot = Directory.systemTemp.createTempSync(
@@ -8105,11 +8487,22 @@ void main() {
         const Key('revision3-project-workspace-tab-test-release'),
       );
 
-      expect(find.text('Voice-Bereitschaft'), findsOneWidget);
-      expect(find.text('Voice ist bereit'), findsOneWidget);
-      expect(find.text('1 von 1 Voice-Slots sind bereit.'), findsOneWidget);
-      expect(find.text('Voice readiness'), findsNothing);
-      expect(find.text('Voice is ready'), findsNothing);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-voice-readiness-panel')),
+          matching: find.text('Voice-Bundle-Prüfung'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Voice-Bundle-Plan geprüft'), findsOneWidget);
+      expect(
+        find.text(
+          '1 von 1 vorhandenen Voice-Slots bestehen diesen Bundle-Plan.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Voice bundle check'), findsNothing);
+      expect(find.text('Voice bundle plan checked'), findsNothing);
 
       final build = find.byKey(const Key('revision3-voice-readiness-build'));
       await tester.ensureVisible(build);
@@ -15077,7 +15470,7 @@ class _FakeManagedLease
     Revision3VoiceTargetTechnicalPlan plan,
   )?
   onVoiceTargetPublish;
-  final AuthoringRevision3VoiceBuildPlanResult Function(
+  final FutureOr<AuthoringRevision3VoiceBuildPlanResult> Function(
     _FakeManagedLease lease,
   )?
   onVoicePlan;
@@ -19231,6 +19624,32 @@ AuthoringRevision3VoiceBuildPlanResult _readyVoicePlan(
   },
   expectedHead: lease.head,
   expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: lease.projectId,
+    projectRevision: lease.projectRevision,
+  ),
+);
+
+AuthoringRevision3VoiceBuildPlanResult _noSlotsVoicePlan(
+  _FakeManagedLease lease,
+) => AuthoringRevision3VoiceBuildPlanResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'blocked',
+    'basis_head_json': lease.head.canonicalJson,
+    'project_id': lease.projectId,
+    'project_revision': lease.projectRevision,
+    'total_slots': 0,
+    'ready_slots': 0,
+    'blockers': const <Object?>[
+      <String, Object?>{'reason': 'no_voice_slots'},
+    ],
+    'plan_authority': 'read_only_voice_build_plan_v1',
+    'build_authority': 'not_granted',
+    'deployment_status': 'not_performed',
+  },
+  expectedHead: lease.head,
+  expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    slotCount: 0,
     projectId: lease.projectId,
     projectRevision: lease.projectRevision,
   ),

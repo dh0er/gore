@@ -3051,28 +3051,30 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+  String get managedVoiceBuildReadinessTitle => 'Voice bundle check';
 
   @override
-  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice bundle check';
 
   @override
   String get managedVoiceBuildReadinessChecking =>
-      'Checking exact Voice readiness';
+      'Checking the exact Voice bundle plan';
 
   @override
   String get managedVoiceBuildReadinessLoadError =>
-      'Voice readiness could not be verified for the current project. No build is available from this result.';
+      'The exact Voice bundle plan could not be verified for the current project. No bundle-plan evidence is available from this result.';
 
   @override
-  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+  String get managedVoiceBuildReadinessReadyTitle =>
+      'Voice bundle plan checked';
 
   @override
-  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+  String get managedVoiceBuildReadinessBlockedTitle =>
+      'Voice bundle plan needs attention';
 
   @override
   String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
-    return '$readySlots of $totalSlots Voice slots are ready.';
+    return '$readySlots of $totalSlots existing Voice slots pass this bundle plan.';
   }
 
   @override
@@ -3084,11 +3086,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedVoiceBuildReadinessBuildReleaseGuidance =>
-      'Voice content is ready. Open Build & Release to create the offline bundle.';
+      'This checks only the plan; creating the offline Voice bundle remains a separate action.';
 
   @override
   String get managedVoiceBuildReadinessConfigureGameGuidance =>
-      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+      'The exact Voice bundle plan is checked. A configured game installation is still required before the separate offline bundle action is available.';
 
   @override
   String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
@@ -3531,7 +3533,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get managedTestReleaseProblemsHeading => 'Problems to resolve';
 
   @override
-  String get managedTestReleaseVoiceHeading => 'Voice build check';
+  String get managedTestReleaseVoiceHeading => 'Voice bundle check';
 
   @override
   String get managedTestReleaseProjectStructureTitle => 'Project structure';
@@ -3663,14 +3665,14 @@ class AppLocalizationsEn extends AppLocalizations {
       'additional compiler messages omitted';
 
   @override
-  String get managedTestReleaseVoiceTitle => 'Text & Voice';
+  String get managedTestReleaseVoiceTitle => 'Voice bundle check';
 
   @override
   String get managedTestReleaseVoiceDescription =>
-      'Use the Voice build check below for the current saved project version.';
+      'Checks only the exact current existing-member Voice bundle plan. It does not check text or translation coverage, playback, build output, deployment, or runtime.';
 
   @override
-  String get managedTestReleaseVoiceAction => 'Check Voice';
+  String get managedTestReleaseVoiceAction => 'Open Voice bundle check';
 
   @override
   String get managedTestReleaseDataAssetsTitle => 'DataAssets';

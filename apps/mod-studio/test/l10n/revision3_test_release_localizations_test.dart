@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
+import 'package:gore_mod/l10n/app_localizations_de.dart';
 import 'package:gore_mod/l10n/app_localizations_en.dart';
 
 const _arbFiles = <String>[
@@ -79,6 +80,16 @@ const _requiredKeys = <String>{
   'managedTestReleaseVoiceTitle',
   'managedTestReleaseVoiceDescription',
   'managedTestReleaseVoiceAction',
+  'managedVoiceBuildReadinessTitle',
+  'managedVoiceBuildReadinessRefresh',
+  'managedVoiceBuildReadinessChecking',
+  'managedVoiceBuildReadinessLoadError',
+  'managedVoiceBuildReadinessReadyTitle',
+  'managedVoiceBuildReadinessBlockedTitle',
+  'managedVoiceBuildReadinessCount',
+  'managedVoiceBuildReadinessBlockedBoundary',
+  'managedVoiceBuildReadinessBuildReleaseGuidance',
+  'managedVoiceBuildReadinessConfigureGameGuidance',
   'managedTestReleaseDataAssetsTitle',
   'managedTestReleaseDataAssetsDescription',
   'managedTestReleaseDataAssetsAction',
@@ -135,6 +146,11 @@ void main() {
           allOf(contains('{project}'), contains('{section}')),
           reason: '$fileName: orientation placeholders',
         );
+        expect(
+          arb['managedTestReleaseVoiceTitle'],
+          arb['managedTestReleaseVoiceHeading'],
+          reason: '$fileName: Voice bundle check naming',
+        );
       }
     },
   );
@@ -168,6 +184,98 @@ void main() {
         AppLocalizationsEn().managedProjectCompilerRecoveryRequired;
     expect(recovery, contains('private compiler output'));
     expect(recovery, contains('exact restoration of the game installation'));
+  });
+
+  test('Voice row copy names and bounds only the bundle-plan check', () {
+    final english = AppLocalizationsEn();
+    expect(english.managedTestReleaseVoiceTitle, 'Voice bundle check');
+    expect(english.managedTestReleaseVoiceHeading, 'Voice bundle check');
+    expect(
+      english.managedTestReleaseVoiceDescription,
+      allOf(
+        contains('exact current existing-member Voice bundle plan'),
+        contains('text or translation coverage'),
+        contains('playback'),
+        contains('build output'),
+        contains('deployment'),
+        contains('runtime'),
+      ),
+    );
+    expect(english.managedVoiceBuildReadinessTitle, 'Voice bundle check');
+    expect(
+      english.managedVoiceBuildReadinessReadyTitle,
+      'Voice bundle plan checked',
+    );
+    expect(
+      english.managedVoiceBuildReadinessBlockedTitle,
+      'Voice bundle plan needs attention',
+    );
+    expect(
+      english.managedVoiceBuildReadinessCount(1, 2),
+      '1 of 2 existing Voice slots pass this bundle plan.',
+    );
+    expect(
+      english.managedVoiceBuildReadinessBuildReleaseGuidance,
+      allOf(
+        contains('only the plan'),
+        contains('separate action'),
+        isNot(contains('Open Build & Release')),
+        isNot(contains('Voice content is ready')),
+      ),
+    );
+    expect(
+      english.managedVoiceBuildReadinessConfigureGameGuidance,
+      allOf(
+        contains('exact Voice bundle plan is checked'),
+        contains('separate offline bundle action'),
+        isNot(contains('Voice content is ready')),
+      ),
+    );
+
+    final german = AppLocalizationsDe();
+    expect(german.managedTestReleaseVoiceTitle, 'Voice-Bundle-Prüfung');
+    expect(german.managedTestReleaseVoiceHeading, 'Voice-Bundle-Prüfung');
+    expect(
+      german.managedTestReleaseVoiceDescription,
+      allOf(
+        contains('vorhandenen Archiveinträgen'),
+        contains('Text- oder Übersetzungsabdeckung'),
+        contains('Wiedergabe'),
+        contains('Build-Ausgabe'),
+        contains('Bereitstellung'),
+        contains('Laufzeit'),
+      ),
+    );
+    expect(german.managedVoiceBuildReadinessTitle, 'Voice-Bundle-Prüfung');
+    expect(
+      german.managedVoiceBuildReadinessReadyTitle,
+      'Voice-Bundle-Plan geprüft',
+    );
+    expect(
+      german.managedVoiceBuildReadinessBlockedTitle,
+      'Voice-Bundle-Plan benötigt Aufmerksamkeit',
+    );
+    expect(
+      german.managedVoiceBuildReadinessCount(1, 2),
+      '1 von 2 vorhandenen Voice-Slots bestehen diesen Bundle-Plan.',
+    );
+    expect(
+      german.managedVoiceBuildReadinessBuildReleaseGuidance,
+      allOf(
+        contains('nur der Plan geprüft'),
+        contains('separate Aktion'),
+        isNot(contains('Build & Release')),
+        isNot(contains('Voice-Inhalt ist bereit')),
+      ),
+    );
+    expect(
+      german.managedVoiceBuildReadinessConfigureGameGuidance,
+      allOf(
+        contains('exakte Voice-Bundle-Plan ist geprüft'),
+        contains('separate Offline-Bundle-Aktion'),
+        isNot(contains('Voice-Inhalt ist bereit')),
+      ),
+    );
   });
 }
 
@@ -230,6 +338,16 @@ List<String> _testReleaseStrings(AppLocalizations l10n) => <String>[
   l10n.managedTestReleaseVoiceTitle,
   l10n.managedTestReleaseVoiceDescription,
   l10n.managedTestReleaseVoiceAction,
+  l10n.managedVoiceBuildReadinessTitle,
+  l10n.managedVoiceBuildReadinessRefresh,
+  l10n.managedVoiceBuildReadinessChecking,
+  l10n.managedVoiceBuildReadinessLoadError,
+  l10n.managedVoiceBuildReadinessReadyTitle,
+  l10n.managedVoiceBuildReadinessBlockedTitle,
+  l10n.managedVoiceBuildReadinessCount(1, 2),
+  l10n.managedVoiceBuildReadinessBlockedBoundary,
+  l10n.managedVoiceBuildReadinessBuildReleaseGuidance,
+  l10n.managedVoiceBuildReadinessConfigureGameGuidance,
   l10n.managedTestReleaseDataAssetsTitle,
   l10n.managedTestReleaseDataAssetsDescription,
   l10n.managedTestReleaseDataAssetsAction,

@@ -60,7 +60,7 @@ void main() {
       planned.complete(_readyPlan());
       await tester.pumpAndSettle();
 
-      expect(find.text('Voice is ready'), findsOneWidget);
+      expect(find.text('Voice bundle plan checked'), findsOneWidget);
       expect(
         find.byKey(const Key('revision3-voice-build-folder-name')),
         findsOneWidget,
@@ -185,8 +185,11 @@ void main() {
       find.byKey(const Key('revision3-voice-readiness-report')),
       findsOneWidget,
     );
-    expect(find.text('Voice needs attention'), findsOneWidget);
-    expect(find.textContaining('0 of 2 Voice slots are ready'), findsOneWidget);
+    expect(find.text('Voice bundle plan needs attention'), findsOneWidget);
+    expect(
+      find.textContaining('0 of 2 existing Voice slots pass this bundle plan'),
+      findsOneWidget,
+    );
     expect(find.text('Resolve this Voice target.'), findsOneWidget);
     expect(find.text('Select an approved Voice take.'), findsOneWidget);
     expect(find.text('Asghan greeting — de'), findsOneWidget);
@@ -234,7 +237,10 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.textContaining('0 of 2 Voice slots are ready'), findsOneWidget);
+    expect(
+      find.textContaining('0 of 2 existing Voice slots pass this bundle plan'),
+      findsOneWidget,
+    );
     expect(find.textContaining('No bundle was created'), findsOneWidget);
     expect(find.byKey(const Key('revision3-voice-build-built')), findsNothing);
   });

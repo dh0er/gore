@@ -164,7 +164,7 @@ final class Revision3TestReleaseCopy {
       actionNotConnectedDescription =
           'Evidence exists, but this action is not connected in the current workspace.',
       problemsHeading = 'Problems to resolve',
-      voiceContinuationHeading = 'Voice build check';
+      voiceContinuationHeading = 'Voice bundle check';
 
   const Revision3TestReleaseCopy.german()
     : title = 'Testen & Veröffentlichen',
@@ -187,7 +187,7 @@ final class Revision3TestReleaseCopy {
       actionNotConnectedDescription =
           'Ein Nachweis ist vorhanden, aber diese Aktion ist hier noch nicht verfügbar.',
       problemsHeading = 'Probleme beheben',
-      voiceContinuationHeading = 'Sprachausgabe prüfen';
+      voiceContinuationHeading = 'Voice-Bundle-Prüfung';
 
   final String title;
   final String description;

@@ -23,6 +23,163 @@ typedef Revision3VoiceBuildRevisionCopy = String Function(int revision);
 typedef Revision3VoiceBuildBlockerTitleCopy =
     String Function(AuthoringRevision3VoiceBuildBlockReason reason);
 
+/// Exact managed-project identity observed by one mounted Voice plan panel.
+@immutable
+final class Revision3VoiceBuildReadinessCheckpoint {
+  const Revision3VoiceBuildReadinessCheckpoint({
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.checkpointIdentity,
+  }) : assert(projectRoot != ''),
+       assert(projectId != ''),
+       assert(projectRevision >= 0),
+       assert(checkpointIdentity != '');
+
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String checkpointIdentity;
+
+  @override
+  bool operator ==(Object other) =>
+      other is Revision3VoiceBuildReadinessCheckpoint &&
+      other.projectRoot == projectRoot &&
+      other.projectId == projectId &&
+      other.projectRevision == projectRevision &&
+      other.checkpointIdentity == checkpointIdentity;
+
+  @override
+  int get hashCode =>
+      Object.hash(projectRoot, projectId, projectRevision, checkpointIdentity);
+}
+
+/// Publication state of the read-only Voice bundle plan observation.
+enum Revision3VoiceBuildReadinessLoadState {
+  detached,
+  loading,
+  ready,
+  unavailable,
+}
+
+/// Narrow status output from the exact plan already loaded by the panel.
+///
+/// It deliberately exposes no blocker targets, build action, game
+/// configuration, output, deployment, playback, or runtime evidence.
+@immutable
+final class Revision3VoiceBuildReadinessSnapshot {
+  const Revision3VoiceBuildReadinessSnapshot._({
+    required this.state,
+    this.checkpoint,
+    this.planOutcome,
+  }) : assert(
+         state == Revision3VoiceBuildReadinessLoadState.detached
+             ? checkpoint == null && planOutcome == null
+             : checkpoint != null,
+       ),
+       assert(
+         state == Revision3VoiceBuildReadinessLoadState.ready
+             ? planOutcome != null
+             : planOutcome == null,
+       );
+
+  const Revision3VoiceBuildReadinessSnapshot._detached()
+    : this._(state: Revision3VoiceBuildReadinessLoadState.detached);
+
+  factory Revision3VoiceBuildReadinessSnapshot._loading(
+    Revision3VoiceBuildReadinessCheckpoint checkpoint,
+  ) => Revision3VoiceBuildReadinessSnapshot._(
+    state: Revision3VoiceBuildReadinessLoadState.loading,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3VoiceBuildReadinessSnapshot._unavailable(
+    Revision3VoiceBuildReadinessCheckpoint checkpoint,
+  ) => Revision3VoiceBuildReadinessSnapshot._(
+    state: Revision3VoiceBuildReadinessLoadState.unavailable,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3VoiceBuildReadinessSnapshot._ready(
+    Revision3VoiceBuildReadinessCheckpoint checkpoint,
+    AuthoringRevision3VoiceBuildPlanResult result,
+  ) => Revision3VoiceBuildReadinessSnapshot._(
+    state: Revision3VoiceBuildReadinessLoadState.ready,
+    checkpoint: checkpoint,
+    planOutcome: result.outcome,
+  );
+
+  final Revision3VoiceBuildReadinessLoadState state;
+  final Revision3VoiceBuildReadinessCheckpoint? checkpoint;
+  final AuthoringRevision3VoiceBuildPlanOutcome? planOutcome;
+
+  bool belongsTo(Revision3VoiceBuildReadinessCheckpoint expected) =>
+      checkpoint == expected;
+}
+
+/// Observes one mounted Voice readiness panel without owning or rerunning its
+/// native planner.
+///
+/// Attachment identity prevents a replaced or disposed panel from publishing
+/// stale evidence into the current Test & Release row.
+final class Revision3VoiceBuildReadinessController extends ChangeNotifier {
+  Object? _attachment;
+  Revision3VoiceBuildReadinessSnapshot _snapshot =
+      const Revision3VoiceBuildReadinessSnapshot._detached();
+  int _attachmentGeneration = 0;
+  bool _disposed = false;
+
+  Revision3VoiceBuildReadinessSnapshot get snapshot => _snapshot;
+
+  void _attach(Object attachment) {
+    if (_disposed) {
+      throw StateError('A disposed Voice readiness controller cannot attach.');
+    }
+    _attachment = attachment;
+    _attachmentGeneration++;
+    _snapshot = const Revision3VoiceBuildReadinessSnapshot._detached();
+  }
+
+  void _publish(
+    Object attachment,
+    Revision3VoiceBuildReadinessSnapshot snapshot, {
+    required bool notify,
+  }) {
+    if (_disposed || !identical(_attachment, attachment)) return;
+    _snapshot = snapshot;
+    if (notify) {
+      notifyListeners();
+    } else {
+      _notifyAfterBuild(_attachmentGeneration);
+    }
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    final generation = ++_attachmentGeneration;
+    _snapshot = const Revision3VoiceBuildReadinessSnapshot._detached();
+    _notifyAfterBuild(generation);
+  }
+
+  void _notifyAfterBuild(int generation) {
+    scheduleMicrotask(() {
+      if (_disposed || generation != _attachmentGeneration) return;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _attachmentGeneration++;
+    _snapshot = const Revision3VoiceBuildReadinessSnapshot._detached();
+    super.dispose();
+  }
+}
+
 /// All author-facing copy rendered by the Voice build readiness surfaces.
 ///
 /// The managed workspace supplies this from its localization layer. Stable
@@ -54,22 +211,22 @@ final class Revision3VoiceBuildReadinessCopy {
   });
 
   const Revision3VoiceBuildReadinessCopy.english()
-    : title = 'Voice readiness',
-      refreshTooltip = 'Refresh Voice readiness',
-      checkingSemanticsLabel = 'Checking exact Voice readiness',
+    : title = 'Voice bundle check',
+      refreshTooltip = 'Refresh Voice bundle check',
+      checkingSemanticsLabel = 'Checking the exact Voice bundle plan',
       loadError =
-          'Voice readiness could not be verified for the current project. No build is available from this result.',
+          'The exact Voice bundle plan could not be verified for the current project. No bundle-plan evidence is available from this result.',
       retryLabel = 'Retry',
-      readyTitle = 'Voice is ready',
-      blockedTitle = 'Voice needs attention',
+      readyTitle = 'Voice bundle plan checked',
+      blockedTitle = 'Voice bundle plan needs attention',
       readyCount = _englishVoiceReadyCount,
       blockedBoundary =
           'No bundle was created and deployment was not performed.',
       buildBundleLabel = 'Build bundle',
       readyBuildReleaseGuidance =
-          'Voice content is ready. Open Build & Release to create the offline bundle.',
+          'This checks only the plan; creating the offline Voice bundle remains a separate action.',
       readyConfigureGameGuidance =
-          'Voice content is ready. Configure the game installation before creating an offline bundle.',
+          'The exact Voice bundle plan is checked. A configured game installation is still required before the separate offline bundle action is available.',
       hideBlockersLabel = 'Hide blockers',
       showBlockersLabel = _englishVoiceBlockerCount,
       workflowOpenFailed =
@@ -110,6 +267,7 @@ final class Revision3VoiceBuildReadinessCopy {
 /// explicit callbacks.
 class Revision3VoiceBuildReadinessPanel extends StatefulWidget {
   const Revision3VoiceBuildReadinessPanel({
+    required this.projectRoot,
     required this.projectId,
     required this.projectRevision,
     required this.checkpointIdentity,
@@ -118,12 +276,16 @@ class Revision3VoiceBuildReadinessPanel extends StatefulWidget {
     this.onManageVoiceTakes,
     this.onBuild,
     this.gameConfigured = false,
+    this.requiresReopen = false,
     this.copy = const Revision3VoiceBuildReadinessCopy.english(),
+    this.controller,
     super.key,
-  }) : assert(projectId != ''),
+  }) : assert(projectRoot != ''),
+       assert(projectId != ''),
        assert(projectRevision >= 0),
        assert(checkpointIdentity != '');
 
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
   final String checkpointIdentity;
@@ -132,7 +294,9 @@ class Revision3VoiceBuildReadinessPanel extends StatefulWidget {
   final Revision3VoiceBuildLineLocaleAction? onManageVoiceTakes;
   final Revision3VoiceBuildReadinessAction? onBuild;
   final bool gameConfigured;
+  final bool requiresReopen;
   final Revision3VoiceBuildReadinessCopy copy;
+  final Revision3VoiceBuildReadinessController? controller;
 
   @override
   State<Revision3VoiceBuildReadinessPanel> createState() =>
@@ -146,44 +310,81 @@ class _Revision3VoiceBuildReadinessPanelState
   bool _loading = false;
   int _loadEpoch = 0;
 
+  Revision3VoiceBuildReadinessCheckpoint get _checkpoint =>
+      Revision3VoiceBuildReadinessCheckpoint(
+        projectRoot: widget.projectRoot,
+        projectId: widget.projectId,
+        projectRevision: widget.projectRevision,
+        checkpointIdentity: widget.checkpointIdentity,
+      );
+
   @override
   void initState() {
     super.initState();
-    unawaited(_load());
+    widget.controller?._attach(this);
+    if (widget.requiresReopen) {
+      _markUnavailable(notify: false, updateState: false);
+    } else {
+      unawaited(_load());
+    }
   }
 
   @override
   void didUpdateWidget(covariant Revision3VoiceBuildReadinessPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectId != widget.projectId ||
-        oldWidget.projectRevision != widget.projectRevision ||
-        oldWidget.checkpointIdentity != widget.checkpointIdentity) {
-      unawaited(_load(clearCurrent: true));
+    final controllerChanged = oldWidget.controller != widget.controller;
+    if (controllerChanged) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
+    final oldCheckpoint = Revision3VoiceBuildReadinessCheckpoint(
+      projectRoot: oldWidget.projectRoot,
+      projectId: oldWidget.projectId,
+      projectRevision: oldWidget.projectRevision,
+      checkpointIdentity: oldWidget.checkpointIdentity,
+    );
+    final checkpointChanged = oldCheckpoint != _checkpoint;
+    if (widget.requiresReopen) {
+      if (checkpointChanged || !oldWidget.requiresReopen || controllerChanged) {
+        _markUnavailable(notify: false, updateState: false);
+      }
+    } else if (checkpointChanged || oldWidget.requiresReopen) {
+      unawaited(_load());
+    } else if (controllerChanged) {
+      _publishCurrentSnapshot(notify: false);
     }
   }
 
   @override
   void dispose() {
     _loadEpoch++;
+    widget.controller?._detach(this);
     super.dispose();
   }
 
-  Future<void> _load({bool clearCurrent = false}) async {
+  Future<void> _load() async {
+    if (widget.requiresReopen) {
+      _markUnavailable(notify: true, updateState: true);
+      return;
+    }
     final epoch = ++_loadEpoch;
-    final expectedProjectId = widget.projectId;
-    final expectedProjectRevision = widget.projectRevision;
-    final expectedCheckpointIdentity = widget.checkpointIdentity;
+    final checkpoint = _checkpoint;
+    final plan = widget.plan;
     setState(() {
       _loading = true;
       _error = null;
-      if (clearCurrent) _result = null;
+      _result = null;
     });
+    _publishSnapshot(
+      Revision3VoiceBuildReadinessSnapshot._loading(checkpoint),
+      notify: false,
+    );
     try {
-      final result = await widget.plan();
-      if (!mounted || epoch != _loadEpoch) return;
-      if (result.projectId != expectedProjectId ||
-          result.projectRevision != expectedProjectRevision ||
-          result.basisHead.canonicalJson != expectedCheckpointIdentity) {
+      final result = await plan();
+      if (!mounted || epoch != _loadEpoch || checkpoint != _checkpoint) return;
+      if (result.projectId != checkpoint.projectId ||
+          result.projectRevision != checkpoint.projectRevision ||
+          result.basisHead.canonicalJson != checkpoint.checkpointIdentity) {
         throw const FormatException(
           'Voice readiness does not match the current project checkpoint.',
         );
@@ -192,13 +393,21 @@ class _Revision3VoiceBuildReadinessPanelState
         _result = result;
         _loading = false;
       });
+      _publishSnapshot(
+        Revision3VoiceBuildReadinessSnapshot._ready(checkpoint, result),
+        notify: true,
+      );
     } catch (error) {
-      if (!mounted || epoch != _loadEpoch) return;
+      if (!mounted || epoch != _loadEpoch || checkpoint != _checkpoint) return;
       setState(() {
         _result = null;
         _error = error;
         _loading = false;
       });
+      _publishSnapshot(
+        Revision3VoiceBuildReadinessSnapshot._unavailable(checkpoint),
+        notify: true,
+      );
     }
   }
 
@@ -284,6 +493,7 @@ class _Revision3VoiceBuildReadinessPanelState
 
   bool _isCurrentResult(AuthoringRevision3VoiceBuildPlanResult result) =>
       mounted &&
+      !widget.requiresReopen &&
       identical(_result, result) &&
       result.projectId == widget.projectId &&
       result.projectRevision == widget.projectRevision &&
@@ -301,7 +511,7 @@ class _Revision3VoiceBuildReadinessPanelState
             action(initialLineId: initialLineId, initialLocale: initialLocale),
       );
       if (_isCurrentResult(result)) {
-        await _load(clearCurrent: true);
+        await _load();
       }
     };
   }
@@ -315,6 +525,43 @@ class _Revision3VoiceBuildReadinessPanelState
       if (!_isCurrentResult(result)) return;
       await Future<void>.sync(action);
     };
+  }
+
+  void _publishCurrentSnapshot({required bool notify}) {
+    final result = _result;
+    final snapshot = _loading
+        ? Revision3VoiceBuildReadinessSnapshot._loading(_checkpoint)
+        : _error != null || result == null || !_isCurrentResult(result)
+        ? Revision3VoiceBuildReadinessSnapshot._unavailable(_checkpoint)
+        : Revision3VoiceBuildReadinessSnapshot._ready(_checkpoint, result);
+    _publishSnapshot(snapshot, notify: notify);
+  }
+
+  void _publishSnapshot(
+    Revision3VoiceBuildReadinessSnapshot snapshot, {
+    required bool notify,
+  }) => widget.controller?._publish(this, snapshot, notify: notify);
+
+  void _markUnavailable({required bool notify, required bool updateState}) {
+    _loadEpoch++;
+
+    void mark() {
+      _result = null;
+      _loading = false;
+      _error = const FormatException(
+        'Voice readiness is unavailable until the project is reopened.',
+      );
+    }
+
+    if (updateState) {
+      setState(mark);
+    } else {
+      mark();
+    }
+    _publishSnapshot(
+      Revision3VoiceBuildReadinessSnapshot._unavailable(_checkpoint),
+      notify: notify,
+    );
   }
 }
 
@@ -715,7 +962,7 @@ _actionForBlocker(
 }
 
 String _englishVoiceReadyCount(int readySlots, int totalSlots) =>
-    '$readySlots of $totalSlots Voice slots are ready.';
+    '$readySlots of $totalSlots existing Voice slots pass this bundle plan.';
 
 String _englishVoiceBlockerCount(int count) =>
     'Show $count ${count == 1 ? 'blocker' : 'blockers'}';
