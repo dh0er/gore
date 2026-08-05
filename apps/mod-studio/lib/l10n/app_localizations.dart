@@ -4830,23 +4830,125 @@ abstract class AppLocalizations {
   /// **'Edit name & archetype'**
   String get managedStoryWorkbenchEditNpcProfile;
 
-  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepTitle.
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupTitle.
   ///
   /// In en, this message translates to:
-  /// **'Next step: Dialog & Voice'**
-  String get managedStoryWorkbenchNpcDialogVoiceNextStepTitle;
+  /// **'Write this Character'**
+  String get managedStoryWorkbenchNpcDraftSetupTitle;
 
-  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceNextStepDescription.
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupDescription.
   ///
   /// In en, this message translates to:
-  /// **'Draft only: continue with greeting lines, text, and voice. This only links project content; it does not create playable dialog or verify runtime behavior.'**
-  String get managedStoryWorkbenchNpcDialogVoiceNextStepDescription;
+  /// **'This view tracks the exact Character details and first authored greeting as two project steps in the current revision.'**
+  String get managedStoryWorkbenchNpcDraftSetupDescription;
 
-  /// No description provided for @managedStoryWorkbenchContinueToNpcDialogVoice.
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupCharacterDetailsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Continue to Dialog & Voice'**
-  String get managedStoryWorkbenchContinueToNpcDialogVoice;
+  /// **'1. Character details'**
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsTitle;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupFirstGreetingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'2. First greeting'**
+  String get managedStoryWorkbenchNpcDraftSetupFirstGreetingTitle;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupCompleteStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved in project'**
+  String get managedStoryWorkbenchNpcDraftSetupCompleteStatus;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupNextStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended next step'**
+  String get managedStoryWorkbenchNpcDraftSetupNextStatus;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupOpenStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Still open'**
+  String get managedStoryWorkbenchNpcDraftSetupOpenStatus;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupCharacterDetailsComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact Character name and reviewed archetype parents are present in this project revision.'**
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsComplete;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupCharacterDetailsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact current Character details could not be verified.'**
+  String get managedStoryWorkbenchNpcDraftSetupCharacterDetailsUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupFirstGreetingPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Link the first authored greeting in Dialog & Voice.'**
+  String get managedStoryWorkbenchNpcDraftSetupFirstGreetingPending;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupFirstGreetingDetailsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Text and Voice coverage for the first greeting could not be verified in this exact project revision.'**
+  String get managedStoryWorkbenchNpcDraftSetupFirstGreetingDetailsUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupRecommendedNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Recommended next step'**
+  String get managedStoryWorkbenchNpcDraftSetupRecommendedNext;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupWriteFirstGreeting.
+  ///
+  /// In en, this message translates to:
+  /// **'Write first greeting'**
+  String get managedStoryWorkbenchNpcDraftSetupWriteFirstGreeting;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupReviewDialogVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Review greetings in Dialog & Voice'**
+  String get managedStoryWorkbenchNpcDraftSetupReviewDialogVoice;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupActionUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog & Voice is unavailable for this exact project revision.'**
+  String get managedStoryWorkbenchNpcDraftSetupActionUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft setup tracks current authored project content only. A greeting link is not a playable dialog topic and does not prove publication history, build, or runtime behavior.'**
+  String get managedStoryWorkbenchNpcDraftSetupBoundary;
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupGreetingLinkCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No authored greeting links} =1{1 authored greeting link} other{{count} authored greeting links}}'**
+  String managedStoryWorkbenchNpcDraftSetupGreetingLinkCount(int count);
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupTextLanguageCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 text language} other{{count} text languages}}'**
+  String managedStoryWorkbenchNpcDraftSetupTextLanguageCount(int count);
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupVoiceTakeCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 Voice take} other{{count} Voice takes}}'**
+  String managedStoryWorkbenchNpcDraftSetupVoiceTakeCount(int count);
+
+  /// No description provided for @managedStoryWorkbenchNpcDraftSetupSelectedVoiceCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 selected Voice take} other{{count} selected Voice takes}}'**
+  String managedStoryWorkbenchNpcDraftSetupSelectedVoiceCount(int count);
 
   /// No description provided for @managedStoryWorkbenchNpcDisplayNameLabel.
   ///

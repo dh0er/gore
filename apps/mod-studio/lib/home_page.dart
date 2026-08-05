@@ -7524,11 +7524,41 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
   editOverview: l10n.managedStoryWorkbenchEditOverview,
   editNpcProfile: l10n.managedStoryWorkbenchEditNpcProfile,
-  npcDialogVoiceNextStepTitle:
-      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepTitle,
-  npcDialogVoiceNextStepDescription:
-      l10n.managedStoryWorkbenchNpcDialogVoiceNextStepDescription,
-  continueToNpcDialogVoice: l10n.managedStoryWorkbenchContinueToNpcDialogVoice,
+  npcDraftSetupTitle: l10n.managedStoryWorkbenchNpcDraftSetupTitle,
+  npcDraftSetupDescription: l10n.managedStoryWorkbenchNpcDraftSetupDescription,
+  npcDraftSetupCharacterDetailsTitle:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsTitle,
+  npcDraftSetupFirstGreetingTitle:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingTitle,
+  npcDraftSetupCompleteStatus:
+      l10n.managedStoryWorkbenchNpcDraftSetupCompleteStatus,
+  npcDraftSetupNextStatus: l10n.managedStoryWorkbenchNpcDraftSetupNextStatus,
+  npcDraftSetupOpenStatus: l10n.managedStoryWorkbenchNpcDraftSetupOpenStatus,
+  npcDraftSetupCharacterDetailsComplete:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsComplete,
+  npcDraftSetupCharacterDetailsUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupCharacterDetailsUnavailable,
+  npcDraftSetupFirstGreetingPending:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingPending,
+  npcDraftSetupFirstGreetingDetailsUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupFirstGreetingDetailsUnavailable,
+  npcDraftSetupRecommendedNext:
+      l10n.managedStoryWorkbenchNpcDraftSetupRecommendedNext,
+  npcDraftSetupWriteFirstGreeting:
+      l10n.managedStoryWorkbenchNpcDraftSetupWriteFirstGreeting,
+  npcDraftSetupReviewDialogVoice:
+      l10n.managedStoryWorkbenchNpcDraftSetupReviewDialogVoice,
+  npcDraftSetupActionUnavailable:
+      l10n.managedStoryWorkbenchNpcDraftSetupActionUnavailable,
+  npcDraftSetupBoundary: l10n.managedStoryWorkbenchNpcDraftSetupBoundary,
+  npcDraftSetupGreetingLinkCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupGreetingLinkCount,
+  npcDraftSetupTextLanguageCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupTextLanguageCount,
+  npcDraftSetupVoiceTakeCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupVoiceTakeCount,
+  npcDraftSetupSelectedVoiceCount:
+      l10n.managedStoryWorkbenchNpcDraftSetupSelectedVoiceCount,
   editStory: l10n.managedStoryWorkbenchEditStory,
   editLogic: l10n.managedStoryWorkbenchEditLogic,
   inspectQuest: l10n.managedStoryWorkbenchInspectQuest,

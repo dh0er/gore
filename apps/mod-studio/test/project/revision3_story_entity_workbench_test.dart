@@ -10,6 +10,14 @@ const _questId = '22222222222222222222222222222222';
 const _npcId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
 const _npcModuleId = '2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f';
+const _greetingLocalizationA = '55555555555555555555555555555555';
+const _greetingLineA = '66666666666666666666666666666666';
+const _greetingLocalizationB = '77777777777777777777777777777777';
+const _greetingLineB = '88888888888888888888888888888888';
+const _greetingVoiceSlot = '99999999999999999999999999999999';
+const _greetingVoiceTakeA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _greetingVoiceTakeB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const _missingGreetingLocalization = 'cccccccccccccccccccccccccccccccc';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _collisionSha =
@@ -418,6 +426,282 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('NPC Draft setup shows the exact N+1 partial checkpoint', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 720));
+    final index = _fixture(revision: 8, npcRevision: 1);
+
+    await _pumpWorkbench(
+      tester,
+      index: index,
+      entityId: _npcId,
+      selectedSection: Revision3StoryWorkbenchSection.profile,
+      npcDialogVoice: const Text('Exact NPC greeting editor'),
+    );
+
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-$_projectA-8-$_npcId-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        Key('revision3-npc-draft-setup-step-characterDetails-$_npcId'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-step-firstGreeting-$_npcId')),
+      findsOneWidget,
+    );
+    expect(find.text('0 authored greeting links'), findsOneWidget);
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-first-greeting-facts-$_npcId')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Link the first authored greeting in Dialog & Voice.'),
+      findsOneWidget,
+    );
+    expect(find.text('Write first greeting'), findsOneWidget);
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-next-$_npcId')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-boundary-$_npcId')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('NPC Draft setup shows exact N+2 first greeting facts', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 720));
+    final index = _fixture(
+      revision: 9,
+      npcRevision: 2,
+      npcGreetingLineIds: const <String>[_greetingLineA],
+    );
+
+    await _pumpWorkbench(
+      tester,
+      index: index,
+      entityId: _npcId,
+      selectedSection: Revision3StoryWorkbenchSection.profile,
+      npcDialogVoice: const Text('Exact NPC greeting editor'),
+    );
+
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-$_projectA-9-$_npcId-2')),
+      findsOneWidget,
+    );
+    expect(find.text('1 authored greeting link'), findsOneWidget);
+    final facts = find.byKey(
+      Key('revision3-npc-draft-setup-first-greeting-facts-$_npcId'),
+    );
+    expect(facts, findsOneWidget);
+    final factText = tester.widget<Text>(facts).data!;
+    expect(factText, contains('2 text languages'));
+    expect(factText, contains('2 Voice takes'));
+    expect(factText, contains('1 selected Voice take'));
+    expect(find.text('Review greetings in Dialog & Voice'), findsOneWidget);
+    expect(
+      find.textContaining('A greeting link is not a playable dialog topic'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'NPC Draft setup retains a greeting when downstream details are unresolved',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1000, 720));
+      final index = _fixture(
+        revision: 9,
+        npcRevision: 2,
+        npcGreetingLineIds: const <String>[_greetingLineA],
+        unresolvedFirstGreetingDetails: true,
+      );
+
+      await _pumpWorkbench(
+        tester,
+        index: index,
+        entityId: _npcId,
+        selectedSection: Revision3StoryWorkbenchSection.profile,
+        npcDialogVoice: const Text('Exact NPC greeting editor'),
+      );
+
+      expect(find.text('1 authored greeting link'), findsOneWidget);
+      final facts = find.byKey(
+        Key('revision3-npc-draft-setup-first-greeting-facts-$_npcId'),
+      );
+      expect(
+        tester.widget<Text>(facts).data,
+        'Text and Voice coverage for the first greeting could not be verified in this exact project revision.',
+      );
+      expect(find.text('Review greetings in Dialog & Voice'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('NPC Draft setup uses the first authored greeting, not totals', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 720));
+    final index = _fixture(
+      revision: 10,
+      npcRevision: 3,
+      npcGreetingLineIds: const <String>[_greetingLineB, _greetingLineA],
+    );
+
+    await _pumpWorkbench(
+      tester,
+      index: index,
+      entityId: _npcId,
+      selectedSection: Revision3StoryWorkbenchSection.profile,
+      npcDialogVoice: const Text('Exact NPC greeting editor'),
+    );
+
+    expect(find.text('2 authored greeting links'), findsOneWidget);
+    final facts = find.byKey(
+      Key('revision3-npc-draft-setup-first-greeting-facts-$_npcId'),
+    );
+    final factText = tester.widget<Text>(facts).data!;
+    expect(factText, contains('1 text language'));
+    expect(factText, contains('0 Voice takes'));
+    expect(
+      factText,
+      isNot(contains('selected')),
+      reason: 'the first authored line has no selected Voice take',
+    );
+    expect(
+      factText,
+      isNot(contains('2 text languages')),
+      reason: 'facts must not be aggregated from the later greeting',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('NPC setup follows exact revision and entity switches', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 720));
+    var index = _fixture(revision: 8, npcRevision: 1);
+    var showNpc = true;
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              final entity = index.entityById(showNpc ? _npcId : _questId)!;
+              return Revision3StoryEntityWorkbench(
+                projectId: index.projectId,
+                index: index,
+                entity: entity,
+                selectedSection: showNpc
+                    ? Revision3StoryWorkbenchSection.profile
+                    : Revision3StoryWorkbenchSection.overview,
+                onSectionChanged: (_) {},
+                actions: _actions,
+                questJourney: const Text('Exact Quest journey'),
+                npcDialogVoice: const Text('Exact NPC greeting editor'),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final oldSetup = find.byKey(
+      Key('revision3-npc-draft-setup-$_projectA-8-$_npcId-1'),
+    );
+    expect(oldSetup, findsOneWidget);
+    expect(find.text('Write first greeting'), findsOneWidget);
+
+    rebuild(() {
+      index = _fixture(
+        revision: 9,
+        npcRevision: 2,
+        npcGreetingLineIds: const <String>[_greetingLineA],
+      );
+    });
+    await tester.pumpAndSettle();
+
+    expect(oldSetup, findsNothing);
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-$_projectA-9-$_npcId-2')),
+      findsOneWidget,
+    );
+    expect(find.text('Write first greeting'), findsNothing);
+    expect(find.text('Review greetings in Dialog & Voice'), findsOneWidget);
+
+    rebuild(() => showNpc = false);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-$_projectA-9-$_npcId-2')),
+      findsNothing,
+    );
+    expect(find.text('Exact Quest journey'), findsOneWidget);
+
+    rebuild(() => showNpc = true);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(Key('revision3-npc-draft-setup-$_projectA-9-$_npcId-2')),
+      findsOneWidget,
+    );
+    expect(find.text('Review greetings in Dialog & Voice'), findsOneWidget);
+    expect(find.text('Exact Quest journey'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unverified Character details disable the setup action', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1000, 720));
+    final index = _fixture(blankNpcCharacterDetails: true);
+
+    await _pumpWorkbench(
+      tester,
+      index: index,
+      entityId: _npcId,
+      selectedSection: Revision3StoryWorkbenchSection.profile,
+      npcDialogVoice: const Text('Exact NPC greeting editor'),
+    );
+
+    final action = find.byKey(
+      Key('revision3-npc-draft-setup-recommended-dialog-voice-$_npcId'),
+    );
+    final profile = find.byKey(
+      Key('revision3-story-workbench-section-profile-$_npcId'),
+    );
+    final disabledReason = find.byKey(
+      Key('revision3-npc-draft-setup-next-disabled-reason-$_npcId'),
+    );
+    await tester.scrollUntilVisible(
+      disabledReason,
+      120,
+      scrollable: find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<FilledButton>(action).onPressed, isNull);
+    expect(disabledReason, findsOneWidget);
+    expect(
+      tester.widget<Text>(disabledReason).data,
+      'The exact current Character details could not be verified.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'NPC Profile is one productive Character journey with planned work collapsed',
     (tester) async {
@@ -465,11 +749,10 @@ void main() {
       }
 
       expect(find.text('Gate Guard'), findsWidgets);
-      expect(find.text('Next step: Dialog & Voice'), findsOneWidget);
+      expect(find.text('Write this Character'), findsOneWidget);
+      expect(find.text('Write first greeting'), findsOneWidget);
       expect(
-        find.byKey(
-          const Key('revision3-story-workbench-npc-planned-capabilities'),
-        ),
+        find.byKey(Key('revision3-npc-draft-setup-$_projectA-7-$_npcId-0')),
         findsOneWidget,
       );
       expect(
@@ -494,6 +777,23 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(profileEdits, 1);
+
+      final profile = find.byKey(
+        Key('revision3-story-workbench-section-profile-$_npcId'),
+      );
+      final planned = find.byKey(
+        const Key('revision3-story-workbench-npc-planned-capabilities'),
+      );
+      await tester.scrollUntilVisible(
+        planned,
+        120,
+        scrollable: find.descendant(
+          of: profile,
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(planned, findsOneWidget);
 
       final semantics = tester.ensureSemantics();
       final plannedSemantics = find.semantics.byLabel(
@@ -522,10 +822,10 @@ void main() {
   );
 
   testWidgets(
-    'compact scaled NPC profile continues to Dialog & Voice for the same draft',
+    'compact scaled NPC setup continues to Dialog & Voice for the same draft',
     (tester) async {
       await _setSurfaceSize(tester, const Size(360, 640));
-      final index = _fixture();
+      final index = _fixture(revision: 8, npcRevision: 1);
       final sectionChanges = <Revision3StoryWorkbenchSection>[];
 
       await tester.pumpWidget(
@@ -557,54 +857,59 @@ void main() {
       final profile = find.byKey(
         Key('revision3-story-workbench-section-profile-$_npcId'),
       );
-      final nextStep = find.byKey(
-        Key('revision3-story-workbench-npc-dialog-next-step-$_npcId'),
+      final setup = find.byKey(
+        Key('revision3-npc-draft-setup-$_projectA-8-$_npcId-1'),
       );
-      final continueButton = find.descendant(
-        of: nextStep,
-        matching: find.widgetWithText(
-          FilledButton,
-          'Continue to Dialog & Voice',
-        ),
+      final characterStep = find.byKey(
+        Key('revision3-npc-draft-setup-step-characterDetails-$_npcId'),
+      );
+      final greetingStep = find.byKey(
+        Key('revision3-npc-draft-setup-step-firstGreeting-$_npcId'),
+      );
+      final nextStep = find.byKey(
+        Key('revision3-npc-draft-setup-next-$_npcId'),
+      );
+      final continueButton = find.byKey(
+        Key('revision3-npc-draft-setup-recommended-dialog-voice-$_npcId'),
+      );
+      final profileScroll = find.descendant(
+        of: profile,
+        matching: find.byType(Scrollable),
       );
 
       expect(details, findsOneWidget);
       expect(profile, findsOneWidget);
       expect(tester.takeException(), isNull);
 
-      await tester.scrollUntilVisible(
-        nextStep,
-        120,
-        scrollable: find.descendant(
-          of: profile,
-          matching: find.byType(Scrollable),
-        ),
-      );
+      await tester.scrollUntilVisible(setup, 120, scrollable: profileScroll);
+      await tester.pumpAndSettle();
+
+      expect(setup, findsOneWidget);
+      expect(characterStep, findsOneWidget);
+      expect(greetingStep, findsOneWidget);
+
+      await tester.scrollUntilVisible(nextStep, 120, scrollable: profileScroll);
       await tester.pumpAndSettle();
 
       expect(nextStep, findsOneWidget);
-      expect(find.text('Next step: Dialog & Voice'), findsOneWidget);
+      expect(find.text('Write first greeting'), findsOneWidget);
       expect(
-        find.textContaining('does not create playable dialog'),
+        find.textContaining('not a playable dialog topic'),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: nextStep, matching: find.textContaining(_npcId)),
+        find.descendant(of: setup, matching: find.textContaining(_npcId)),
         findsNothing,
       );
       expect(
         find.descendant(
-          of: nextStep,
+          of: setup,
           matching: find.textContaining('GORE_GATE_GUARD'),
         ),
         findsNothing,
       );
       expect(tester.takeException(), isNull);
 
-      final profileScroll = find.descendant(
-        of: profile,
-        matching: find.byType(Scrollable),
-      );
       for (
         var attempt = 0;
         attempt < 20 && continueButton.hitTestable().evaluate().isEmpty;
@@ -895,11 +1200,29 @@ Future<void> _pumpWorkbench(
 Finder _actionTile(String key) =>
     find.descendant(of: find.byKey(Key(key)), matching: find.byType(ListTile));
 
-Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
+Revision3ContentIndex _fixture({
+  int revision = 7,
+  int entityRevision = 1,
+  int npcRevision = 0,
+  List<String> npcGreetingLineIds = const <String>[],
+  bool blankNpcCharacterDetails = false,
+  bool unresolvedFirstGreetingDetails = false,
+}) => _fixtureFrom(
+  _WorkbenchFixture(
+    revision: revision,
+    entityRevision: entityRevision,
+    npcRevision: npcRevision,
+    npcGreetingLineIds: npcGreetingLineIds,
+    blankNpcCharacterDetails: blankNpcCharacterDetails,
+    unresolvedFirstGreetingDetails: unresolvedFirstGreetingDetails,
+  ),
+);
+
+Revision3ContentIndex _fixtureFrom(_WorkbenchFixture fixture) =>
     Revision3ContentIndex.fromJsonObject(<String, Object?>{
       'schema_revision': 1,
       'project_id': _projectA,
-      'project_revision': revision,
+      'project_revision': fixture.revision,
       'project_name': 'Workbench fixture',
       'project_version': '0.1.0',
       'project_author': 'GORE',
@@ -908,6 +1231,16 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
       },
       'authoring_locales': <Object?>['de', 'en'],
       'entity_counts': <String, Object?>{
+        if (fixture.includesGreetingA || fixture.includesGreetingB)
+          'localization_entry':
+              (fixture.includesGreetingA ? 1 : 0) +
+              (fixture.includesGreetingB ? 1 : 0),
+        if (fixture.includesGreetingA || fixture.includesGreetingB)
+          'dialog_line':
+              (fixture.includesGreetingA ? 1 : 0) +
+              (fixture.includesGreetingB ? 1 : 0),
+        if (fixture.includesGreetingA) 'voice_slot': 1,
+        if (fixture.includesGreetingA) 'voice_take': 2,
         'npc_draft': 1,
         'quest_draft': 1,
         'script_module': 2,
@@ -917,7 +1250,7 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'id': _questId,
           'kind': 'quest_draft',
           'display_name': 'Find Homer',
-          'revision': entityRevision,
+          'revision': fixture.entityRevision,
           'origin': <String, Object?>{
             'type': 'new',
             'authored_runtime_id': 'GORE_FIND_HOMER',
@@ -1014,7 +1347,7 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'id': _npcId,
           'kind': 'npc_draft',
           'display_name': 'Gate Guard',
-          'revision': 0,
+          'revision': fixture.npcRevision,
           'origin': <String, Object?>{
             'type': 'new',
             'authored_runtime_id': 'GORE_GATE_GUARD',
@@ -1026,8 +1359,10 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               'module_namespace': 'PROJECT.NPCS.GATEGUARD',
               'parent_character_definition': 'UCharacterDefinition_Asghan',
               'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
-              'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
-              'greeting_count': 0,
+              'parent_spawn_definition': fixture.blankNpcCharacterDetails
+                  ? '   '
+                  : 'USpawnAIAgentDefinition_Asghan',
+              'greeting_count': fixture.npcGreetingLineIds.length,
             },
           },
           'references': <Object?>[
@@ -1041,6 +1376,17 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
               },
               'resolution': 'resolved',
             },
+            for (final lineId in fixture.npcGreetingLineIds)
+              <String, Object?>{
+                'role': 'npc_greeting_line',
+                'qualifier': null,
+                'target': <String, Object?>{
+                  'project_id': _projectA,
+                  'entity_id': lineId,
+                  'expected_kind': 'dialog_line',
+                },
+                'resolution': 'resolved',
+              },
           ],
           'asset_references': <Object?>[],
         },
@@ -1048,7 +1394,7 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           'id': _moduleId,
           'kind': 'script_module',
           'display_name': 'Find Homer source',
-          'revision': entityRevision,
+          'revision': fixture.entityRevision,
           'origin': <String, Object?>{
             'type': 'generated',
             'generator_id': 'gore-authoring.draft-quest-skeleton',
@@ -1096,6 +1442,12 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
           ],
           'asset_references': <Object?>[],
         },
+        ..._npcGreetingEntities(
+          includeGreetingA: fixture.includesGreetingA,
+          includeGreetingB: fixture.includesGreetingB,
+          unresolvedFirstGreetingDetails:
+              fixture.unresolvedFirstGreetingDetails,
+        ),
       ],
       'assets': <Object?>[
         <String, Object?>{
@@ -1106,3 +1458,227 @@ Revision3ContentIndex _fixture({int revision = 7, int entityRevision = 1}) =>
         },
       ],
     });
+
+final class _WorkbenchFixture {
+  const _WorkbenchFixture({
+    required this.revision,
+    required this.entityRevision,
+    required this.npcRevision,
+    required this.npcGreetingLineIds,
+    required this.blankNpcCharacterDetails,
+    required this.unresolvedFirstGreetingDetails,
+  });
+
+  final int revision;
+  final int entityRevision;
+  final int npcRevision;
+  final List<String> npcGreetingLineIds;
+  final bool blankNpcCharacterDetails;
+  final bool unresolvedFirstGreetingDetails;
+
+  bool get includesGreetingA => npcGreetingLineIds.contains(_greetingLineA);
+  bool get includesGreetingB => npcGreetingLineIds.contains(_greetingLineB);
+}
+
+List<Object?> _npcGreetingEntities({
+  required bool includeGreetingA,
+  required bool includeGreetingB,
+  required bool unresolvedFirstGreetingDetails,
+}) => <Object?>[
+  if (includeGreetingA)
+    _contentEntity(
+      id: _greetingLocalizationA,
+      kind: 'localization_entry',
+      displayName: 'Gate greeting text',
+      revision: 4,
+      summaryData: <String, Object?>{
+        'loc_id': 'DIA_GATE_GREETING',
+        'locales': <Object?>['de', 'en'],
+      },
+    ),
+  if (includeGreetingA)
+    _contentEntity(
+      id: _greetingLineA,
+      kind: 'dialog_line',
+      displayName: 'Gate greeting',
+      revision: 5,
+      summaryData: <String, Object?>{
+        'speaker_hint': 'Gate Guard',
+        'voice_slot_locales': <Object?>['de'],
+      },
+      references: <Object?>[
+        if (unresolvedFirstGreetingDetails)
+          _unresolvedReference(
+            role: 'dialog_localization',
+            targetId: _missingGreetingLocalization,
+            expectedKind: 'localization_entry',
+          )
+        else
+          _resolvedReference(
+            role: 'dialog_localization',
+            targetId: _greetingLocalizationA,
+            expectedKind: 'localization_entry',
+          ),
+        _resolvedReference(
+          role: 'dialog_voice_slot',
+          qualifier: 'de',
+          targetId: _greetingVoiceSlot,
+          expectedKind: 'voice_slot',
+        ),
+      ],
+    ),
+  if (includeGreetingB)
+    _contentEntity(
+      id: _greetingLocalizationB,
+      kind: 'localization_entry',
+      displayName: 'Watch greeting text',
+      revision: 2,
+      summaryData: <String, Object?>{
+        'loc_id': 'DIA_WATCH_GREETING',
+        'locales': <Object?>['de'],
+      },
+    ),
+  if (includeGreetingB)
+    _contentEntity(
+      id: _greetingLineB,
+      kind: 'dialog_line',
+      displayName: 'Watch greeting',
+      revision: 3,
+      summaryData: <String, Object?>{
+        'speaker_hint': 'Gate Guard',
+        'voice_slot_locales': <Object?>[],
+      },
+      references: <Object?>[
+        _resolvedReference(
+          role: 'dialog_localization',
+          targetId: _greetingLocalizationB,
+          expectedKind: 'localization_entry',
+        ),
+      ],
+    ),
+  if (includeGreetingA)
+    _contentEntity(
+      id: _greetingVoiceSlot,
+      kind: 'voice_slot',
+      displayName: 'German Gate greeting Voice',
+      revision: 2,
+      origin: <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.dialog-voice-slot',
+        'generator_version': 1,
+        'owner': <String, Object?>{
+          'project_id': _projectA,
+          'entity_id': _greetingLineA,
+          'expected_kind': 'dialog_line',
+        },
+      },
+      summaryData: <String, Object?>{
+        'locale': 'de',
+        'target_resolution': 'resolved',
+        'candidate_count': 2,
+        'has_selected_take': true,
+      },
+      references: <Object?>[
+        _resolvedReference(
+          role: 'origin_owner',
+          targetId: _greetingLineA,
+          expectedKind: 'dialog_line',
+        ),
+        _resolvedReference(
+          role: 'voice_candidate',
+          targetId: _greetingVoiceTakeA,
+          expectedKind: 'voice_take',
+        ),
+        _resolvedReference(
+          role: 'voice_candidate',
+          targetId: _greetingVoiceTakeB,
+          expectedKind: 'voice_take',
+        ),
+        _resolvedReference(
+          role: 'voice_selected',
+          targetId: _greetingVoiceTakeB,
+          expectedKind: 'voice_take',
+        ),
+      ],
+    ),
+  if (includeGreetingA)
+    _contentEntity(
+      id: _greetingVoiceTakeA,
+      kind: 'voice_take',
+      displayName: 'Gate greeting take 1',
+      revision: 1,
+      summaryData: <String, Object?>{
+        'locale': 'de',
+        'status': 'recorded',
+        'codec': 'vorbis',
+        'channels': 1,
+        'sample_rate': 44100,
+      },
+    ),
+  if (includeGreetingA)
+    _contentEntity(
+      id: _greetingVoiceTakeB,
+      kind: 'voice_take',
+      displayName: 'Gate greeting take 2',
+      revision: 1,
+      summaryData: <String, Object?>{
+        'locale': 'de',
+        'status': 'approved',
+        'codec': 'vorbis',
+        'channels': 1,
+        'sample_rate': 44100,
+      },
+    ),
+];
+
+Map<String, Object?> _contentEntity({
+  required String id,
+  required String kind,
+  required String displayName,
+  required int revision,
+  required Map<String, Object?> summaryData,
+  Map<String, Object?>? origin,
+  List<Object?> references = const <Object?>[],
+}) => <String, Object?>{
+  'id': id,
+  'kind': kind,
+  'display_name': displayName,
+  'revision': revision,
+  'origin':
+      origin ??
+      <String, Object?>{'type': 'new', 'authored_runtime_id': 'AUTHORED_$kind'},
+  'summary': <String, Object?>{'kind': kind, 'data': summaryData},
+  'references': references,
+  'asset_references': <Object?>[],
+};
+
+Map<String, Object?> _resolvedReference({
+  required String role,
+  String? qualifier,
+  required String targetId,
+  required String expectedKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': qualifier,
+  'target': <String, Object?>{
+    'project_id': _projectA,
+    'entity_id': targetId,
+    'expected_kind': expectedKind,
+  },
+  'resolution': 'resolved',
+};
+
+Map<String, Object?> _unresolvedReference({
+  required String role,
+  required String targetId,
+  required String expectedKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': null,
+  'target': <String, Object?>{
+    'project_id': _projectA,
+    'entity_id': targetId,
+    'expected_kind': expectedKind,
+  },
+  'resolution': 'missing_entity',
+};
