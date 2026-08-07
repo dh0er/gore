@@ -94,6 +94,43 @@ pub const CONFIG: GroupSpec = GroupSpec {
 };
 
 // ---------------------------------------------------------------------------------------------
+// gore_doctor
+// ---------------------------------------------------------------------------------------------
+
+const DOCTOR_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "game",
+    Long("game"),
+    Path,
+    "Game install root (the folder containing G1R/). Falls back to the configured game path, then      Steam auto-detect",
+    false,
+)];
+
+const DOCTOR_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "doctor",
+    "Diagnose the setup: what is installed, what is deployed, and what is wrong with it",
+    DOCTOR_ARGS,
+    Safety::read(),
+    // Reads and hashes whatever the deploy record claims, exactly as `mgr status` does, so it
+    // inherits that command's budget rather than the fast one its other checks would suggest.
+    T_NORMAL,
+)
+.json(JsonSupport::Stdout)
+.guide("getting-started")];
+
+/// A tool of its own rather than a leaf of `gore_config`, which is nested under `gore config` and
+/// would put this at `gore config doctor`. It also earns the place: this is the command to reach
+/// for when a mod was built and deployed and the game shows nothing, and an agent that has to find
+/// it inside another tool's subcommand list will not.
+pub const DOCTOR: GroupSpec = GroupSpec {
+    tool: "gore_doctor",
+    title: "gore doctor",
+    cli: "",
+    summary: "One read-only pass over the setup: where the game is and where that came from,               whether UE4SS is installed (item and stat overrides silently do nothing without               it), which UE4SS mods are enabled, what is deployed, what is left over from an               interrupted run, and whether the shared text catalog still matches the install.",
+    shape: GroupShape::Flat,
+    commands: DOCTOR_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
 // gore_catalog  (synthetic: the reflection + catalog pipeline)
 // ---------------------------------------------------------------------------------------------
 

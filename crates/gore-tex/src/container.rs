@@ -2952,8 +2952,21 @@ fn ensure_plain_directory_tree(path: &Path, label: &str) -> Result<()> {
 
 /// The game's IoStore override folder: containers dropped here are mounted on top
 /// of the base game (additive override; later-mounting wins).
-fn mods_dir(game_dir: &Path) -> PathBuf {
-    game_dir.join("G1R/Content/Paks/~mods")
+///
+/// Public because `gore doctor` reports what is mounted from it: the folder's name begins with a
+/// `~` precisely so it sorts last, and a diagnosis that spelled the path itself could look in a
+/// directory this crate does not deploy to and report an empty one as proof that nothing is
+/// installed.
+pub fn mods_dir(game_dir: &Path) -> PathBuf {
+    // Joined a component at a time rather than as one `"G1R/Content/Paks/~mods"` literal. Both
+    // produce the same path -- `PathBuf` compares by component, and Windows accepts either
+    // separator -- but only this one renders with the platform's separator throughout, and this
+    // path is now printed to people by `gore doctor`.
+    game_dir
+        .join("G1R")
+        .join("Content")
+        .join("Paks")
+        .join("~mods")
 }
 
 /// On-disk record of a deployed container, written next to the triplet as

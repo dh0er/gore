@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::SourceFormat;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("I/O error: {0}")]
@@ -78,6 +80,18 @@ pub enum OggError {
     Empty,
     #[error("truncated Ogg page at byte {offset}")]
     Truncated { offset: usize },
+    /// The payload is not an Ogg at all, as opposed to an Ogg that goes wrong partway through.
+    ///
+    /// Kept apart from [`Self::Capture`] because the two failures need different answers. A byte
+    /// offset helps someone whose stream started as an Ogg; at byte zero it told a voice actor
+    /// holding a WAV only that a term she had never met was missing.
+    #[error(
+        "{} — voice archives hold Ogg/Vorbis, the codec of every recording the game ships (mono, \
+         48 kHz). Convert it first: '{}'",
+        .format.describe(),
+        .format.ffmpeg_command()
+    )]
+    NotOgg { format: SourceFormat },
     #[error("invalid Ogg capture pattern at byte {offset}")]
     Capture { offset: usize },
     #[error("unsupported Ogg page version {version} at byte {offset}")]

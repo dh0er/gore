@@ -204,6 +204,16 @@ enum Commands {
         #[command(subcommand)]
         action: GuideAction,
     },
+    /// Diagnose the setup: what is installed, what is deployed, and what is wrong with it
+    Doctor {
+        /// Game install root (the folder containing G1R/). Falls back to the configured
+        /// game path, then Steam auto-detect
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Emit one JSON document instead of the human-readable report
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,6 +301,18 @@ enum ModAction {
 
 #[derive(Subcommand)]
 enum AudioAction {
+    /// List the .bank files the configured install carries, with each one's sample count
+    Banks {
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Emit one JSON document instead of the human-readable table
+        #[arg(long)]
+        json: bool,
+        /// Override the bank encryption key (defaults to the Gothic 1 Remake key)
+        #[arg(long)]
+        key: Option<String>,
+    },
     /// List a bank's samples (name, codec, sample rate, channels, duration)
     List {
         /// Path to a .bank file
@@ -495,6 +517,7 @@ fn run_cli() {
         Commands::Asset { action } => cmd::asset::run(action),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
+            AudioAction::Banks { game, json, key } => cmd::audio::banks(game, json, key),
             AudioAction::List {
                 bank,
                 filter,
@@ -553,6 +576,7 @@ fn run_cli() {
             GuideAction::Search { query, limit } => cmd::guide::search(&query, limit),
             GuideAction::Html { out, repo_ref } => cmd::guide::html_file(out, &repo_ref),
         },
+        Commands::Doctor { game, json } => cmd::doctor::run(game, json),
     };
     if let Err(e) = result {
         eprintln!("error: {e:#}");

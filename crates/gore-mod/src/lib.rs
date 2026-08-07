@@ -3798,6 +3798,18 @@ fn record_path(root: &Path) -> PathBuf {
     record_root(root).join(RECORD_NAME)
 }
 
+/// Where this install's deploy record lives, for a read-only diagnosis that has to name the file
+/// it is reporting on (`gore doctor`).
+///
+/// Exposed rather than reconstructed by the caller: the record's name and the normalization of the
+/// root are the two things a second spelling would get wrong, and a diagnosis that looked for the
+/// record somewhere other than where deploy writes it would report "nothing is deployed" about a
+/// live deployment. Reading the record itself stays private — [`mgr::status::status`] is the
+/// supported way to ask what state it describes.
+pub fn deploy_record_path(root: &Path) -> PathBuf {
+    record_path(root)
+}
+
 fn install_compile_state_detail(state: &gore_as::compile::InstallCompileStateProbe) -> String {
     use gore_as::compile::InstallCompileStateDisposition;
 

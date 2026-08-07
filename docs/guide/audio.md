@@ -4,10 +4,78 @@ The game's sounds and music live in encrypted FMOD `.bank` files at
 `$GAME\G1R\Content\FMOD\Desktop\*.bank`. `gore audio` reads and replaces
 samples in pure Rust — no FMOD installation or third-party tool is needed.
 
-Every subcommand wants a `--bank` path, and none of them will find one for you:
-there is no command that lists the banks an install has. That directory is the
-list — ten files, of which four carry samples (`SFX.bank`, `Music.bank`,
-`VO.bank`, `CINEMATICS.bank`). The other six are explained below.
+Every other subcommand wants a `--bank` path. `gore audio banks` is where you
+get one.
+
+## The banks an install has
+
+```powershell
+gore audio banks          # every .bank file, one row each
+gore audio banks --json   # the same answer as one JSON document
+```
+
+It takes no path. It resolves the configured install — the same `--game`
+fallback every other command uses — and describes
+`G1R\Content\FMOD\Desktop`. That is the same directory a bundle resolves a bare
+bank name against, so a bank listed here and a bank a bundle names cannot turn
+out to be two different files.
+
+Run against BuildID 24539464 it prints ten rows:
+
+```
+FMOD banks: 10 in D:\…\Gothic 1 Remake\G1R\Content\FMOD\Desktop (4 carry samples, 7443 samples in total)
+SAMPLES  CODEC     BANK (pass this whole path as --bank)
+     49  Vorbis    D:\…\Desktop\CINEMATICS.bank
+      —  —         D:\…\Desktop\Master.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\Master.strings.bank  [no sample data: nothing here to list, extract or replace]
+    174  Vorbis    D:\…\Desktop\Music.bank
+      —  —         D:\…\Desktop\Music_NotDemo.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\Music_NyrasPrologue.bank  [no sample data: nothing here to list, extract or replace]
+   7218  Vorbis    D:\…\Desktop\SFX.bank
+      —  —         D:\…\Desktop\SFX_NotDemo.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\SFX_NyrasPrologue.bank  [no sample data: nothing here to list, extract or replace]
+      2  Vorbis    D:\…\Desktop\VO.bank
+```
+
+The third column is the whole path on purpose: it is the string the next call's
+`--bank` wants, and assembling it by hand from a directory printed once at the
+top is the step this command exists to remove. (The paths are shortened here to
+fit the page; the command prints each one in full.)
+
+Six of the ten rows carry no samples and are printed anyway. A listing that
+showed four files while claiming to describe the directory would send you back
+to searching the filesystem, which is where you started; what those six are is
+under [Banks with no samples](#banks-with-no-samples).
+
+The listing is never truncated — the directory holds ten files, so a bound
+could only hide something — and it is cheap, because it decrypts each bank's
+60-byte FSB5 header rather than the bank. The FSB5 cipher is position-indexed,
+so a block's header decrypts on its own without the 247 MB behind it. Measured
+once on one machine from an unoptimized build: 0.21 s to describe all ten banks
+(about 520 MB of file), against 2.49 s for a single `audio list --max 0` of
+`SFX.bank`, which decrypts it in full.
+
+A bank that has been replaced into carries a second FSB5 sub-bank, and the row
+says so. The install above was pristine, so this row is the shape the code emits
+— pinned by a test that injects into a fixture bank and reads the listing back —
+rather than something that run produced:
+
+```
+   7218  Vorbis    D:\…\Desktop\SFX.bank  [injected — `gore audio restore` puts the shipped bank back]
+```
+
+The marker is read out of the bank's own wrapper rather than from a record this
+toolkit keeps, so it stays true across a reinstall of the tools. It does not say
+*which* samples were replaced — `audio list` marks those individually.
+
+`--json` mirrors `list --json`. The path is under `bank`, the same key `list`
+uses, so it can be handed straight back as the next call's `--bank`; each entry
+also carries `name`, `carries_samples`, `sample_count`, `codec`, `sub_banks` and
+`injected`, under a document-level `directory`, `bank_count`,
+`with_samples_count` and `sample_count`. A file that cannot be read at all is
+still a row, carrying an `error` instead of a count: one damaged bank must not
+cost you the other nine. Passing the wrong `--key` puts every sample-carrying
+bank in exactly that state, and the error names the key as the thing to suspect.
 
 ## Inspect a bank
 
@@ -53,6 +121,8 @@ ask "how many match?".
 "nothing found" when the truth is "wrong case". It folds case exactly the way
 `gore voice list --filter` does.
 
+### Banks with no samples
+
 Not every bank carries samples. `Master.bank` holds only the mixer and its
 buses, `Master.strings.bank` only the string table, and `Music_NotDemo.bank`,
 `Music_NyrasPrologue.bank`, `SFX_NotDemo.bank` and `SFX_NyrasPrologue.bank` are
@@ -61,8 +131,10 @@ rather than calling it damaged — they are intact, there is simply nothing in
 them to extract or replace. It still says it as a failure: the command writes
 `error: decoding bank: bank carries no sample data …` to stderr and exits 1,
 and the `gore_audio` MCP tool flags the result as an error. A script that walks
-all ten banks has to expect that; the samples themselves are in `SFX.bank`,
-`Music.bank`, `VO.bank` and `CINEMATICS.bank`.
+all ten banks has to expect that — or ask
+[`gore audio banks`](#the-banks-an-install-has) instead, which is the one
+command that describes these six as rows rather than as failures. The samples
+themselves are in `SFX.bank`, `Music.bank`, `VO.bank` and `CINEMATICS.bank`.
 
 ## Extract
 
@@ -236,21 +308,24 @@ default, or to `-o`.
 
 Every subcommand that reads bank content accepts `--key` to override the bank
 encryption key. It defaults to the Gothic 1 Remake key, so you normally never
-pass it.
+pass it. A wrong one is visible rather than silent: every field `banks` reports
+comes out of the encrypted header, so it checks the decrypted `FSB5` magic
+before printing a number and names the key when that check fails.
 
 ## Flag summary
 
 | Flag | Commands | Meaning |
 |---|---|---|
-| `--bank <PATH>` | all | The `.bank` file to read or modify. |
-| `--json` | `list` | One JSON document instead of the human-readable table. |
+| `--bank <PATH>` | all but `banks` | The `.bank` file to read or modify. `banks` is where you get the path. |
+| `--game <PATH>` | `banks` | Game install root (the folder containing `G1R/`). Defaults to the configured game path, then Steam auto-detect. |
+| `--json` | `list`, `banks` | One JSON document instead of the human-readable table. |
 | `--filter <TEXT>` | `list`, `extract` | Keep only sample names containing this substring, case-insensitive. |
 | `--max <N>` | `list` | Max samples to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
 | `-o, --out <PATH>` | `extract`, `replace`, `export-patch`, `apply-patch` | Output dir (`extract`), output bank (`replace`, `apply-patch`), or output zip (`export-patch`). |
 | `--sample <NAME>` | `extract` | One sample name, or `all` (default). |
 | `--map <PATH>` | `replace`, `export-patch` | `{ "SampleName": "new.wav" }` JSON; WAV paths relative to it. |
 | `--patch <PATH>` | `apply-patch` | Patch zip produced by `export-patch`. |
-| `--key <KEY>` | `list`, `extract`, `replace`, `apply-patch` | Override the bank encryption key. |
+| `--key <KEY>` | `banks`, `list`, `extract`, `replace`, `apply-patch` | Override the bank encryption key. |
 
 ## Related
 

@@ -625,6 +625,7 @@ pub const T_COMPILE: u64 = 2700;
 /// install, then the deeper script tooling.
 pub const GROUPS: &[GroupSpec] = &[
     groups::core::CONFIG,
+    groups::core::DOCTOR,
     groups::core::CATALOG,
     groups::core::LOCATION,
     groups::core::PROJECT,
@@ -642,7 +643,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 82;
+pub const EXPECTED_LEAF_COUNT: usize = 84;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -661,7 +662,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 12);
+        assert_eq!(GROUPS.len(), 13);
     }
 
     #[test]

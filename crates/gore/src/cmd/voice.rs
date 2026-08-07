@@ -77,7 +77,7 @@ pub enum VoiceAction {
         /// Full path for the new entry inside the archive
         #[arg(long, value_name = "ARCHIVE_PATH")]
         path: String,
-        /// Ogg/Vorbis or Ogg/Opus file to add
+        /// Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
         #[arg(long)]
         ogg: PathBuf,
         /// New output ZIP; must not already exist
@@ -91,7 +91,7 @@ pub enum VoiceAction {
         archive: PathBuf,
         #[command(flatten)]
         selector: VoiceSelector,
-        /// Ogg/Vorbis or Ogg/Opus replacement file
+        /// Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
         #[arg(long)]
         ogg: PathBuf,
         /// New output ZIP; must not already exist

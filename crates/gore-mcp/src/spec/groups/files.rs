@@ -147,6 +147,22 @@ const AUDIO_KEY: ArgSpec = ArgSpec::new(
 )
 .with_default("the built-in Gothic 1 Remake studio key");
 
+/// `banks` is the one `audio` command that takes no `--bank`, because it is where a `--bank` comes
+/// from: it resolves the configured install and describes its FMOD directory. Exposing `game` here
+/// matters for the same reason it does on `texture` — an agent handed a path by the caller must be
+/// able to describe that install rather than the configured one.
+const AUDIO_BANKS_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game root (the folder containing G1R/)",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+    AUDIO_KEY,
+];
+
 /// `list` is bounded by `--max` in the CLI itself, which is what keeps `SFX.bank`'s 7,218 samples
 /// from being clipped mid-line into a result whose back half is simply absent. The bound is only
 /// useful if an agent can move it, so both narrowing flags are exposed here.
@@ -233,6 +249,15 @@ const AUDIO_APPLY_PATCH_ARGS: &[ArgSpec] = &[
 ];
 
 const AUDIO_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "banks",
+        "List the .bank files the configured install carries, with each one's sample count",
+        AUDIO_BANKS_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("audio"),
     CommandSpec::new(
         "list",
         "List a bank's samples (name, codec, sample rate, channels, duration)",
@@ -404,7 +429,13 @@ const VOICE_ADD_ARGS: &[ArgSpec] = &[
         "Full path for the new entry inside the archive",
         true,
     ),
-    ArgSpec::new("ogg", Long("ogg"), Path, "Ogg/Vorbis or Ogg/Opus file to add", true),
+    ArgSpec::new(
+        "ogg",
+        Long("ogg"),
+        Path,
+        "Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a          libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        true,
+    ),
     VOICE_OUT_ZIP,
 ];
 
@@ -412,7 +443,13 @@ const VOICE_REPLACE_ARGS: &[ArgSpec] = &[
     VOICE_ARCHIVE,
     VOICE_BASENAME,
     VOICE_SELECTOR_PATH,
-    ArgSpec::new("ogg", Long("ogg"), Path, "Ogg/Vorbis or Ogg/Opus replacement file", true),
+    ArgSpec::new(
+        "ogg",
+        Long("ogg"),
+        Path,
+        "Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav          -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        true,
+    ),
     VOICE_OUT_ZIP,
 ];
 
@@ -509,7 +546,7 @@ mod tests {
     #[test]
     fn the_group_sizes_match_the_cli() {
         assert_eq!(LOC.commands.len(), 4);
-        assert_eq!(AUDIO.commands.len(), 6);
+        assert_eq!(AUDIO.commands.len(), 7);
         assert_eq!(VOICE.commands.len(), 6);
     }
 

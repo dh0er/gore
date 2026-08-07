@@ -98,6 +98,11 @@ fn description() -> String {
          Start with `search`; it ranks individual sections, so the follow-up `read` stays small. \
          Reading a whole page is fine for short ones but some run to several hundred lines; those \
          come back in parts, each naming what the other parts hold.\n\n\
+         Describe the problem in the words you would use to report it — \"deployed but nothing \
+         changed in game\" ranks the sections about exactly that — rather than guessing which term \
+         the page uses. Ranking prefers the guide unless the query is written in the reference's \
+         own vocabulary, so name what you want (a receipt, a seal, a USMAP generation) when the \
+         answer you need is a contract rather than an instruction.\n\n\
          Guide ({} pages) — how to mod the game: {}.\n\n\
          Reference ({} pages) — the contracts and invariants behind those commands. Reach for \
          these when a command refuses something and the guide does not say why: {}.",
@@ -649,6 +654,129 @@ mod tests {
         let result = call_with(json!({ "action": "read", "page": "../../../etc/passwd" }));
         assert_eq!(result["isError"], json!(true));
         assert!(text_of(&result).contains("no guide page"));
+    }
+
+    /// The hits a search rendered, in order, as `(kind, "page#anchor")` — parsed back out of the
+    /// text, because the text is the whole of what the model is handed.
+    fn hits_of(query: &str) -> Vec<(String, String)> {
+        let result = call_with(json!({ "action": "search", "query": query }));
+        assert_eq!(result["isError"], json!(false), "{}", text_of(&result));
+        let hits: Vec<(String, String)> = text_of(&result)
+            .lines()
+            .filter_map(|line| line.strip_prefix('['))
+            .filter_map(|line| {
+                let (kind, rest) = line.split_once("] ")?;
+                // A heading may itself contain " — ", so the first one ends the location.
+                let (place, _) = rest.split_once(" — ")?;
+                Some((kind.to_string(), place.to_string()))
+            })
+            .collect();
+        // Every caller below reads the first five. Saying so here beats an index panic that names
+        // a slice range instead of the query that came back short.
+        assert!(
+            hits.len() >= 5,
+            "{query:?} returned only {} hit(s); the ranking assertions below need five",
+            hits.len()
+        );
+        hits
+    }
+
+    fn places(hits: &[(String, String)]) -> Vec<&str> {
+        hits.iter().map(|(_, place)| place.as_str()).collect()
+    }
+
+    #[test]
+    fn the_symptom_that_sent_a_tester_to_the_table_of_contents_now_answers_him() {
+        // Typed verbatim, the way he said it. What came back was "Mod Studio", "Mod Studio voice
+        // authoring internals", "Cooked DataAsset internals" and "Mod Studio project snapshot
+        // internals" — four page titles, three of them maintainer internals — and the only way he
+        // got anywhere was reading `list` by hand and guessing from headings. The guide had the
+        // answer the whole time and had given it an honest title.
+        let hits = hits_of("deployed but nothing changed in game, mod has no effect");
+        let places = places(&hits);
+
+        // `textures#what-is-proven-and-by-what` is the section that says a deploy is verified by
+        // SHA-256 and by nothing else, so a clean deploy never means anything changed on screen.
+        // `bundles` carries the same heading and follows it; both were observed in the top three.
+        assert!(
+            places[..3].contains(&"textures#what-is-proven-and-by-what"),
+            "the section that explains an invisible deploy is not in the top three: {places:?}"
+        );
+        assert!(
+            hits[..3].iter().all(|(kind, _)| kind == "guide"),
+            "a beginner's phrasing must not lead with internals: {hits:?}"
+        );
+        // The four he actually got. None of them answers this question, and none of them should be
+        // anywhere in the result now.
+        for wrong in [
+            "mod-studio#mod-studio",
+            "studio-voice#mod-studio-voice-authoring-internals",
+            "dataassets-internals#cooked-dataasset-internals",
+            "studio-project-archive#mod-studio-project-snapshot-internals",
+        ] {
+            assert!(!places.contains(&wrong), "{wrong} came back again: {places:?}");
+        }
+    }
+
+    #[test]
+    fn a_symptom_in_plain_words_finds_the_section_written_for_it() {
+        // The corpus is written in terms of mechanisms and these queries are written in terms of
+        // symptoms, which is the mismatch the tester ran into. Each section named below is titled
+        // for exactly the symptom beside it, and each was reachable only by browsing before.
+        //
+        // Asserted as "in the top five of the eight returned, with the right page in the top
+        // three" rather than at a fixed position. The guide is edited constantly, and twice while
+        // this was being written a newly added section took a top slot on one of these queries by
+        // genuinely answering it — that is the ranking working, not a regression, and a test
+        // pinned to an exact position would call it a failure.
+        for (query, answer) in [
+            (
+                "I replaced the voice line but the character still says the old one",
+                "voice#deployment-reality-check",
+            ),
+            (
+                "I edited the german text but the dialog still shows the old line",
+                "text-and-dialogs#getting-it-wrong-reports-success",
+            ),
+            (
+                "changed a texture but the game looks the same",
+                "textures#what-is-proven-and-by-what",
+            ),
+        ] {
+            let hits = hits_of(query);
+            let places = places(&hits);
+            let page = answer.split('#').next().expect("an answer names its page");
+
+            assert!(
+                places[..5].contains(&answer),
+                "{query:?} does not reach {answer} in its top five: {places:?}"
+            );
+            assert!(
+                places[..3].iter().any(|place| place.starts_with(&format!("{page}#"))),
+                "{query:?} does not put {page} in its top three at all: {places:?}"
+            );
+            assert!(
+                hits[..3].iter().all(|(kind, _)| kind == "guide"),
+                "{query:?} leads with internals: {hits:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_internals_question_still_reaches_the_reference() {
+        // The constraint on the demotion. The reference is the right answer to some questions and
+        // must stay findable by the person who needs it — the preference for the guide is switched
+        // off by the query's own vocabulary, not by anything the caller has to know to type.
+        for query in [
+            "receipt seal mismatch invariant usmap generation",
+            "what does a receipt actually guarantee",
+        ] {
+            let hits = hits_of(query);
+            assert!(
+                hits[..3].iter().any(|(kind, _)| kind == "reference"),
+                "{query:?} returned no reference section in its top three: {hits:?}"
+            );
+        }
     }
 
     #[test]

@@ -68,6 +68,53 @@ Resolution precedence for every command that needs the install:
 The value is stored in a shared `config.json` (`gore config path`) that the GUI
 apps read too, so the install is configured in exactly one place.
 
+## Check the setup
+
+```powershell
+gore doctor
+```
+
+One read-only pass over everything the rest of this guide assumes. Nine checks,
+one line each: where the install is and which of the three sources above
+answered, whether that folder holds Gothic 1 Remake, whether [UE4SS](#ue4ss) is
+present, which UE4SS mods are enabled, what is deployed, what an interrupted run
+left behind, whether the executable is running, and whether the shared
+localized-text catalog still describes the installed `.lcache`.
+
+Any line that is not `ok` carries a `fix:` line. From a real run, abridged:
+
+```
+ok      game path     D:\SteamLibrary\steamapps\common\Gothic 1 Remake (source: config)
+ok      UE4SS         installed at …\G1R\Binaries\Win64\ue4ss
+ok      UE4SS mods    22 mod folder(s), 7 enabled
+ok      deployment    nothing is deployed (no deploy record in the install)
+problem loc catalog   43851 ids in 19 language(s), but stale: extracted from 37081808 bytes and the installed cache is now 37093440
+                      fix: … Run 'gore loc extract' so the shared catalog describes the file that is actually installed
+
+9 check(s): 8 ok, 0 note, 1 problem, 0 skipped
+```
+
+| Verdict | Meaning |
+|---|---|
+| `ok` | checked, nothing to do |
+| `note` | worth knowing, not a fault — the executable is running, the catalog was extracted elsewhere |
+| `problem` | a reason a mod would silently do nothing, or a mess somebody has to clean up |
+| `skipped` | not answerable, because something this check reads is absent; whatever reported that absence is on a line above |
+
+**Exit code 0 either way.** A finding is not the command failing, and this is the
+command you reach for once something has already gone wrong — no wrapper should
+read its exit code as "this is broken too". To act on the findings from a
+script, use `gore doctor --json`: each check carries a stable `id` and its own
+`verdict`, and the top level carries `ok` / `note` / `problem` / `skipped`
+counts.
+
+Nothing here writes, creates or removes anything. The `deployment` check hashes
+the files the deploy record claims, exactly as `gore mgr status` does, which
+makes it the slowest of the nine.
+
+What each check reads — and therefore what it can and cannot prove — is in the
+[CLI reference](cli-reference.md#doctor).
+
 ## Which tool for which job
 
 | You want to… | Use |
@@ -129,7 +176,8 @@ and `gore mod build` produce a well-formed mod either way, and `gore mod deploy`
 creates `ue4ss\Mods\` itself when it is missing — so a deploy that reports
 success means the files are in place, never that anything will run them.
 
-To find out whether you already have it, look at this folder:
+`gore doctor` answers whether you have it — the `UE4SS` line — along with which
+mods in it are enabled. To look for yourself:
 
 ```powershell
 ls "$GAME\G1R\Binaries\Win64\ue4ss"
@@ -195,6 +243,11 @@ gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 Start the game. The value is applied a few seconds in rather than at the moment
 of launch, and `UE4SS.log` is where you see it happen — see [UE4SS](#ue4ss)
 above. Details and the full override format: [Item & stat values](items.md).
+
+If apples still cost what they did, run [`gore doctor`](#check-the-setup) before
+anything else. Nothing in the build or the deploy would have told you that UE4SS
+is missing, that another enabled mod is setting the same value, or that the
+folder has no `enabled.txt`; that one command checks all three.
 
 ## Next steps
 

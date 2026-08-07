@@ -23,6 +23,100 @@ pub mod vorbis;
 pub mod test_fixture {
     use super::{build_fsb5_pcm16_multi, fsb5_encrypt, is_pristine_bank, Pcm16Sample};
 
+    /// How SNDH hangs off BNKI. `parse_bank` has an arm for each and they read the size field from
+    /// different offsets; all ten shipped banks take the nested one, so a fixture that only emits
+    /// `Direct` leaves the arm the game actually uses untested.
+    #[derive(Clone, Copy)]
+    pub enum Sndh {
+        /// A direct sub-chunk of BNKI.
+        Direct,
+        /// One level down, inside a nested `LIST`, the way the shipped banks are written.
+        NestedInList,
+    }
+
+    /// A minimal RIFF/`FEV ` bank whose SNDH body is exactly `body`, followed by `trailing_snd` as
+    /// the payload of a top-level `SND ` chunk — empty for the sample-free banks, which have no
+    /// `SND ` chunk at all. Carries only the wrapper `parse_bank` actually walks — FMT (bank
+    /// version at absolute 0x14), the top-level LIST holding PROJ/BNKI, then SNDH — and backpatches
+    /// the RIFF size so the whole-file length field is honest. The real game banks are never
+    /// vendored here; the chunk layout is the whole of what these tests need.
+    pub fn bank_with_sndh(body: &[u8], sndh: Sndh, trailing_snd: &[u8]) -> Vec<u8> {
+        let u32b = |v: u32| v.to_le_bytes();
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
+        b.extend_from_slice(b"FEV ");
+        b.extend_from_slice(b"FMT ");
+        let fmt_size_pos = b.len(); // 0x10
+        b.extend_from_slice(&u32b(0));
+        assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
+        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
+        b.extend_from_slice(&u32b(0)); // filler
+        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
+        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
+
+        b.extend_from_slice(b"LIST");
+        let list_size_pos = b.len();
+        b.extend_from_slice(&u32b(0));
+        let list_body = b.len();
+        b.extend_from_slice(b"PROJ");
+        // The sub-chunk walk begins right after PROJ framing chunks as [fourcc][u32 size][body],
+        // so BNKI is the first such header and needs a size of its own.
+        b.extend_from_slice(b"BNKI");
+        b.extend_from_slice(&u32b(0)); // empty BNKI body
+        match sndh {
+            Sndh::Direct => {
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+            Sndh::NestedInList => {
+                // [LIST][size][list type][SNDH][size][body]: the walk recognises the nested chunk
+                // by the fourcc four bytes into the LIST body and takes the body twelve bytes in.
+                b.extend_from_slice(b"LIST");
+                b.extend_from_slice(&u32b((0x0C + body.len()) as u32));
+                b.extend_from_slice(b"MODS");
+                b.extend_from_slice(b"SNDH");
+                b.extend_from_slice(&u32b(body.len() as u32));
+                b.extend_from_slice(body);
+            }
+        }
+        let list_size = (b.len() - list_body) as u32;
+        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
+
+        // A bank that carries samples keeps them in a top-level `SND ` chunk behind the LIST, so
+        // its LIST is not the last chunk in the file. A sample-free bank ends with the LIST.
+        if !trailing_snd.is_empty() {
+            b.extend_from_slice(b"SND ");
+            b.extend_from_slice(&u32b(trailing_snd.len() as u32));
+            b.extend_from_slice(trailing_snd);
+        }
+
+        let riff = (b.len() - 8) as u32;
+        b[4..8].copy_from_slice(&u32b(riff));
+        b
+    }
+
+    /// The sample-free shape with SNDH directly under BNKI.
+    pub fn bank_with_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::Direct, &[])
+    }
+
+    /// The sample-free shape with SNDH nested in a `LIST`, as every shipped bank writes it.
+    pub fn bank_with_nested_sndh_body(body: &[u8]) -> Vec<u8> {
+        bank_with_sndh(body, Sndh::NestedInList, &[])
+    }
+
+    /// A bank that carries no sample data at all, written the way the shipped ones are.
+    ///
+    /// Six of the ten banks a Gothic 1 Remake install ships are this shape — `Master.bank`,
+    /// `Master.strings.bank` and the four ~506-byte placeholders — so any listing of that directory
+    /// is mostly these. Downstream tests need one because "describe a bank that has nothing in it"
+    /// is a case a pristine PCM16 fixture cannot produce.
+    pub fn sample_free_bank() -> Vec<u8> {
+        bank_with_nested_sndh_body(&[])
+    }
+
     /// `count` mono PCM16 samples named `{prefix}{index:02}`, one frame each.
     ///
     /// The names are what a `--filter` is tested against and the frame is what makes the bank
@@ -184,7 +278,35 @@ pub fn is_pristine_bank(bank: &[u8]) -> bool {
     parse_bank(bank).map(|e| e.len() == 1).unwrap_or(false)
 }
 
+/// What a bank's wrapper says about its sample data, before a single byte has been decrypted.
+///
+/// The split exists because "intact, and carries nothing" and "damaged" are different answers that
+/// [`parse_bank`] has to collapse into one — it returns sub-banks, and a bank with none leaves its
+/// caller nothing to work with either way. A listing of a whole directory does have somewhere to
+/// put the distinction: six of the ten shipped banks are sample-free, and describing them as ten
+/// failures would be describing the install wrongly.
+enum BankShape {
+    /// The wrapper points at these FSB5 sub-banks.
+    Entries(Vec<BankEntry>),
+    /// An intact wrapper with no sample data behind it: a placeholder, or a metadata-only bank.
+    SampleFree,
+}
+
 pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
+    match bank_shape(b)? {
+        BankShape::Entries(entries) => Ok(entries),
+        // Not a new verdict: this is the message the sample-free branch has always returned, kept
+        // here so `parse_bank`'s callers see exactly what they saw before the shape was split out.
+        BankShape::SampleFree => Err(
+            "bank carries no sample data (its SNDH chunk is empty): a placeholder or a \
+             metadata-only bank such as Master.bank or *.strings.bank, not a damaged one — the \
+             samples are in SFX.bank, Music.bank, VO.bank and CINEMATICS.bank"
+                .into(),
+        ),
+    }
+}
+
+fn bank_shape(b: &[u8]) -> Result<BankShape, String> {
     if b.len() < 0x18 || &b[0x00..0x04] != b"RIFF" || &b[0x08..0x0C] != b"FEV " {
         return Err("not a RIFF/FEV bank".into());
     }
@@ -273,12 +395,7 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
         && b.len() - 8 == u32_le(b, 0x04) as usize
         && b.len() - list_body == u32_le(b, list_body - 4) as usize;
     if sample_free {
-        return Err(
-            "bank carries no sample data (its SNDH chunk is empty): a placeholder or a \
-             metadata-only bank such as Master.bank or *.strings.bank, not a damaged one — the \
-             samples are in SFX.bank, Music.bank, VO.bank and CINEMATICS.bank"
-                .into(),
-        );
+        return Ok(BankShape::SampleFree);
     }
     // 1..=3 bytes cannot hold SNDH's mandatory 4-byte chunk-version prefix, so the body is torn.
     if sndh_size < 4 {
@@ -305,7 +422,7 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
             fsb5_size: s,
         });
     }
-    Ok(out)
+    Ok(BankShape::Entries(out))
 }
 
 // ---------- FSB5 container ----------
@@ -571,6 +688,82 @@ pub fn decrypt_fsb0(bank: &[u8], key: &[u8]) -> Result<(Vec<u8>, Fsb5), String> 
 /// Decrypt + parse FSB5 sub-bank #0 (the audio the bank shipped with).
 pub fn bank_fsb0(bank: &[u8], key: &[u8]) -> Result<Fsb5, String> {
     decrypt_fsb0(bank, key).map(|(_, f)| f)
+}
+
+/// Bytes of an FSB5 block ahead of its per-sample header table, and therefore the most a reader
+/// that only wants the block's own counts ever has to look at. [`parse_fsb5`] refuses anything
+/// shorter, so both readers agree on what "the header" is.
+const FSB5_HEADER_LEN: usize = 0x3C;
+
+/// What one bank holds, read without decrypting its audio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BankSummary {
+    /// The bank carries sample data.
+    Samples {
+        /// FSB5 sub-banks in the wrapper. One is a bank as it shipped; more means
+        /// [`replace_samples`] has appended to it.
+        sub_banks: usize,
+        /// Waveforms in sub-bank 0 — the audio the bank shipped with, which is also what
+        /// [`read_bank`] lists, so the two never disagree about how many there are.
+        sample_count: usize,
+        /// The codec of that shipped audio.
+        codec: Codec,
+    },
+    /// An intact bank with nothing in it to list, extract or replace: `Master.bank`,
+    /// `Master.strings.bank`, or one of the four ~506-byte placeholders.
+    SampleFree,
+}
+
+/// Describe a bank — how many samples, in what codec — by decrypting only its FSB5 header.
+///
+/// This exists because describing a directory must not cost what reading one bank costs.
+/// [`read_bank`] and [`bank_fsb0`] decrypt every byte of every sub-bank, which is 247 MB for
+/// `SFX.bank`'s FSB5 alone and roughly 520 MB across the ten banks a Gothic 1 Remake install
+/// carries — an unreasonable price for a listing whose whole job is to hand back a path.
+///
+/// Reading a prefix on its own is sound because the cipher is position-indexed:
+/// `plain[i] = reverse_bits(cipher[i]) ^ key[i % key.len()]`, with `i` counted from the start of
+/// the FSB5 block, so byte `i` decrypts without reference to any byte after it (see
+/// [`fsb5_decrypt`]). The three facts a summary needs — the magic, the sample count at 0x08 and
+/// the codec at 0x18 — all live in the first [`FSB5_HEADER_LEN`] bytes, ahead of the per-sample
+/// header table that makes a full parse proportional to the bank.
+///
+/// A sample-free bank is [`BankSummary::SampleFree`] rather than an error: it is a file the install
+/// really has, and a directory listing that dropped six of ten files while claiming to describe the
+/// directory would mislead worse than no listing at all.
+pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
+    let entries = match bank_shape(bank)? {
+        BankShape::SampleFree => return Ok(BankSummary::SampleFree),
+        BankShape::Entries(entries) => entries,
+    };
+    // Sub-bank 0, for the same reason `read_bank` names it the bank's own audio: an injection
+    // appends sub-banks and repoints into them without ever renaming or dropping a waveform, so
+    // sub-bank 0 is what "how many samples does this bank have" means in every other subcommand.
+    let first = *entries.first().ok_or("bank has no FSB5")?;
+    let end = first
+        .fsb5_offset
+        .checked_add(FSB5_HEADER_LEN)
+        .ok_or("FSB5 offset out of range (corrupt bank)")?;
+    let mut header = bank
+        .get(first.fsb5_offset..end)
+        .ok_or("FSB5 header runs past the end of the file (truncated bank)")?
+        .to_vec();
+    fsb5_decrypt(&mut header, key);
+    if &header[0..4] != b"FSB5" {
+        // The realistic cause by far, since every other field is read from this same block: a key
+        // that is not the one the bank was encrypted with turns the header into noise, and a noisy
+        // 0x08 would otherwise be printed as a sample count.
+        return Err(format!(
+            "decrypting the FSB5 header produced {:02x?}, not the FSB5 magic: the key is not the \
+             one this bank was encrypted with, or the bank is damaged",
+            &header[0..4]
+        ));
+    }
+    Ok(BankSummary::Samples {
+        sub_banks: entries.len(),
+        sample_count: u32_le(&header, 0x08) as usize,
+        codec: Codec::from_u32(u32_le(&header, 0x18)),
+    })
 }
 
 /// Where one waveform's audio is taken from: a sub-bank index and a subsound within it.
@@ -1232,6 +1425,9 @@ pub fn inject_fsb5(
 
 #[cfg(test)]
 mod tests {
+    use super::test_fixture::{
+        bank_with_nested_sndh_body, bank_with_sndh, bank_with_sndh_body, Sndh,
+    };
     use super::*;
 
     #[test]
@@ -1310,90 +1506,6 @@ mod tests {
         let fsb = build_fsb5_pcm16("hi", 88200, 2, &[0i16; 128]).unwrap();
         assert!(fsb.len() > 0x4A);
         assert!(parse_fsb5(&fsb[..0x4A]).is_err());
-    }
-
-    /// How SNDH hangs off BNKI. `parse_bank` has an arm for each and they read the size field from
-    /// different offsets; all ten shipped banks take the nested one, so a fixture that only emits
-    /// `Direct` leaves the arm the game actually uses untested.
-    #[derive(Clone, Copy)]
-    enum Sndh {
-        /// A direct sub-chunk of BNKI.
-        Direct,
-        /// One level down, inside a nested `LIST`, the way the shipped banks are written.
-        NestedInList,
-    }
-
-    /// A minimal RIFF/`FEV ` bank whose SNDH body is exactly `body`, followed by `trailing_snd` as
-    /// the payload of a top-level `SND ` chunk — empty for the sample-free banks, which have no
-    /// `SND ` chunk at all. Carries only the wrapper `parse_bank` actually walks — FMT (bank
-    /// version at absolute 0x14), the top-level LIST holding PROJ/BNKI, then SNDH — and backpatches
-    /// the RIFF size so the whole-file length field is honest. The real game banks are never
-    /// vendored here; the chunk layout is the whole of what these tests need.
-    fn bank_with_sndh(body: &[u8], sndh: Sndh, trailing_snd: &[u8]) -> Vec<u8> {
-        let u32b = |v: u32| v.to_le_bytes();
-        let mut b: Vec<u8> = Vec::new();
-        b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&u32b(0)); // riff size @0x04 (backpatched)
-        b.extend_from_slice(b"FEV ");
-        b.extend_from_slice(b"FMT ");
-        let fmt_size_pos = b.len(); // 0x10
-        b.extend_from_slice(&u32b(0));
-        assert_eq!(b.len(), 0x14, "FMT body must land at 0x14");
-        b.extend_from_slice(&u32b(0x30)); // version 0x30 (>0x28) → 8-byte SNDH entries
-        b.extend_from_slice(&u32b(0)); // filler
-        let fmt_size = (b.len() - (fmt_size_pos + 4)) as u32;
-        b[fmt_size_pos..fmt_size_pos + 4].copy_from_slice(&u32b(fmt_size));
-
-        b.extend_from_slice(b"LIST");
-        let list_size_pos = b.len();
-        b.extend_from_slice(&u32b(0));
-        let list_body = b.len();
-        b.extend_from_slice(b"PROJ");
-        // The sub-chunk walk begins right after PROJ framing chunks as [fourcc][u32 size][body],
-        // so BNKI is the first such header and needs a size of its own.
-        b.extend_from_slice(b"BNKI");
-        b.extend_from_slice(&u32b(0)); // empty BNKI body
-        match sndh {
-            Sndh::Direct => {
-                b.extend_from_slice(b"SNDH");
-                b.extend_from_slice(&u32b(body.len() as u32));
-                b.extend_from_slice(body);
-            }
-            Sndh::NestedInList => {
-                // [LIST][size][list type][SNDH][size][body]: the walk recognises the nested chunk
-                // by the fourcc four bytes into the LIST body and takes the body twelve bytes in.
-                b.extend_from_slice(b"LIST");
-                b.extend_from_slice(&u32b((0x0C + body.len()) as u32));
-                b.extend_from_slice(b"MODS");
-                b.extend_from_slice(b"SNDH");
-                b.extend_from_slice(&u32b(body.len() as u32));
-                b.extend_from_slice(body);
-            }
-        }
-        let list_size = (b.len() - list_body) as u32;
-        b[list_size_pos..list_size_pos + 4].copy_from_slice(&u32b(list_size));
-
-        // A bank that carries samples keeps them in a top-level `SND ` chunk behind the LIST, so
-        // its LIST is not the last chunk in the file. A sample-free bank ends with the LIST.
-        if !trailing_snd.is_empty() {
-            b.extend_from_slice(b"SND ");
-            b.extend_from_slice(&u32b(trailing_snd.len() as u32));
-            b.extend_from_slice(trailing_snd);
-        }
-
-        let riff = (b.len() - 8) as u32;
-        b[4..8].copy_from_slice(&u32b(riff));
-        b
-    }
-
-    /// The sample-free shape with SNDH directly under BNKI.
-    fn bank_with_sndh_body(body: &[u8]) -> Vec<u8> {
-        bank_with_sndh(body, Sndh::Direct, &[])
-    }
-
-    /// The sample-free shape with SNDH nested in a `LIST`, as every shipped bank writes it.
-    fn bank_with_nested_sndh_body(body: &[u8]) -> Vec<u8> {
-        bank_with_sndh(body, Sndh::NestedInList, &[])
     }
 
     /// Offset of the four bytes `parse_bank` reads as the SNDH size, i.e. just past the fourcc.
@@ -1633,6 +1745,87 @@ mod tests {
             u32_le(&injected, 0x04) as usize,
             injected.len() - 8,
             "the RIFF length must describe the file the injection actually wrote"
+        );
+    }
+
+    #[test]
+    fn a_bank_summary_says_what_a_full_read_would_say_about_the_count_and_the_codec() {
+        // `audio banks` prints these two numbers and `audio list` prints them again from a full
+        // decrypt of the same file. Two readers of one bank that disagreed would send someone to
+        // the wrong `--bank`, so the summary is compared against the reader it is a shortcut for
+        // rather than against a literal.
+        let bank = two_sample_bank();
+        let summary = bank_summary(&bank, GOTHIC_STUDIO_KEY).unwrap();
+        let view = read_bank(&bank, GOTHIC_STUDIO_KEY).unwrap();
+
+        assert_eq!(
+            summary,
+            BankSummary::Samples {
+                sub_banks: 1,
+                sample_count: view.samples.len(),
+                codec: view.codec(),
+            }
+        );
+        assert_eq!(view.codec(), Codec::Pcm16, "the fixture's codec has to be read, not assumed");
+    }
+
+    #[test]
+    fn decrypting_a_prefix_of_a_sub_bank_gives_the_same_bytes_as_decrypting_all_of_it() {
+        // The property that lets `bank_summary` read a header on its own, and the whole reason it
+        // is cheap: the cipher is position-indexed from the block start, so byte i does not depend
+        // on any byte after it. If this ever stopped holding, `bank_summary` would keep returning
+        // numbers — wrong ones — on every bank in the install.
+        let bank = two_sample_bank();
+        let entry = parse_bank(&bank).unwrap()[0];
+        let block = &bank[entry.fsb5_offset..entry.fsb5_offset + entry.fsb5_size];
+
+        let mut whole = block.to_vec();
+        fsb5_decrypt(&mut whole, GOTHIC_STUDIO_KEY);
+        let mut prefix = block[..FSB5_HEADER_LEN].to_vec();
+        fsb5_decrypt(&mut prefix, GOTHIC_STUDIO_KEY);
+
+        assert_eq!(prefix, whole[..FSB5_HEADER_LEN]);
+        assert_eq!(&prefix[0..4], b"FSB5", "the prefix has to be the real header, not noise");
+    }
+
+    #[test]
+    fn a_sample_free_bank_summarises_as_sample_free_rather_than_as_a_failure() {
+        // Six of the ten shipped banks are this shape. `parse_bank` reports it as an error, which
+        // is right for a caller asking for sub-banks and wrong for a listing of a directory: four
+        // rows under a heading that claims to describe ten files is a worse answer than none.
+        assert_eq!(
+            bank_summary(&test_fixture::sample_free_bank(), GOTHIC_STUDIO_KEY).unwrap(),
+            BankSummary::SampleFree
+        );
+    }
+
+    #[test]
+    fn a_summary_counts_the_sub_bank_an_injection_appended_and_still_counts_shipped_samples() {
+        // What makes `audio banks` able to say a bank has been modded without decrypting it. The
+        // sample count must stay the shipped one: an injection repoints waveforms, it never adds
+        // or renames one, so a count that grew would contradict `audio list` on the same file.
+        let injected = replace_samples(
+            &two_sample_bank(),
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_00".into(), ramp("tone", 44_100, 8))],
+        )
+        .unwrap();
+
+        assert_eq!(
+            bank_summary(&injected, GOTHIC_STUDIO_KEY).unwrap(),
+            BankSummary::Samples { sub_banks: 2, sample_count: 2, codec: Codec::Pcm16 }
+        );
+    }
+
+    #[test]
+    fn a_summary_read_with_the_wrong_key_names_the_key_instead_of_printing_a_number() {
+        // Every field a summary reports comes out of the encrypted header, so a wrong `--key` does
+        // not fail — it decodes noise. Without the magic check `audio banks` would print an
+        // arbitrary sample count and an `Unknown(…)` codec for a bank that is perfectly fine.
+        let err = bank_summary(&two_sample_bank(), b"not-the-studio-key").unwrap_err();
+        assert!(
+            err.contains("FSB5 magic") && err.contains("key"),
+            "the message must name what was read and what to suspect, got {err:?}"
         );
     }
 

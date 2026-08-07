@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use tempfile::TempDir;
 use zip::write::SimpleFileOptions;
@@ -707,6 +708,48 @@ fn add_and_replace_write_verified_new_archives_only() {
     assert_eq!(read_entry(&replaced_archive, "NPC/New.ogg"), added);
 }
 
+/// A voice actor handed `replace` the WAV her recording tool wrote and got "invalid Ogg capture
+/// pattern at byte 0": neither the format she supplied nor the one required, and no way forward.
+/// She called it the single blocker of her session. The refusal must name WAV and hand over the
+/// conversion — and still publish nothing.
+#[test]
+fn a_wav_payload_is_refused_by_name_with_a_conversion_and_publishes_nothing() {
+    let temp = TempDir::new().unwrap();
+    let input = temp.path().join("input.zip");
+    let wav = temp.path().join("recording.wav");
+    let output = temp.path().join("output.zip");
+    let original = vorbis_ogg(22_050);
+    make_archive(&input, &[("NPC/Old.ogg", &original)]);
+
+    let mut header = Vec::from(*b"RIFF");
+    header.extend_from_slice(&36u32.to_le_bytes());
+    header.extend_from_slice(b"WAVEfmt ");
+    std::fs::write(&wav, &header).unwrap();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "voice",
+            "replace",
+            "--archive",
+            input.to_str().unwrap(),
+            "--path",
+            "NPC/Old.ogg",
+            "--ogg",
+            wav.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("a WAV file (RIFF/WAVE), not an Ogg stream"))
+        .stderr(contains(
+            "ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        ))
+        .stderr(contains("capture pattern").not());
+    assert!(!output.exists());
+}
+
 #[test]
 fn invalid_ogg_error_is_preserved_and_no_output_is_published() {
     let temp = TempDir::new().unwrap();
@@ -733,7 +776,9 @@ fn invalid_ogg_error_is_preserved_and_no_output_is_published() {
         ])
         .assert()
         .failure()
-        .stderr(contains("truncated Ogg page at byte 0"));
+        // A payload no signature names still has to say what was wanted and how to get there.
+        .stderr(contains("not an Ogg stream"))
+        .stderr(contains("-c:a libvorbis"));
     assert!(!output.exists());
 }
 
@@ -884,7 +929,7 @@ fn apply_manifest_validates_later_ogg_before_publishing_any_output() {
         .assert()
         .failure()
         .stderr(contains("voice manifest edit #2"))
-        .stderr(contains("truncated Ogg page at byte 0"));
+        .stderr(contains("not an Ogg stream"));
     assert!(!output.exists());
 }
 

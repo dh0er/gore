@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::{Limits, OggError};
+use crate::{Limits, OggError, SourceFormat};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OggCodec {
@@ -92,6 +92,15 @@ pub fn validate_ogg_with_timing(data: &[u8], limits: &Limits) -> Result<OggValid
             kind: "stream bytes",
             actual: data.len(),
             limit: limits.max_ogg_bytes,
+        });
+    }
+    // A payload that does not open with the capture pattern is not a damaged Ogg, it is a different
+    // file — a WAV, nearly always, because that is what recording tools write. Answer that with the
+    // format's name and a conversion instead of the page-level offset below, which is the right
+    // answer only once a stream has already parsed as an Ogg.
+    if !data.starts_with(b"OggS") {
+        return Err(OggError::NotOgg {
+            format: SourceFormat::detect(data),
         });
     }
 
@@ -1952,6 +1961,47 @@ pub(crate) mod tests {
             validate_ogg(truncated, &Limits::default()),
             Err(OggError::Truncated { .. })
         ));
+    }
+
+    /// The reported failure: `replace` was handed the WAV a recording tool wrote and answered
+    /// "invalid Ogg capture pattern at byte 0", which named neither the format supplied nor the one
+    /// required. The message must now name both and carry the conversion.
+    #[test]
+    fn a_wav_payload_names_itself_a_wav_and_offers_the_conversion() {
+        let mut wav = Vec::from(*b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&[0u8; 64]);
+
+        let error = validate_ogg(&wav, &Limits::default()).expect_err("a WAV is not an Ogg");
+        assert_eq!(
+            error,
+            OggError::NotOgg {
+                format: SourceFormat::Wav
+            }
+        );
+        let message = error.to_string();
+        assert!(message.contains("WAV"), "{message}");
+        assert!(message.contains("Ogg/Vorbis"), "{message}");
+        assert!(message.contains("ffmpeg -i line.wav"), "{message}");
+        assert!(!message.contains("capture pattern"), "{message}");
+    }
+
+    /// The byte offset still earns its place once a payload has parsed as an Ogg: a stream that
+    /// loses the capture pattern on its second page is damaged, not the wrong format, and the
+    /// offset says where. Collapsing both cases into the WAV message would have hidden that.
+    #[test]
+    fn a_capture_pattern_lost_after_the_first_page_still_reports_its_offset() {
+        let mut data = vorbis_ogg(48_000);
+        let second_page = page_offsets(&data)[1];
+        data[second_page..second_page + 4].copy_from_slice(b"junk");
+
+        assert_eq!(
+            validate_ogg(&data, &Limits::default()),
+            Err(OggError::Capture {
+                offset: second_page
+            })
+        );
     }
 
     #[test]
