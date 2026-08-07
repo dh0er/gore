@@ -13,7 +13,7 @@ Write a `spec.json`:
 {
   "meta": { "name": "MyMod", "version": "1.0.0", "author": "you" },
   "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
-  "loc_edits": { "some_text_id": { "german": "…" } },
+  "loc_edits": { "ch1_bringlist_entry_3": { "german": "…", "german_new": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
@@ -37,6 +37,18 @@ else and names the rule, so an absolute path fails while you are still building
 instead of surviving to a deploy that was always going to reject it.
 `voice.archive` has the same shape for `G1R\Story\VoiceOver` — see
 [below](#voice-packaging-details).
+
+**`loc_edits` keys are language keys, and German has two of them.** The cache
+carries `german` (the original 1998 text) and `german_new` (the remake's
+rewrite), plus three English generations; where an id has both German keys the
+game displays `german_new` — observed once, on BuildID 24340829. That is why
+the example above writes both. An edit
+whose key a given id does not carry is **silently dropped at deploy** — the
+bundle deploys, the `.lcache` is rewritten, the `*.gore-bak` backup is taken,
+and the line in game is unchanged. Unlike `audio.bank`, `build` cannot refuse
+it, because whether a key fits an id is a property of the install's cache rather
+than of the spec. Check the id in a `gore loc export` and see
+[which language key to write](text-and-dialogs.md#which-language-key-to-write).
 
 Every section is optional; `delay_ms` may be set alongside `overrides` to defer
 the CDO patch. Each section maps to the domain guide of the same name:
