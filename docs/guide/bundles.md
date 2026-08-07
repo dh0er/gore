@@ -50,6 +50,19 @@ it, because whether a key fits an id is a property of the install's cache rather
 than of the spec. Check the id in a `gore loc export` and see
 [which language key to write](text-and-dialogs.md#which-language-key-to-write).
 
+**`overrides` class and field names are checked only if you ask.** Pass
+`--model model.json` and `build` rejects unknown classes, unknown fields and
+type mismatches before writing anything — the same check `gore gen --model`
+runs, through the same code. Without it the names go unchecked and the build
+says so on stderr. Nothing in the release zip is a model; building one is
+covered in [Catalogs & models](catalogs-and-models.md). An unchecked typo costs
+you a play session: the bundle builds, deploys, and its Lua polls once a second
+for 120 attempts before writing one "gave up" line to `UE4SS.log`.
+
+```powershell
+gore mod build --spec spec.json -o build --model model.json
+```
+
 Every section is optional; `delay_ms` may be set alongside `overrides` to defer
 the CDO patch. Each section maps to the domain guide of the same name:
 [items](items.md), [text](text-and-dialogs.md), [audio](audio.md),

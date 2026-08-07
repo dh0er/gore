@@ -5,10 +5,45 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// `gore mod build --spec spec.json --out DIR` → write the bundle dir.
-pub fn build(spec_path: PathBuf, out: PathBuf) -> Result<()> {
+pub fn build(spec_path: PathBuf, out: PathBuf, model: Option<PathBuf>) -> Result<()> {
     let json = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("reading spec '{}'", spec_path.display()))?;
     let spec: gore_mod::BuildSpec = serde_json::from_str(&json).context("parsing build spec")?;
+    // Override class/field names are the one part of a spec that nothing else checks: an unknown
+    // class produces a well-formed bundle whose Lua never resolves, and the only report of that is
+    // a "gave up" line in UE4SS.log after two minutes of retries. Validate before building, so a
+    // rejected spec never reaches write_bundle (which clears <out>/<mod-name> first).
+    if !spec.overrides.is_empty() {
+        let cfg = gore_modgen::gen::OverridesConfig {
+            meta: gore_modgen::gen::MetaConfig {
+                name: spec.meta.name.clone(),
+                delay_ms: spec.delay_ms,
+            },
+            overrides: spec.overrides.clone(),
+        };
+        match &model {
+            Some(model_path) => {
+                crate::cmd::validate_overrides_against_model(
+                    &cfg,
+                    model_path,
+                    &spec_path.display().to_string(),
+                )?;
+                eprintln!(
+                    "checked {} override(s) against '{}'",
+                    cfg.overrides.len(),
+                    model_path.display()
+                );
+            }
+            // stdout stays the bundle result so `--json`-style consumers see one clean document.
+            None => eprintln!(
+                "note: no --model, so none of the {} override class and field names were checked. \
+                 An unknown class never resolves in game: the mod retries once a second for 120 \
+                 attempts and reports it only in UE4SS.log. See the catalogs-and-models guide page \
+                 for building a model.json.",
+                cfg.overrides.len()
+            ),
+        }
+    }
     // Asset paths written in the spec are resolved against the SPEC's own directory, exactly like
     // `gore audio replace --map`. A path written next to the spec has to mean the file next to the
     // spec: an agent or GUI that runs this command chooses neither the working directory nor,

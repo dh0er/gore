@@ -1,12 +1,8 @@
-use anyhow::{bail, Context, Result};
-use gore_modgen::{
-    gen::{gen_lua, OverridesConfig},
-    validate::validate_config,
-};
-use gore_reflect::model::ReflectionModel;
+use anyhow::{Context, Result};
+use gore_modgen::gen::{gen_lua, OverridesConfig};
 use std::{fs, path::PathBuf};
 
-use crate::cmd::validate_mod_name;
+use crate::cmd::{validate_mod_name, validate_overrides_against_model};
 
 pub fn run(overrides_path: PathBuf, mods_dir: PathBuf, model_path: Option<PathBuf>) -> Result<()> {
     // 1. Parse overrides.toml
@@ -18,22 +14,10 @@ pub fn run(overrides_path: PathBuf, mods_dir: PathBuf, model_path: Option<PathBu
     // 1b. Validate mod name is safe (no path traversal)
     validate_mod_name(&cfg.meta.name).with_context(|| "invalid mod name in overrides.toml")?;
 
-    // 2. Optionally validate against reflection model
+    // 2. Optionally validate against reflection model. `gore mod build --model` runs the very
+    //    same check through the same helper, so the bundle path and this one cannot disagree.
     if let Some(model_path) = model_path {
-        let json = fs::read_to_string(&model_path)
-            .with_context(|| format!("reading model.json '{}'", model_path.display()))?;
-        let model: ReflectionModel =
-            serde_json::from_str(&json).with_context(|| "parsing model.json")?;
-
-        let errors = validate_config(&cfg, &model);
-        if !errors.is_empty() {
-            let msg = errors
-                .iter()
-                .map(|e| format!("  - {e}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            bail!("validation errors in overrides.toml:\n{msg}");
-        }
+        validate_overrides_against_model(&cfg, &model_path, &overrides_path.display().to_string())?;
     }
 
     // 3. Generate Lua

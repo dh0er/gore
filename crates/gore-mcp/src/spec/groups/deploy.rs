@@ -460,6 +460,13 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
         "Output directory (the bundle is written to <out>/<mod-name>)",
         true,
     ),
+    ArgSpec::new(
+        "model",
+        Long("model"),
+        Path,
+        "Path to model.json for validation (optional; skips validation if absent)",
+        false,
+    ),
 ];
 
 const MOD_DEPLOY_ARGS: &[ArgSpec] =

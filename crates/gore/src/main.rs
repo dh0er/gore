@@ -268,6 +268,9 @@ enum ModAction {
         /// Output directory (the bundle is written to <out>/<mod-name>)
         #[arg(short = 'o', long)]
         out: PathBuf,
+        /// Path to model.json for validation (optional; skips validation if absent)
+        #[arg(long)]
+        model: Option<PathBuf>,
     },
     /// Deploy a built bundle to the game install
     Deploy {
@@ -519,7 +522,7 @@ fn run_cli() {
         },
         Commands::Voice { action } => cmd::voice::run(action),
         Commands::Mod { action } => match action {
-            ModAction::Build { spec, out } => cmd::modcmd::build(spec, out),
+            ModAction::Build { spec, out, model } => cmd::modcmd::build(spec, out, model),
             ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
             ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
         },
