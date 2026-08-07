@@ -4,6 +4,11 @@ The game's sounds and music live in encrypted FMOD `.bank` files at
 `$GAME\G1R\Content\FMOD\Desktop\*.bank`. `gore audio` reads and replaces
 samples in pure Rust — no FMOD installation or third-party tool is needed.
 
+Every subcommand wants a `--bank` path, and none of them will find one for you:
+there is no command that lists the banks an install has. That directory is the
+list — ten files, of which four carry samples (`SFX.bank`, `Music.bank`,
+`VO.bank`, `CINEMATICS.bank`). The other six are explained below.
+
 ## Inspect a bank
 
 ```powershell
@@ -92,6 +97,20 @@ sliders, spin boxes and the settings rows. Replace one of those, click through
 the main menu, and you hear the original — not because the replacement failed
 but because that surface never plays it.
 
+One check in game bears that out and widens it. On BuildID 24340829 the four
+`SFX_UI_Action_MenuButton_Click` samples were replaced with distinguishable tones
+and a person listened: the tones played on the menu buttons, and also when
+backing out of a submenu with Escape. The name is narrower than the behaviour, so
+expect a replacement here throughout menu navigation rather than on clicks alone.
+In the same run `SFX_UI_Action_Button_Hover_01` landed where its name suggests —
+its tone played on hover, and nothing else the listener did played it.
+
+Music has the same gap between name and binding, and one hole that run did not
+close. The main menu's title music was replaced successfully on that build, but
+`title` and `title_MASTER` in `Music.bank` were replaced in the same pass, so
+which of the two the title event draws on is still unknown. Replacing one of them
+alone has not been tried.
+
 ## Variant sets
 
 Most sounds are one take of several. 7,191 of `SFX.bank`'s 7,218 sample names
@@ -108,8 +127,21 @@ it if the change has to be audible every time:
 gore audio list --bank "$SFX" --filter SFX_UI_Action_Button_Click
 ```
 
+Nothing in the listing marks a group as one. The four
+`SFX_UI_Action_MenuButton_Click` takes print at `#1912`, `#1942`, `#3507` and
+`#6477` — four rows thousands apart, each looking as unrelated to the others as
+to anything else on the page. The shared prefix is all that ties them together,
+which is why filtering on the prefix is how you find the rest of a set. Filter on
+the exact prefix you mean: `--filter` is a substring test, so the command above
+does not list the menu takes at all — `SFX_UI_Action_Button_Click` is not a
+substring of `SFX_UI_Action_MenuButton_Click_01`.
+
 Which member a trigger picks is decided by the event's playlist inside the bank,
-which `gore audio` does not read.
+which `gore audio` does not read. For that one set it behaved randomly: on
+BuildID 24340829, with a different tone in each of the four, a listener clicking
+through the main menu reported them arriving in no pattern. Replacing only `_01`,
+which is the obvious move, would have produced the intended sound on roughly one
+click in four — easy to mistake for a tool that does not work.
 
 ## Replace
 
@@ -168,9 +200,16 @@ and it does not prove anyone will hear it.
 For the layer below that, the record is this: an injected bank loads in the
 game's own FMOD runtime and the event plays the injected audio. That was measured
 once, off-line, by rendering an event through FMOD's non-realtime writer from a
-pristine bank and from an injected one and comparing the results — not by anyone
-listening in game. Nothing in this toolkit ever observes the screen or the
-speakers, and no test in the suite checks either.
+pristine bank and from an injected one and comparing the results.
+
+It has since also been heard. On BuildID 24340829, five replaced `SFX.bank`
+samples and the main menu's title music came out of the running game and were
+identified by a person listening — one build, one install, one listener, one
+sitting. That single session is what the menu findings above rest on, and it is
+worth reading for exactly what it is: it shows the path works end to end on that
+build, not that any particular replacement of yours will be audible, and it is
+not a check the toolkit can run for you. Nothing here ever observes the screen or
+the speakers, and no test in the suite checks either.
 
 ## Share a patch without shipping game audio
 
