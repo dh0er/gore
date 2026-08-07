@@ -163,6 +163,51 @@ $pack = $packJson | ConvertFrom-Json
 
 ## Limits
 
+### Which packages this reaches at all
+
+Two classes of package come back with no editable leaves, for two different
+reasons, and knowing which one you hit saves you looking for a leaf that was
+never going to be there.
+
+**A Blueprint-generated export cannot be bound.** The USMAP describes native
+classes. An export whose class name ends in `_C` — `DA_GlobalDaySettings` is
+`BP_PostProcessDynamicData_C` — has no schema in it, and `inspect` says so:
+
+```
+ASSET_SCHEMA: export 0 class "…BP_PostProcessDynamicData_C" cannot be bound to
+USMAP: schema … was not found
+```
+
+There is no way around that here. It is not about the leaf you wanted.
+
+**One unproven struct costs the whole export.** `MPC_StencilColor` is native
+(`/Script/Engine.MaterialParameterCollection`) and binds cleanly, and still
+yields nothing:
+
+```
+ASSET_WALK: struct "Guid" has no proven G1R UE5.4 wire form at byte 6
+```
+
+The walk stops where it cannot account for the bytes, so a single unsupported
+field takes its export's other leaves with it.
+
+### One edit per extract
+
+A second edit to the same package is not reachable. `patch-fixed` requires the
+extract receipt, that receipt seals the exact pristine pair, and after the first
+patch the pair no longer matches it:
+
+```
+ASSET_GENERATION_MISMATCH: input package pair differs from extract receipt
+```
+
+The patch receipt written beside the output is a different document and is not
+accepted in its place. So one fixed-width change per package is the ceiling —
+re-inspecting the output tells you what the new bytes are, but there is nothing
+to re-seal it with.
+
+### Selectors
+
 A selector addresses exactly one proven fixed-width leaf — a single value
 whose byte width never changes. It carries no byte offset: it is sealed to
 the exact pair and USMAP it was inspected from and goes stale as soon as
@@ -191,11 +236,12 @@ The second is one sighting, and it is new. Before 2026-08-07 no edit made by
 these commands had ever been observed to take effect in the game — the workflow
 was trusted because the bytes and the receipts said so, and for no other reason.
 On that date, on Gothic 1 Remake Steam BuildID 24539464 with `gore` built from
-commit 90940340, one edit was watched. Note one wrinkle in its provenance: the
-triplet had been extracted and packed two days earlier, against the containers
-of the preceding build 24340829, and it still applied after the game updated.
-That is worth knowing and is not the same as having been produced against the
-build it ran on:
+commit 90940340, two edits were watched.
+
+The first came with a wrinkle in its provenance: the triplet had been extracted
+and packed two days earlier, against the containers of the preceding build
+24340829, and it still applied after the game updated. That is worth knowing and
+is not the same as having been produced against the build it ran on:
 
 - package `/Game/UI/CoreMenus/Settings/W_SettingsRow`, extracted to a sealed
   legacy package;
@@ -215,14 +261,30 @@ broken. One person looked at the screen, once. There is no screenshot, and
 nothing in the test suite checks any of it. Afterwards the mod was undeployed
 and `~mods\` was confirmed empty again.
 
-Read that sighting for exactly what it is. It establishes that the engine
-honours an additive container for a cooked UMG widget asset on this build, and
-that one fixed-width `float32` leaf patched this way reaches the renderer. It
-does not establish anything about other leaf kinds, other asset classes, or
-other builds: one asset, one leaf, one float, one build, one look. Note also
-that the target was a cooked UMG widget package rather than a DataAsset proper —
-that is what these commands accepted in this one case, not a general statement
-about which classes they cover.
+The second closed the two things the first left open — it was neither a widget
+nor a `float32` — and its provenance is clean: extracted, patched, packed,
+deployed and observed all on 24539464.
+
+- package `/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_HumanFootsteps`,
+  a DataAsset proper: its export class is `/Script/G1R.FootstepTag`, native
+  rather than Blueprint-generated;
+- leaf `/BoneData/struct:BoneFeetData/FeetTextureSize`, reached through a struct
+  inside a struct;
+- one `vector4_f64x4`: `(16, 16, 0, 1)` replaced by `(160, 160, 0, 1)`;
+- packed as `zzz_GoreFootBig_P` and applied through `gore mgr` beside the
+  settings-row triplet, which was left enabled on purpose as a control — so that
+  "no change" could be told apart from "nothing was deployed".
+
+In game, the hero's footprints came out roughly ten times too large. The
+settings rows were dramatically tall in the same launch, which is what makes the
+footprint observation mean something.
+
+Read both sightings for exactly what they are. Together they establish that the
+engine honours an additive container for a cooked UMG widget *and* for a native
+DataAsset on this build, and that a `float32` and a `vector4_f64x4` patched this
+way both reach what draws them. They establish nothing about other builds, and
+nothing about the leaf kinds neither of them used. Two assets, two leaves, one
+build, one person looking.
 
 Nothing in this toolkit ever observes the screen. A clean `pack` means the
 container is well formed and holds the bytes you asked for; whether the game

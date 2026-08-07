@@ -16,6 +16,51 @@
           "by": "maintainer"
         }
       ]
+    },
+    {
+      "id": "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_HumanFootsteps",
+      "effect": "The hero's footprint decals — their size comes from BoneData/BoneFeetData/FeetTextureSize",
+      "note": "Extends this domain past the one case it had. The first sighting was a UMG widget (W_SettingsRow) and a float32; this is a real native DataAsset — class /Script/G1R.FootstepTag, not a Blueprint-generated one — and the leaf is a vector4_f64x4, reached through a struct inside a struct. FeetTextureSize was raised from (16,16,0,1) to (160,160,0,1) and the footprints came out roughly ten times too large. Provenance is clean here in a way the settings-row sighting's was not: extracted, patched, packed, deployed and observed all on build 24539464. Delivered through `gore mgr` as a foreign triplet, alongside the settings-row triplet, which served as the control that the deployment had landed at all.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "confirmed",
+          "witness": "einstellungsseite absurd groß, fußabdrücke absurd groß"
+        }
+      ]
+    },
+    {
+      "id": "/Game/Blueprints/PostProcessing/DA_GlobalDaySettings",
+      "effect": null,
+      "note": "Unreachable by `gore asset`, and the reason generalises. Its export is a Blueprint-generated class (BP_PostProcessDynamicData_C); the USMAP describes native classes, so there is no schema to bind and `inspect` reports status \"unsupported\" with zero editable leaves. Every asset whose export class ends in `_C` is in the same position. This is a tool limit, not a game one — nothing was deployed and nothing was observed in game.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "refuted",
+          "witness": "ASSET_SCHEMA: export 0 class \"…BP_PostProcessDynamicData_C\" cannot be bound to USMAP: schema was not found"
+        }
+      ]
+    },
+    {
+      "id": "/Game/Blueprints/OutlineInteractionSystem/MPC_StencilColor",
+      "effect": null,
+      "note": "A second, different reach limit. The class IS native (/Script/Engine.MaterialParameterCollection) and binds cleanly, but the walk stops at `struct \"Guid\" has no proven G1R UE5.4 wire form at byte 6` and the export yields no leaves. One unproven struct type therefore costs the whole export, not just the field containing it. Also a tool limit; nothing was deployed.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "refuted",
+          "witness": "ASSET_WALK: struct \"Guid\" has no proven G1R UE5.4 wire form at byte 6"
+        }
+      ]
     }
   ]
 }
