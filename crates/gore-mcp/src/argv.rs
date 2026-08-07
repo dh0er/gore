@@ -40,8 +40,38 @@ pub struct Invocation {
     pub consent: Option<Consent>,
 }
 
+/// Why a name could not be taken out of the JSON file an argument names.
+///
+/// These four used to be one `None`, and the gate read all four as "something might be in the
+/// way" — so a spec with a misspelled field came back as a refusal about permission, for a command
+/// that could not have run either way. Only the last is still a question rather than a defect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceProblem {
+    /// The file could not be opened or read.
+    Unopenable(String),
+    /// The file is not JSON.
+    NotJson(String),
+    /// The pointer resolves to nothing, or to something that is not a string.
+    NoName,
+    /// A name was read, but it is not one path component, so the write lands somewhere the gate
+    /// cannot check. Not a defect in the call: the child accepts it and runs.
+    NotOneComponent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildError {
+    UnusableSource {
+        sub: &'static str,
+        /// The argument naming the file.
+        arg: &'static str,
+        /// The JSON pointer that was supposed to yield a name.
+        pointer: &'static str,
+        /// The path as it was given.
+        path: String,
+        problem: SourceProblem,
+        /// The guide page for this command, when it has one.
+        guide: Option<&'static str>,
+    },
     UnknownSubcommand { tool: &'static str, given: String, available: Vec<&'static str> },
     ArgsNotAnObject { got: &'static str },
     UnknownArgument { sub: &'static str, given: String, known: Vec<&'static str> },
@@ -61,6 +91,43 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            BuildError::UnusableSource { sub, arg, pointer, path, problem, guide } => {
+                write!(
+                    f,
+                    "`{sub}` reads the name of the directory it writes from `{pointer}` in the \
+                     file `{arg}` names, and `{path}` "
+                )?;
+                match problem {
+                    SourceProblem::Unopenable(error) => write!(
+                        f,
+                        "could not be opened: {error}. Check the path in `{arg}` and send the \
+                         same call again."
+                    )?,
+                    SourceProblem::NotJson(error) => write!(
+                        f,
+                        "is not valid JSON: {error}. Fix the JSON and send the same call again."
+                    )?,
+                    SourceProblem::NoName => write!(
+                        f,
+                        "has no string there. Put a string at `{pointer}` and send the same call \
+                         again."
+                    )?,
+                    // Unreachable from check_derived_sources: that one is still the gate's to ask
+                    // about. Written so the match is total and a future caller cannot get nonsense.
+                    SourceProblem::NotOneComponent => write!(f, "names something else.")?,
+                }
+                write!(
+                    f,
+                    " Nothing ran, and no confirmation was asked for: the problem is in that \
+                     file, not in what this server is allowed to do."
+                )?;
+                match guide {
+                    Some(page) => {
+                        write!(f, " The shape this file has to have is in `gore://guide/{page}`.")
+                    }
+                    None => Ok(()),
+                }
+            }
             BuildError::UnknownSubcommand { tool, given, available } => write!(
                 f,
                 "{tool} has no subcommand `{given}`. Available: {}.",
@@ -154,6 +221,7 @@ pub fn build(
 
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
+    check_derived_sources(command, &args)?;
     // Dropped rather than never computed, so that turning a flag on cannot change which arm the
     // gate would have matched — only whether anyone is asked about it. The command line it shows is
     // filled in below, once there is one.
@@ -664,8 +732,11 @@ fn derived_target(
         Derived::ChildNamedInJson { arg, pointer } => {
             let source = args.get(arg).and_then(Value::as_str).unwrap_or(arg).to_string();
             match name_in_json(&source, pointer) {
-                Some(name) => DerivedTarget::At(base.join(name)),
-                None => DerivedTarget::Unknown { source },
+                Ok(name) => DerivedTarget::At(base.join(name)),
+                // Still fails closed. By the time the gate runs, `check_derived_sources` has
+                // already rejected the unreadable cases, so what reaches here is a name that read
+                // fine but is not one path component — the write lands somewhere this cannot check.
+                Err(_) => DerivedTarget::Unknown { source },
             }
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
@@ -679,15 +750,63 @@ fn derived_target(
 /// A name carrying a separator, a drive letter or `..` would make the derived path point somewhere
 /// other than inside the directory the caller named — so the honest answer there is "unknown",
 /// which fails closed, rather than a path the check would then look for in the wrong place.
-fn name_in_json(path: &str, pointer: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let document: Value = serde_json::from_str(&text).ok()?;
-    let name = document.pointer(pointer)?.as_str()?;
+fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| SourceProblem::Unopenable(error.to_string()))?;
+    let document: Value =
+        serde_json::from_str(&text).map_err(|error| SourceProblem::NotJson(error.to_string()))?;
+    let name = document
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .ok_or(SourceProblem::NoName)?;
     let mut components = std::path::Path::new(name).components();
     match (components.next(), components.next()) {
-        (Some(std::path::Component::Normal(only)), None) if only == name => Some(name.to_string()),
-        _ => None,
+        (Some(std::path::Component::Normal(only)), None) if only == name => Ok(name.to_string()),
+        _ => Err(SourceProblem::NotOneComponent),
     }
+}
+
+/// Reject a call whose derived output cannot be worked out because the file it is named in is
+/// missing, is not JSON, or does not carry the name.
+///
+/// Ordered before `consent_for` deliberately. The gate's occupancy check reads that same file, and
+/// used to treat every way it could disappoint as "something might be in the way" — so a spec with
+/// a misspelled field raised a confirmation, and a client that answers its own dialogs turned that
+/// into a refusal about permission. None of these calls could have run: the child reads the same
+/// file and fails on it before writing anything, so there is nothing there for a person to allow.
+/// A name that reads fine but is not one path component is left to the gate, because that one the
+/// child does run.
+fn check_derived_sources(
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Result<(), BuildError> {
+    for (name, how) in command.safety.derives {
+        let Derived::ChildNamedInJson { arg, pointer } = how else {
+            continue;
+        };
+        // Both arguments have to be present. A missing one is `MissingRequired`'s to report, and
+        // reading a file for a call clap will reject anyway helps nobody.
+        if args.get(*name).and_then(Value::as_str).is_none() {
+            continue;
+        }
+        let Some(path) = args.get(*arg).and_then(Value::as_str) else {
+            continue;
+        };
+        match name_in_json(path, pointer) {
+            Ok(_) | Err(SourceProblem::NotOneComponent) => {}
+            Err(problem) => {
+                return Err(BuildError::UnusableSource {
+                    sub: command.sub,
+                    arg,
+                    pointer,
+                    path: path.to_string(),
+                    problem,
+                    guide: command.guide,
+                })
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String, BuildError> {
@@ -1192,23 +1311,19 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_name_that_cannot_be_read_is_treated_as_occupied() {
-        // Fail closed, in every direction the file can disappoint. "Could not check" must never
-        // read as "nothing there" — that is the one mistake this facet could introduce, and it
-        // would land on exactly the calls whose spec is malformed.
+    fn a_bundle_name_that_reads_but_is_not_one_component_is_treated_as_occupied() {
+        // Fail closed where the gate genuinely cannot tell what would be deleted. The spec is
+        // fine and `gore mod build` will run it; it is only the destination this layer cannot
+        // pin down, so "could not check" must not read as "nothing there".
         let dir = tempfile::tempdir().expect("tempdir");
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let unreadable: [&[u8]; 5] = [
-            b"{ not json",
-            br#"{"meta":{}}"#,
-            br#"{"meta":{"name":42}}"#,
-            // A name that is not one path component would put the deletion somewhere else entirely.
+        let elsewhere: [&[u8]; 2] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
         ];
-        for body in unreadable {
+        for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
             let raised = question(
                 "gore_mod",
@@ -1219,18 +1334,60 @@ mod tests {
             .unwrap_or_else(|| panic!("{:?} must not pass as an empty destination", body));
             assert!(raised.reason.contains("could not be read"), "{}", raised.reason);
         }
+    }
 
-        // Including the file simply not being there.
-        std::fs::remove_file(&spec).expect("remove");
-        assert!(
-            question(
+    #[test]
+    fn a_spec_that_cannot_be_read_is_a_validation_failure_not_a_consent_question() {
+        // These four used to raise a confirmation. A client that answers its own dialogs turned
+        // that into "refused: the confirmation came back no", so a misspelled field read as a
+        // permission problem — and the caller went looking in the wrong place. None of these
+        // calls could have run: the child reads the same file and fails on it before writing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+        let spec = dir.path().join("spec.json");
+
+        let unusable: [(&[u8], &str); 3] = [
+            (b"{ not json", "is not valid JSON"),
+            (br#"{"meta":{}}"#, "has no string there"),
+            (br#"{"meta":{"name":42}}"#, "has no string there"),
+        ];
+        for (body, expected) in unusable {
+            std::fs::write(&spec, body).expect("write");
+            let error = build_with(
                 "gore_mod",
                 "build",
                 json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
                 &options(),
             )
-            .is_some(),
-            "a spec that cannot be opened tells the gate nothing about what it would delete"
+            .expect_err("a spec this broken must not build a command line");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(expected),
+                "{body:?} must be diagnosed as a defect in the file: {rendered}"
+            );
+            assert!(
+                rendered.contains("not in what this server is allowed to do"),
+                "the message must say this is not a permission problem: {rendered}"
+            );
+            assert!(
+                rendered.contains("gore://guide/bundles"),
+                "the message must point at the shape the file needs: {rendered}"
+            );
+        }
+
+        // Including the file simply not being there.
+        std::fs::remove_file(&spec).expect("remove");
+        let rendered = build_with(
+            "gore_mod",
+            "build",
+            json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+            &options(),
+        )
+        .expect_err("a missing spec must not build a command line")
+        .to_string();
+        assert!(
+            rendered.contains("could not be opened"),
+            "a missing spec names itself as missing: {rendered}"
         );
     }
 
